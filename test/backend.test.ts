@@ -2342,6 +2342,245 @@ describe("backend API composition", () => {
     });
   });
 
+  it("returns stable errors for missing orders without provider calls", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({ optionalMethods: ["refundPayment", "cancelOrder"] });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(
+      api.admin.orderRefund({ orderId: createTestMikaId("order", 404) }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 404,
+      error: {
+        code: "VALIDATION_FAILED",
+        fieldErrors: { orderId: "Order was not found." },
+      },
+    });
+    await expect(
+      api.admin.orderCancel({ orderId: createTestMikaId("order", 404) }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 404,
+      error: {
+        code: "VALIDATION_FAILED",
+        fieldErrors: { orderId: "Order was not found." },
+      },
+    });
+
+    expect(fake.getCalls().refundPayment).toEqual([]);
+    expect(fake.getCalls().cancelOrder).toEqual([]);
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
+    ).resolves.toBeNull();
+  });
+
+  it("returns provider unsupported for order actions without mutating the order", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({ optionalMethods: "none" });
+    const order = createOrderDocument();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.ledger.put(order);
+
+    await expect(api.admin.orderRefund({ orderId: order.id, amount: 500 })).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "PROVIDER_UNSUPPORTED" },
+    });
+    await expect(api.admin.orderCancel({ orderId: order.id })).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "PROVIDER_UNSUPPORTED" },
+    });
+
+    expect(fake.getCalls().refundPayment).toEqual([]);
+    expect(fake.getCalls().cancelOrder).toEqual([]);
+    await expect(repositories.ledger.findOrderById(order.id)).resolves.toEqual(order);
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
+    ).resolves.toBeNull();
+  });
+
+  it("normalizes order provider failures and records failed audit state", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["refundPayment"],
+      overrides: {
+        refundPayment: async () => {
+          throw new Error("Provider refund failed.");
+        },
+      },
+    });
+    const order = createOrderDocument();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.ledger.put(order);
+
+    await expect(
+      api.admin.orderRefund({ orderId: order.id, amount: 500, reason: "customer_request" }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 502,
+      error: {
+        code: "PROVIDER_FAILED",
+        message: "Provider refund failed.",
+      },
+    });
+
+    expect(fake.getCalls().refundPayment).toEqual([
+      {
+        orderId: order.id,
+        providerPaymentId: "payment_1",
+        amount: 500,
+        reason: "customer_request",
+      },
+    ]);
+    await expect(repositories.ledger.findOrderById(order.id)).resolves.toEqual(order);
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
+    ).resolves.toMatchObject({
+      status: "failed",
+      record: {
+        action: "order.refund",
+        targetType: "order",
+        targetId: order.id,
+        status: "failed",
+        metadata: {
+          provider: TEST_PROVIDER,
+          orderId: order.id,
+          providerPaymentId: "payment_1",
+          amount: 500,
+          reason: "customer_request",
+          error: "Provider refund failed.",
+        },
+      },
+    });
+  });
+
+  it("runs order refund and cancel actions and updates ledger audit state", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["refundPayment", "cancelOrder"],
+    });
+    const refundOrder = createOrderDocument();
+    const cancelTarget = createOrderDocument({
+      id: createTestMikaId("order", 2),
+      orderNumber: "M-1002",
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.ledger.put(refundOrder);
+    await repositories.ledger.put(cancelTarget);
+
+    await expect(
+      api.admin.orderRefund({ orderId: refundOrder.id, amount: 500, reason: "duplicate" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        status: "completed",
+      },
+    });
+    await expect(
+      api.admin.orderCancel({ orderId: cancelTarget.id, reason: "customer_request" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        status: "completed",
+      },
+    });
+
+    expect(fake.getCalls().refundPayment).toEqual([
+      {
+        orderId: refundOrder.id,
+        providerPaymentId: "payment_1",
+        amount: 500,
+        reason: "duplicate",
+      },
+    ]);
+    expect(fake.getCalls().cancelOrder).toEqual([
+      {
+        orderId: cancelTarget.id,
+        providerOrderId: "provider_order_1",
+        reason: "customer_request",
+      },
+    ]);
+    await expect(repositories.ledger.findOrderById(refundOrder.id)).resolves.toMatchObject({
+      status: "partially_refunded",
+      paymentStatus: "partially_refunded",
+      aggregate: {
+        metadata: {
+          lastAdminAction: "order.refund",
+          refundAmount: 500,
+          refundReason: "duplicate",
+        },
+      },
+    });
+    await expect(repositories.ledger.findOrderById(cancelTarget.id)).resolves.toMatchObject({
+      status: "cancelled",
+      paymentStatus: "paid",
+      aggregate: {
+        metadata: {
+          lastAdminAction: "order.cancel",
+          cancelReason: "customer_request",
+        },
+      },
+    });
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
+    ).resolves.toMatchObject({
+      status: "completed",
+      record: {
+        action: "order.refund",
+        status: "completed",
+        metadata: {
+          provider: TEST_PROVIDER,
+          orderId: refundOrder.id,
+          providerPaymentId: "payment_1",
+          amount: 500,
+          reason: "duplicate",
+        },
+      },
+    });
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 2)),
+    ).resolves.toMatchObject({
+      status: "completed",
+      record: {
+        action: "order.cancel",
+        status: "completed",
+        metadata: {
+          provider: TEST_PROVIDER,
+          orderId: cancelTarget.id,
+          providerOrderId: "provider_order_1",
+          reason: "customer_request",
+        },
+      },
+    });
+  });
+
   it("returns stable magic link token errors for invalid and expired tokens", async () => {
     const harness = await createMagicLinkHarness({ ttlMs: 1 });
 

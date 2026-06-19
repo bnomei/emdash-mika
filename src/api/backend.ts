@@ -1,7 +1,9 @@
 import type {
   MikaProviderLineItem,
   MikaProviderPaymentEvent,
+  MikaProviderOrderCancelInput,
   MikaProviderRegistry,
+  MikaProviderRefundInput,
   MikaProviderSubscriptionActionInput,
   MikaProviderSubscriptionEvent,
   MikaProviderWebhookEvent,
@@ -93,6 +95,8 @@ import type {
   DownloadDTO,
   DownloadResolutionDTO,
   EntitlementDTO,
+  OrderCancelInput,
+  OrderRefundInput,
   OrderSummaryDTO,
   ProviderHealthDTO,
   ProviderHealthInput,
@@ -393,6 +397,8 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
         };
       },
       webhookReplay: async (replayInput) => replayWebhook(input, replayInput),
+      orderRefund: async (refundInput) => refundOrder(input, refundInput),
+      orderCancel: async (cancelInput) => cancelOrder(input, cancelInput),
       ...input.overrides?.admin,
     },
     cart: {
@@ -1364,6 +1370,174 @@ async function providerSync(
     return { ok: true, status: 200, data: result };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Provider catalog sync failed.";
+    await input.repositories.ops.writeAudit({
+      ...audit,
+      status: "failed",
+      updatedAt: currentBackendISODateTime(input),
+      record: {
+        ...audit.record,
+        status: "failed",
+        metadata: {
+          ...audit.record.metadata,
+          error: message,
+        },
+      },
+    });
+
+    return providerFailed(message);
+  }
+}
+
+async function refundOrder(
+  input: CreateMikaBackendApiInput,
+  refundInput: OrderRefundInput,
+): Promise<MikaApiResult<AdminActionResultDTO>> {
+  const order = await input.repositories.ledger.findOrderById(refundInput.orderId);
+  if (!order) {
+    return orderNotFound(refundInput.orderId);
+  }
+
+  const provider = input.providers.get(order.provider);
+  if (!provider?.refundPayment) {
+    return providerUnsupportedForAction(
+      provider
+        ? `Provider '${order.provider}' does not support order refunds.`
+        : `Provider '${order.provider}' is not configured.`,
+    );
+  }
+
+  const now = currentBackendISODateTime(input);
+  const audit = createAdminAuditDocument(input, {
+    action: "order.refund",
+    targetType: "order",
+    targetId: order.id,
+    status: "started",
+    createdAt: now,
+    metadata: {
+      provider: order.provider,
+      orderId: order.id,
+      ...(order.providerPaymentId ? { providerPaymentId: order.providerPaymentId } : {}),
+      ...(refundInput.amount !== undefined ? { amount: refundInput.amount } : {}),
+      ...(refundInput.reason ? { reason: refundInput.reason } : {}),
+    },
+  });
+  await input.repositories.ops.writeAudit(audit);
+
+  const providerInput: MikaProviderRefundInput = {
+    orderId: order.id,
+    ...(order.providerPaymentId ? { providerPaymentId: order.providerPaymentId } : {}),
+    ...(refundInput.amount !== undefined ? { amount: refundInput.amount } : {}),
+    ...(refundInput.reason ? { reason: refundInput.reason } : {}),
+  };
+
+  try {
+    const result = await provider.refundPayment(providerInput);
+    const updated = updateOrderAfterRefund(order, refundInput, currentBackendISODateTime(input));
+    await input.repositories.ledger.put(updated);
+    await input.repositories.ops.writeAudit({
+      ...audit,
+      status: "completed",
+      updatedAt: currentBackendISODateTime(input),
+      record: {
+        ...audit.record,
+        status: "completed",
+      },
+    });
+
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        ...result,
+        id: result.id ?? order.id,
+        status: "completed",
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Provider order refund failed.";
+    await input.repositories.ops.writeAudit({
+      ...audit,
+      status: "failed",
+      updatedAt: currentBackendISODateTime(input),
+      record: {
+        ...audit.record,
+        status: "failed",
+        metadata: {
+          ...audit.record.metadata,
+          error: message,
+        },
+      },
+    });
+
+    return providerFailed(message);
+  }
+}
+
+async function cancelOrder(
+  input: CreateMikaBackendApiInput,
+  cancelInput: OrderCancelInput,
+): Promise<MikaApiResult<AdminActionResultDTO>> {
+  const order = await input.repositories.ledger.findOrderById(cancelInput.orderId);
+  if (!order) {
+    return orderNotFound(cancelInput.orderId);
+  }
+
+  const provider = input.providers.get(order.provider);
+  if (!provider?.cancelOrder) {
+    return providerUnsupportedForAction(
+      provider
+        ? `Provider '${order.provider}' does not support order cancellation.`
+        : `Provider '${order.provider}' is not configured.`,
+    );
+  }
+
+  const now = currentBackendISODateTime(input);
+  const audit = createAdminAuditDocument(input, {
+    action: "order.cancel",
+    targetType: "order",
+    targetId: order.id,
+    status: "started",
+    createdAt: now,
+    metadata: {
+      provider: order.provider,
+      orderId: order.id,
+      ...(order.providerOrderId ? { providerOrderId: order.providerOrderId } : {}),
+      ...(cancelInput.reason ? { reason: cancelInput.reason } : {}),
+    },
+  });
+  await input.repositories.ops.writeAudit(audit);
+
+  const providerInput: MikaProviderOrderCancelInput = {
+    orderId: order.id,
+    ...(order.providerOrderId ? { providerOrderId: order.providerOrderId } : {}),
+    ...(cancelInput.reason ? { reason: cancelInput.reason } : {}),
+  };
+
+  try {
+    const result = await provider.cancelOrder(providerInput);
+    const updated = updateOrderAfterCancel(order, cancelInput, currentBackendISODateTime(input));
+    await input.repositories.ledger.put(updated);
+    await input.repositories.ops.writeAudit({
+      ...audit,
+      status: "completed",
+      updatedAt: currentBackendISODateTime(input),
+      record: {
+        ...audit.record,
+        status: "completed",
+      },
+    });
+
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        ...result,
+        id: result.id ?? order.id,
+        status: "completed",
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Provider order cancellation failed.";
     await input.repositories.ops.writeAudit({
       ...audit,
       status: "failed",
@@ -5100,6 +5274,51 @@ function adminStockAdjustmentResult(
   };
 }
 
+function updateOrderAfterRefund(
+  order: OrderDocument,
+  refundInput: OrderRefundInput,
+  now: ISODateTime,
+): OrderDocument {
+  const fullRefund = refundInput.amount === undefined || refundInput.amount >= order.totalAmount;
+  const status = fullRefund ? "refunded" : "partially_refunded";
+
+  return {
+    ...order,
+    status,
+    paymentStatus: status,
+    updatedAt: now,
+    aggregate: {
+      ...order.aggregate,
+      metadata: {
+        ...order.aggregate.metadata,
+        lastAdminAction: "order.refund",
+        ...(refundInput.amount !== undefined ? { refundAmount: refundInput.amount } : {}),
+        ...(refundInput.reason ? { refundReason: refundInput.reason } : {}),
+      },
+    },
+  };
+}
+
+function updateOrderAfterCancel(
+  order: OrderDocument,
+  cancelInput: OrderCancelInput,
+  now: ISODateTime,
+): OrderDocument {
+  return {
+    ...order,
+    status: "cancelled",
+    updatedAt: now,
+    aggregate: {
+      ...order.aggregate,
+      metadata: {
+        ...order.aggregate.metadata,
+        lastAdminAction: "order.cancel",
+        ...(cancelInput.reason ? { cancelReason: cancelInput.reason } : {}),
+      },
+    },
+  };
+}
+
 function currentBackendISODateTime(input: MikaBackendDependencies): ISODateTime {
   return input.isoNow?.() ?? createISODateTime(input.now().toISOString());
 }
@@ -5203,6 +5422,18 @@ function providerFailed(message: string): MikaApiFailure {
     error: {
       code: "PROVIDER_FAILED",
       message,
+    },
+  };
+}
+
+function orderNotFound(orderId: MikaId): MikaApiFailure {
+  return {
+    ok: false,
+    status: 404,
+    error: {
+      code: "VALIDATION_FAILED",
+      message: `Order '${orderId}' was not found.`,
+      fieldErrors: { orderId: "Order was not found." },
     },
   };
 }
