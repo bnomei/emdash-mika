@@ -1448,6 +1448,182 @@ describe("backend API composition", () => {
     });
   });
 
+  it("creates, reports, and downloads an account export with a one-time token", async () => {
+    const harness = await createAccountServicesHarness({ exportTtlMs: 60_000 });
+
+    try {
+      await harness.repositories.account.put(createCustomerDocument());
+      await harness.repositories.ledger.put(createOrderDocument());
+
+      await expect(
+        harness.api.account.export(
+          createTestRequestContext({ customerId: createTestMikaId("customer", 1) }),
+          {},
+        ),
+      ).resolves.toMatchObject({
+        ok: true,
+        status: 202,
+        data: {
+          id: "account_export_1",
+          status: "ready",
+          requestedAt: TEST_NOW,
+          expiresAt: "2026-01-01T00:01:00.000Z",
+          downloadHref:
+            "https://shop.example.test/_emdash/api/plugins/mika/account/export/download?exportId=account_export_1&token=account_export_token_1",
+        },
+      });
+      await expect(
+        harness.repositories.ops.findAccountExport(createTestMikaId("account_export", 1)),
+      ).resolves.toMatchObject({
+        type: "accountExport",
+        status: "ready",
+        record: {
+          customerId: "customer_1",
+          downloadTokenHash: createTestHash("account-export-download-token:account_export_token_1"),
+          artifactRef: expect.stringContaining("data:application/json"),
+        },
+      });
+
+      await expect(
+        harness.api.account.exportStatus(createTestRequestContext(), {
+          exportId: createTestMikaId("account_export", 1),
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        status: 200,
+        data: {
+          id: "account_export_1",
+          status: "ready",
+          downloadHref:
+            "https://shop.example.test/_emdash/api/plugins/mika/account/export/download?exportId=account_export_1",
+        },
+      });
+
+      await expect(
+        harness.api.account.exportDownload(
+          createTestRequestContext({ customerId: false, userId: false }),
+          {
+            exportId: createTestMikaId("account_export", 1),
+            token: createTestMikaId("account_export_token", 1),
+          },
+        ),
+      ).resolves.toMatchObject({
+        ok: true,
+        status: 200,
+        data: {
+          id: "account_export_1",
+          href: expect.stringContaining(encodeURIComponent("Subscriber@Example.test")),
+          expiresAt: "2026-01-01T00:01:00.000Z",
+        },
+      });
+      await expect(
+        harness.api.account.exportDownload(createTestRequestContext(), {
+          exportId: createTestMikaId("account_export", 1),
+          token: createTestMikaId("account_export_token", 1),
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 410,
+        error: { code: "TOKEN_USED" },
+      });
+    } finally {
+      await harness.destroy();
+    }
+  });
+
+  it("returns stable account export download token errors", async () => {
+    const expiredHarness = await createAccountServicesHarness({ exportTtlMs: 1 });
+
+    try {
+      await expiredHarness.repositories.account.put(createCustomerDocument());
+      await expiredHarness.api.account.export(createTestRequestContext(), {});
+
+      await expect(
+        expiredHarness.api.account.exportDownload(createTestRequestContext(), {
+          exportId: createTestMikaId("account_export", 1),
+          token: "wrong-token",
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 400,
+        error: { code: "TOKEN_INVALID" },
+      });
+      await expect(
+        expiredHarness.api.account.exportDownload(
+          createTestRequestContext({ now: createTestClock().at(2) }),
+          {
+            exportId: createTestMikaId("account_export", 1),
+            token: createTestMikaId("account_export_token", 1),
+          },
+        ),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 410,
+        error: { code: "TOKEN_EXPIRED" },
+      });
+    } finally {
+      await expiredHarness.destroy();
+    }
+
+    const revokedHarness = await createAccountServicesHarness({ exportTtlMs: 60_000 });
+
+    try {
+      await revokedHarness.repositories.account.put(createCustomerDocument());
+      await revokedHarness.api.account.export(createTestRequestContext(), {});
+      const tokenHash = createTestHash("account-export-download-token:account_export_token_1");
+      const tokenRecord = await revokedHarness.repositories.ephemeral.get(tokenHash);
+      if (!tokenRecord) throw new Error("Expected account export token to be stored.");
+      await revokedHarness.repositories.ephemeral.put({
+        ...tokenRecord,
+        status: "revoked",
+        updatedAt: TEST_NOW,
+      });
+
+      await expect(
+        revokedHarness.api.account.exportDownload(createTestRequestContext(), {
+          exportId: createTestMikaId("account_export", 1),
+          token: createTestMikaId("account_export_token", 1),
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 410,
+        error: { code: "DOWNLOAD_REVOKED" },
+      });
+    } finally {
+      await revokedHarness.destroy();
+    }
+  });
+
+  it("stores account delete requests and returns requested status", async () => {
+    const harness = await createAccountServicesHarness();
+
+    try {
+      await harness.repositories.account.put(createCustomerDocument());
+
+      await expect(harness.api.account.delete(createTestRequestContext(), {})).resolves.toEqual({
+        ok: true,
+        status: 202,
+        data: { requested: true },
+      });
+      await expect(
+        harness.repositories.ops.findAccountDeleteRequest(
+          createTestMikaId("account_delete_request", 1),
+        ),
+      ).resolves.toMatchObject({
+        type: "accountDeleteRequest",
+        status: "queued",
+        customerId: "customer_1",
+        userId: "user_1",
+        record: {
+          status: "queued",
+          requestedAt: TEST_NOW,
+        },
+      });
+    } finally {
+      await harness.destroy();
+    }
+  });
+
   it("returns stable magic link token errors for invalid and expired tokens", async () => {
     const harness = await createMagicLinkHarness({ ttlMs: 1 });
 
@@ -5202,6 +5378,54 @@ async function createMagicLinkHarness(options: { readonly ttlMs?: number } = {})
     api,
     repositories,
     accountCollection,
+    opsCollection,
+    destroy: async () => {
+      await rollbackMikaInitialMigration(db);
+      await db.destroy();
+    },
+  };
+}
+
+async function createAccountServicesHarness(
+  options: { readonly exportTtlMs?: number } = {},
+): Promise<{
+  readonly api: MikaApi;
+  readonly repositories: MikaBackendRepositories;
+  readonly accountCollection: StorageCollection<MikaStorageDocuments["account"]>;
+  readonly ledgerCollection: StorageCollection<MikaStorageDocuments["ledger"]>;
+  readonly opsCollection: StorageCollection<MikaStorageDocuments["ops"]>;
+  readonly destroy: () => Promise<void>;
+}> {
+  const db = createTestMikaDb();
+  const accountCollection = createStorageCollection("account");
+  const ledgerCollection = createStorageCollection("ledger");
+  const opsCollection = createStorageCollection("ops");
+
+  await mikaInitialMigration.up(db);
+
+  const repositories = {
+    ...createTestBackendRepositories(),
+    account: new AccountRepository(accountCollection),
+    ledger: new LedgerRepository(ledgerCollection),
+    ops: new OpsRepository(opsCollection),
+    ephemeral: new EphemeralRepository(db),
+  } satisfies MikaBackendRepositories;
+  const api = createMikaBackendApi(
+    createIncrementingBackendDependencies({
+      repositories,
+      config: {
+        accountExport: {
+          ttlMs: options.exportTtlMs,
+        },
+      },
+    }),
+  );
+
+  return {
+    api,
+    repositories,
+    accountCollection,
+    ledgerCollection,
     opsCollection,
     destroy: async () => {
       await rollbackMikaInitialMigration(db);

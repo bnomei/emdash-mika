@@ -45,6 +45,8 @@ import type {
 import type {
   CartDocument,
   CheckoutDocument,
+  AccountDeleteRequestDocument,
+  AccountExportDocument,
   CustomerDocument,
   EmailDocument,
   EntitlementDocument,
@@ -73,6 +75,8 @@ import { createMikaApi, type MikaApi, type MikaApiOverrides } from "./server";
 import type {
   AddCartItemInput,
   AccountDTO,
+  AccountExportDTO,
+  AccountExportDownloadDTO,
   AdminActionResultDTO,
   CartDTO,
   CartQuoteDTO,
@@ -747,6 +751,11 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
     },
     account: {
       get: async (ctx) => getAccount(input, ctx),
+      export: async (ctx) => requestAccountExport(input, ctx),
+      exportStatus: async (ctx, exportInput) => accountExportStatus(input, ctx, exportInput),
+      exportDownload: async (ctx, downloadInput) =>
+        downloadAccountExport(input, ctx, downloadInput),
+      delete: async (ctx) => requestAccountDelete(input, ctx),
       ...input.overrides?.account,
     },
     webhook: {
@@ -790,12 +799,16 @@ async function resolveAccountIdentity(
       readonly entitlements: Awaited<
         ReturnType<MikaBackendRepositories["account"]["listEntitlementsByCustomer"]>
       >["items"];
+      readonly userId?: string;
+      readonly emailHash?: string;
     }
   | {
       readonly customer: null;
       readonly entitlements: Awaited<
         ReturnType<MikaBackendRepositories["account"]["listEntitlementsByUser"]>
       >["items"];
+      readonly userId?: string;
+      readonly emailHash?: string;
     }
   | null
 > {
@@ -812,6 +825,8 @@ async function resolveAccountIdentity(
     return {
       customer,
       entitlements: (await input.repositories.account.listEntitlementsByCustomer(customerId)).items,
+      userId: customer.userId,
+      emailHash: customer.emailHash,
     };
   }
 
@@ -828,7 +843,7 @@ async function resolveAccountIdentity(
 
     const entitlements = await input.repositories.account.listEntitlementsByUser(userId);
     if (entitlements.items.length > 0) {
-      return { customer: null, entitlements: entitlements.items };
+      return { customer: null, entitlements: entitlements.items, userId };
     }
   }
 
@@ -846,11 +861,179 @@ async function resolveAccountIdentity(
     const entitlements =
       await input.repositories.account.listEntitlementsByEmailHash(sessionEmailHash);
     if (entitlements.items.length > 0) {
-      return { customer: null, entitlements: entitlements.items };
+      return { customer: null, entitlements: entitlements.items, emailHash: sessionEmailHash };
     }
   }
 
   return null;
+}
+
+async function requestAccountExport(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+): Promise<MikaApiResult<AccountExportDTO>> {
+  const identity = await resolveAccountIdentity(input, ctx);
+  if (!identity) {
+    return authRequired("Account export requires an authenticated customer identity.");
+  }
+
+  const now = ctx.now;
+  const exportId = input.createId("account_export");
+  const token = input.createId("account_export_token");
+  const tokenHash = await hashAccountExportDownloadToken(input, token);
+  const expiresAt = addMilliseconds(now, input.config?.accountExport?.ttlMs ?? 24 * 60 * 60_000);
+  const account = identity.customer
+    ? await accountDTOForCustomer(input, identity.customer)
+    : {
+        orders: [],
+        subscriptions: [],
+        entitlements: identity.entitlements.map((item) => entitlementDTO(item.data)),
+        downloads: [],
+      };
+  const artifactRef = accountExportArtifactRef(account, now);
+
+  await input.repositories.ephemeral.put({
+    key: tokenHash,
+    kind: "token",
+    subjectHash: accountExportSubjectHash(identity),
+    status: "pending",
+    count: 0,
+    expiresAt,
+    version: 1,
+    createdAt: now,
+    updatedAt: now,
+    data: {
+      purpose: "account_export_download",
+      exportId,
+    },
+  });
+
+  const record = {
+    id: exportId,
+    customerId: identity.customer?.customerId,
+    userId: identity.customer?.userId ?? identity.userId,
+    status: "ready" as const,
+    requestedAt: now,
+    finishedAt: now,
+    expiresAt,
+    downloadTokenHash: tokenHash,
+    artifactRef,
+  };
+
+  const document: AccountExportDocument = {
+    id: exportId,
+    type: "accountExport",
+    schemaVersion: 1,
+    customerId: record.customerId,
+    userId: record.userId,
+    status: record.status,
+    expiresAt,
+    record,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await input.repositories.ops.put(document);
+
+  return { ok: true, status: 202, data: accountExportDTO(document, ctx, token) };
+}
+
+async function accountExportStatus(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  statusInput: { readonly exportId: MikaId },
+): Promise<MikaApiResult<AccountExportDTO>> {
+  const identity = await resolveAccountIdentity(input, ctx);
+  if (!identity) {
+    return authRequired("Account export status requires an authenticated customer identity.");
+  }
+
+  const document = await input.repositories.ops.findAccountExport(statusInput.exportId);
+  if (!document || !accountExportBelongsToIdentity(document, identity)) {
+    return forbidden("Account export is not available for this identity.");
+  }
+
+  return { ok: true, status: 200, data: accountExportDTO(document, ctx) };
+}
+
+async function downloadAccountExport(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  downloadInput: { readonly exportId: MikaId; readonly token?: string },
+): Promise<MikaApiResult<AccountExportDownloadDTO>> {
+  const document = await input.repositories.ops.findAccountExport(downloadInput.exportId);
+  if (!document) {
+    return tokenResult("TOKEN_INVALID", "Account export download token is invalid.");
+  }
+
+  if (downloadInput.token) {
+    const tokenHash = await hashAccountExportDownloadToken(input, downloadInput.token.trim());
+    if (tokenHash !== document.record.downloadTokenHash) {
+      return tokenResult("TOKEN_INVALID", "Account export download token is invalid.");
+    }
+
+    const record = await input.repositories.ephemeral.get(tokenHash);
+    const tokenError = accountExportDownloadTokenError(record, document.id, ctx.now);
+    if (tokenError) return tokenError;
+
+    const consumed = await input.repositories.ephemeral.consumeToken(tokenHash, ctx.now);
+    if (!consumed) {
+      const current = await input.repositories.ephemeral.get(tokenHash);
+      return (
+        accountExportDownloadTokenError(current, document.id, ctx.now) ??
+        tokenResult("TOKEN_INVALID", "Account export download token is invalid.")
+      );
+    }
+
+    return accountExportDownloadResult(document, ctx.now);
+  }
+
+  const identity = await resolveAccountIdentity(input, ctx);
+  if (!identity) {
+    return authRequired("Account export download requires an authenticated customer identity.");
+  }
+  if (!accountExportBelongsToIdentity(document, identity)) {
+    return forbidden("Account export download is not available for this identity.");
+  }
+
+  return accountExportDownloadResult(document, ctx.now);
+}
+
+async function requestAccountDelete(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+): Promise<MikaApiResult<{ requested: boolean }>> {
+  const identity = await resolveAccountIdentity(input, ctx);
+  if (!identity) {
+    return authRequired("Account deletion requires an authenticated customer identity.");
+  }
+
+  const now = ctx.now;
+  const requestId = input.createId("account_delete_request");
+  const record = {
+    id: requestId,
+    customerId: identity.customer?.customerId,
+    userId: identity.customer?.userId ?? identity.userId,
+    emailHash: identity.customer?.emailHash ?? identity.emailHash,
+    status: "queued" as const,
+    requestedAt: now,
+  };
+  const document: AccountDeleteRequestDocument = {
+    id: requestId,
+    type: "accountDeleteRequest",
+    schemaVersion: 1,
+    customerId: record.customerId,
+    userId: record.userId,
+    emailHash: record.emailHash,
+    status: record.status,
+    record,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await input.repositories.ops.put(document);
+
+  return { ok: true, status: 202, data: { requested: true } };
 }
 
 async function requestMagicLink(
@@ -1051,6 +1234,110 @@ function orderDownloadDTOs(order: OrderDocument): readonly DownloadDTO[] {
   );
 }
 
+function accountExportDTO(
+  document: AccountExportDocument,
+  ctx: MikaRequestContext,
+  token?: string,
+): AccountExportDTO {
+  const expired = document.expiresAt <= ctx.now;
+  const status = expired && document.status !== "failed" ? "expired" : document.status;
+
+  return {
+    id: document.id,
+    status,
+    requestedAt: document.record.requestedAt,
+    expiresAt: document.expiresAt,
+    ...(status === "ready"
+      ? {
+          downloadHref: mikaPluginRoute("accountExportDownload", {
+            origin: ctx.url?.origin,
+            search: {
+              exportId: document.id,
+              token,
+            },
+          }),
+        }
+      : {}),
+  };
+}
+
+function accountExportDownloadResult(
+  document: AccountExportDocument,
+  now: ISODateTime,
+): MikaApiResult<AccountExportDownloadDTO> {
+  if (document.expiresAt <= now || document.status === "expired") {
+    return tokenResult("TOKEN_EXPIRED", "Account export download token has expired.");
+  }
+  if (document.status !== "ready") {
+    return tokenResult("TOKEN_INVALID", "Account export download is not ready.");
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      id: document.id,
+      href: document.record.artifactRef,
+      expiresAt: document.expiresAt,
+    },
+  };
+}
+
+function accountExportArtifactRef(account: AccountDTO, exportedAt: ISODateTime): string {
+  return `data:application/json;charset=utf-8,${encodeURIComponent(
+    JSON.stringify({ exportedAt, account }),
+  )}`;
+}
+
+function accountExportBelongsToIdentity(
+  document: AccountExportDocument,
+  identity: NonNullable<Awaited<ReturnType<typeof resolveAccountIdentity>>>,
+): boolean {
+  if (identity.customer && document.customerId === identity.customer.customerId) return true;
+  return Boolean(identity.userId && document.userId === identity.userId);
+}
+
+function accountExportSubjectHash(
+  identity: NonNullable<Awaited<ReturnType<typeof resolveAccountIdentity>>>,
+): string | undefined {
+  if (identity.customer?.customerId) return `customer:${identity.customer.customerId}`;
+  if (identity.userId) return `user:${identity.userId}`;
+  return identity.emailHash ? `email:${identity.emailHash}` : undefined;
+}
+
+async function hashAccountExportDownloadToken(
+  input: CreateMikaBackendApiInput,
+  token: string,
+): Promise<string> {
+  return input.hash(`account-export-download-token:${token}`);
+}
+
+function accountExportDownloadTokenError(
+  record: Awaited<ReturnType<MikaBackendRepositories["ephemeral"]["get"]>>,
+  exportId: MikaId,
+  now: ISODateTime,
+): MikaApiFailure | null {
+  if (
+    !record ||
+    record.kind !== "token" ||
+    stringChild(record.data ?? {}, "purpose") !== "account_export_download" ||
+    stringChild(record.data ?? {}, "exportId") !== exportId
+  ) {
+    return tokenResult("TOKEN_INVALID", "Account export download token is invalid.");
+  }
+  if (record.status === "revoked") {
+    return tokenResult("DOWNLOAD_REVOKED", "Account export download token has been revoked.");
+  }
+  if (record.status !== "pending") {
+    return tokenResult("TOKEN_USED", "Account export download token has already been used.");
+  }
+  if (record.expiresAt <= now) {
+    return tokenResult("TOKEN_EXPIRED", "Account export download token has expired.");
+  }
+
+  return null;
+}
+
 async function hashMagicLinkToken(
   input: CreateMikaBackendApiInput,
   token: string,
@@ -1095,6 +1382,14 @@ function authRequired(message: string): MikaApiFailure {
     ok: false,
     status: 401,
     error: { code: "AUTH_REQUIRED", message },
+  };
+}
+
+function forbidden(message: string): MikaApiFailure {
+  return {
+    ok: false,
+    status: 403,
+    error: { code: "FORBIDDEN", message },
   };
 }
 
