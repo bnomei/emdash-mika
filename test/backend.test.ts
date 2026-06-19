@@ -2065,6 +2065,276 @@ describe("backend API composition", () => {
     ).resolves.toBeNull();
   });
 
+  it("previews checkout totals, lines, provider, mode, and proof requirements", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const stock = createStockRecord({
+      sellableId: sellable.id,
+      quantityOnHand: 5,
+      quantityReserved: 0,
+    });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([[sellable.id, stock]]),
+    });
+    const fake = createFakeMikaProvider({ id: createProviderName("stripe") });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+
+    const preview = await api.checkout.preview(ctx, {
+      cartId: added.data.id,
+      provider: createProviderName("stripe"),
+    });
+
+    expect(preview).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "checkout_preview_1",
+        quoteId: "cart_quote_1",
+        status: "requires_payment_authorization",
+        mode: "payment",
+        provider: "stripe",
+        quote: {
+          cartId: added.data.id,
+          status: "valid",
+          items: [
+            {
+              lineId: added.data.items[0]!.id,
+              sellableId: sellable.id,
+              quantity: 2,
+              unitAmount: { amount: 1200, currency: TEST_CURRENCY },
+              subtotal: { amount: 2400, currency: TEST_CURRENCY },
+              total: { amount: 2400, currency: TEST_CURRENCY },
+            },
+          ],
+          subtotal: { amount: 2400, currency: TEST_CURRENCY },
+          total: { amount: 2400, currency: TEST_CURRENCY },
+        },
+        requiredProofs: [
+          {
+            kind: "payment_authorization",
+            required: true,
+            reason: expect.stringContaining("payment confirmation"),
+            inputHash: expect.any(String),
+          },
+        ],
+        acceptedProofs: ["consent", "mandate", "payment_authorization"],
+        inputHash: expect.any(String),
+      },
+    });
+    if (!preview.ok) {
+      throw new Error("Expected checkout.preview to succeed.");
+    }
+    await expect(repositories.session.findById(preview.data.id!)).resolves.toBeNull();
+    await expect(
+      repositories.session.findById(createTestMikaId("checkout", 1)),
+    ).resolves.toBeNull();
+    expect(Object.values(fake.getCalls()).flat()).toEqual([]);
+  });
+
+  it("requires current bound payment authorization when checkout preview quote changes", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repricedSellable = createSellableDefinition({
+      prices: [createPriceDefinition({ amount: 1500 })],
+    });
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+
+    const originalPreview = await api.checkout.preview(ctx, { cartId: added.data.id });
+    if (!originalPreview.ok) {
+      throw new Error("Expected checkout.preview to succeed.");
+    }
+
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [repricedSellable] }),
+    );
+
+    const unboundProofPreview = await api.checkout.preview(ctx, {
+      cartId: added.data.id,
+      proofRefs: [{ kind: "payment_authorization", id: "proof_unbound" }],
+    });
+    expect(unboundProofPreview).toMatchObject({
+      ok: true,
+      data: {
+        status: "requires_payment_authorization",
+        quote: {
+          status: "changed",
+          total: { amount: 3000, currency: TEST_CURRENCY },
+        },
+      },
+    });
+    if (!unboundProofPreview.ok) {
+      throw new Error("Expected checkout.preview to succeed.");
+    }
+
+    const staleProofPreview = await api.checkout.preview(ctx, {
+      cartId: added.data.id,
+      proofRefs: [
+        {
+          kind: "payment_authorization",
+          id: "proof_stale",
+          inputHash: originalPreview.data.inputHash,
+        },
+      ],
+    });
+    expect(staleProofPreview).toMatchObject({
+      ok: true,
+      data: {
+        status: "requires_payment_authorization",
+        quote: { status: "changed" },
+      },
+    });
+    if (!staleProofPreview.ok) {
+      throw new Error("Expected checkout.preview to succeed.");
+    }
+    expect(staleProofPreview.data.inputHash).not.toBe(originalPreview.data.inputHash);
+
+    await expect(
+      api.checkout.preview(ctx, {
+        cartId: added.data.id,
+        proofRefs: [
+          {
+            kind: "payment_authorization",
+            id: "proof_current",
+            inputHash: staleProofPreview.data.inputHash,
+          },
+        ],
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        status: "ready",
+        quote: { status: "changed" },
+      },
+    });
+    await expect(repositories.session.findById(unboundProofPreview.data.id!)).resolves.toBeNull();
+    await expect(repositories.session.findById(staleProofPreview.data.id!)).resolves.toBeNull();
+    expect(Object.values(fake.getCalls()).flat()).toEqual([]);
+  });
+
+  it("binds checkout preview authorization to visible line availability projection", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const stockBySellableId = new Map<string, StockItemRecord>([
+      [
+        sellable.id,
+        createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+      ],
+    ]);
+    const repositories = createTestBackendRepositories({ stockBySellableId });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+
+    const availablePreview = await api.checkout.preview(ctx, { cartId: added.data.id });
+    if (!availablePreview.ok) {
+      throw new Error("Expected checkout.preview to succeed.");
+    }
+    expect(availablePreview).toMatchObject({
+      ok: true,
+      data: {
+        quote: {
+          status: "valid",
+          items: [{ availability: { status: "available", availableQuantity: 5 } }],
+          total: { amount: 1200, currency: TEST_CURRENCY },
+        },
+      },
+    });
+
+    stockBySellableId.set(
+      sellable.id,
+      createStockRecord({ sellableId: sellable.id, quantityOnHand: 2, quantityReserved: 0 }),
+    );
+
+    const staleAvailabilityProofPreview = await api.checkout.preview(ctx, {
+      cartId: added.data.id,
+      proofRefs: [
+        {
+          kind: "payment_authorization",
+          id: "proof_stale_availability",
+          inputHash: availablePreview.data.inputHash,
+        },
+      ],
+    });
+    expect(staleAvailabilityProofPreview).toMatchObject({
+      ok: true,
+      data: {
+        status: "requires_payment_authorization",
+        quote: {
+          status: "valid",
+          items: [{ availability: { status: "low_stock", availableQuantity: 2 } }],
+          total: { amount: 1200, currency: TEST_CURRENCY },
+        },
+      },
+    });
+    if (!staleAvailabilityProofPreview.ok) {
+      throw new Error("Expected checkout.preview to succeed.");
+    }
+    expect(staleAvailabilityProofPreview.data.inputHash).not.toBe(availablePreview.data.inputHash);
+
+    await expect(
+      api.checkout.preview(ctx, {
+        cartId: added.data.id,
+        proofRefs: [
+          {
+            kind: "payment_authorization",
+            id: "proof_current_availability",
+            inputHash: staleAvailabilityProofPreview.data.inputHash,
+          },
+        ],
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        status: "ready",
+        quote: {
+          status: "valid",
+          items: [{ availability: { status: "low_stock", availableQuantity: 2 } }],
+          total: { amount: 1200, currency: TEST_CURRENCY },
+        },
+      },
+    });
+    await expect(
+      repositories.session.findById(staleAvailabilityProofPreview.data.id!),
+    ).resolves.toBeNull();
+  });
+
   it("returns stable errors for invalid target cart and merge currency mismatches", async () => {
     const dependencies = createIncrementingBackendDependencies();
     const api = createMikaBackendApi(dependencies);

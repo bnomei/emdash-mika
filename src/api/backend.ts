@@ -34,6 +34,7 @@ import type {
   JsonObject,
   MikaId,
   ProviderName,
+  PurchaseMode,
 } from "../types/primitives";
 import type { StockItemRecord } from "../types/operational";
 import type { MikaRequestContext } from "./context";
@@ -45,6 +46,8 @@ import type {
   CartQuoteDTO,
   CartQuoteInput,
   CartQuoteLineDTO,
+  CheckoutPreviewDTO,
+  CheckoutPreviewInput,
   MikaError,
   MikaApiResult,
   MoneyDTO,
@@ -685,6 +688,14 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
       },
       ...input.overrides?.wishlist,
     },
+    checkout: {
+      preview: async (ctx, previewInput) => {
+        const preview = await createCheckoutPreview(input, ctx, previewInput);
+
+        return { ok: true, status: 200, data: preview };
+      },
+      ...input.overrides?.checkout,
+    },
   });
 }
 
@@ -923,6 +934,122 @@ async function createCartQuote(
     warnings: warnings.length > 0 ? warnings : undefined,
     errors: errors.length > 0 ? errors : undefined,
   };
+}
+
+async function createCheckoutPreview(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  previewInput: CheckoutPreviewInput,
+): Promise<CheckoutPreviewDTO> {
+  const quote = await createCartQuote(input, ctx, previewInput);
+  const mode = await resolveCheckoutPreviewMode(input, ctx, previewInput);
+  const provider = previewInput.provider ?? input.defaults?.provider;
+  const inputHash = await input.hash(
+    JSON.stringify(checkoutPreviewProofProjection(previewInput, quote, mode, provider)),
+  );
+  const hasPaymentAuthorization =
+    previewInput.proofRefs?.some(
+      (proof) =>
+        proof.kind === "payment_authorization" &&
+        proof.inputHash !== undefined &&
+        proof.inputHash === inputHash,
+    ) ?? false;
+  const requiredProofs = [
+    {
+      kind: "payment_authorization" as const,
+      required: true,
+      reason: "Checkout start requires payment confirmation before provider handoff.",
+      inputHash,
+      expiresAt: quote.expiresAt,
+    },
+  ];
+  const status =
+    quote.status === "expired"
+      ? "expired"
+      : quote.status === "unavailable"
+        ? "unavailable"
+        : hasPaymentAuthorization
+          ? "ready"
+          : "requires_payment_authorization";
+
+  return {
+    id: input.createId("checkout_preview"),
+    quoteId: previewInput.quoteId ?? quote.id,
+    status,
+    mode,
+    provider,
+    quote,
+    requiredProofs,
+    acceptedProofs: ["consent", "mandate", "payment_authorization"],
+    proofRefs: previewInput.proofRefs,
+    expiresAt: quote.expiresAt,
+    inputHash,
+    warnings: quote.warnings,
+    errors: quote.errors,
+  };
+}
+
+function checkoutPreviewProofProjection(
+  previewInput: CheckoutPreviewInput,
+  quote: CartQuoteDTO,
+  mode: PurchaseMode | undefined,
+  provider: ProviderName | undefined,
+) {
+  return {
+    quoteId: previewInput.quoteId,
+    provider,
+    mode,
+    customer: previewInput.customer,
+    customFields: previewInput.customFields,
+    successPath: previewInput.successPath,
+    cancelPath: previewInput.cancelPath,
+    returnTo: previewInput.returnTo,
+    quote: {
+      cartId: quote.cartId,
+      status: quote.status,
+      currency: quote.currency,
+      items: quote.items,
+      subtotal: quote.subtotal,
+      discount: quote.discount,
+      tax: quote.tax,
+      shipping: quote.shipping,
+      total: quote.total,
+      adjustments: quote.adjustments,
+      coupon: quote.coupon,
+      expiresAt: quote.expiresAt,
+      warnings: quote.warnings,
+      errors: quote.errors,
+    },
+  };
+}
+
+async function resolveCheckoutPreviewMode(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  previewInput: CheckoutPreviewInput,
+): Promise<PurchaseMode | undefined> {
+  if (previewInput.sellableId) {
+    const catalog = await input.repositories.catalog.findItemBySellableId(previewInput.sellableId);
+    const sellable = catalog?.aggregate.sellables.find(
+      (item) => item.id === previewInput.sellableId,
+    );
+    return sellable
+      ? selectCartPrice(
+          sellable,
+          previewInput.priceId,
+          input.defaults?.currency ?? createCurrencyCode("EUR"),
+        )?.mode
+      : undefined;
+  }
+
+  const cartResult = await findQuoteCart(
+    input,
+    ctx,
+    previewInput.cartId,
+    input.defaults?.currency ?? createCurrencyCode("EUR"),
+  );
+  const modes = new Set(cartResult.cart?.aggregate.items.map((line) => line.item.mode) ?? []);
+  return modes.size === 1 ? modes.values().next().value : undefined;
 }
 
 async function findQuoteCart(
