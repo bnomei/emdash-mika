@@ -42,7 +42,12 @@ import type {
   AddCartItemInput,
   AdminActionResultDTO,
   CartDTO,
+  CartQuoteDTO,
+  CartQuoteInput,
+  CartQuoteLineDTO,
+  MikaError,
   MikaApiResult,
+  MoneyDTO,
   StockAdjustInput,
   WishlistDTO,
   WishlistItemInput,
@@ -338,6 +343,11 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
         const cart = await findOrCreateOpenCart(input, ctx);
 
         return { ok: true, status: 200, data: await cartDocumentToDTO(input, cart) };
+      },
+      quote: async (ctx, quoteInput) => {
+        const quote = await createCartQuote(input, ctx, quoteInput);
+
+        return { ok: true, status: 200, data: quote };
       },
       add: async (ctx, itemInput) => {
         const currency = input.defaults?.currency;
@@ -789,6 +799,297 @@ async function findOpenCart(
   return ctx.sessionId
     ? input.repositories.session.findOpenCartBySession(ctx.sessionId, currency)
     : null;
+}
+
+async function createCartQuote(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  quoteInput: CartQuoteInput,
+): Promise<CartQuoteDTO> {
+  const defaultCurrency = input.defaults?.currency ?? createCurrencyCode("EUR");
+  const cartResult = await findQuoteCart(input, ctx, quoteInput.cartId, defaultCurrency);
+  const currency = cartResult.cart?.aggregate.currency ?? defaultCurrency;
+  const warnings: string[] = [];
+  const errors: MikaError[] = [];
+  const quoteLines: CartQuoteLineDTO[] = [];
+  let changed = false;
+  let unavailable = false;
+  let coupon = cartResult.cart?.aggregate.coupon;
+  let quotedCouponLabel: string | undefined;
+  let quotedCouponCodeHash: string | undefined;
+
+  if (quoteInput.couponCode !== undefined) {
+    const normalizedCode = quoteInput.couponCode.trim();
+    if (normalizedCode) {
+      quotedCouponLabel = normalizedCode.toUpperCase();
+      quotedCouponCodeHash = await input.hash(`coupon:${quotedCouponLabel}`);
+      changed = !coupon || coupon.label !== quotedCouponLabel;
+    } else if (coupon) {
+      changed = true;
+      coupon = undefined;
+    }
+  }
+
+  if (cartResult.cart) {
+    for (const line of cartResult.cart.aggregate.items) {
+      const quoted = await quoteCartLine(input, line);
+      quoteLines.push(quoted.line);
+      changed = changed || quoted.changed;
+      unavailable = unavailable || quoted.unavailable;
+    }
+  }
+
+  if (quoteInput.sellableId) {
+    const quoted = await quoteInputLine(input, quoteInput, currency);
+    quoteLines.push(quoted.line);
+    unavailable = unavailable || quoted.unavailable;
+  }
+
+  if (quoteLines.length === 0) {
+    unavailable = true;
+    warnings.push("Cart quote is empty.");
+    errors.push({
+      code: "CHECKOUT_EMPTY",
+      message: "Cart quote is empty.",
+    });
+  }
+
+  if (cartResult.expired) {
+    warnings.push("Cart quote has expired.");
+    errors.push({
+      code: "CHECKOUT_EXPIRED",
+      message: "Cart quote has expired.",
+    });
+  }
+
+  const subtotalAmount = quoteLines.reduce((sum, line) => sum + (line.subtotal?.amount ?? 0), 0);
+  const discountAmount =
+    quotedCouponLabel !== undefined
+      ? Math.floor(subtotalAmount * 0.1)
+      : (coupon?.discountAmount ?? 0);
+  if (quotedCouponLabel !== undefined) {
+    coupon = {
+      codeHash: quotedCouponCodeHash ?? "",
+      label: quotedCouponLabel,
+      discountAmount,
+    };
+  }
+  const totalAmount = Math.max(0, subtotalAmount - discountAmount);
+  const status = cartResult.expired
+    ? "expired"
+    : unavailable
+      ? "unavailable"
+      : changed
+        ? "changed"
+        : "valid";
+
+  return {
+    id: input.createId("cart_quote"),
+    cartId: cartResult.cart?.id,
+    status,
+    currency,
+    items: quoteLines,
+    subtotal: moneyDTO(subtotalAmount, currency),
+    discount: discountAmount > 0 ? moneyDTO(discountAmount, currency) : undefined,
+    total: moneyDTO(totalAmount, currency),
+    adjustments:
+      discountAmount > 0
+        ? [
+            {
+              type: "discount",
+              label: coupon?.label,
+              amount: moneyDTO(discountAmount, currency),
+            },
+          ]
+        : undefined,
+    coupon: coupon
+      ? {
+          label: coupon.label,
+          discount: discountAmount > 0 ? moneyDTO(discountAmount, currency) : undefined,
+          providerCouponId: coupon.providerRef?.priceId,
+        }
+      : undefined,
+    expiresAt: cartResult.cart?.expiresAt,
+    inputHash: await input.hash(
+      JSON.stringify({
+        cartId: cartResult.cart?.id,
+        sellableId: quoteInput.sellableId,
+        priceId: quoteInput.priceId,
+        quantity: quoteInput.quantity,
+        couponCode: quoteInput.couponCode,
+        currency,
+      }),
+    ),
+    warnings: warnings.length > 0 ? warnings : undefined,
+    errors: errors.length > 0 ? errors : undefined,
+  };
+}
+
+async function findQuoteCart(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  cartId: MikaId | undefined,
+  currency: CurrencyCode,
+): Promise<{ readonly cart: CartDocument | null; readonly expired: boolean }> {
+  const cart = cartId
+    ? await findOwnedCartById(input, ctx, cartId)
+    : await findOpenCart(input, ctx, currency);
+  if (!cart) return { cart: null, expired: false };
+
+  const expired =
+    cart.status === "expired" ||
+    (cart.expiresAt !== undefined &&
+      new Date(cart.expiresAt).getTime() <= new Date(ctx.now).getTime());
+
+  return { cart, expired };
+}
+
+async function findOwnedCartById(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  cartId: MikaId,
+): Promise<CartDocument | null> {
+  const document = await input.repositories.session.findById(cartId);
+  if (!document || document.type !== "cart") return null;
+  if (document.customerId && document.customerId !== ctx.customerId) return null;
+  if (!document.customerId && document.sessionId && document.sessionId !== ctx.sessionId)
+    return null;
+
+  return document;
+}
+
+async function quoteCartLine(
+  input: CreateMikaBackendApiInput,
+  line: CartLine,
+): Promise<{
+  readonly line: CartQuoteLineDTO;
+  readonly changed: boolean;
+  readonly unavailable: boolean;
+}> {
+  const catalog = await input.repositories.catalog.findItemBySellableId(line.item.sellableId);
+  const sellable = catalog?.aggregate.sellables.find((item) => item.id === line.item.sellableId);
+  const stock = await input.repositories.stock.findBySellableId(line.item.sellableId);
+  const availability = sellable ? stockAvailabilityToDTO(sellable, stock ?? undefined) : undefined;
+  const warnings: string[] = [];
+  let changed = false;
+  let unavailable = false;
+  let unitAmount = line.item.unitAmount;
+  let title = line.item.titleSnapshot;
+  let sku = line.item.sku;
+  let variantOptions = line.item.variantOptions;
+
+  if (!sellable?.active) {
+    unavailable = true;
+    warnings.push(`Sellable '${line.item.sellableId}' is unavailable.`);
+  } else {
+    const price = selectCartPrice(sellable, line.item.priceId, line.item.currency);
+    if (!price) {
+      unavailable = true;
+      warnings.push(`Price for sellable '${sellable.id}' is unavailable.`);
+    } else {
+      title = price.titleSnapshot ?? sellable.titleSnapshot ?? title;
+      sku = price.sku ?? sellable.sku;
+      variantOptions = sellable.variantOptions;
+      if (
+        price.amount !== line.item.unitAmount ||
+        title !== line.item.titleSnapshot ||
+        sku !== line.item.sku
+      ) {
+        changed = true;
+        warnings.push("Line details changed since it was added to the cart.");
+      }
+      unitAmount = price.amount;
+    }
+
+    const quantityError = validateQuantityLimit(sellable, stock, line.quantity);
+    if (quantityError) {
+      unavailable = true;
+      warnings.push(quantityError.error.message);
+    }
+  }
+
+  const subtotalAmount = unitAmount * line.quantity;
+
+  return {
+    line: {
+      lineId: line.id,
+      sellableId: line.item.sellableId,
+      priceId: line.item.priceId,
+      title,
+      sku,
+      variantOptions,
+      quantity: line.quantity,
+      unitAmount: moneyDTO(unitAmount, line.item.currency),
+      subtotal: moneyDTO(subtotalAmount, line.item.currency),
+      total: moneyDTO(subtotalAmount, line.item.currency),
+      availability,
+      warnings: warnings.length > 0 ? warnings : undefined,
+    },
+    changed,
+    unavailable,
+  };
+}
+
+async function quoteInputLine(
+  input: CreateMikaBackendApiInput,
+  quoteInput: CartQuoteInput,
+  currency: CurrencyCode,
+): Promise<{
+  readonly line: CartQuoteLineDTO;
+  readonly unavailable: boolean;
+}> {
+  const quantity = quoteInput.quantity ?? 1;
+  const catalog = quoteInput.sellableId
+    ? await input.repositories.catalog.findItemBySellableId(quoteInput.sellableId)
+    : null;
+  const sellable = catalog?.aggregate.sellables.find((item) => item.id === quoteInput.sellableId);
+  const stock = quoteInput.sellableId
+    ? await input.repositories.stock.findBySellableId(quoteInput.sellableId)
+    : null;
+  const availability = sellable ? stockAvailabilityToDTO(sellable, stock ?? undefined) : undefined;
+  const warnings: string[] = [];
+  let unavailable = false;
+  let price: PriceDefinition | null = null;
+
+  if (!sellable?.active) {
+    unavailable = true;
+    warnings.push(`Sellable '${quoteInput.sellableId}' is unavailable.`);
+  } else {
+    price = selectCartPrice(sellable, quoteInput.priceId, currency);
+    if (!price) {
+      unavailable = true;
+      warnings.push(`Price for sellable '${sellable.id}' is unavailable.`);
+    }
+    const quantityError = validateQuantityLimit(sellable, stock, quantity);
+    if (quantityError) {
+      unavailable = true;
+      warnings.push(quantityError.error.message);
+    }
+  }
+
+  const unitAmount = price?.amount ?? 0;
+  const subtotalAmount = unitAmount * quantity;
+
+  return {
+    line: {
+      sellableId: quoteInput.sellableId ?? createMikaId("sellable_missing"),
+      priceId: price?.id ?? quoteInput.priceId,
+      title: sellable?.titleSnapshot,
+      sku: price?.sku ?? sellable?.sku,
+      variantOptions: sellable?.variantOptions,
+      quantity,
+      unitAmount: price ? moneyDTO(unitAmount, currency) : undefined,
+      subtotal: price ? moneyDTO(subtotalAmount, currency) : undefined,
+      total: price ? moneyDTO(subtotalAmount, currency) : undefined,
+      availability,
+      warnings: warnings.length > 0 ? warnings : undefined,
+    },
+    unavailable,
+  };
+}
+
+function moneyDTO(amount: number, currency: CurrencyCode): MoneyDTO {
+  return { amount, currency };
 }
 
 async function findOpenCartBySessionAnyCurrency(

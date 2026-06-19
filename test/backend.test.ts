@@ -1807,6 +1807,264 @@ describe("backend API composition", () => {
     });
   });
 
+  it("returns a valid cart quote without provider or stock mutations", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const stock = createStockRecord({
+      sellableId: sellable.id,
+      quantityOnHand: 5,
+      quantityReserved: 0,
+    });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([[sellable.id, stock]]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+        config: { cart: { ttlMs: 60_000 } },
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+
+    await expect(api.cart.quote(ctx, { cartId: added.data.id })).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "cart_quote_1",
+        cartId: added.data.id,
+        status: "valid",
+        currency: TEST_CURRENCY,
+        items: [
+          {
+            lineId: added.data.items[0]!.id,
+            sellableId: sellable.id,
+            quantity: 2,
+            unitAmount: { amount: 1200, currency: TEST_CURRENCY },
+            subtotal: { amount: 2400, currency: TEST_CURRENCY },
+            total: { amount: 2400, currency: TEST_CURRENCY },
+            availability: { status: "available", availableQuantity: 5 },
+          },
+        ],
+        subtotal: { amount: 2400, currency: TEST_CURRENCY },
+        total: { amount: 2400, currency: TEST_CURRENCY },
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      },
+    });
+    await expect(
+      repositories.session.findOpenCartBySession("session_1", TEST_CURRENCY),
+    ).resolves.toMatchObject({ id: added.data.id, updatedAt: TEST_NOW });
+    expect(Object.values(fake.getCalls()).flat()).toEqual([]);
+  });
+
+  it("quotes an explicit cart id using the stored cart currency", async () => {
+    const usd = createTestCurrencyCode("USD");
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition({
+      prices: [createPriceDefinition({ currency: usd, amount: 1500 })],
+    });
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const dependencies = createIncrementingBackendDependencies({ repositories });
+    const usdApi = createMikaBackendApi({
+      ...dependencies,
+      defaults: { ...dependencies.defaults, currency: usd },
+    });
+    const defaultApi = createMikaBackendApi(dependencies);
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await usdApi.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) {
+      throw new Error("Expected USD cart.add to succeed.");
+    }
+
+    await expect(defaultApi.cart.quote(ctx, { cartId: added.data.id })).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        cartId: added.data.id,
+        status: "valid",
+        currency: usd,
+        items: [
+          {
+            sellableId: sellable.id,
+            unitAmount: { amount: 1500, currency: usd },
+            subtotal: { amount: 3000, currency: usd },
+            total: { amount: 3000, currency: usd },
+          },
+        ],
+        subtotal: { amount: 3000, currency: usd },
+        total: { amount: 3000, currency: usd },
+        inputHash: createTestHash(
+          JSON.stringify({
+            cartId: added.data.id,
+            quantity: undefined,
+            currency: usd,
+          }),
+        ),
+      },
+    });
+  });
+
+  it("marks cart quotes changed when current price or coupon input differs", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repricedSellable = createSellableDefinition({
+      prices: [createPriceDefinition({ amount: 1500 })],
+    });
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [repricedSellable] }),
+    );
+
+    await expect(
+      api.cart.quote(ctx, { cartId: added.data.id, couponCode: "save10" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        status: "changed",
+        items: [
+          {
+            sellableId: sellable.id,
+            unitAmount: { amount: 1500, currency: TEST_CURRENCY },
+            subtotal: { amount: 3000, currency: TEST_CURRENCY },
+            warnings: [expect.any(String)],
+          },
+        ],
+        coupon: {
+          label: "SAVE10",
+          discount: { amount: 300, currency: TEST_CURRENCY },
+        },
+        subtotal: { amount: 3000, currency: TEST_CURRENCY },
+        discount: { amount: 300, currency: TEST_CURRENCY },
+        total: { amount: 2700, currency: TEST_CURRENCY },
+      },
+    });
+  });
+
+  it("marks cart quotes unavailable when current stock cannot satisfy the cart", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const stockBySellableId = new Map<string, StockItemRecord>([
+      [
+        sellable.id,
+        createStockRecord({ sellableId: sellable.id, quantityOnHand: 3, quantityReserved: 0 }),
+      ],
+    ]);
+    const repositories = createTestBackendRepositories({ stockBySellableId });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+    stockBySellableId.set(
+      sellable.id,
+      createStockRecord({ sellableId: sellable.id, quantityOnHand: 0, quantityReserved: 0 }),
+    );
+
+    await expect(api.cart.quote(ctx, { cartId: added.data.id })).resolves.toMatchObject({
+      ok: true,
+      data: {
+        status: "unavailable",
+        items: [
+          {
+            sellableId: sellable.id,
+            availability: { status: "out_of_stock", availableQuantity: 0 },
+            warnings: [expect.stringContaining("does not have enough stock")],
+          },
+        ],
+      },
+    });
+  });
+
+  it("marks cart quotes expired without mutating the cart", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        config: { cart: { ttlMs: 1 } },
+      }),
+    );
+    const addCtx = createTestRequestContext({ customerId: false, userId: false });
+    const quoteCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      now: new Date(createTestClock().isoAt(60_000)),
+    });
+
+    const added = await api.cart.add(addCtx, { sellableId: sellable.id, quantity: 1 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+
+    await expect(api.cart.quote(quoteCtx, { cartId: added.data.id })).resolves.toMatchObject({
+      ok: true,
+      data: {
+        status: "expired",
+        cartId: added.data.id,
+        warnings: ["Cart quote has expired."],
+        errors: [{ code: "CHECKOUT_EXPIRED" }],
+      },
+    });
+    await expect(
+      repositories.session.findOpenCartBySession("session_1", TEST_CURRENCY),
+    ).resolves.toMatchObject({ id: added.data.id, status: "open", updatedAt: TEST_NOW });
+  });
+
+  it("returns an unavailable empty quote without creating a cart", async () => {
+    const repositories = createTestBackendRepositories();
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    await expect(api.cart.quote(ctx, {})).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "cart_quote_1",
+        status: "unavailable",
+        items: [],
+        subtotal: { amount: 0, currency: TEST_CURRENCY },
+        total: { amount: 0, currency: TEST_CURRENCY },
+        warnings: ["Cart quote is empty."],
+        errors: [{ code: "CHECKOUT_EMPTY" }],
+      },
+    });
+    await expect(
+      repositories.session.findOpenCartBySession("session_1", TEST_CURRENCY),
+    ).resolves.toBeNull();
+  });
+
   it("returns stable errors for invalid target cart and merge currency mismatches", async () => {
     const dependencies = createIncrementingBackendDependencies();
     const api = createMikaBackendApi(dependencies);
