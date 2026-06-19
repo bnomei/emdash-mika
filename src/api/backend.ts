@@ -1,5 +1,10 @@
 import type { MikaProviderRegistry } from "../provider";
-import type { MikaRepositories, ReserveStockRepositoryResult } from "../storage/repositories";
+import type {
+  ConsumeReservedStockRepositoryResult,
+  MikaRepositories,
+  ReleaseReservedStockRepositoryResult,
+  ReserveStockRepositoryResult,
+} from "../storage/repositories";
 import {
   cartToDTO,
   cartWithItems,
@@ -113,8 +118,26 @@ export interface ReserveStockInput {
 
 export type ReserveStockResult = ReserveStockRepositoryResult;
 
+export interface ReleaseReservedStockInput {
+  readonly reservationEventId: MikaId;
+  readonly now?: ISODateTime;
+}
+
+export type ReleaseReservedStockResult = ReleaseReservedStockRepositoryResult;
+
+export interface ConsumeReservedStockInput {
+  readonly reservationEventId: MikaId;
+  readonly now?: ISODateTime;
+  readonly orderId?: MikaId;
+  readonly orderLineId?: MikaId;
+}
+
+export type ConsumeReservedStockResult = ConsumeReservedStockRepositoryResult;
+
 export interface MikaStockLifecycleService {
   reserve(input: ReserveStockInput): Promise<ReserveStockResult>;
+  release(input: ReleaseReservedStockInput): Promise<ReleaseReservedStockResult>;
+  consume(input: ConsumeReservedStockInput): Promise<ConsumeReservedStockResult>;
 }
 
 export function createMikaStockLifecycleService(
@@ -125,6 +148,16 @@ export function createMikaStockLifecycleService(
       input.repositories.stock.reserve({
         ...reservation,
         reservationEventId: input.createId("stock_event"),
+        now: reservation.now ?? currentBackendISODateTime(input),
+      }),
+    release: async (reservation) =>
+      input.repositories.stock.release({
+        ...reservation,
+        now: reservation.now ?? currentBackendISODateTime(input),
+      }),
+    consume: async (reservation) =>
+      input.repositories.stock.consume({
+        ...reservation,
         now: reservation.now ?? currentBackendISODateTime(input),
       }),
   };

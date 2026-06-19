@@ -40,8 +40,12 @@ import type {
   StorageQueryOptions,
   StorageWhereClause,
 } from "./collections";
-import type { MikaDatabase, MikaInsertable, MikaSelectable } from "./schema";
-import { reserveStockStatement } from "./statements";
+import type { MikaDatabase, MikaInsertable, MikaSelectable, MikaUpdateable } from "./schema";
+import {
+  consumeReservedStockStatement,
+  releaseStockStatement,
+  reserveStockStatement,
+} from "./statements";
 
 export type MikaDb = Kysely<MikaDatabase>;
 export type MikaTransaction = Transaction<MikaDatabase>;
@@ -79,6 +83,38 @@ export type ReserveStockRepositoryResult =
   | {
       readonly status: "not_found";
     };
+
+export interface ReleaseReservedStockRepositoryInput {
+  readonly reservationEventId: MikaId;
+  readonly now: ISODateTime;
+}
+
+export interface ConsumeReservedStockRepositoryInput {
+  readonly reservationEventId: MikaId;
+  readonly now: ISODateTime;
+  readonly orderId?: MikaId;
+  readonly orderLineId?: MikaId;
+}
+
+type ReservationEventMutationRepositoryResult<TStatus extends "released" | "consumed"> =
+  | {
+      readonly status: TStatus;
+      readonly event: StockEventRecord;
+      readonly stock: StockItemRecord;
+    }
+  | {
+      readonly status: "not_active";
+      readonly event: StockEventRecord;
+      readonly stock: StockItemRecord | null;
+    }
+  | {
+      readonly status: "not_found";
+    };
+
+export type ReleaseReservedStockRepositoryResult =
+  ReservationEventMutationRepositoryResult<"released">;
+export type ConsumeReservedStockRepositoryResult =
+  ReservationEventMutationRepositoryResult<"consumed">;
 
 type TypedDocument = {
   readonly type: string;
@@ -500,6 +536,10 @@ export class StockRepository {
     return findStockEventByIdempotencyKey(this.db, idempotencyKey);
   }
 
+  async findEventById(eventId: MikaId): Promise<StockEventRecord | null> {
+    return findStockEventById(this.db, eventId);
+  }
+
   async putItem(record: StockItemRecord): Promise<void> {
     const row: MikaInsertable<"mika_stock_items"> = {
       id: record.id,
@@ -595,6 +635,117 @@ export class StockRepository {
       return { status: "reserved", event, stock };
     });
   }
+
+  async release(
+    input: ReleaseReservedStockRepositoryInput,
+  ): Promise<ReleaseReservedStockRepositoryResult> {
+    return mutateActiveReservationEvent({
+      executor: this.db,
+      reservationEventId: input.reservationEventId,
+      now: input.now,
+      targetStatus: "released",
+      applyStockMutation: (executor, event) =>
+        releaseStockStatement({
+          stockItemId: event.stockItemId,
+          quantity: event.quantityDelta,
+          now: input.now,
+        }).execute(executor),
+    });
+  }
+
+  async consume(
+    input: ConsumeReservedStockRepositoryInput,
+  ): Promise<ConsumeReservedStockRepositoryResult> {
+    return mutateActiveReservationEvent({
+      executor: this.db,
+      reservationEventId: input.reservationEventId,
+      now: input.now,
+      targetStatus: "consumed",
+      eventPatch: {
+        ...(input.orderId === undefined ? {} : { order_id: input.orderId }),
+        ...(input.orderLineId === undefined ? {} : { order_line_id: input.orderLineId }),
+      },
+      applyStockMutation: (executor, event) =>
+        consumeReservedStockStatement({
+          stockItemId: event.stockItemId,
+          quantity: event.quantityDelta,
+          now: input.now,
+        }).execute(executor),
+    });
+  }
+}
+
+async function mutateActiveReservationEvent<TStatus extends "released" | "consumed">(input: {
+  readonly executor: MikaDbExecutor;
+  readonly reservationEventId: MikaId;
+  readonly now: ISODateTime;
+  readonly targetStatus: TStatus;
+  readonly eventPatch?: MikaUpdateable<"mika_stock_events">;
+  readonly applyStockMutation: (
+    executor: MikaDbExecutor,
+    event: StockEventRecord,
+  ) => Promise<{
+    readonly numAffectedRows?: bigint | number;
+    readonly numUpdatedRows?: bigint | number;
+    readonly numChangedRows?: bigint | number;
+  }>;
+}): Promise<ReservationEventMutationRepositoryResult<TStatus>> {
+  return withTransaction(input.executor, async (executor) => {
+    const current = await findStockEventById(executor, input.reservationEventId);
+    if (!current || current.kind !== "reservation") {
+      return { status: "not_found" };
+    }
+
+    if (current.status !== "active") {
+      return {
+        status: "not_active",
+        event: current,
+        stock: await findStockItemById(executor, current.stockItemId),
+      };
+    }
+
+    const eventMutation = await executor
+      .updateTable("mika_stock_events")
+      .set({
+        status: input.targetStatus,
+        updated_at: input.now,
+        ...input.eventPatch,
+      })
+      .where("id", "=", input.reservationEventId)
+      .where("kind", "=", "reservation")
+      .where("status", "=", "active")
+      .executeTakeFirst();
+
+    if (!mutationAffected(eventMutation)) {
+      const event = await findStockEventById(executor, input.reservationEventId);
+      if (!event || event.kind !== "reservation") {
+        return { status: "not_found" };
+      }
+
+      return {
+        status: "not_active",
+        event,
+        stock: await findStockItemById(executor, event.stockItemId),
+      };
+    }
+
+    const stockMutation = await input.applyStockMutation(executor, current);
+    if (!mutationAffected(stockMutation)) {
+      throw new Error(
+        `Stock item '${current.stockItemId}' for reservation event '${current.id}' could not be updated.`,
+      );
+    }
+
+    const event = await findStockEventById(executor, input.reservationEventId);
+    const stock = await findStockItemById(executor, current.stockItemId);
+    if (!event || !stock) {
+      throw new Error(
+        `Reservation event '${input.reservationEventId}' could not be reloaded after stock mutation.`,
+      );
+    }
+
+    return { status: input.targetStatus, event, stock };
+  });
 }
 
 async function insertStockEvent(executor: MikaDbExecutor, record: StockEventRecord): Promise<void> {
@@ -807,6 +958,19 @@ async function findStockEventByIdempotencyKey(
     .selectFrom("mika_stock_events")
     .selectAll()
     .where("idempotency_key", "=", idempotencyKey)
+    .executeTakeFirst();
+
+  return row ? mapStockEvent(row) : null;
+}
+
+async function findStockEventById(
+  executor: MikaDbExecutor,
+  eventId: MikaId,
+): Promise<StockEventRecord | null> {
+  const row = await executor
+    .selectFrom("mika_stock_events")
+    .selectAll()
+    .where("id", "=", eventId)
     .executeTakeFirst();
 
   return row ? mapStockEvent(row) : null;

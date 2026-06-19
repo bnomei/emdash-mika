@@ -447,6 +447,160 @@ describe("backend test Kysely stock database harness", () => {
       await database.destroy();
     }
   });
+
+  it("releases active reservation events once", async () => {
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const repository = new StockRepository(db);
+    const service = createMikaStockLifecycleService(
+      createIncrementingBackendDependencies({
+        repositories: { ...createTestBackendRepositories(), stock: repository },
+      }),
+    );
+    const clock = createTestClock();
+    const stockItem = createStockRecord({
+      quantityOnHand: 10,
+      quantityReserved: 0,
+    });
+
+    try {
+      await mikaInitialMigration.up(db);
+      await repository.putItem(stockItem);
+
+      const reservation = await service.reserve({
+        stockItemId: stockItem.id,
+        quantity: 4,
+        expiresAt: clock.isoAt(15 * 60_000),
+        idempotencyKey: "release_once_1",
+      });
+      if (reservation.status !== "reserved") {
+        throw new Error(`Expected reservation, received '${reservation.status}'.`);
+      }
+
+      await expect(
+        service.release({
+          reservationEventId: reservation.event.id,
+          now: clock.isoAt(60_000),
+        }),
+      ).resolves.toMatchObject({
+        status: "released",
+        event: {
+          id: "stock_event_1",
+          status: "released",
+          updatedAt: "2026-01-01T00:01:00.000Z",
+        },
+        stock: {
+          quantityOnHand: 10,
+          quantityReserved: 0,
+        },
+      });
+      await expect(
+        service.release({
+          reservationEventId: reservation.event.id,
+          now: clock.isoAt(120_000),
+        }),
+      ).resolves.toMatchObject({
+        status: "not_active",
+        event: {
+          id: "stock_event_1",
+          status: "released",
+          updatedAt: "2026-01-01T00:01:00.000Z",
+        },
+        stock: {
+          quantityOnHand: 10,
+          quantityReserved: 0,
+        },
+      });
+      await expect(repository.findEventById(reservation.event.id)).resolves.toMatchObject({
+        status: "released",
+      });
+      await expect(countStockEvents(db)).resolves.toBe(1);
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
+    }
+  });
+
+  it("consumes active reservation events once without negative quantities", async () => {
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const repository = new StockRepository(db);
+    const service = createMikaStockLifecycleService(
+      createIncrementingBackendDependencies({
+        repositories: { ...createTestBackendRepositories(), stock: repository },
+      }),
+    );
+    const clock = createTestClock();
+    const stockItem = createStockRecord({
+      quantityOnHand: 2,
+      quantityReserved: 0,
+      allowBackorder: true,
+    });
+
+    try {
+      await mikaInitialMigration.up(db);
+      await repository.putItem(stockItem);
+
+      const reservation = await service.reserve({
+        stockItemId: stockItem.id,
+        quantity: 4,
+        expiresAt: clock.isoAt(15 * 60_000),
+        idempotencyKey: "consume_once_1",
+      });
+      if (reservation.status !== "reserved") {
+        throw new Error(`Expected reservation, received '${reservation.status}'.`);
+      }
+
+      await expect(
+        service.consume({
+          reservationEventId: reservation.event.id,
+          orderId: createTestMikaId("order", 1),
+          orderLineId: createTestMikaId("order_line", 1),
+          now: clock.isoAt(60_000),
+        }),
+      ).resolves.toMatchObject({
+        status: "consumed",
+        event: {
+          id: "stock_event_1",
+          status: "consumed",
+          orderId: "order_1",
+          orderLineId: "order_line_1",
+          updatedAt: "2026-01-01T00:01:00.000Z",
+        },
+        stock: {
+          quantityOnHand: 0,
+          quantityReserved: 0,
+        },
+      });
+      await expect(
+        service.consume({
+          reservationEventId: reservation.event.id,
+          now: clock.isoAt(120_000),
+        }),
+      ).resolves.toMatchObject({
+        status: "not_active",
+        event: {
+          id: "stock_event_1",
+          status: "consumed",
+          orderId: "order_1",
+          orderLineId: "order_line_1",
+          updatedAt: "2026-01-01T00:01:00.000Z",
+        },
+        stock: {
+          quantityOnHand: 0,
+          quantityReserved: 0,
+        },
+      });
+      await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+        quantityOnHand: 0,
+        quantityReserved: 0,
+      });
+      await expect(countStockEvents(db)).resolves.toBe(1);
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
+    }
+  });
 });
 
 describe("backend test provider helpers", () => {
@@ -2040,6 +2194,9 @@ function createTestStockRepository(
     async findEventByIdempotencyKey() {
       return null;
     },
+    async findEventById() {
+      return null;
+    },
     async putItem() {
       // No-op test double.
     },
@@ -2048,6 +2205,12 @@ function createTestStockRepository(
     },
     async reserve() {
       throw new Error("The test stock repository does not implement reserve().");
+    },
+    async release() {
+      throw new Error("The test stock repository does not implement release().");
+    },
+    async consume() {
+      throw new Error("The test stock repository does not implement consume().");
     },
   };
 }
