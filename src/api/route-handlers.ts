@@ -86,7 +86,7 @@ function methodNotAllowed(request: Request, operations: readonly MikaRouteOperat
     ok: false,
     status: 405,
     error: {
-      code: "VALIDATION_FAILED",
+      code: "METHOD_NOT_ALLOWED",
       message: `Mika route does not support ${request.method.toUpperCase()}.`,
       fieldErrors: {
         method: `Expected ${allowed.join(", ")}.`,

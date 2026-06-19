@@ -195,6 +195,7 @@ function normalizeEffects(effects: unknown): readonly MikaClientEffect[] | undef
 function fallbackMikaErrorCode(status: number): MikaErrorCode {
   if (status === 401) return "AUTH_REQUIRED";
   if (status === 403) return "FORBIDDEN";
+  if (status === 405) return "METHOD_NOT_ALLOWED";
   if (status === 409) return "CONFLICT";
   if (status === 422) return "VALIDATION_FAILED";
   if (status === 429) return "RATE_LIMITED";

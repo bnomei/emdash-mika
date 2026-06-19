@@ -213,6 +213,17 @@ async function findOneByType<
   return documentOfType(result.items[0]?.data, type);
 }
 
+async function findByIdOfType<
+  TDocument extends TypedDocument,
+  TType extends DocumentType<TDocument>,
+>(
+  collection: StorageCollection<TDocument>,
+  id: string,
+  type: TType,
+): Promise<DocumentOfType<TDocument, TType> | null> {
+  return documentOfType(await collection.get(id), type);
+}
+
 async function listByType<TDocument extends TypedDocument, TType extends DocumentType<TDocument>>(
   collection: StorageCollection<TDocument>,
   type: TType,
@@ -322,7 +333,7 @@ export class SessionRepository {
   }
 
   async findCheckoutById(id: MikaId): Promise<CheckoutDocument | null> {
-    return documentOfType(await this.collection.get(id), "checkout");
+    return findByIdOfType(this.collection, id, "checkout");
   }
 
   async findOpenCartBySession(sessionId: string, currency: string): Promise<CartDocument | null> {
@@ -400,13 +411,11 @@ export class AccountRepository {
   }
 
   async findEntitlementById(entitlementId: MikaId): Promise<EntitlementDocument | null> {
-    const document = await this.collection.get(entitlementId);
-    return documentOfType(document, "entitlement");
+    return findByIdOfType(this.collection, entitlementId, "entitlement");
   }
 
   async findLicenseById(licenseId: MikaId): Promise<LicenseDocument | null> {
-    const document = await this.collection.get(licenseId);
-    return documentOfType(document, "license");
+    return findByIdOfType(this.collection, licenseId, "license");
   }
 
   async findProviderAccount(
@@ -430,8 +439,7 @@ export class AccountRepository {
   }
 
   async findSubscriptionById(subscriptionId: MikaId): Promise<SubscriptionDocument | null> {
-    const document = await this.collection.get(subscriptionId);
-    return documentOfType(document, "subscription");
+    return findByIdOfType(this.collection, subscriptionId, "subscription");
   }
 
   async listProviderAccountsByCustomer(
@@ -513,8 +521,7 @@ export class LedgerRepository {
   }
 
   async findOrderById(orderId: MikaId): Promise<OrderDocument | null> {
-    const document = await this.collection.get(orderId);
-    return documentOfType(document, "order");
+    return findByIdOfType(this.collection, orderId, "order");
   }
 
   async findOrderByNumber(orderNumber: string): Promise<OrderDocument | null> {
@@ -606,18 +613,15 @@ export class OpsRepository {
   }
 
   async findWebhookById(webhookId: MikaId): Promise<WebhookDocument | null> {
-    const document = await this.collection.get(webhookId);
-    return documentOfType(document, "webhook");
+    return findByIdOfType(this.collection, webhookId, "webhook");
   }
 
   async findAccountExport(exportId: MikaId): Promise<AccountExportDocument | null> {
-    const document = await this.collection.get(exportId);
-    return documentOfType(document, "accountExport");
+    return findByIdOfType(this.collection, exportId, "accountExport");
   }
 
   async findAccountDeleteRequest(requestId: MikaId): Promise<AccountDeleteRequestDocument | null> {
-    const document = await this.collection.get(requestId);
-    return documentOfType(document, "accountDeleteRequest");
+    return findByIdOfType(this.collection, requestId, "accountDeleteRequest");
   }
 
   async listAccountExportsByCustomer(
@@ -643,18 +647,15 @@ export class OpsRepository {
   }
 
   async findProviderSyncRun(runId: MikaId): Promise<ProviderSyncRunDocument | null> {
-    const document = await this.collection.get(runId);
-    return documentOfType(document, "providerSyncRun");
+    return findByIdOfType(this.collection, runId, "providerSyncRun");
   }
 
   async findAdminAudit(auditId: MikaId): Promise<AdminAuditDocument | null> {
-    const document = await this.collection.get(auditId);
-    return documentOfType(document, "adminAudit");
+    return findByIdOfType(this.collection, auditId, "adminAudit");
   }
 
   async findEmail(emailId: MikaId): Promise<EmailDocument | null> {
-    const document = await this.collection.get(emailId);
-    return documentOfType(document, "email");
+    return findByIdOfType(this.collection, emailId, "email");
   }
 
   async listWebhookFailures(now: string, limit = 50): Promise<DocumentList<WebhookDocument>> {
@@ -1123,8 +1124,8 @@ export class EphemeralRepository {
     readonly kind: EphemeralRecord["kind"];
     readonly subjectHash?: string;
     readonly status?: string;
-    readonly expiresAt: string;
-    readonly now: string;
+    readonly expiresAt: ISODateTime;
+    readonly now: ISODateTime;
     readonly data?: JsonObject;
   }): Promise<EphemeralRecord> {
     await this.db
@@ -1163,7 +1164,7 @@ export class EphemeralRepository {
     return record;
   }
 
-  async consumeToken(key: string, now: string): Promise<boolean> {
+  async consumeToken(key: string, now: ISODateTime): Promise<boolean> {
     const result = await this.db
       .updateTable("mika_ephemeral_records")
       .set((eb) => ({
@@ -1180,7 +1181,7 @@ export class EphemeralRepository {
     return affected(result.numUpdatedRows);
   }
 
-  async purgeExpired(now: string): Promise<number> {
+  async purgeExpired(now: ISODateTime): Promise<number> {
     const result = await this.db
       .deleteFrom("mika_ephemeral_records")
       .where("expires_at", "<=", now)

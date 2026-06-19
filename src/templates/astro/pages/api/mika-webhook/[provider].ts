@@ -9,6 +9,7 @@ export const POST: APIRoute = async ({ params }) => {
   return Response.json(
     {
       ok: false,
+      status: 501,
       error: {
         code: "NOT_IMPLEMENTED",
         message: `Wire ${provider} webhook verification to a server-side Mika provider adapter.`,

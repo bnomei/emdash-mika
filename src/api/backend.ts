@@ -118,6 +118,13 @@ import type {
 
 type MikaApiFailure = Extract<MikaApiResult<never>, { readonly ok: false }>;
 
+const DEFAULT_BACKEND_CURRENCY = createCurrencyCode("EUR");
+const CHECKOUT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY = "checkoutIdempotencyInputHash";
+
+function defaultBackendCurrency(input: { readonly defaults?: MikaBackendDefaults }): CurrencyCode {
+  return input.defaults?.currency ?? DEFAULT_BACKEND_CURRENCY;
+}
+
 type PublicContract<TValue> = Pick<TValue, keyof TValue>;
 
 export type MikaBackendRepositories = {
@@ -174,6 +181,14 @@ export interface MikaBackendDependencies {
 export interface CreateMikaBackendApiInput extends MikaBackendDependencies {
   readonly overrides?: MikaApiOverrides;
 }
+
+type MikaCartWishlistBackendRepositories = Pick<
+  MikaBackendRepositories,
+  "catalog" | "session" | "stock"
+>;
+type MikaCartWishlistBackendInput = Omit<CreateMikaBackendApiInput, "repositories"> & {
+  readonly repositories: MikaCartWishlistBackendRepositories;
+};
 
 export interface ReserveStockInput {
   readonly stockItemId: MikaId;
@@ -411,353 +426,8 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
       downloadIssue: async (issueInput) => issueDownload(input, issueInput),
       ...input.overrides?.admin,
     },
-    cart: {
-      get: async (ctx) => {
-        const cart = await findOrCreateOpenCart(input, ctx);
-
-        return { ok: true, status: 200, data: await cartDocumentToDTO(input, cart) };
-      },
-      quote: async (ctx, quoteInput) => {
-        const quote = await createCartQuote(input, ctx, quoteInput);
-
-        return { ok: true, status: 200, data: quote };
-      },
-      add: async (ctx, itemInput) => {
-        const currency = input.defaults?.currency;
-        if (!currency) {
-          return validationFailed("currency", "A default cart currency is required.");
-        }
-
-        const resolved = await resolveCartLine(input, itemInput, currency);
-        if (!resolved.ok) return resolved;
-
-        const existing = await findOpenCart(input, ctx, currency);
-        const currentItems = existing?.aggregate.items ?? [];
-        const existingLine = currentItems.find((line) => isEquivalentCartLine(line, resolved.line));
-        const nextQuantity = (existingLine?.quantity ?? 0) + resolved.line.quantity;
-        const quantityError = validateQuantityLimit(
-          resolved.sellable,
-          resolved.stock,
-          nextQuantity,
-        );
-        if (quantityError) return quantityError;
-
-        const cart = existing ?? createCartDocument(input, ctx, currency);
-        const items = existingLine
-          ? currentItems.map((line) =>
-              line.id === existingLine.id ? { ...line, quantity: nextQuantity } : line,
-            )
-          : [...currentItems, resolved.line];
-        const updated = updateCartDocument(cart, items, ctx.now);
-
-        await input.repositories.session.put(updated);
-
-        return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
-      },
-      update: async (ctx, itemInput) => {
-        if (!Number.isInteger(itemInput.quantity) || itemInput.quantity < 1) {
-          return validationFailed("quantity", "Quantity must be a positive whole number.");
-        }
-
-        const cart = await findOrCreateOpenCart(input, ctx);
-        const line = cart.aggregate.items.find((item) => item.id === itemInput.lineId);
-        if (!line) {
-          return cartLineNotFound(itemInput.lineId);
-        }
-
-        const catalog = await input.repositories.catalog.findItemBySellableId(line.item.sellableId);
-        const sellable = catalog?.aggregate.sellables.find(
-          (item) => item.id === line.item.sellableId,
-        );
-        const stock = await input.repositories.stock.findBySellableId(line.item.sellableId);
-        if (sellable) {
-          const quantityError = validateQuantityLimit(sellable, stock, itemInput.quantity);
-          if (quantityError) return quantityError;
-        }
-
-        const updated = updateCartDocument(
-          cart,
-          cart.aggregate.items.map((item) =>
-            item.id === itemInput.lineId ? { ...item, quantity: itemInput.quantity } : item,
-          ),
-          ctx.now,
-        );
-
-        await input.repositories.session.put(updated);
-
-        return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
-      },
-      remove: async (ctx, itemInput) => {
-        const cart = await findOrCreateOpenCart(input, ctx);
-        if (!cart.aggregate.items.some((item) => item.id === itemInput.lineId)) {
-          return cartLineNotFound(itemInput.lineId);
-        }
-
-        const updated = updateCartDocument(
-          cart,
-          cart.aggregate.items.filter((item) => item.id !== itemInput.lineId),
-          ctx.now,
-        );
-
-        await input.repositories.session.put(updated);
-
-        return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
-      },
-      merge: async (ctx, mergeInput) => {
-        const currency = input.defaults?.currency ?? createCurrencyCode("EUR");
-        const targetResult = mergeInput.targetCartId
-          ? await findOwnedOpenCartById(input, ctx, mergeInput.targetCartId, "targetCartId")
-          : { ok: true as const, cart: await findOrCreateOpenCart(input, ctx) };
-        if (!targetResult.ok) return targetResult;
-        if (targetResult.cart.aggregate.currency !== currency) {
-          return validationFailed(
-            "targetCartId",
-            `Target cart uses currency '${targetResult.cart.aggregate.currency}'.`,
-          );
-        }
-
-        const sourceSessionId = mergeInput.sourceSessionId;
-        if (!sourceSessionId) {
-          return {
-            ok: true,
-            status: 200,
-            data: await cartDocumentToDTO(input, targetResult.cart),
-          };
-        }
-
-        const source =
-          (await input.repositories.session.findOpenCartBySession(sourceSessionId, currency)) ??
-          (await findOpenCartBySessionAnyCurrency(input, sourceSessionId));
-        if (!source || source.id === targetResult.cart.id) {
-          return {
-            ok: true,
-            status: 200,
-            data: await cartDocumentToDTO(input, targetResult.cart),
-          };
-        }
-        if (source.aggregate.currency !== targetResult.cart.aggregate.currency) {
-          return validationFailed(
-            "sourceSessionId",
-            `Source cart uses currency '${source.aggregate.currency}'.`,
-          );
-        }
-
-        const mergedItemsResult = await mergeCartLines(input, targetResult.cart, source);
-        if (!mergedItemsResult.ok) return mergedItemsResult;
-
-        const updated = updateCartDocument(
-          targetResult.cart,
-          mergedItemsResult.items,
-          ctx.now,
-          targetResult.cart.aggregate.coupon ?? source.aggregate.coupon,
-        );
-        const abandonedSource: CartDocument = {
-          ...source,
-          status: "abandoned",
-          updatedAt: ctx.now,
-        };
-
-        await input.repositories.session.put(updated);
-        await input.repositories.session.put(abandonedSource);
-
-        return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
-      },
-      applyCoupon: async (ctx, couponInput) => {
-        const cartResult = couponInput.cartId
-          ? await findOwnedOpenCartById(input, ctx, couponInput.cartId, "cartId")
-          : { ok: true as const, cart: await findOrCreateOpenCart(input, ctx) };
-        if (!cartResult.ok) return cartResult;
-
-        const code = couponInput.code.trim();
-        if (!code) {
-          return validationFailed("code", "Coupon code is required.");
-        }
-
-        const updated: CartDocument = {
-          ...cartResult.cart,
-          updatedAt: ctx.now,
-          aggregate: cartWithCoupon({
-            cart: cartResult.cart.aggregate,
-            coupon: await createCouponSnapshot(input, cartResult.cart, code),
-          }),
-        };
-
-        await input.repositories.session.put(updated);
-
-        return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
-      },
-      removeCoupon: async (ctx, couponInput) => {
-        const cartResult = couponInput.cartId
-          ? await findOwnedOpenCartById(input, ctx, couponInput.cartId, "cartId")
-          : { ok: true as const, cart: await findOrCreateOpenCart(input, ctx) };
-        if (!cartResult.ok) return cartResult;
-
-        const updated: CartDocument = {
-          ...cartResult.cart,
-          updatedAt: ctx.now,
-          aggregate: cartWithoutCoupon({ cart: cartResult.cart.aggregate }),
-        };
-
-        await input.repositories.session.put(updated);
-
-        return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
-      },
-      ...input.overrides?.cart,
-    },
-    wishlist: {
-      get: async (ctx) => {
-        const wishlist = await findOrCreateActiveWishlist(input, ctx);
-
-        return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, wishlist) };
-      },
-      add: async (ctx, itemInput) => {
-        const resolved = await resolveWishlistItem(input, itemInput);
-        if (!resolved.ok) return resolved;
-
-        const wishlist = await findOrCreateActiveWishlist(input, ctx);
-        const existingItem = wishlist.aggregate.items.find((item) =>
-          isEquivalentWishlistItem(item, resolved.item),
-        );
-        const items = existingItem
-          ? wishlist.aggregate.items
-          : [...wishlist.aggregate.items, resolved.item];
-        const updated = updateWishlistDocument(wishlist, items, ctx.now);
-
-        await input.repositories.session.put(updated);
-
-        return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, updated) };
-      },
-      remove: async (ctx, itemInput) => {
-        const wishlist = await findOrCreateActiveWishlist(input, ctx);
-        if (!wishlist.aggregate.items.some((item) => item.id === itemInput.itemId)) {
-          return wishlistItemNotFound(itemInput.itemId);
-        }
-
-        const updated = updateWishlistDocument(
-          wishlist,
-          wishlist.aggregate.items.filter((item) => item.id !== itemInput.itemId),
-          ctx.now,
-        );
-
-        await input.repositories.session.put(updated);
-
-        return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, updated) };
-      },
-      moveToCart: async (ctx, itemInput) => {
-        const quantity = itemInput.quantity ?? 1;
-        if (!Number.isInteger(quantity) || quantity < 1) {
-          return validationFailed("quantity", "Quantity must be a positive whole number.");
-        }
-
-        const wishlist = await findOrCreateActiveWishlist(input, ctx);
-        const item = wishlist.aggregate.items.find(
-          (candidate) => candidate.id === itemInput.itemId,
-        );
-        if (!item) {
-          return wishlistItemNotFound(itemInput.itemId);
-        }
-
-        const currency = input.defaults?.currency ?? createCurrencyCode("EUR");
-        const existingCart = await findOpenCart(input, ctx, currency);
-        const cart = existingCart ?? createCartDocument(input, ctx, currency);
-        if (item.item.currency !== cart.aggregate.currency) {
-          return validationFailed(
-            "itemId",
-            `Wishlist item '${item.id}' uses currency '${item.item.currency}'.`,
-          );
-        }
-
-        const line: CartLine = {
-          id: input.createId("cart_line"),
-          item: item.item,
-          quantity,
-          addedAt: ctx.now,
-          metadata: item.metadata,
-        };
-        const itemsResult = await mergeCartLine(input, cart.aggregate.items, line);
-        if (!itemsResult.ok) return itemsResult;
-
-        const updatedCart = updateCartDocument(cart, itemsResult.items, ctx.now);
-        const updatedWishlist = updateWishlistDocument(
-          wishlist,
-          wishlist.aggregate.items.filter((candidate) => candidate.id !== item.id),
-          ctx.now,
-        );
-
-        await input.repositories.session.put(updatedCart);
-        await input.repositories.session.put(updatedWishlist);
-
-        return { ok: true, status: 200, data: await cartDocumentToDTO(input, updatedCart) };
-      },
-      saveForLater: async (ctx, itemInput) => {
-        const cart = await findOrCreateOpenCart(input, ctx);
-        const line = cart.aggregate.items.find((candidate) => candidate.id === itemInput.lineId);
-        if (!line) {
-          return cartLineNotFound(itemInput.lineId);
-        }
-
-        const wishlist = await findOrCreateActiveWishlist(input, ctx);
-        const item: WishlistItem = {
-          id: input.createId("wishlist_item"),
-          item: line.item,
-          addedAt: ctx.now,
-          metadata: line.metadata,
-        };
-        const wishlistItems = mergeWishlistItems(wishlist.aggregate.items, [item]);
-        const updatedWishlist = updateWishlistDocument(wishlist, wishlistItems, ctx.now);
-        const updatedCart = updateCartDocument(
-          cart,
-          cart.aggregate.items.filter((candidate) => candidate.id !== line.id),
-          ctx.now,
-        );
-
-        await input.repositories.session.put(updatedWishlist);
-        await input.repositories.session.put(updatedCart);
-
-        return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, updatedWishlist) };
-      },
-      merge: async (ctx, mergeInput) => {
-        const targetResult = mergeInput.targetWishlistId
-          ? await findOwnedActiveWishlistById(input, ctx, mergeInput.targetWishlistId)
-          : { ok: true as const, wishlist: await findOrCreateActiveWishlist(input, ctx) };
-        if (!targetResult.ok) return targetResult;
-
-        const sourceSessionId = mergeInput.sourceSessionId;
-        if (!sourceSessionId) {
-          return {
-            ok: true,
-            status: 200,
-            data: await wishlistDocumentToDTO(input, targetResult.wishlist),
-          };
-        }
-
-        const source = await input.repositories.session.findWishlistBySession(sourceSessionId);
-        if (!source || source.id === targetResult.wishlist.id) {
-          return {
-            ok: true,
-            status: 200,
-            data: await wishlistDocumentToDTO(input, targetResult.wishlist),
-          };
-        }
-
-        const updated = updateWishlistDocument(
-          targetResult.wishlist,
-          mergeWishlistItems(targetResult.wishlist.aggregate.items, source.aggregate.items),
-          ctx.now,
-        );
-        const mergedSource: WishlistDocument = {
-          ...source,
-          status: "merged",
-          updatedAt: ctx.now,
-        };
-
-        await input.repositories.session.put(updated);
-        await input.repositories.session.put(mergedSource);
-
-        return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, updated) };
-      },
-      ...input.overrides?.wishlist,
-    },
+    cart: createCartBackend(input),
+    wishlist: createWishlistBackend(input),
     checkout: {
       start: async (ctx, checkoutInput) => startCheckout(input, ctx, checkoutInput),
       status: async (statusInput) => checkoutStatus(input, createMikaId(statusInput.checkoutId)),
@@ -798,6 +468,355 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
       ...input.overrides?.webhook,
     },
   });
+}
+
+function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"] {
+  const cart = {
+    get: async (ctx) => {
+      const document = await findOrCreateOpenCart(input, ctx);
+
+      return { ok: true, status: 200, data: await cartDocumentToDTO(input, document) };
+    },
+    quote: async (ctx, quoteInput) => {
+      const quote = await createCartQuote(input, ctx, quoteInput);
+
+      return { ok: true, status: 200, data: quote };
+    },
+    add: async (ctx, itemInput) => {
+      const currency = input.defaults?.currency;
+      if (!currency) {
+        return validationFailed("currency", "A default cart currency is required.");
+      }
+
+      const resolved = await resolveCartLine(input, itemInput, currency);
+      if (!resolved.ok) return resolved;
+
+      const existing = await findOpenCart(input, ctx, currency);
+      const currentItems = existing?.aggregate.items ?? [];
+      const existingLine = currentItems.find((line) => isEquivalentCartLine(line, resolved.line));
+      const nextQuantity = (existingLine?.quantity ?? 0) + resolved.line.quantity;
+      const quantityError = validateQuantityLimit(resolved.sellable, resolved.stock, nextQuantity);
+      if (quantityError) return quantityError;
+
+      const document = existing ?? createCartDocument(input, ctx, currency);
+      const items = existingLine
+        ? currentItems.map((line) =>
+            line.id === existingLine.id ? { ...line, quantity: nextQuantity } : line,
+          )
+        : [...currentItems, resolved.line];
+      const updated = updateCartDocument(document, items, ctx.now);
+
+      await input.repositories.session.put(updated);
+
+      return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
+    },
+    update: async (ctx, itemInput) => {
+      if (!Number.isInteger(itemInput.quantity) || itemInput.quantity < 1) {
+        return validationFailed("quantity", "Quantity must be a positive whole number.");
+      }
+
+      const document = await findOrCreateOpenCart(input, ctx);
+      const line = document.aggregate.items.find((item) => item.id === itemInput.lineId);
+      if (!line) {
+        return cartLineNotFound(itemInput.lineId);
+      }
+
+      const catalog = await input.repositories.catalog.findItemBySellableId(line.item.sellableId);
+      const sellable = catalog?.aggregate.sellables.find(
+        (item) => item.id === line.item.sellableId,
+      );
+      const stock = await input.repositories.stock.findBySellableId(line.item.sellableId);
+      if (sellable) {
+        const quantityError = validateQuantityLimit(sellable, stock, itemInput.quantity);
+        if (quantityError) return quantityError;
+      }
+
+      const updated = updateCartDocument(
+        document,
+        document.aggregate.items.map((item) =>
+          item.id === itemInput.lineId ? { ...item, quantity: itemInput.quantity } : item,
+        ),
+        ctx.now,
+      );
+
+      await input.repositories.session.put(updated);
+
+      return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
+    },
+    remove: async (ctx, itemInput) => {
+      const document = await findOrCreateOpenCart(input, ctx);
+      if (!document.aggregate.items.some((item) => item.id === itemInput.lineId)) {
+        return cartLineNotFound(itemInput.lineId);
+      }
+
+      const updated = updateCartDocument(
+        document,
+        document.aggregate.items.filter((item) => item.id !== itemInput.lineId),
+        ctx.now,
+      );
+
+      await input.repositories.session.put(updated);
+
+      return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
+    },
+    merge: async (ctx, mergeInput) => {
+      const currency = defaultBackendCurrency(input);
+      const targetResult = mergeInput.targetCartId
+        ? await findOwnedOpenCartById(input, ctx, mergeInput.targetCartId, "targetCartId")
+        : { ok: true as const, cart: await findOrCreateOpenCart(input, ctx) };
+      if (!targetResult.ok) return targetResult;
+      if (targetResult.cart.aggregate.currency !== currency) {
+        return validationFailed(
+          "targetCartId",
+          `Target cart uses currency '${targetResult.cart.aggregate.currency}'.`,
+        );
+      }
+
+      const sourceSessionId = mergeInput.sourceSessionId;
+      if (!sourceSessionId) {
+        return {
+          ok: true,
+          status: 200,
+          data: await cartDocumentToDTO(input, targetResult.cart),
+        };
+      }
+
+      const source =
+        (await input.repositories.session.findOpenCartBySession(sourceSessionId, currency)) ??
+        (await findOpenCartBySessionAnyCurrency(input, sourceSessionId));
+      if (!source || source.id === targetResult.cart.id) {
+        return {
+          ok: true,
+          status: 200,
+          data: await cartDocumentToDTO(input, targetResult.cart),
+        };
+      }
+      if (source.aggregate.currency !== targetResult.cart.aggregate.currency) {
+        return validationFailed(
+          "sourceSessionId",
+          `Source cart uses currency '${source.aggregate.currency}'.`,
+        );
+      }
+
+      const mergedItemsResult = await mergeCartLines(input, targetResult.cart, source);
+      if (!mergedItemsResult.ok) return mergedItemsResult;
+
+      const updated = updateCartDocument(
+        targetResult.cart,
+        mergedItemsResult.items,
+        ctx.now,
+        targetResult.cart.aggregate.coupon ?? source.aggregate.coupon,
+      );
+      const abandonedSource: CartDocument = {
+        ...source,
+        status: "abandoned",
+        updatedAt: ctx.now,
+      };
+
+      await input.repositories.session.put(updated);
+      await input.repositories.session.put(abandonedSource);
+
+      return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
+    },
+    applyCoupon: async (ctx, couponInput) => {
+      const cartResult = couponInput.cartId
+        ? await findOwnedOpenCartById(input, ctx, couponInput.cartId, "cartId")
+        : { ok: true as const, cart: await findOrCreateOpenCart(input, ctx) };
+      if (!cartResult.ok) return cartResult;
+
+      const code = couponInput.code.trim();
+      if (!code) {
+        return validationFailed("code", "Coupon code is required.");
+      }
+
+      const updated: CartDocument = {
+        ...cartResult.cart,
+        updatedAt: ctx.now,
+        aggregate: cartWithCoupon({
+          cart: cartResult.cart.aggregate,
+          coupon: await createCouponSnapshot(input, cartResult.cart, code),
+        }),
+      };
+
+      await input.repositories.session.put(updated);
+
+      return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
+    },
+    removeCoupon: async (ctx, couponInput) => {
+      const cartResult = couponInput.cartId
+        ? await findOwnedOpenCartById(input, ctx, couponInput.cartId, "cartId")
+        : { ok: true as const, cart: await findOrCreateOpenCart(input, ctx) };
+      if (!cartResult.ok) return cartResult;
+
+      const updated: CartDocument = {
+        ...cartResult.cart,
+        updatedAt: ctx.now,
+        aggregate: cartWithoutCoupon({ cart: cartResult.cart.aggregate }),
+      };
+
+      await input.repositories.session.put(updated);
+
+      return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
+    },
+  } satisfies MikaApi["cart"];
+
+  return { ...cart, ...input.overrides?.cart };
+}
+
+function createWishlistBackend(input: MikaCartWishlistBackendInput): MikaApi["wishlist"] {
+  const wishlist = {
+    get: async (ctx) => {
+      const document = await findOrCreateActiveWishlist(input, ctx);
+
+      return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, document) };
+    },
+    add: async (ctx, itemInput) => {
+      const resolved = await resolveWishlistItem(input, itemInput);
+      if (!resolved.ok) return resolved;
+
+      const document = await findOrCreateActiveWishlist(input, ctx);
+      const existingItem = document.aggregate.items.find((item) =>
+        isEquivalentWishlistItem(item, resolved.item),
+      );
+      const items = existingItem
+        ? document.aggregate.items
+        : [...document.aggregate.items, resolved.item];
+      const updated = updateWishlistDocument(document, items, ctx.now);
+
+      await input.repositories.session.put(updated);
+
+      return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, updated) };
+    },
+    remove: async (ctx, itemInput) => {
+      const document = await findOrCreateActiveWishlist(input, ctx);
+      if (!document.aggregate.items.some((item) => item.id === itemInput.itemId)) {
+        return wishlistItemNotFound(itemInput.itemId);
+      }
+
+      const updated = updateWishlistDocument(
+        document,
+        document.aggregate.items.filter((item) => item.id !== itemInput.itemId),
+        ctx.now,
+      );
+
+      await input.repositories.session.put(updated);
+
+      return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, updated) };
+    },
+    moveToCart: async (ctx, itemInput) => {
+      const quantity = itemInput.quantity ?? 1;
+      if (!Number.isInteger(quantity) || quantity < 1) {
+        return validationFailed("quantity", "Quantity must be a positive whole number.");
+      }
+
+      const document = await findOrCreateActiveWishlist(input, ctx);
+      const item = document.aggregate.items.find((candidate) => candidate.id === itemInput.itemId);
+      if (!item) {
+        return wishlistItemNotFound(itemInput.itemId);
+      }
+
+      const currency = defaultBackendCurrency(input);
+      const existingCart = await findOpenCart(input, ctx, currency);
+      const cart = existingCart ?? createCartDocument(input, ctx, currency);
+      if (item.item.currency !== cart.aggregate.currency) {
+        return validationFailed(
+          "itemId",
+          `Wishlist item '${item.id}' uses currency '${item.item.currency}'.`,
+        );
+      }
+
+      const line: CartLine = {
+        id: input.createId("cart_line"),
+        item: item.item,
+        quantity,
+        addedAt: ctx.now,
+        metadata: item.metadata,
+      };
+      const itemsResult = await mergeCartLine(input, cart.aggregate.items, line);
+      if (!itemsResult.ok) return itemsResult;
+
+      const updatedCart = updateCartDocument(cart, itemsResult.items, ctx.now);
+      const updatedWishlist = updateWishlistDocument(
+        document,
+        document.aggregate.items.filter((candidate) => candidate.id !== item.id),
+        ctx.now,
+      );
+
+      await input.repositories.session.put(updatedCart);
+      await input.repositories.session.put(updatedWishlist);
+
+      return { ok: true, status: 200, data: await cartDocumentToDTO(input, updatedCart) };
+    },
+    saveForLater: async (ctx, itemInput) => {
+      const cart = await findOrCreateOpenCart(input, ctx);
+      const line = cart.aggregate.items.find((candidate) => candidate.id === itemInput.lineId);
+      if (!line) {
+        return cartLineNotFound(itemInput.lineId);
+      }
+
+      const document = await findOrCreateActiveWishlist(input, ctx);
+      const item: WishlistItem = {
+        id: input.createId("wishlist_item"),
+        item: line.item,
+        addedAt: ctx.now,
+        metadata: line.metadata,
+      };
+      const wishlistItems = mergeWishlistItems(document.aggregate.items, [item]);
+      const updatedWishlist = updateWishlistDocument(document, wishlistItems, ctx.now);
+      const updatedCart = updateCartDocument(
+        cart,
+        cart.aggregate.items.filter((candidate) => candidate.id !== line.id),
+        ctx.now,
+      );
+
+      await input.repositories.session.put(updatedWishlist);
+      await input.repositories.session.put(updatedCart);
+
+      return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, updatedWishlist) };
+    },
+    merge: async (ctx, mergeInput) => {
+      const targetResult = mergeInput.targetWishlistId
+        ? await findOwnedActiveWishlistById(input, ctx, mergeInput.targetWishlistId)
+        : { ok: true as const, wishlist: await findOrCreateActiveWishlist(input, ctx) };
+      if (!targetResult.ok) return targetResult;
+
+      const sourceSessionId = mergeInput.sourceSessionId;
+      if (!sourceSessionId) {
+        return {
+          ok: true,
+          status: 200,
+          data: await wishlistDocumentToDTO(input, targetResult.wishlist),
+        };
+      }
+
+      const source = await input.repositories.session.findWishlistBySession(sourceSessionId);
+      if (!source || source.id === targetResult.wishlist.id) {
+        return {
+          ok: true,
+          status: 200,
+          data: await wishlistDocumentToDTO(input, targetResult.wishlist),
+        };
+      }
+
+      const updated = updateWishlistDocument(
+        targetResult.wishlist,
+        mergeWishlistItems(targetResult.wishlist.aggregate.items, source.aggregate.items),
+        ctx.now,
+      );
+      const mergedSource: WishlistDocument = {
+        ...source,
+        status: "merged",
+        updatedAt: ctx.now,
+      };
+
+      await input.repositories.session.put(updated);
+      await input.repositories.session.put(mergedSource);
+
+      return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, updated) };
+    },
+  } satisfies MikaApi["wishlist"];
+
+  return { ...wishlist, ...input.overrides?.wishlist };
 }
 
 async function getAccount(
@@ -1218,33 +1237,13 @@ async function runSubscriptionAction(
   } catch (error) {
     const message =
       error instanceof Error ? error.message : `Provider subscription ${action} failed.`;
-    await input.repositories.ops.writeAudit({
-      ...audit,
-      status: "failed",
-      updatedAt: currentBackendISODateTime(input),
-      record: {
-        ...audit.record,
-        status: "failed",
-        metadata: {
-          ...audit.record.metadata,
-          error: message,
-        },
-      },
-    });
+    await failAdminAudit(input, audit, message);
 
     return providerFailed(message);
   }
 
   await updateSubscriptionAfterAction(input, ctx, subscription, action, priceMatch);
-  await input.repositories.ops.writeAudit({
-    ...audit,
-    status: "completed",
-    updatedAt: currentBackendISODateTime(input),
-    record: {
-      ...audit.record,
-      status: "completed",
-    },
-  });
+  await completeAdminAudit(input, audit);
 
   return {
     ok: true,
@@ -1367,32 +1366,12 @@ async function providerSync(
     const result = await provider.syncCatalog({
       mode: syncInput.mode ?? "dry_run",
     });
-    await input.repositories.ops.writeAudit({
-      ...audit,
-      status: "completed",
-      updatedAt: currentBackendISODateTime(input),
-      record: {
-        ...audit.record,
-        status: "completed",
-      },
-    });
+    await completeAdminAudit(input, audit);
 
     return { ok: true, status: 200, data: result };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Provider catalog sync failed.";
-    await input.repositories.ops.writeAudit({
-      ...audit,
-      status: "failed",
-      updatedAt: currentBackendISODateTime(input),
-      record: {
-        ...audit.record,
-        status: "failed",
-        metadata: {
-          ...audit.record.metadata,
-          error: message,
-        },
-      },
-    });
+    await failAdminAudit(input, audit, message);
 
     return providerFailed(message);
   }
@@ -1444,15 +1423,7 @@ async function refundOrder(
     const result = await provider.refundPayment(providerInput);
     const updated = updateOrderAfterRefund(order, refundInput, currentBackendISODateTime(input));
     await input.repositories.ledger.put(updated);
-    await input.repositories.ops.writeAudit({
-      ...audit,
-      status: "completed",
-      updatedAt: currentBackendISODateTime(input),
-      record: {
-        ...audit.record,
-        status: "completed",
-      },
-    });
+    await completeAdminAudit(input, audit);
 
     return {
       ok: true,
@@ -1465,19 +1436,7 @@ async function refundOrder(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Provider order refund failed.";
-    await input.repositories.ops.writeAudit({
-      ...audit,
-      status: "failed",
-      updatedAt: currentBackendISODateTime(input),
-      record: {
-        ...audit.record,
-        status: "failed",
-        metadata: {
-          ...audit.record.metadata,
-          error: message,
-        },
-      },
-    });
+    await failAdminAudit(input, audit, message);
 
     return providerFailed(message);
   }
@@ -1527,15 +1486,7 @@ async function cancelOrder(
     const result = await provider.cancelOrder(providerInput);
     const updated = updateOrderAfterCancel(order, cancelInput, currentBackendISODateTime(input));
     await input.repositories.ledger.put(updated);
-    await input.repositories.ops.writeAudit({
-      ...audit,
-      status: "completed",
-      updatedAt: currentBackendISODateTime(input),
-      record: {
-        ...audit.record,
-        status: "completed",
-      },
-    });
+    await completeAdminAudit(input, audit);
 
     return {
       ok: true,
@@ -1548,19 +1499,7 @@ async function cancelOrder(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Provider order cancellation failed.";
-    await input.repositories.ops.writeAudit({
-      ...audit,
-      status: "failed",
-      updatedAt: currentBackendISODateTime(input),
-      record: {
-        ...audit.record,
-        status: "failed",
-        metadata: {
-          ...audit.record.metadata,
-          error: message,
-        },
-      },
-    });
+    await failAdminAudit(input, audit, message);
 
     return providerFailed(message);
   }
@@ -4130,7 +4069,7 @@ function webhookDuplicateResult(duplicate: WebhookDocument): MikaApiResult<Webho
 }
 
 async function findOrCreateActiveWishlist(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
 ): Promise<WishlistDocument> {
   const existing = await findActiveWishlist(input, ctx);
@@ -4143,7 +4082,7 @@ async function findOrCreateActiveWishlist(
 }
 
 async function findActiveWishlist(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
 ): Promise<WishlistDocument | null> {
   if (ctx.customerId) {
@@ -4154,7 +4093,7 @@ async function findActiveWishlist(
 }
 
 async function findOwnedActiveWishlistById(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
   wishlistId: MikaId,
 ): Promise<{ readonly ok: true; readonly wishlist: WishlistDocument } | MikaApiFailure> {
@@ -4175,7 +4114,7 @@ async function findOwnedActiveWishlistById(
 }
 
 function createWishlistDocument(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
 ): WishlistDocument {
   const now = ctx.now;
@@ -4215,10 +4154,10 @@ function updateWishlistDocument(
 }
 
 async function findOrCreateOpenCart(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
 ): Promise<CartDocument> {
-  const currency = input.defaults?.currency ?? createCurrencyCode("EUR");
+  const currency = defaultBackendCurrency(input);
   const existing = await findOpenCart(input, ctx, currency);
   if (existing) return existing;
 
@@ -4229,7 +4168,7 @@ async function findOrCreateOpenCart(
 }
 
 async function findOpenCart(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
   currency: CurrencyCode,
 ): Promise<CartDocument | null> {
@@ -4243,11 +4182,11 @@ async function findOpenCart(
 }
 
 async function createCartQuote(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
   quoteInput: CartQuoteInput,
 ): Promise<CartQuoteDTO> {
-  const defaultCurrency = input.defaults?.currency ?? createCurrencyCode("EUR");
+  const defaultCurrency = defaultBackendCurrency(input);
   const cartResult = await findQuoteCart(input, ctx, quoteInput.cartId, defaultCurrency);
   const currency = cartResult.cart?.aggregate.currency ?? defaultCurrency;
   const warnings: string[] = [];
@@ -4384,10 +4323,20 @@ async function startCheckout(
   ctx: MikaRequestContext,
   checkoutInput: StartCheckoutInput,
 ): Promise<MikaApiResult<CheckoutSessionDTO>> {
+  const idempotencyInputHash = ctx.idempotencyKey
+    ? await checkoutIdempotencyInputHash(input, ctx, checkoutInput)
+    : undefined;
   const replayedCheckout = ctx.idempotencyKey
     ? await input.repositories.session.findCheckoutByIdempotencyKey(ctx.idempotencyKey)
     : null;
-  if (replayedCheckout) return checkoutDocumentResult(replayedCheckout);
+  if (replayedCheckout) {
+    const replayedInputHash = checkoutStoredIdempotencyInputHash(replayedCheckout);
+    if (replayedInputHash && idempotencyInputHash && replayedInputHash !== idempotencyInputHash) {
+      return checkoutIdempotencyInputMismatch();
+    }
+
+    return checkoutDocumentResult(replayedCheckout);
+  }
 
   const resolved = await resolveCheckoutStart(input, ctx, checkoutInput);
   if (!resolved.ok) return resolved;
@@ -4477,7 +4426,12 @@ async function startCheckout(
           }),
         ),
       },
-      metadata: checkoutMetadata(checkoutInput.customFields, ctx.idempotencyKey, providerSession),
+      metadata: checkoutMetadata({
+        customFields: checkoutInput.customFields,
+        idempotencyInputHash,
+        idempotencyKey: ctx.idempotencyKey,
+        providerSession,
+      }),
     }),
     createdAt: ctx.now,
     updatedAt: ctx.now,
@@ -4517,7 +4471,7 @@ async function resolveCheckoutStart(
   ctx: MikaRequestContext,
   checkoutInput: StartCheckoutInput,
 ): Promise<({ readonly ok: true } & CheckoutStartResolution) | MikaApiFailure> {
-  const defaultCurrency = input.defaults?.currency ?? createCurrencyCode("EUR");
+  const defaultCurrency = defaultBackendCurrency(input);
   const cartResult = await findCheckoutStartCart(input, ctx, checkoutInput.cartId, defaultCurrency);
   if (!cartResult.ok) return cartResult;
   if (cartResult.expired) return checkoutExpired();
@@ -4780,20 +4734,67 @@ async function releaseCheckoutReservations(
   }
 }
 
-function checkoutMetadata(
-  customFields: JsonObject | undefined,
-  idempotencyKey: string | undefined,
-  providerSession: {
+function checkoutMetadata(input: {
+  readonly customFields: JsonObject | undefined;
+  readonly idempotencyInputHash?: string;
+  readonly idempotencyKey: string | undefined;
+  readonly providerSession: {
     readonly status: CheckoutSessionDTO["status"];
     readonly redirectUrl?: string;
-  },
-): JsonObject {
-  return {
-    ...customFields,
-    checkoutProviderStatus: providerSession.status,
-    ...(idempotencyKey ? { checkoutIdempotencyKey: idempotencyKey } : {}),
-    ...(providerSession.redirectUrl ? { checkoutRedirectUrl: providerSession.redirectUrl } : {}),
   };
+}): JsonObject {
+  return {
+    ...input.customFields,
+    checkoutProviderStatus: input.providerSession.status,
+    ...(input.idempotencyKey ? { checkoutIdempotencyKey: input.idempotencyKey } : {}),
+    ...(input.idempotencyInputHash
+      ? { [CHECKOUT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY]: input.idempotencyInputHash }
+      : {}),
+    ...(input.providerSession.redirectUrl
+      ? { checkoutRedirectUrl: input.providerSession.redirectUrl }
+      : {}),
+  };
+}
+
+async function checkoutIdempotencyInputHash(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  checkoutInput: StartCheckoutInput,
+): Promise<string> {
+  return input.hash(
+    stableJsonStringify({
+      context: {
+        customerId: ctx.customerId,
+        sessionId: ctx.sessionId,
+        userId: ctx.userId,
+      },
+      input: checkoutInput,
+    }),
+  );
+}
+
+function checkoutStoredIdempotencyInputHash(document: CheckoutDocument): string | undefined {
+  return metadataString(document.aggregate.metadata, CHECKOUT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY);
+}
+
+function stableJsonStringify(value: unknown): string {
+  return JSON.stringify(stableJsonValue(value));
+}
+
+function stableJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stableJsonValue);
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, child]) => child !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => [key, stableJsonValue(child)]),
+  );
 }
 
 function checkoutDocumentResult(document: CheckoutDocument): MikaApiResult<CheckoutSessionDTO> {
@@ -5132,11 +5133,7 @@ async function resolveCheckoutPreviewMode(
       (item) => item.id === previewInput.sellableId,
     );
     return sellable
-      ? selectCartPrice(
-          sellable,
-          previewInput.priceId,
-          input.defaults?.currency ?? createCurrencyCode("EUR"),
-        )?.mode
+      ? selectCartPrice(sellable, previewInput.priceId, defaultBackendCurrency(input))?.mode
       : undefined;
   }
 
@@ -5144,14 +5141,14 @@ async function resolveCheckoutPreviewMode(
     input,
     ctx,
     previewInput.cartId,
-    input.defaults?.currency ?? createCurrencyCode("EUR"),
+    defaultBackendCurrency(input),
   );
   const modes = new Set(cartResult.cart?.aggregate.items.map((line) => line.item.mode) ?? []);
   return modes.size === 1 ? modes.values().next().value : undefined;
 }
 
 async function findQuoteCart(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
   cartId: MikaId | undefined,
   currency: CurrencyCode,
@@ -5170,7 +5167,7 @@ async function findQuoteCart(
 }
 
 async function findOwnedCartById(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
   cartId: MikaId,
 ): Promise<CartDocument | null> {
@@ -5184,7 +5181,7 @@ async function findOwnedCartById(
 }
 
 async function quoteCartLine(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   line: CartLine,
 ): Promise<{
   readonly line: CartQuoteLineDTO;
@@ -5256,7 +5253,7 @@ async function quoteCartLine(
 }
 
 async function quoteInputLine(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   quoteInput: CartQuoteInput,
   currency: CurrencyCode,
 ): Promise<{
@@ -5318,7 +5315,7 @@ function moneyDTO(amount: number, currency: CurrencyCode): MoneyDTO {
 }
 
 async function findOpenCartBySessionAnyCurrency(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   sessionId: string,
 ): Promise<CartDocument | null> {
   const collection = (
@@ -5348,7 +5345,7 @@ async function findOpenCartBySessionAnyCurrency(
 }
 
 function createCartDocument(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
   currency: CurrencyCode,
 ): CartDocument {
@@ -5386,7 +5383,7 @@ function updateCartDocument(
 }
 
 async function findOwnedOpenCartById(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
   cartId: MikaId,
   field: string,
@@ -5408,7 +5405,7 @@ async function findOwnedOpenCartById(
 }
 
 async function mergeCartLines(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   target: CartDocument,
   source: CartDocument,
 ): Promise<{ readonly ok: true; readonly items: readonly CartLine[] } | MikaApiFailure> {
@@ -5439,7 +5436,7 @@ async function mergeCartLines(
 }
 
 async function mergeCartLine(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   currentItems: readonly CartLine[],
   nextLine: CartLine,
 ): Promise<{ readonly ok: true; readonly items: readonly CartLine[] } | MikaApiFailure> {
@@ -5477,7 +5474,7 @@ function mergeWishlistItems(
 }
 
 async function validateExistingLineQuantity(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   line: CartLine,
   quantity: number,
 ): Promise<MikaApiFailure | null> {
@@ -5490,7 +5487,7 @@ async function validateExistingLineQuantity(
 }
 
 async function createCouponSnapshot(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   cart: CartDocument,
   code: string,
 ): Promise<CouponSnapshot> {
@@ -5508,7 +5505,7 @@ async function createCouponSnapshot(
 }
 
 async function cartDocumentToDTO(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   cart: CartDocument,
 ): Promise<CartDTO> {
   const stockRecords = await Promise.all(
@@ -5552,7 +5549,7 @@ async function cartDocumentToDTO(
 }
 
 async function wishlistDocumentToDTO(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   wishlist: WishlistDocument,
 ): Promise<WishlistDTO> {
   const stockRecords = await Promise.all(
@@ -5595,7 +5592,7 @@ async function wishlistDocumentToDTO(
 }
 
 async function resolveCartLine(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   itemInput: AddCartItemInput,
   cartCurrency: CurrencyCode,
 ): Promise<
@@ -5695,7 +5692,7 @@ async function resolveCartLine(
 }
 
 async function resolveWishlistItem(
-  input: CreateMikaBackendApiInput,
+  input: MikaCartWishlistBackendInput,
   itemInput: WishlistItemInput,
 ): Promise<
   | {
@@ -5704,7 +5701,7 @@ async function resolveWishlistItem(
     }
   | MikaApiFailure
 > {
-  const currency = input.defaults?.currency ?? createCurrencyCode("EUR");
+  const currency = defaultBackendCurrency(input);
   const catalog = await input.repositories.catalog.findItemBySellableId(itemInput.sellableId);
   if (!catalog) {
     return {
@@ -5899,7 +5896,9 @@ function updateOrderAfterCancel(
   };
 }
 
-function currentBackendISODateTime(input: MikaBackendDependencies): ISODateTime {
+function currentBackendISODateTime(
+  input: Pick<MikaBackendDependencies, "isoNow" | "now">,
+): ISODateTime {
   return input.isoNow?.() ?? createISODateTime(input.now().toISOString());
 }
 
@@ -5936,6 +5935,17 @@ function checkoutIdempotencyInProgress(): MikaApiFailure {
     error: {
       code: "CONFLICT",
       message: "Checkout idempotency replay is already in progress.",
+    },
+  };
+}
+
+function checkoutIdempotencyInputMismatch(): MikaApiFailure {
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "CONFLICT",
+      message: "Checkout idempotency key was reused with different input.",
     },
   };
 }

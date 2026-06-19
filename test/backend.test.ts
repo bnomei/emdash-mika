@@ -61,6 +61,7 @@ import {
   createMikaId,
   createProviderName,
   type JsonObject,
+  type MikaId,
 } from "../src/types/primitives";
 import {
   TEST_CURRENCY,
@@ -644,6 +645,132 @@ describe("backend test Kysely stock database harness", () => {
       await database.destroy();
     }
   });
+
+  for (const repositoryKind of ["fake", "real"] as const) {
+    it(`${repositoryKind} stock repository contract consumes finite reservations without negative quantities`, async () => {
+      const stockItem = createStockRecord({
+        quantityOnHand: 2,
+        quantityReserved: 0,
+        allowBackorder: true,
+      });
+
+      await withStockRepositoryContractHarness(
+        repositoryKind,
+        stockItem,
+        async ({ repository, service }) => {
+          const clock = createTestClock();
+          const reservation = await service.reserve({
+            stockItemId: stockItem.id,
+            quantity: 4,
+            expiresAt: clock.isoAt(15 * 60_000),
+            idempotencyKey: `${repositoryKind}_consume_contract_1`,
+          });
+          if (reservation.status !== "reserved") {
+            throw new Error(`Expected reservation, received '${reservation.status}'.`);
+          }
+
+          await expect(
+            service.consume({
+              reservationEventId: reservation.event.id,
+              now: clock.isoAt(60_000),
+            }),
+          ).resolves.toMatchObject({
+            status: "consumed",
+            stock: {
+              quantityOnHand: 0,
+              quantityReserved: 0,
+            },
+          });
+          await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+            quantityOnHand: 0,
+            quantityReserved: 0,
+          });
+        },
+      );
+    });
+
+    it(`${repositoryKind} stock repository contract keeps reservation policy independent from availability override`, async () => {
+      const stockItem = createStockRecord({
+        quantityOnHand: 2,
+        quantityReserved: 0,
+        availableOverride: false,
+      });
+
+      await withStockRepositoryContractHarness(
+        repositoryKind,
+        stockItem,
+        async ({ repository, service }) => {
+          const result = await service.reserve({
+            stockItemId: stockItem.id,
+            quantity: 1,
+            expiresAt: createTestClock().isoAt(15 * 60_000),
+            idempotencyKey: `${repositoryKind}_available_override_contract_1`,
+          });
+
+          expect(result).toMatchObject({
+            status: "reserved",
+            stock: {
+              quantityReserved: 1,
+            },
+          });
+          await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+            quantityReserved: 1,
+          });
+        },
+      );
+    });
+
+    it(`${repositoryKind} stock repository contract releases expired reservations once`, async () => {
+      const stockItem = createStockRecord({
+        quantityOnHand: 5,
+        quantityReserved: 0,
+      });
+
+      await withStockRepositoryContractHarness(
+        repositoryKind,
+        stockItem,
+        async ({ repository, service }) => {
+          const clock = createTestClock();
+          const expiredReservation = await service.reserve({
+            stockItemId: stockItem.id,
+            quantity: 2,
+            expiresAt: clock.isoAt(30_000),
+            idempotencyKey: `${repositoryKind}_expired_contract_1`,
+          });
+          const activeReservation = await service.reserve({
+            stockItemId: stockItem.id,
+            quantity: 1,
+            expiresAt: clock.isoAt(15 * 60_000),
+            idempotencyKey: `${repositoryKind}_expired_contract_2`,
+          });
+          if (expiredReservation.status !== "reserved" || activeReservation.status !== "reserved") {
+            throw new Error("Expected reservations to be created.");
+          }
+
+          await expect(
+            service.releaseExpiredReservations({ now: clock.isoAt(60_000) }),
+          ).resolves.toMatchObject({
+            scannedCount: 1,
+            releasedCount: 1,
+            stockItemsAffected: 1,
+          });
+          await expect(
+            repository.findEventById(expiredReservation.event.id),
+          ).resolves.toMatchObject({
+            status: "expired",
+          });
+          await expect(repository.findEventById(activeReservation.event.id)).resolves.toMatchObject(
+            {
+              status: "active",
+            },
+          );
+          await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+            quantityReserved: 1,
+          });
+        },
+      );
+    });
+  }
 
   it("treats already released or consumed reservations as non-active conflicts", async () => {
     const database = createTransactionTestMikaDb();
@@ -5538,6 +5665,57 @@ describe("backend API composition", () => {
     });
   });
 
+  it("rejects duplicate checkout starts that reuse an idempotency key with different input", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      idempotencyKey: "checkout_replay_mismatch_1",
+    });
+
+    await expect(
+      api.checkout.start(ctx, { sellableId: sellable.id, quantity: 1 }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        id: "checkout_1",
+      },
+    });
+    await expect(
+      api.checkout.start(ctx, { sellableId: sellable.id, quantity: 2 }),
+    ).resolves.toEqual({
+      ok: false,
+      status: 409,
+      error: {
+        code: "CONFLICT",
+        message: "Checkout idempotency key was reused with different input.",
+      },
+    });
+    expect(fake.getCalls().createCheckoutSession).toHaveLength(1);
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 1,
+    });
+  });
+
   it("returns stored checkout status without a provider lookup", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();
@@ -6720,6 +6898,47 @@ async function createAccountServicesHarness(
   };
 }
 
+type StockRepositoryContractKind = "fake" | "real";
+
+async function withStockRepositoryContractHarness(
+  kind: StockRepositoryContractKind,
+  stockItem: StockItemRecord,
+  run: (harness: {
+    readonly repository: MikaBackendRepositories["stock"];
+    readonly service: ReturnType<typeof createMikaStockLifecycleService>;
+  }) => Promise<void>,
+): Promise<void> {
+  if (kind === "fake") {
+    const repository = createTestStockRepository(new Map([[stockItem.sellableId, stockItem]]));
+    const service = createMikaStockLifecycleService(
+      createIncrementingBackendDependencies({
+        repositories: { ...createTestBackendRepositories(), stock: repository },
+      }),
+    );
+
+    await run({ repository, service });
+    return;
+  }
+
+  const database = createTransactionTestMikaDb();
+  const { db } = database;
+  const repository = new StockRepository(db);
+  const service = createMikaStockLifecycleService(
+    createIncrementingBackendDependencies({
+      repositories: { ...createTestBackendRepositories(), stock: repository },
+    }),
+  );
+
+  try {
+    await mikaInitialMigration.up(db);
+    await repository.putItem(stockItem);
+    await run({ repository, service });
+  } finally {
+    await rollbackMikaInitialMigration(db);
+    await database.destroy();
+  }
+}
+
 function createTestStockRepository(
   stockBySellableId: ReadonlyMap<string, StockItemRecord> = new Map(),
 ): MikaBackendRepositories["stock"] {
@@ -6771,11 +6990,9 @@ function createTestStockRepository(
 
       const availableQuantity = current.quantityOnHand - current.quantityReserved;
       const canReserve =
-        current.availableOverride !== false &&
-        (current.availableOverride === true ||
-          current.policy !== "finite" ||
-          current.allowBackorder ||
-          reservation.quantity <= availableQuantity);
+        current.policy !== "finite" ||
+        current.allowBackorder ||
+        reservation.quantity <= availableQuantity;
       if (!canReserve) {
         return { status: "insufficient_stock", stock: current };
       }
@@ -6863,7 +7080,10 @@ function createTestStockRepository(
       const stock = current
         ? {
             ...current,
-            quantityOnHand: current.quantityOnHand - event.quantityDelta,
+            quantityOnHand:
+              current.policy === "finite"
+                ? Math.max(0, current.quantityOnHand - event.quantityDelta)
+                : current.quantityOnHand,
             quantityReserved: Math.max(0, current.quantityReserved - event.quantityDelta),
             updatedAt: consume.now,
           }
@@ -6880,8 +7100,46 @@ function createTestStockRepository(
         ? { status: "consumed", event: consumedEvent, stock }
         : { status: "not_active", event: consumedEvent, stock };
     },
-    async releaseExpiredReservations() {
-      return { scannedCount: 0, releasedCount: 0, stockItemsAffected: 0 };
+    async releaseExpiredReservations(input) {
+      let scannedCount = 0;
+      let releasedCount = 0;
+      const stockItemsAffected = new Set<MikaId>();
+
+      for (const event of Array.from(eventsById.values())) {
+        if (
+          event.kind !== "reservation" ||
+          event.status !== "active" ||
+          !event.expiresAt ||
+          event.expiresAt > input.now
+        ) {
+          continue;
+        }
+
+        scannedCount += 1;
+        const expiredEvent: StockEventRecord = {
+          ...event,
+          status: "expired",
+          updatedAt: input.now,
+        };
+        const current =
+          Array.from(stockItems.values()).find((stock) => stock.id === event.stockItemId) ?? null;
+        eventsById.set(expiredEvent.id, expiredEvent);
+        if (expiredEvent.idempotencyKey) {
+          eventsByIdempotencyKey.set(expiredEvent.idempotencyKey, expiredEvent);
+        }
+        if (!current) continue;
+
+        const stock = {
+          ...current,
+          quantityReserved: Math.max(0, current.quantityReserved - event.quantityDelta),
+          updatedAt: input.now,
+        };
+        stockItems.set(stock.sellableId, stock);
+        stockItemsAffected.add(stock.id);
+        releasedCount += 1;
+      }
+
+      return { scannedCount, releasedCount, stockItemsAffected: stockItemsAffected.size };
     },
     async adjustStock() {
       throw new Error("The test stock repository does not implement adjustStock().");

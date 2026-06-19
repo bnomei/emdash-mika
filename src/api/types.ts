@@ -15,6 +15,7 @@ import type { MikaAgentProofKind, MikaAgentProofRef } from "./agent-types";
 
 export const MIKA_ERROR_CODES = [
   "VALIDATION_FAILED",
+  "METHOD_NOT_ALLOWED",
   "CSRF_INVALID",
   "RATE_LIMITED",
   "AUTH_REQUIRED",

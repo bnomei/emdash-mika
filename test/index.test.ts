@@ -275,6 +275,71 @@ describe("Mika Astro helpers", () => {
     }
   });
 
+  it("lets explicit Astro helper API overrides win over native plugin defaults", async () => {
+    const defaultApi = {
+      cart: {
+        get: async () => ({
+          ok: true,
+          status: 200,
+          data: { id: "cart_default" } as CartDTO,
+        }),
+      },
+    } satisfies MikaApiOverrides;
+    const explicitApi = {
+      cart: {
+        get: async () => ({
+          ok: true,
+          status: 200,
+          data: { id: "cart_explicit" } as CartDTO,
+        }),
+      },
+    } satisfies MikaApiOverrides;
+
+    try {
+      createPlugin({ api: defaultApi });
+      const Mika = createMika(
+        {
+          request: new Request("https://shop.test/cart"),
+          url: new URL("https://shop.test/cart"),
+        },
+        { api: explicitApi },
+      );
+
+      await expect(Mika.cart.get()).resolves.toMatchObject({
+        ok: true,
+        data: { id: "cart_explicit" },
+      });
+    } finally {
+      createPlugin();
+    }
+  });
+
+  it("clears native plugin API defaults when a plugin is created without overrides", async () => {
+    const api = {
+      cart: {
+        get: async () => ({
+          ok: true,
+          status: 200,
+          data: { id: "cart_default" } as CartDTO,
+        }),
+      },
+    } satisfies MikaApiOverrides;
+
+    createPlugin({ api });
+    createPlugin();
+
+    const Mika = createMika({
+      request: new Request("https://shop.test/cart"),
+      url: new URL("https://shop.test/cart"),
+    });
+
+    await expect(Mika.cart.get()).resolves.toMatchObject({
+      ok: false,
+      status: 501,
+      error: { code: "NOT_IMPLEMENTED" },
+    });
+  });
+
   it("falls back to Astro's current locale for direct catalog helper calls", async () => {
     let contentRef: unknown;
     const api = {
@@ -796,6 +861,111 @@ describe("Mika client", () => {
     ]);
   });
 
+  it("pins every operation route, transport, and action exposure", () => {
+    expect(
+      Object.entries(mikaOperationDefinitions).map(([key, operation]) =>
+        [
+          key,
+          operation.name,
+          `${operation.namespace}.${operation.method}`,
+          operation.routeKey,
+          operation.httpMethod,
+          operation.transport,
+          operation.public ? "public" : "trusted",
+          operation.requiresRequestContext ? "ctx" : "noctx",
+          "searchKeys" in operation ? (operation.searchKeys?.join(",") ?? "") : "",
+          "action" in operation ? (operation.action?.accept ?? "") : "",
+        ].join("|"),
+      ),
+    ).toEqual([
+      "catalogSellables|catalog.sellables|catalog.sellables|catalogSellables|GET|search|public|noctx|collection,id,locale|json",
+      "stockAvailability|stock.availability|stock.availability|sellableAvailability|GET|search|public|noctx|sellableId|json",
+      "cartGet|cart.get|cart.get|cart|GET|none|trusted|ctx||",
+      "cartQuote|cart.quote|cart.quote|cartQuote|POST|body|trusted|ctx||",
+      "cartAdd|cart.add|cart.add|cartItems|POST|body|trusted|ctx||form",
+      "cartUpdate|cart.update|cart.update|cartItem|PATCH|body|trusted|ctx||form",
+      "cartRemove|cart.remove|cart.remove|cartItem|DELETE|body|trusted|ctx||form",
+      "cartMerge|cart.merge|cart.merge|cartMerge|POST|body|trusted|ctx||form",
+      "cartApplyCoupon|cart.applyCoupon|cart.applyCoupon|cartCoupon|POST|body|trusted|ctx||form",
+      "cartRemoveCoupon|cart.removeCoupon|cart.removeCoupon|cartCoupon|DELETE|body|trusted|ctx||form",
+      "wishlistGet|wishlist.get|wishlist.get|wishlist|GET|none|trusted|ctx||",
+      "wishlistAdd|wishlist.add|wishlist.add|wishlistItems|POST|body|trusted|ctx||form",
+      "wishlistRemove|wishlist.remove|wishlist.remove|wishlistItem|DELETE|body|trusted|ctx||form",
+      "wishlistMoveToCart|wishlist.moveToCart|wishlist.moveToCart|wishlistMoveToCart|POST|body|trusted|ctx||form",
+      "wishlistSaveForLater|wishlist.saveForLater|wishlist.saveForLater|wishlistSaveForLater|POST|body|trusted|ctx||form",
+      "wishlistMerge|wishlist.merge|wishlist.merge|wishlistMerge|POST|body|trusted|ctx||form",
+      "checkoutStart|checkout.start|checkout.start|checkout|POST|body|trusted|ctx||form",
+      "checkoutPreview|checkout.preview|checkout.preview|checkoutPreview|POST|body|trusted|ctx||",
+      "checkoutStatus|checkout.status|checkout.status|checkoutStatus|GET|search|trusted|noctx|checkoutId|json",
+      "magicLinkRequest|magicLink.request|magicLink.request|magicLink|POST|body|trusted|ctx||form",
+      "magicLinkVerify|magicLink.verify|magicLink.verify|magicLinkVerify|POST|body|trusted|ctx||form",
+      "accountGet|account.get|account.get|account|GET|none|trusted|ctx||",
+      "accountExport|account.export|account.export|accountExport|POST|body|trusted|ctx||form",
+      "accountExportStatus|account.exportStatus|account.exportStatus|accountExportStatus|GET|search|trusted|ctx|exportId|json",
+      "accountExportDownload|account.exportDownload|account.exportDownload|accountExportDownload|GET|search|trusted|ctx|exportId,token|",
+      "accountDelete|account.delete|account.delete|accountDelete|POST|body|trusted|ctx||form",
+      "accountPortal|account.portal|account.portal|accountPortal|POST|body|trusted|ctx||form",
+      "subscriptionCancel|subscription.cancel|subscription.cancel|subscriptionCancel|POST|body|trusted|ctx||form",
+      "subscriptionChange|subscription.change|subscription.change|subscriptionChange|POST|body|trusted|ctx||form",
+      "subscriptionRenew|subscription.renew|subscription.renew|subscriptionRenew|POST|body|trusted|ctx||form",
+      "downloadResolve|download.resolve|download.resolve|download|GET|search|trusted|noctx|token|",
+      "orderInvoice|order.invoice|order.invoice|orderInvoice|GET|search|trusted|noctx|orderId,returnTo|",
+      "webhookReceive|webhook.receive|webhook.receive|webhook|POST|body|trusted|ctx||",
+      "adminProviderHealth|admin.providerHealth|admin.providerHealth|adminProviderHealth|POST|body|trusted|noctx||",
+      "adminProviderSync|admin.providerSync|admin.providerSync|adminProviderSync|POST|body|trusted|noctx||",
+      "adminStockAdjust|admin.stockAdjust|admin.stockAdjust|adminStockAdjust|POST|body|trusted|noctx||",
+      "adminStockReleaseExpiredReservations|admin.releaseExpiredReservations|admin.releaseExpiredReservations|adminStockReleaseExpiredReservations|POST|body|trusted|noctx||",
+      "adminWebhookReplay|admin.webhookReplay|admin.webhookReplay|adminWebhookReplay|POST|body|trusted|noctx||",
+      "adminOrderRefund|admin.orderRefund|admin.orderRefund|adminOrderRefund|POST|body|trusted|noctx||",
+      "adminOrderCancel|admin.orderCancel|admin.orderCancel|adminOrderCancel|POST|body|trusted|noctx||",
+      "adminEntitlementGrant|admin.entitlementGrant|admin.entitlementGrant|adminEntitlementGrant|POST|body|trusted|noctx||",
+      "adminEntitlementRevoke|admin.entitlementRevoke|admin.entitlementRevoke|adminEntitlementRevoke|POST|body|trusted|noctx||",
+      "adminEmailResend|admin.emailResend|admin.emailResend|adminEmailResend|POST|body|trusted|noctx||",
+      "adminLicenseRevoke|admin.licenseRevoke|admin.licenseRevoke|adminLicenseRevoke|POST|body|trusted|noctx||",
+      "adminDownloadIssue|admin.downloadIssue|admin.downloadIssue|adminDownloadIssue|POST|body|trusted|noctx||",
+    ]);
+  });
+
+  it("pins action descriptors to their operation metadata", () => {
+    expect(
+      Object.entries(mikaActionDefinitions).map(([key, definition]) =>
+        [
+          key,
+          definition.name,
+          definition.accept,
+          definition.operation.name,
+          definition.operation.routeKey,
+          definition.operation.transport,
+        ].join("|"),
+      ),
+    ).toEqual([
+      "catalogSellables|catalog.sellables|json|catalog.sellables|catalogSellables|search",
+      "stockAvailability|stock.availability|json|stock.availability|sellableAvailability|search",
+      "cartAdd|cart.add|form|cart.add|cartItems|body",
+      "cartUpdate|cart.update|form|cart.update|cartItem|body",
+      "cartRemove|cart.remove|form|cart.remove|cartItem|body",
+      "cartMerge|cart.merge|form|cart.merge|cartMerge|body",
+      "cartApplyCoupon|cart.applyCoupon|form|cart.applyCoupon|cartCoupon|body",
+      "cartRemoveCoupon|cart.removeCoupon|form|cart.removeCoupon|cartCoupon|body",
+      "wishlistAdd|wishlist.add|form|wishlist.add|wishlistItems|body",
+      "wishlistRemove|wishlist.remove|form|wishlist.remove|wishlistItem|body",
+      "wishlistMoveToCart|wishlist.moveToCart|form|wishlist.moveToCart|wishlistMoveToCart|body",
+      "wishlistSaveForLater|wishlist.saveForLater|form|wishlist.saveForLater|wishlistSaveForLater|body",
+      "wishlistMerge|wishlist.merge|form|wishlist.merge|wishlistMerge|body",
+      "checkoutStart|checkout.start|form|checkout.start|checkout|body",
+      "checkoutStatus|checkout.status|json|checkout.status|checkoutStatus|search",
+      "magicLinkRequest|magicLink.request|form|magicLink.request|magicLink|body",
+      "magicLinkVerify|magicLink.verify|form|magicLink.verify|magicLinkVerify|body",
+      "accountExport|account.export|form|account.export|accountExport|body",
+      "accountExportStatus|account.exportStatus|json|account.exportStatus|accountExportStatus|search",
+      "accountDelete|account.delete|form|account.delete|accountDelete|body",
+      "accountPortal|account.portal|form|account.portal|accountPortal|body",
+      "subscriptionCancel|subscription.cancel|form|subscription.cancel|subscriptionCancel|body",
+      "subscriptionChange|subscription.change|form|subscription.change|subscriptionChange|body",
+      "subscriptionRenew|subscription.renew|form|subscription.renew|subscriptionRenew|body",
+    ]);
+  });
+
   it("covers every routed operation with handler and validation metadata", () => {
     const routes = createMikaPluginRoutes();
     const expectedRoutePaths = [
@@ -1178,7 +1348,7 @@ describe("Mika client", () => {
       ok: false,
       status: 405,
       error: {
-        code: "VALIDATION_FAILED",
+        code: "METHOD_NOT_ALLOWED",
         fieldErrors: { method: "Expected DELETE, PATCH." },
       },
     });
@@ -1193,7 +1363,7 @@ describe("Mika client", () => {
       ok: false,
       status: 405,
       error: {
-        code: "VALIDATION_FAILED",
+        code: "METHOD_NOT_ALLOWED",
         fieldErrors: { method: "Expected DELETE, POST." },
       },
     });
@@ -1333,6 +1503,69 @@ describe("Mika client", () => {
           quoteId: "quote_1",
           proofRefs: [{ kind: "receipt", id: "receipt_1", inputHash: "hash_1" }],
         }),
+      },
+    ]);
+  });
+
+  it("maps representative server client methods through operation transport metadata", async () => {
+    const requests: Array<{
+      readonly url: string;
+      readonly method?: string;
+      readonly body: string;
+    }> = [];
+    const client = createMikaServerClient({
+      baseUrl: "https://shop.test",
+      fetch: async (url, init) => {
+        requests.push({
+          url: typeof url === "string" ? url : url instanceof URL ? url.toString() : url.url,
+          method: init?.method,
+          body: typeof init?.body === "string" ? init.body : "",
+        });
+        return Response.json({
+          ok: false,
+          status: 501,
+          error: { code: "NOT_IMPLEMENTED", message: "stub" },
+        });
+      },
+    });
+
+    await client.cart.get();
+    await client.checkout.status("checkout_1");
+    await client.cart.update({ lineId: id("cart_line_1"), quantity: 2 });
+    await client.cart.remove({ lineId: id("cart_line_1") });
+    await client.cart.applyCoupon({ code: "SAVE10" });
+    await client.cart.removeCoupon({ cartId: id("cart_1") });
+
+    expect(requests).toEqual([
+      {
+        url: "https://shop.test/_emdash/api/plugins/mika/cart",
+        method: "GET",
+        body: "",
+      },
+      {
+        url: "https://shop.test/_emdash/api/plugins/mika/checkout/status?checkoutId=checkout_1",
+        method: "GET",
+        body: "",
+      },
+      {
+        url: "https://shop.test/_emdash/api/plugins/mika/cart/item",
+        method: "PATCH",
+        body: JSON.stringify({ lineId: "cart_line_1", quantity: 2 }),
+      },
+      {
+        url: "https://shop.test/_emdash/api/plugins/mika/cart/item",
+        method: "DELETE",
+        body: JSON.stringify({ lineId: "cart_line_1" }),
+      },
+      {
+        url: "https://shop.test/_emdash/api/plugins/mika/cart/coupon",
+        method: "POST",
+        body: JSON.stringify({ code: "SAVE10" }),
+      },
+      {
+        url: "https://shop.test/_emdash/api/plugins/mika/cart/coupon",
+        method: "DELETE",
+        body: JSON.stringify({ cartId: "cart_1" }),
       },
     ]);
   });
