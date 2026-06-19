@@ -353,23 +353,29 @@ describe("backend API composition", () => {
 
   it("dispatches plugin routes through createMikaBackendApi without route key changes", async () => {
     const contentRef = createTestContentRef({ id: "route-product", locale: "de-AT" });
-    const sellable = createTestSellableDTO({ contentRef });
-    const api = createMikaBackendApi(
-      createTestBackendDependencies({
-        overrides: {
-          catalog: {
-            sellables: async (input) => ({
-              ok: true,
-              status: 200,
-              data: input.contentRef.id === contentRef.id ? [sellable] : [],
-            }),
-          },
-        },
-      }),
+    const sellable = createSellableDefinition({ maxPerOrder: 4 });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({
+            sellableId: sellable.id,
+            quantityOnHand: 6,
+            quantityReserved: 1,
+          }),
+        ],
+      ]),
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
     );
+    const api = createMikaBackendApi(createTestBackendDependencies({ repositories }));
     const routes = createMikaPluginRoutes(api);
 
-    expect(routes[mikaPluginRoutes.catalogSellables]).toBeDefined();
+    expect(mikaPluginRoutes.catalogSellables).toBe("catalog/sellables");
+    expect(mikaPluginRoutes.sellableAvailability).toBe("sellables/availability");
+    expect(routes[mikaPluginRoutes.catalogSellables]).toMatchObject({ public: true });
+    expect(routes[mikaPluginRoutes.sellableAvailability]).toMatchObject({ public: true });
     await expect(
       routes[mikaPluginRoutes.catalogSellables].handler({
         input: {},
@@ -380,7 +386,34 @@ describe("backend API composition", () => {
     ).resolves.toMatchObject({
       ok: true,
       status: 200,
-      data: [sellable],
+      data: [
+        {
+          id: sellable.id,
+          contentRef,
+          availability: {
+            sellableId: sellable.id,
+            status: "available",
+            availableQuantity: 5,
+            maxPerOrder: 4,
+          },
+        },
+      ],
+    });
+    await expect(
+      routes[mikaPluginRoutes.sellableAvailability].handler({
+        input: {},
+        request: new Request(
+          `https://shop.example.test/_emdash/api/plugins/mika/sellables/availability?sellableId=${sellable.id}`,
+        ),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        sellableId: sellable.id,
+        status: "available",
+        availableQuantity: 5,
+      },
     });
   });
 
