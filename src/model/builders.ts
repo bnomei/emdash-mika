@@ -128,11 +128,32 @@ export function cartToDTO(input: {
 export function cartWithItems(input: {
   readonly cart: CartAggregate;
   readonly items: readonly CartLine[];
+  readonly coupon?: CouponSnapshot;
 }): CartAggregate {
   return createCartAggregate({
     currency: input.cart.currency,
     items: input.items,
-    coupon: input.cart.coupon,
+    coupon: input.coupon ?? input.cart.coupon,
+    metadata: input.cart.metadata,
+  });
+}
+
+export function cartWithoutCoupon(input: { readonly cart: CartAggregate }): CartAggregate {
+  return createCartAggregate({
+    currency: input.cart.currency,
+    items: input.cart.items,
+    metadata: input.cart.metadata,
+  });
+}
+
+export function cartWithCoupon(input: {
+  readonly cart: CartAggregate;
+  readonly coupon: CouponSnapshot;
+}): CartAggregate {
+  return createCartAggregate({
+    currency: input.cart.currency,
+    items: input.cart.items,
+    coupon: input.coupon,
     metadata: input.cart.metadata,
   });
 }

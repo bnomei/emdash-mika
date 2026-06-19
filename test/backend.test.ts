@@ -841,6 +841,145 @@ describe("backend API composition", () => {
     });
   });
 
+  it("merges compatible cart lines from a source session into the current cart", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition({ maxPerOrder: 5 });
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const sourceCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_source",
+    });
+    const targetCtx = createTestRequestContext({
+      customerId: "customer_1",
+      userId: "user_1",
+      sessionId: "session_target",
+    });
+
+    await api.cart.add(sourceCtx, {
+      sellableId: sellable.id,
+      priceId: createTestMikaId("price", 1),
+      quantity: 2,
+    });
+    await api.cart.add(targetCtx, {
+      sellableId: sellable.id,
+      priceId: createTestMikaId("price", 1),
+      quantity: 1,
+    });
+
+    await expect(
+      api.cart.merge(targetCtx, { sourceSessionId: "session_source" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        items: [{ sellableId: sellable.id, quantity: 3, total: { amount: 3600 } }],
+        subtotal: { amount: 3600 },
+        total: { amount: 3600 },
+      },
+    });
+    await expect(
+      repositories.session.findOpenCartBySession("session_source", TEST_CURRENCY),
+    ).resolves.toBeNull();
+  });
+
+  it("applies and removes coupon snapshots on cart totals", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+
+    await expect(api.cart.applyCoupon(ctx, { code: " save10 " })).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        coupon: {
+          label: "SAVE10",
+          discount: { amount: 240, currency: TEST_CURRENCY },
+        },
+        subtotal: { amount: 2400, currency: TEST_CURRENCY },
+        discount: { amount: 240, currency: TEST_CURRENCY },
+        total: { amount: 2160, currency: TEST_CURRENCY },
+      },
+    });
+    await expect(api.cart.removeCoupon(ctx, {})).resolves.toMatchObject({
+      ok: true,
+      data: {
+        coupon: undefined,
+        subtotal: { amount: 2400, currency: TEST_CURRENCY },
+        discount: undefined,
+        total: { amount: 2400, currency: TEST_CURRENCY },
+      },
+    });
+  });
+
+  it("returns stable errors for invalid target cart and merge currency mismatches", async () => {
+    const dependencies = createIncrementingBackendDependencies();
+    const api = createMikaBackendApi(dependencies);
+    const ctx = createTestRequestContext({
+      customerId: "customer_1",
+      userId: "user_1",
+      sessionId: "session_target",
+    });
+    const sourceCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_usd_source",
+    });
+    const usdApi = createMikaBackendApi({
+      ...dependencies,
+      defaults: { ...dependencies.defaults, currency: createTestCurrencyCode("USD") },
+    });
+
+    await expect(
+      api.cart.merge(ctx, { targetCartId: createTestMikaId("cart", 404) }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 404,
+      error: {
+        code: "VALIDATION_FAILED",
+        fieldErrors: { targetCartId: "Open cart was not found." },
+      },
+    });
+
+    const usdCart = await usdApi.cart.get(ctx);
+    if (!usdCart.ok) {
+      throw new Error("Expected USD cart.get to succeed.");
+    }
+
+    await expect(api.cart.merge(ctx, { targetCartId: usdCart.data.id })).resolves.toMatchObject({
+      ok: false,
+      status: 422,
+      error: {
+        code: "VALIDATION_FAILED",
+        fieldErrors: { targetCartId: expect.any(String) },
+      },
+    });
+
+    await usdApi.cart.get(sourceCtx);
+
+    await expect(
+      api.cart.merge(ctx, { sourceSessionId: "session_usd_source" }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 422,
+      error: {
+        code: "VALIDATION_FAILED",
+        fieldErrors: { sourceSessionId: expect.any(String) },
+      },
+    });
+  });
+
   it("rejects inactive sellables, inactive prices, currency mismatches, and max quantity before creating a cart", async () => {
     const contentRef = createTestContentRef();
     const inactiveSellable = createSellableDefinition({

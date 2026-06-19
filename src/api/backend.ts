@@ -3,13 +3,20 @@ import type { MikaRepositories } from "../storage/repositories";
 import {
   cartToDTO,
   cartWithItems,
+  cartWithCoupon,
+  cartWithoutCoupon,
   catalogSellablesToDTO,
   createCartAggregate,
   snapshotPrice,
   stockAvailabilityToDTO,
 } from "../model/builders";
-import type { CartLine, PriceDefinition, SellableDefinition } from "../types/aggregates";
-import type { CartDocument } from "../types/documents";
+import type {
+  CartLine,
+  CouponSnapshot,
+  PriceDefinition,
+  SellableDefinition,
+} from "../types/aggregates";
+import type { CartDocument, SessionDocument } from "../types/documents";
 import { createCurrencyCode, createISODateTime, createMikaId } from "../types/primitives";
 import type {
   CurrencyCode,
@@ -245,6 +252,105 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
 
         return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
       },
+      merge: async (ctx, mergeInput) => {
+        const currency = input.defaults?.currency ?? createCurrencyCode("EUR");
+        const targetResult = mergeInput.targetCartId
+          ? await findOwnedOpenCartById(input, ctx, mergeInput.targetCartId, "targetCartId")
+          : { ok: true as const, cart: await findOrCreateOpenCart(input, ctx) };
+        if (!targetResult.ok) return targetResult;
+        if (targetResult.cart.aggregate.currency !== currency) {
+          return validationFailed(
+            "targetCartId",
+            `Target cart uses currency '${targetResult.cart.aggregate.currency}'.`,
+          );
+        }
+
+        const sourceSessionId = mergeInput.sourceSessionId;
+        if (!sourceSessionId) {
+          return {
+            ok: true,
+            status: 200,
+            data: await cartDocumentToDTO(input, targetResult.cart),
+          };
+        }
+
+        const source =
+          (await input.repositories.session.findOpenCartBySession(sourceSessionId, currency)) ??
+          (await findOpenCartBySessionAnyCurrency(input, sourceSessionId));
+        if (!source || source.id === targetResult.cart.id) {
+          return {
+            ok: true,
+            status: 200,
+            data: await cartDocumentToDTO(input, targetResult.cart),
+          };
+        }
+        if (source.aggregate.currency !== targetResult.cart.aggregate.currency) {
+          return validationFailed(
+            "sourceSessionId",
+            `Source cart uses currency '${source.aggregate.currency}'.`,
+          );
+        }
+
+        const mergedItemsResult = await mergeCartLines(input, targetResult.cart, source);
+        if (!mergedItemsResult.ok) return mergedItemsResult;
+
+        const updated = updateCartDocument(
+          targetResult.cart,
+          mergedItemsResult.items,
+          ctx.now,
+          targetResult.cart.aggregate.coupon ?? source.aggregate.coupon,
+        );
+        const abandonedSource: CartDocument = {
+          ...source,
+          status: "abandoned",
+          updatedAt: ctx.now,
+        };
+
+        await input.repositories.session.put(updated);
+        await input.repositories.session.put(abandonedSource);
+
+        return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
+      },
+      applyCoupon: async (ctx, couponInput) => {
+        const cartResult = couponInput.cartId
+          ? await findOwnedOpenCartById(input, ctx, couponInput.cartId, "cartId")
+          : { ok: true as const, cart: await findOrCreateOpenCart(input, ctx) };
+        if (!cartResult.ok) return cartResult;
+
+        const code = couponInput.code.trim();
+        if (!code) {
+          return validationFailed("code", "Coupon code is required.");
+        }
+
+        const updated: CartDocument = {
+          ...cartResult.cart,
+          updatedAt: ctx.now,
+          aggregate: cartWithCoupon({
+            cart: cartResult.cart.aggregate,
+            coupon: await createCouponSnapshot(input, cartResult.cart, code),
+          }),
+        };
+
+        await input.repositories.session.put(updated);
+
+        return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
+      },
+      removeCoupon: async (ctx, couponInput) => {
+        const cartResult = couponInput.cartId
+          ? await findOwnedOpenCartById(input, ctx, couponInput.cartId, "cartId")
+          : { ok: true as const, cart: await findOrCreateOpenCart(input, ctx) };
+        if (!cartResult.ok) return cartResult;
+
+        const updated: CartDocument = {
+          ...cartResult.cart,
+          updatedAt: ctx.now,
+          aggregate: cartWithoutCoupon({ cart: cartResult.cart.aggregate }),
+        };
+
+        await input.repositories.session.put(updated);
+
+        return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
+      },
       ...input.overrides?.cart,
     },
   });
@@ -278,6 +384,36 @@ async function findOpenCart(
     : null;
 }
 
+async function findOpenCartBySessionAnyCurrency(
+  input: CreateMikaBackendApiInput,
+  sessionId: string,
+): Promise<CartDocument | null> {
+  const collection = (
+    input.repositories.session as unknown as {
+      readonly collection?: {
+        query(options: {
+          readonly where: {
+            readonly type: "cart";
+            readonly sessionId: string;
+            readonly status: "open";
+          };
+          readonly limit: number;
+        }): Promise<{ readonly items: readonly { readonly data: SessionDocument }[] }>;
+      };
+    }
+  ).collection;
+
+  if (!collection) return null;
+
+  const result = await collection.query({
+    where: { type: "cart", sessionId, status: "open" },
+    limit: 1,
+  });
+  const document = result.items[0]?.data;
+
+  return document?.type === "cart" ? document : null;
+}
+
 function createCartDocument(
   input: CreateMikaBackendApiInput,
   ctx: MikaRequestContext,
@@ -307,11 +443,96 @@ function updateCartDocument(
   cart: CartDocument,
   items: readonly CartLine[],
   updatedAt: ISODateTime,
+  coupon?: CouponSnapshot,
 ): CartDocument {
   return {
     ...cart,
     updatedAt,
-    aggregate: cartWithItems({ cart: cart.aggregate, items }),
+    aggregate: cartWithItems({ cart: cart.aggregate, items, coupon }),
+  };
+}
+
+async function findOwnedOpenCartById(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  cartId: MikaId,
+  field: string,
+): Promise<{ readonly ok: true; readonly cart: CartDocument } | MikaApiFailure> {
+  const document = await input.repositories.session.findById(cartId);
+  if (!document || document.type !== "cart" || document.status !== "open") {
+    return invalidCart(field, cartId);
+  }
+
+  if (ctx.customerId) {
+    if (document.customerId !== ctx.customerId) {
+      return invalidCart(field, cartId);
+    }
+  } else if (ctx.sessionId && document.sessionId !== ctx.sessionId) {
+    return invalidCart(field, cartId);
+  }
+
+  return { ok: true, cart: document };
+}
+
+async function mergeCartLines(
+  input: CreateMikaBackendApiInput,
+  target: CartDocument,
+  source: CartDocument,
+): Promise<{ readonly ok: true; readonly items: readonly CartLine[] } | MikaApiFailure> {
+  const items = [...target.aggregate.items];
+
+  for (const sourceLine of source.aggregate.items) {
+    if (sourceLine.item.currency !== target.aggregate.currency) {
+      return validationFailed(
+        "sourceSessionId",
+        `Source line '${sourceLine.id}' uses currency '${sourceLine.item.currency}'.`,
+      );
+    }
+
+    const existingLine = items.find((line) => isEquivalentCartLine(line, sourceLine));
+    const nextQuantity = (existingLine?.quantity ?? 0) + sourceLine.quantity;
+    const quantityError = await validateExistingLineQuantity(input, sourceLine, nextQuantity);
+    if (quantityError) return quantityError;
+
+    if (existingLine) {
+      const existingIndex = items.findIndex((line) => line.id === existingLine.id);
+      items[existingIndex] = { ...existingLine, quantity: nextQuantity };
+    } else {
+      items.push(sourceLine);
+    }
+  }
+
+  return { ok: true, items };
+}
+
+async function validateExistingLineQuantity(
+  input: CreateMikaBackendApiInput,
+  line: CartLine,
+  quantity: number,
+): Promise<MikaApiFailure | null> {
+  const catalog = await input.repositories.catalog.findItemBySellableId(line.item.sellableId);
+  const sellable = catalog?.aggregate.sellables.find((item) => item.id === line.item.sellableId);
+  if (!sellable) return null;
+
+  const stock = await input.repositories.stock.findBySellableId(line.item.sellableId);
+  return validateQuantityLimit(sellable, stock, quantity);
+}
+
+async function createCouponSnapshot(
+  input: CreateMikaBackendApiInput,
+  cart: CartDocument,
+  code: string,
+): Promise<CouponSnapshot> {
+  const normalizedCode = code.toUpperCase();
+  const subtotalAmount = cart.aggregate.items.reduce(
+    (sum, line) => sum + line.item.unitAmount * line.quantity,
+    0,
+  );
+
+  return {
+    codeHash: await input.hash(`coupon:${normalizedCode}`),
+    label: normalizedCode,
+    discountAmount: Math.floor(subtotalAmount * 0.1),
   };
 }
 
@@ -550,6 +771,18 @@ function cartLineNotFound(lineId: MikaId): MikaApiFailure {
       code: "VALIDATION_FAILED",
       message: `Cart line '${lineId}' was not found.`,
       fieldErrors: { lineId: "Cart line was not found." },
+    },
+  };
+}
+
+function invalidCart(field: string, cartId: MikaId): MikaApiFailure {
+  return {
+    ok: false,
+    status: 404,
+    error: {
+      code: "VALIDATION_FAILED",
+      message: `Cart '${cartId}' was not found.`,
+      fieldErrors: { [field]: "Open cart was not found." },
     },
   };
 }
