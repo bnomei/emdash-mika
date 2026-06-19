@@ -89,6 +89,7 @@ import type {
   MikaApiResult,
   MoneyDTO,
   DownloadDTO,
+  DownloadResolutionDTO,
   EntitlementDTO,
   OrderSummaryDTO,
   StartCheckoutInput,
@@ -759,6 +760,10 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
       portal: async (ctx, portalInput) => createAccountPortalSession(input, ctx, portalInput),
       ...input.overrides?.account,
     },
+    download: {
+      resolve: async (downloadInput) => resolveDownload(input, downloadInput),
+      ...input.overrides?.download,
+    },
     webhook: {
       receive: async (ctx, webhookInput) => receiveWebhook(input, ctx, webhookInput),
       ...input.overrides?.webhook,
@@ -1338,6 +1343,84 @@ function accountExportDownloadResult(
   };
 }
 
+async function resolveDownload(
+  input: CreateMikaBackendApiInput,
+  downloadInput: { readonly token: string },
+): Promise<MikaApiResult<DownloadResolutionDTO>> {
+  const now = input.isoNow?.() ?? createISODateTime(input.now().toISOString());
+  const tokenHash = await hashDownloadToken(input, downloadInput.token.trim());
+  const record = await input.repositories.ephemeral.get(tokenHash);
+  const tokenError = downloadTokenError(record, now);
+  if (tokenError) return tokenError;
+
+  const data = record?.data ?? {};
+  const downloadRef = stringChild(data, "downloadRef");
+  if (!downloadRef) {
+    return tokenResult("TOKEN_INVALID", "Download token is invalid.");
+  }
+
+  const order = await input.repositories.ledger.findOrderByDownloadRef(downloadRef);
+  const line = order?.aggregate.lines.find((candidate) =>
+    candidate.downloadRefs?.includes(downloadRef),
+  );
+  if (!order || !line || order.status !== "paid" || order.paymentStatus !== "paid") {
+    return tokenResult("TOKEN_INVALID", "Download token is invalid.");
+  }
+
+  const orderId = stringChild(data, "orderId");
+  const orderLineId = stringChild(data, "orderLineId");
+  if ((orderId && order.id !== orderId) || (orderLineId && line.id !== orderLineId)) {
+    return tokenResult("TOKEN_INVALID", "Download token is invalid.");
+  }
+
+  const entitlementId = stringChild(data, "entitlementId");
+  if (entitlementId) {
+    const entitlement = await input.repositories.account.findEntitlementById(
+      createMikaId(entitlementId),
+    );
+    if (
+      !entitlement ||
+      entitlement.status !== "active" ||
+      (entitlement.record.currentPeriodEnd !== undefined &&
+        entitlement.record.currentPeriodEnd <= now) ||
+      (entitlement.orderId && entitlement.orderId !== order.id)
+    ) {
+      return tokenResult("DOWNLOAD_REVOKED", "Download access has been revoked.");
+    }
+  }
+
+  const licenseId = stringChild(data, "licenseId");
+  if (licenseId) {
+    const license = await input.repositories.account.findLicenseById(createMikaId(licenseId));
+    if (
+      !license ||
+      license.status !== "active" ||
+      license.record.orderId !== order.id ||
+      license.record.orderLineId !== line.id
+    ) {
+      return tokenResult("DOWNLOAD_REVOKED", "Download access has been revoked.");
+    }
+  }
+
+  const consumed = await input.repositories.ephemeral.consumeToken(tokenHash, now);
+  if (!consumed) {
+    const current = await input.repositories.ephemeral.get(tokenHash);
+    return (
+      downloadTokenError(current, now) ?? tokenResult("TOKEN_INVALID", "Download token is invalid.")
+    );
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      title: stringChild(data, "title") ?? line.item.titleSnapshot,
+      redirectUrl: stringChild(data, "redirectUrl") ?? downloadRef,
+      expiresAt: record?.expiresAt,
+    },
+  };
+}
+
 function accountExportArtifactRef(account: AccountDTO, exportedAt: ISODateTime): string {
   return `data:application/json;charset=utf-8,${encodeURIComponent(
     JSON.stringify({ exportedAt, account }),
@@ -1367,6 +1450,10 @@ async function hashAccountExportDownloadToken(
   return input.hash(`account-export-download-token:${token}`);
 }
 
+async function hashDownloadToken(input: CreateMikaBackendApiInput, token: string): Promise<string> {
+  return input.hash(`download-token:${token}`);
+}
+
 function accountExportDownloadTokenError(
   record: Awaited<ReturnType<MikaBackendRepositories["ephemeral"]["get"]>>,
   exportId: MikaId,
@@ -1388,6 +1475,30 @@ function accountExportDownloadTokenError(
   }
   if (record.expiresAt <= now) {
     return tokenResult("TOKEN_EXPIRED", "Account export download token has expired.");
+  }
+
+  return null;
+}
+
+function downloadTokenError(
+  record: Awaited<ReturnType<MikaBackendRepositories["ephemeral"]["get"]>>,
+  now: ISODateTime,
+): MikaApiFailure | null {
+  if (
+    !record ||
+    record.kind !== "token" ||
+    stringChild(record.data ?? {}, "purpose") !== "download"
+  ) {
+    return tokenResult("TOKEN_INVALID", "Download token is invalid.");
+  }
+  if (record.status === "revoked") {
+    return tokenResult("DOWNLOAD_REVOKED", "Download token has been revoked.");
+  }
+  if (record.status !== "pending") {
+    return tokenResult("TOKEN_USED", "Download token has already been used.");
+  }
+  if (record.expiresAt <= now) {
+    return tokenResult("TOKEN_EXPIRED", "Download token has expired.");
   }
 
   return null;

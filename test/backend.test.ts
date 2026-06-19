@@ -59,6 +59,7 @@ import {
   createISODateTime,
   createMikaId,
   createProviderName,
+  type JsonObject,
 } from "../src/types/primitives";
 import {
   TEST_CURRENCY,
@@ -1594,6 +1595,184 @@ describe("backend API composition", () => {
     }
   });
 
+  it("resolves a valid download token without leaking account data", async () => {
+    const harness = await createAccountServicesHarness();
+
+    try {
+      await harness.repositories.ledger.put(createOrderDocument());
+      await harness.repositories.account.put(createEntitlementDocument());
+      await harness.repositories.account.put(createLicenseDocument());
+      await issueDownloadToken(harness.repositories, {
+        token: "download_token_1",
+        expiresAt: createTestClock().isoAt(60_000),
+        data: {
+          downloadRef: "download:order_1:order_line_1",
+          orderId: createTestMikaId("order", 1),
+          orderLineId: createTestMikaId("order_line", 1),
+          entitlementId: createTestMikaId("entitlement", 1),
+          licenseId: createTestMikaId("license", 1),
+          redirectUrl: "https://files.example.test/downloads/order_1/order_line_1",
+          title: "Private download",
+        },
+      });
+
+      const result = await harness.api.download.resolve({ token: "download_token_1" });
+
+      expect(result).toMatchObject({
+        ok: true,
+        status: 200,
+        data: {
+          title: "Private download",
+          redirectUrl: "https://files.example.test/downloads/order_1/order_line_1",
+          expiresAt: "2026-01-01T00:01:00.000Z",
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain("customer_1");
+      expect(JSON.stringify(result)).not.toContain("Subscriber@Example.test");
+      await expect(
+        harness.repositories.ephemeral.get(createTestHash("download-token:download_token_1")),
+      ).resolves.toMatchObject({ status: "consumed" });
+    } finally {
+      await harness.destroy();
+    }
+  });
+
+  it("returns stable download token errors for invalid, expired, used, and revoked tokens", async () => {
+    const harness = await createAccountServicesHarness();
+
+    try {
+      await harness.repositories.ledger.put(createOrderDocument());
+
+      await expect(harness.api.download.resolve({ token: "missing" })).resolves.toMatchObject({
+        ok: false,
+        status: 400,
+        error: { code: "TOKEN_INVALID" },
+      });
+
+      await issueDownloadToken(harness.repositories, {
+        token: "expired_download_token",
+        expiresAt: TEST_NOW,
+        data: { downloadRef: "download:order_1:order_line_1" },
+      });
+      await expect(
+        harness.api.download.resolve({
+          token: "expired_download_token",
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 410,
+        error: { code: "TOKEN_EXPIRED" },
+      });
+
+      await issueDownloadToken(harness.repositories, {
+        token: "used_download_token",
+        status: "consumed",
+        expiresAt: createTestClock().isoAt(60_000),
+        data: { downloadRef: "download:order_1:order_line_1" },
+      });
+      await expect(
+        harness.api.download.resolve({ token: "used_download_token" }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 410,
+        error: { code: "TOKEN_USED" },
+      });
+
+      await issueDownloadToken(harness.repositories, {
+        token: "revoked_download_token",
+        status: "revoked",
+        expiresAt: createTestClock().isoAt(60_000),
+        data: { downloadRef: "download:order_1:order_line_1" },
+      });
+      await expect(
+        harness.api.download.resolve({ token: "revoked_download_token" }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 410,
+        error: { code: "DOWNLOAD_REVOKED" },
+      });
+    } finally {
+      await harness.destroy();
+    }
+  });
+
+  it("rejects download tokens when entitlement, license, or download record state is unavailable", async () => {
+    const harness = await createAccountServicesHarness();
+
+    try {
+      const revokedEntitlement = createEntitlementDocument();
+      const activeEntitlement = createEntitlementDocument();
+      const revokedLicense = createLicenseDocument();
+
+      await harness.repositories.ledger.put(createOrderDocument());
+      await harness.repositories.account.put({
+        ...revokedEntitlement,
+        status: "revoked",
+        record: { ...revokedEntitlement.record, status: "revoked", revokedAt: TEST_NOW },
+      });
+      await harness.repositories.account.put(createLicenseDocument());
+      await issueDownloadToken(harness.repositories, {
+        token: "revoked_entitlement_download_token",
+        expiresAt: createTestClock().isoAt(60_000),
+        data: {
+          downloadRef: "download:order_1:order_line_1",
+          entitlementId: createTestMikaId("entitlement", 1),
+        },
+      });
+
+      await expect(
+        harness.api.download.resolve({ token: "revoked_entitlement_download_token" }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 410,
+        error: { code: "DOWNLOAD_REVOKED" },
+      });
+
+      await harness.repositories.account.put({
+        ...activeEntitlement,
+        status: "active",
+        record: { ...activeEntitlement.record, status: "active" },
+      });
+      await harness.repositories.account.put({
+        ...revokedLicense,
+        status: "revoked",
+        record: { ...revokedLicense.record, status: "revoked", revokedAt: TEST_NOW },
+      });
+      await issueDownloadToken(harness.repositories, {
+        token: "revoked_license_download_token",
+        expiresAt: createTestClock().isoAt(60_000),
+        data: {
+          downloadRef: "download:order_1:order_line_1",
+          licenseId: createTestMikaId("license", 1),
+        },
+      });
+
+      await expect(
+        harness.api.download.resolve({ token: "revoked_license_download_token" }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 410,
+        error: { code: "DOWNLOAD_REVOKED" },
+      });
+
+      await issueDownloadToken(harness.repositories, {
+        token: "missing_download_record_token",
+        expiresAt: createTestClock().isoAt(60_000),
+        data: { downloadRef: "download:order_1:other_line" },
+      });
+
+      await expect(
+        harness.api.download.resolve({ token: "missing_download_record_token" }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 400,
+        error: { code: "TOKEN_INVALID" },
+      });
+    } finally {
+      await harness.destroy();
+    }
+  });
+
   it("stores account delete requests and returns requested status", async () => {
     const harness = await createAccountServicesHarness();
 
@@ -2406,6 +2585,7 @@ describe("backend API composition", () => {
         concurrentOrder?.checkoutSessionId === checkoutSessionId
           ? concurrentOrder
           : baseLedger.findOrderByCheckoutSession(checkoutSessionId),
+      findOrderByDownloadRef: (downloadRef) => baseLedger.findOrderByDownloadRef(downloadRef),
       listOrdersByCustomer: (customerId, limit) =>
         baseLedger.listOrdersByCustomer(customerId, limit),
       put: async (document) => {
@@ -5751,6 +5931,31 @@ function createCustomerDocument(overrides: Partial<CustomerDocument> = {}): Cust
     updatedAt: TEST_NOW,
     ...overrides,
   };
+}
+
+async function issueDownloadToken(
+  repositories: MikaBackendRepositories,
+  input: {
+    readonly token: string;
+    readonly status?: string;
+    readonly expiresAt: string;
+    readonly data: JsonObject;
+  },
+): Promise<void> {
+  await repositories.ephemeral.put({
+    key: createTestHash(`download-token:${input.token}`),
+    kind: "token",
+    status: input.status ?? "pending",
+    count: 0,
+    expiresAt: createISODateTime(input.expiresAt),
+    version: 1,
+    createdAt: TEST_NOW,
+    updatedAt: TEST_NOW,
+    data: {
+      purpose: "download",
+      ...input.data,
+    },
+  });
 }
 
 function createProviderAccountDocument(

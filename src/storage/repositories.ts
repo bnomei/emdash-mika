@@ -535,6 +535,16 @@ export class LedgerRepository {
     return findOneByType(this.collection, "order", { checkoutSessionId });
   }
 
+  async findOrderByDownloadRef(downloadRef: string): Promise<OrderDocument | null> {
+    const result = await listByType(this.collection, "order");
+
+    return (
+      result.items.find((item) =>
+        item.data.aggregate.lines.some((line) => line.downloadRefs?.includes(downloadRef)),
+      )?.data ?? null
+    );
+  }
+
   async listOrdersByCustomer(customerId: MikaId, limit = 50): Promise<DocumentList<OrderDocument>> {
     return listByType(this.collection, "order", {
       where: { customerId },
