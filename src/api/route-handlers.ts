@@ -1,4 +1,5 @@
 import { createMikaAdminActionsManifest } from "../admin";
+import { MIKA_AGENT_IDEMPOTENCY_KEY_HEADER } from "./agent-types";
 import { createMikaRequestContext, type MikaSessionAccess } from "./context";
 import {
   callMikaOperation,
@@ -116,8 +117,14 @@ function requestContext(ctx: MikaRouteContext) {
   return createMikaRequestContext({
     request: ctx.request,
     url: ctx.request.url,
+    idempotencyKey: requestIdempotencyKey(ctx.request),
     sessionId: ctx.sessionId,
     session: ctx.session,
     locale: ctx.currentLocale,
   });
+}
+
+function requestIdempotencyKey(request: Request): string | undefined {
+  const value = request.headers.get(MIKA_AGENT_IDEMPOTENCY_KEY_HEADER)?.trim();
+  return value && value.length > 0 ? value : undefined;
 }

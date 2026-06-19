@@ -13,6 +13,7 @@ import {
   type MikaBackendDependencies,
   type MikaBackendRepositories,
 } from "../src/api/backend";
+import { MIKA_AGENT_IDEMPOTENCY_KEY_HEADER } from "../src/api/agent-types";
 import { callMikaOperation, mikaActionDefinitions } from "../src/api/operations";
 import { createMikaPluginRoutes } from "../src/api/route-handlers";
 import { mikaPluginRoutes } from "../src/api/routes";
@@ -3411,6 +3412,143 @@ describe("backend API composition", () => {
         code: "VALIDATION_FAILED",
         fieldErrors: { itemId: "Wishlist item was not found." },
       },
+    });
+  });
+
+  it("dispatches quote, checkout preview, start, and status routes with checkout idempotency", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition({
+      prices: [
+        createPriceDefinition({
+          providerRefs: [
+            { provider: TEST_PROVIDER, productId: "prod_route", priceId: "price_route" },
+          ],
+        }),
+      ],
+    });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const routes = createMikaPluginRoutes(api);
+    const sessionId = "session_checkout_routes";
+
+    const added = await routes[mikaPluginRoutes.cartItems].handler({
+      input: { sellableId: sellable.id, priceId: "price_1", quantity: 2 },
+      request: new Request("https://shop.example.test/_emdash/api/plugins/mika/cart/items", {
+        method: "POST",
+      }),
+      sessionId,
+    });
+    if (!isCartRouteResult(added)) {
+      throw new Error("Expected cart route to return a cart DTO.");
+    }
+
+    await expect(
+      routes[mikaPluginRoutes.cartQuote].handler({
+        input: { cartId: added.data.id },
+        request: new Request("https://shop.example.test/_emdash/api/plugins/mika/cart/quote", {
+          method: "POST",
+        }),
+        sessionId,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        cartId: added.data.id,
+        status: "valid",
+        total: { amount: 2400, currency: TEST_CURRENCY },
+      },
+    });
+
+    await expect(
+      routes[mikaPluginRoutes.checkoutPreview].handler({
+        input: { cartId: added.data.id },
+        request: new Request(
+          "https://shop.example.test/_emdash/api/plugins/mika/checkout/preview",
+          { method: "POST" },
+        ),
+        sessionId,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        status: "requires_payment_authorization",
+        provider: TEST_PROVIDER,
+        quote: {
+          cartId: added.data.id,
+          total: { amount: 2400, currency: TEST_CURRENCY },
+        },
+      },
+    });
+
+    const startRequest = () =>
+      new Request("https://shop.example.test/_emdash/api/plugins/mika/checkout", {
+        method: "POST",
+        headers: { [MIKA_AGENT_IDEMPOTENCY_KEY_HEADER]: "checkout_route_replay_1" },
+      });
+    const firstStart = await routes[mikaPluginRoutes.checkout].handler({
+      input: { cartId: added.data.id },
+      request: startRequest(),
+      sessionId,
+    });
+    const replayStart = await routes[mikaPluginRoutes.checkout].handler({
+      input: { cartId: added.data.id },
+      request: startRequest(),
+      sessionId,
+    });
+
+    expect(firstStart).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "checkout_1",
+        redirectUrl: "https://checkout.example.test/session/checkout_fake",
+      },
+    });
+    expect(replayStart).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "checkout_1",
+        redirectUrl: "https://checkout.example.test/session/checkout_fake",
+      },
+    });
+    expect(fake.getCalls().createCheckoutSession).toHaveLength(1);
+
+    await expect(
+      routes[mikaPluginRoutes.checkoutStatus].handler({
+        input: {},
+        request: new Request(
+          "https://shop.example.test/_emdash/api/plugins/mika/checkout/status?checkoutId=checkout_1",
+        ),
+        sessionId,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "checkout_1",
+        status: "created",
+        redirectUrl: "https://checkout.example.test/session/checkout_fake",
+      },
+      effects: [{ type: "redirect", url: "https://checkout.example.test/session/checkout_fake" }],
     });
   });
 });
