@@ -6,9 +6,11 @@ import {
   type MikaBackendDependencies,
   type MikaBackendRepositories,
 } from "../src/api/backend";
+import { createMikaPluginRoutes } from "../src/api/route-handlers";
+import { mikaPluginRoutes } from "../src/api/routes";
 import type { StorageCollection } from "../src/storage/collections";
 import type { MikaProviderCapability } from "../src/api/types";
-import { mikaApiMethodNames, type MikaApi } from "../src/api/server";
+import { createMikaApi, mikaApiMethodNames, type MikaApi } from "../src/api/server";
 import type {
   MikaProviderAdapter,
   MikaProviderCheckoutInput,
@@ -250,6 +252,47 @@ describe("backend test provider helpers", () => {
 });
 
 describe("backend API composition", () => {
+  it("keeps createMikaApi missing methods on the default NOT_IMPLEMENTED shell", async () => {
+    const api = createMikaApi({
+      catalog: {
+        sellables: async () => ({ ok: true, status: 200, data: [] }),
+      },
+    });
+
+    await expect(api.catalog.sellables({ contentRef: createTestContentRef() })).resolves.toEqual({
+      ok: true,
+      status: 200,
+      data: [],
+    });
+
+    for (const [namespace, methods] of Object.entries(mikaApiMethodNames)) {
+      const apiNamespace = api[namespace as keyof MikaApi] as Record<
+        string,
+        (...args: readonly unknown[]) => Promise<unknown>
+      >;
+
+      for (const method of methods) {
+        const methodName = String(method);
+        if (namespace === "catalog" && methodName === "sellables") continue;
+        const apiMethod = apiNamespace[methodName];
+
+        expect(apiMethod).toEqual(expect.any(Function));
+        if (!apiMethod) {
+          throw new Error(`Missing Mika API method '${namespace}.${methodName}'.`);
+        }
+
+        await expect(apiMethod(createTestRequestContext(), {})).resolves.toMatchObject({
+          ok: false,
+          status: 501,
+          error: {
+            code: "NOT_IMPLEMENTED",
+            message: `Mika API '${namespace}.${methodName}' has not been wired yet.`,
+          },
+        });
+      }
+    }
+  });
+
   it("defines injectable dependencies from backend test helpers", () => {
     const dependencies = createTestBackendDependencies();
 
@@ -304,6 +347,39 @@ describe("backend API composition", () => {
         code: "NOT_IMPLEMENTED",
         message: "Mika API 'stock.availability' has not been wired yet.",
       },
+    });
+  });
+
+  it("dispatches plugin routes through createMikaBackendApi without route key changes", async () => {
+    const contentRef = createTestContentRef({ id: "route-product", locale: "de-AT" });
+    const sellable = createTestSellableDTO({ contentRef });
+    const api = createMikaBackendApi(
+      createTestBackendDependencies({
+        overrides: {
+          catalog: {
+            sellables: async (input) => ({
+              ok: true,
+              status: 200,
+              data: input.contentRef.id === contentRef.id ? [sellable] : [],
+            }),
+          },
+        },
+      }),
+    );
+    const routes = createMikaPluginRoutes(api);
+
+    expect(routes[mikaPluginRoutes.catalogSellables]).toBeDefined();
+    await expect(
+      routes[mikaPluginRoutes.catalogSellables].handler({
+        input: {},
+        request: new Request(
+          "https://shop.example.test/_emdash/api/plugins/mika/catalog/sellables?collection=products&id=route-product&locale=de-AT",
+        ),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: [sellable],
     });
   });
 });
