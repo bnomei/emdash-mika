@@ -131,12 +131,12 @@ export const mikaStorageConfig = {
       ["type", "expiresAt"],
       ["status", "nextAttemptAt"],
       ["provider", "providerEventId"],
-      ["provider", "eventType", "payloadHash"],
+      ["provider", "payloadHash"],
       ["targetType", "targetId"],
     ],
     uniqueIndexes: [
       ["provider", "providerEventId"],
-      ["provider", "eventType", "payloadHash"],
+      ["provider", "payloadHash"],
     ],
   },
 } satisfies MikaStorageConfig;

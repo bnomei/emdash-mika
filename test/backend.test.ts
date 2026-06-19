@@ -17,13 +17,15 @@ import { MIKA_AGENT_IDEMPOTENCY_KEY_HEADER } from "../src/api/agent-types";
 import { callMikaOperation, mikaActionDefinitions } from "../src/api/operations";
 import { createMikaPluginRoutes } from "../src/api/route-handlers";
 import { mikaPluginRoutes } from "../src/api/routes";
-import type { StorageCollection } from "../src/storage/collections";
+import { createMikaStorageConfig, type StorageCollection } from "../src/storage/collections";
 import { MIKA_ERROR_CODES, type CartDTO, type MikaProviderCapability } from "../src/api/types";
 import { createMikaApi, mikaApiMethodNames, type MikaApi } from "../src/api/server";
 import type {
   MikaProviderAdapter,
   MikaProviderCheckoutInput,
+  MikaProviderWebhookEvent,
   MikaProviderWebhookVerificationInput,
+  MikaVerifiedWebhookPayload,
 } from "../src/provider";
 import { createMikaProviderRegistry } from "../src/provider";
 import type { PriceDefinition, SellableDefinition } from "../src/types/aggregates";
@@ -78,6 +80,26 @@ describe("backend test storage helpers", () => {
     expectTypeOf(createMemoryStorageCollection<MemoryRecord>()).toEqualTypeOf<
       StorageCollection<MemoryRecord>
     >();
+  });
+
+  it("aligns ops webhook unique indexes with webhook dedupe keys", () => {
+    const opsConfig = createMikaStorageConfig().ops;
+
+    expect(opsConfig.indexes).toEqual(
+      expect.arrayContaining([
+        ["provider", "providerEventId"],
+        ["provider", "payloadHash"],
+      ]),
+    );
+    expect(opsConfig.uniqueIndexes).toEqual(
+      expect.arrayContaining([
+        ["provider", "providerEventId"],
+        ["provider", "payloadHash"],
+      ]),
+    );
+    expect(opsConfig.uniqueIndexes).not.toEqual(
+      expect.arrayContaining([["provider", "eventType", "payloadHash"]]),
+    );
   });
 
   it("supports single-record storage methods", async () => {
@@ -1184,6 +1206,189 @@ describe("backend API composition", () => {
         status: "available",
         availableQuantity: 5,
       },
+    });
+  });
+
+  it("rejects webhooks that fail provider verification", async () => {
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      ops: new OpsRepository(opsCollection),
+    };
+    const fake = createFakeMikaProvider({
+      id: TEST_PROVIDER,
+      overrides: {
+        verifyWebhook: async (webhookInput) => {
+          expect(new URL(webhookInput.request.url).pathname).toBe("/bad-webhook-path");
+          throw new Error("invalid webhook path");
+        },
+      },
+    });
+    const api = createMikaBackendApi(
+      createTestBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(
+      api.webhook.receive(
+        createTestRequestContext({
+          request: createWebhookRequest("{}", "/bad-webhook-path"),
+          sessionId: false,
+          customerId: false,
+          userId: false,
+          idempotencyKey: false,
+        }),
+        { provider: TEST_PROVIDER },
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 400,
+      error: {
+        code: "WEBHOOK_INVALID",
+      },
+    });
+    expect(fake.getCalls()).toMatchObject({
+      verifyWebhook: [expect.any(Object)],
+      parseWebhookEvent: [],
+    });
+    await expect(opsCollection.count({ type: "webhook" })).resolves.toBe(0);
+  });
+
+  it("preserves raw body bytes when dispatching webhook routes", async () => {
+    const rawBody = '{"event":"route.raw"}';
+    const fake = createFakeMikaProvider({
+      id: TEST_PROVIDER,
+      overrides: {
+        verifyWebhook: async (webhookInput) => {
+          expect(new TextDecoder().decode(webhookInput.rawBody)).toBe(rawBody);
+          return createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "route_hash_1",
+            parsed: { event: "route.raw" },
+          });
+        },
+        parseWebhookEvent: async (verified) =>
+          createWebhookEvent(verified, {
+            providerEventId: "event_route_1",
+            type: "route.raw",
+          }),
+      },
+    });
+    const api = createMikaBackendApi(
+      createTestBackendDependencies({
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const routes = createMikaPluginRoutes(api);
+
+    await expect(
+      routes[mikaPluginRoutes.webhook].handler({
+        input: { provider: TEST_PROVIDER },
+        request: createWebhookRequest(rawBody),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "webhook_1",
+        status: "received",
+      },
+    });
+  });
+
+  it("stores accepted webhooks and deduplicates by provider event id or payload hash", async () => {
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      ops: new OpsRepository(opsCollection),
+    };
+    const payloadHashes = ["hash_1", "hash_2", "hash_1"];
+    const providerEventIds = ["event_1", "event_1", "event_2"];
+    const eventTypes = ["payment.completed", "payment.completed", "invoice.paid"];
+    const fake = createFakeMikaProvider({
+      id: TEST_PROVIDER,
+      overrides: {
+        verifyWebhook: async (webhookInput) => {
+          const payloadHash = payloadHashes.shift();
+          if (!payloadHash) throw new Error("Unexpected webhook verification call.");
+
+          return createVerifiedWebhookPayload(webhookInput, {
+            payloadHash,
+            parsed: { payloadHash },
+          });
+        },
+        parseWebhookEvent: async (verified) => {
+          const providerEventId = providerEventIds.shift();
+          const eventType = eventTypes.shift();
+          if (!providerEventId) throw new Error("Unexpected webhook parse call.");
+          if (!eventType) throw new Error("Unexpected webhook event type.");
+
+          return createWebhookEvent(verified, {
+            providerEventId,
+            type: eventType,
+          });
+        },
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(receiveWebhook(api, "first")).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "webhook_1",
+        status: "received",
+        replayable: true,
+      },
+    });
+    await expect(receiveWebhook(api, "same-event-id")).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "webhook_1",
+        status: "duplicate",
+      },
+    });
+    await expect(receiveWebhook(api, "same-payload-hash")).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "webhook_1",
+        status: "duplicate",
+      },
+    });
+
+    await expect(opsCollection.count({ type: "webhook" })).resolves.toBe(1);
+    await expect(
+      repositories.ops.findWebhookDuplicate({
+        provider: TEST_PROVIDER,
+        providerEventId: "event_1",
+        eventType: "payment.completed",
+        payloadHash: "hash_1",
+      }),
+    ).resolves.toMatchObject({
+      id: "webhook_1",
+      status: "received",
+      record: {
+        provider: TEST_PROVIDER,
+        providerEventId: "event_1",
+        eventType: "payment.completed",
+        payloadHash: "hash_1",
+        status: "received",
+        attemptCount: 0,
+        receivedAt: TEST_NOW,
+        rawPayloadJson: { payloadHash: "hash_1" },
+      },
+    });
+    expect(fake.getCalls()).toMatchObject({
+      verifyWebhook: [expect.any(Object), expect.any(Object), expect.any(Object)],
+      parseWebhookEvent: [expect.any(Object), expect.any(Object), expect.any(Object)],
     });
   });
 
@@ -4075,6 +4280,61 @@ function createCheckoutInput(
     successUrl: "https://shop.example.test/success",
     cancelUrl: "https://shop.example.test/cancel",
     ...overrides,
+  };
+}
+
+function receiveWebhook(api: MikaApi, marker: string) {
+  return api.webhook.receive(
+    createTestRequestContext({
+      request: createWebhookRequest(JSON.stringify({ marker })),
+      sessionId: false,
+      customerId: false,
+      userId: false,
+      idempotencyKey: false,
+    }),
+    { provider: TEST_PROVIDER },
+  );
+}
+
+function createWebhookRequest(
+  rawBody = "{}",
+  path = "/_emdash/api/plugins/mika/webhooks",
+): Request {
+  return new Request(new URL(path, "https://shop.example.test").toString(), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-test-signature": "signature_1",
+    },
+    body: rawBody,
+  });
+}
+
+function createVerifiedWebhookPayload(
+  input: MikaProviderWebhookVerificationInput,
+  overrides: Partial<Omit<MikaVerifiedWebhookPayload, "provider" | "rawBody">> = {},
+): MikaVerifiedWebhookPayload {
+  return {
+    provider: input.provider,
+    rawBody: input.rawBody,
+    payloadHash: "hash_1",
+    headers: Object.fromEntries(input.request.headers.entries()),
+    ...overrides,
+  };
+}
+
+function createWebhookEvent(
+  verified: MikaVerifiedWebhookPayload,
+  overrides: {
+    readonly providerEventId?: string;
+    readonly type?: string;
+  } = {},
+): MikaProviderWebhookEvent {
+  return {
+    kind: "unknown",
+    provider: verified.provider,
+    providerEventId: overrides.providerEventId,
+    type: overrides.type ?? "test.webhook",
   };
 }
 

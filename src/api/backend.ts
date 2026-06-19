@@ -1,4 +1,9 @@
-import type { MikaProviderLineItem, MikaProviderRegistry } from "../provider";
+import type {
+  MikaProviderLineItem,
+  MikaProviderRegistry,
+  MikaProviderWebhookEvent,
+  MikaVerifiedWebhookPayload,
+} from "../provider";
 import type {
   AdjustStockRepositoryResult,
   ConsumeReservedStockRepositoryResult,
@@ -32,6 +37,7 @@ import type {
   CartDocument,
   CheckoutDocument,
   SessionDocument,
+  WebhookDocument,
   WishlistDocument,
 } from "../types/documents";
 import { createCurrencyCode, createISODateTime, createMikaId } from "../types/primitives";
@@ -64,6 +70,8 @@ import type {
   StockAdjustInput,
   WishlistDTO,
   WishlistItemInput,
+  WebhookReceiveDTO,
+  WebhookReceiveInput,
 } from "./types";
 
 type MikaApiFailure = Extract<MikaApiResult<never>, { readonly ok: false }>;
@@ -708,7 +716,151 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
       },
       ...input.overrides?.checkout,
     },
+    webhook: {
+      receive: async (ctx, webhookInput) => receiveWebhook(input, ctx, webhookInput),
+      ...input.overrides?.webhook,
+    },
   });
+}
+
+async function receiveWebhook(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  webhookInput: WebhookReceiveInput,
+): Promise<MikaApiResult<WebhookReceiveDTO>> {
+  const provider = input.providers.get(webhookInput.provider);
+  if (!provider?.verifyWebhook || !provider.parseWebhookEvent) {
+    return webhookInvalid("Webhook provider does not support verified webhooks.");
+  }
+
+  const request = ctx.request;
+  if (!request) {
+    return webhookInvalid("Webhook request is unavailable.");
+  }
+
+  const rawBody = await readWebhookRawBody(request);
+  if (!rawBody) {
+    return webhookInvalid("Webhook raw body is unavailable.");
+  }
+
+  let verified: MikaVerifiedWebhookPayload;
+  let event: MikaProviderWebhookEvent;
+  try {
+    verified = await provider.verifyWebhook({
+      provider: webhookInput.provider,
+      request,
+      rawBody,
+    });
+    event = await provider.parseWebhookEvent(verified);
+  } catch {
+    return webhookInvalid("Webhook signature or payload could not be verified.");
+  }
+
+  if (verified.provider !== webhookInput.provider || event.provider !== webhookInput.provider) {
+    return webhookInvalid("Webhook provider binding does not match the request.");
+  }
+
+  const eventType = event.type || webhookInput.eventType;
+  if (!eventType) {
+    return webhookInvalid("Webhook event type is unavailable.");
+  }
+
+  const providerEventId = event.providerEventId ?? webhookInput.providerEventId;
+  const duplicate = await input.repositories.ops.findWebhookDuplicate({
+    provider: webhookInput.provider,
+    providerEventId,
+    eventType,
+    payloadHash: verified.payloadHash,
+  });
+  if (duplicate) return webhookDuplicateResult(duplicate);
+
+  const webhook = createWebhookDocument(input, ctx, verified, event, {
+    eventType,
+    providerEventId,
+  });
+
+  try {
+    await input.repositories.ops.put(webhook);
+  } catch {
+    const replayedDuplicate = await input.repositories.ops.findWebhookDuplicate({
+      provider: webhookInput.provider,
+      providerEventId,
+      eventType,
+      payloadHash: verified.payloadHash,
+    });
+    if (replayedDuplicate) return webhookDuplicateResult(replayedDuplicate);
+
+    return providerFailed("Webhook could not be stored.");
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      id: webhook.id,
+      status: "received",
+      replayable: true,
+    },
+  };
+}
+
+async function readWebhookRawBody(request: Request): Promise<Uint8Array | null> {
+  try {
+    return new Uint8Array(await request.clone().arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+function createWebhookDocument(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  verified: MikaVerifiedWebhookPayload,
+  event: MikaProviderWebhookEvent,
+  resolved: {
+    readonly eventType: string;
+    readonly providerEventId?: string;
+  },
+): WebhookDocument {
+  const id = input.createId("webhook");
+  const record = {
+    id,
+    provider: event.provider,
+    providerEventId: resolved.providerEventId,
+    eventType: resolved.eventType,
+    payloadHash: verified.payloadHash,
+    status: "received" as const,
+    attemptCount: 0,
+    receivedAt: ctx.now,
+    rawPayloadJson: verified.parsed ?? event.raw,
+  };
+
+  return {
+    id,
+    type: "webhook",
+    schemaVersion: 1,
+    provider: record.provider,
+    providerEventId: record.providerEventId,
+    eventType: record.eventType,
+    payloadHash: record.payloadHash,
+    status: record.status,
+    receivedAt: record.receivedAt,
+    record,
+    createdAt: ctx.now,
+    updatedAt: ctx.now,
+  };
+}
+
+function webhookDuplicateResult(duplicate: WebhookDocument): MikaApiResult<WebhookReceiveDTO> {
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      id: duplicate.id,
+      status: "duplicate",
+      replayable: duplicate.status === "failed" ? true : undefined,
+    },
+  };
 }
 
 async function findOrCreateActiveWishlist(
@@ -2523,6 +2675,17 @@ function providerFailed(message: string): MikaApiFailure {
     status: 502,
     error: {
       code: "PROVIDER_FAILED",
+      message,
+    },
+  };
+}
+
+function webhookInvalid(message: string): MikaApiFailure {
+  return {
+    ok: false,
+    status: 400,
+    error: {
+      code: "WEBHOOK_INVALID",
       message,
     },
   };

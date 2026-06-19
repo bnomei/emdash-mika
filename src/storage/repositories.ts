@@ -470,19 +470,18 @@ export class OpsRepository {
     readonly eventType: string;
     readonly payloadHash: string;
   }): Promise<WebhookDocument | null> {
-    const where: TypeScopedWhere<OpsDocument> =
-      input.providerEventId !== undefined
-        ? {
-            provider: input.provider,
-            providerEventId: input.providerEventId,
-          }
-        : {
-            provider: input.provider,
-            eventType: input.eventType,
-            payloadHash: input.payloadHash,
-          };
+    if (input.providerEventId !== undefined) {
+      const duplicate = await findOneByType(this.collection, "webhook", {
+        provider: input.provider,
+        providerEventId: input.providerEventId,
+      });
+      if (duplicate) return duplicate;
+    }
 
-    return findOneByType(this.collection, "webhook", where);
+    return findOneByType(this.collection, "webhook", {
+      provider: input.provider,
+      payloadHash: input.payloadHash,
+    });
   }
 
   async findAccountExport(exportId: MikaId): Promise<AccountExportDocument | null> {
