@@ -553,6 +553,11 @@ export class OpsRepository {
     });
   }
 
+  async findWebhookById(webhookId: MikaId): Promise<WebhookDocument | null> {
+    const document = await this.collection.get(webhookId);
+    return documentOfType(document, "webhook");
+  }
+
   async findAccountExport(exportId: MikaId): Promise<AccountExportDocument | null> {
     const document = await this.collection.get(exportId);
     return documentOfType(document, "accountExport");

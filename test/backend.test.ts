@@ -1391,7 +1391,15 @@ describe("backend API composition", () => {
         status: "received",
         attemptCount: 0,
         receivedAt: TEST_NOW,
-        rawPayloadJson: { payloadHash: "hash_1" },
+        rawPayloadJson: {
+          providerPayload: { payloadHash: "hash_1" },
+          normalizedEvent: {
+            kind: "unknown",
+            provider: TEST_PROVIDER,
+            providerEventId: "event_1",
+            type: "payment.completed",
+          },
+        },
       },
     });
     expect(fake.getCalls()).toMatchObject({
@@ -2168,6 +2176,131 @@ describe("backend API composition", () => {
         lastError: "Subscription event could not be linked to a subscription.",
       },
     });
+  });
+
+  it("replays failed webhooks through the idempotent processing path", async () => {
+    const stripe = createProviderName("stripe");
+    const accountCollection = createStorageCollection("account");
+    const opsCollection = createStorageCollection("ops");
+    const subscriptionSellable = createSellableDefinition({
+      prices: [
+        createPriceDefinition({
+          id: createTestMikaId("price", 1),
+          mode: "subscription",
+          fulfillmentKind: "entitlement",
+          entitlementKey: "course:replay-product",
+          providerRefs: [{ provider: stripe, productId: "prod_replay", priceId: "price_replay" }],
+        }),
+      ],
+    });
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      ops: new OpsRepository(opsCollection),
+    };
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "subscription_replay_hash",
+            parsed: { delivery: "event_subscription_replay" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createSubscriptionWebhookEvent(verified, {
+            providerEventId: "event_subscription_replay",
+            providerSubscriptionId: "provider_subscription_replay",
+            providerCustomerId: "provider_customer_replay",
+            providerPriceId: "price_replay",
+            status: "active",
+          }),
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(receiveWebhook(api, "subscription-replay-failed", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "failed", replayable: true },
+    });
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
+      status: "failed",
+      record: {
+        attemptCount: 1,
+        rawPayloadJson: {
+          normalizedEvent: {
+            kind: "subscription",
+            provider: "stripe",
+            providerEventId: "event_subscription_replay",
+            providerSubscriptionId: "provider_subscription_replay",
+            providerCustomerId: "provider_customer_replay",
+            providerPriceId: "price_replay",
+          },
+        },
+      },
+    });
+
+    await repositories.catalog.put(
+      createCatalogItemDocument({
+        contentRef: createTestContentRef(),
+        sellables: [subscriptionSellable],
+      }),
+    );
+    await repositories.account.put(createCustomerDocument());
+    await repositories.account.put(
+      createProviderAccountDocument({
+        provider: stripe,
+        providerCustomerId: "provider_customer_replay",
+      }),
+    );
+
+    await expect(
+      api.admin.webhookReplay({ webhookId: createTestMikaId("webhook", 1) }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "webhook_1",
+        status: "completed",
+        affected: {
+          processed: 1,
+          failed: 0,
+        },
+      },
+    });
+    await expect(accountCollection.count({ type: "subscription" })).resolves.toBe(1);
+    await expect(accountCollection.count({ type: "entitlement" })).resolves.toBe(1);
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
+      status: "processed",
+      record: {
+        status: "processed",
+        attemptCount: 2,
+        relatedCustomerId: "customer_1",
+        relatedSubscriptionId: "subscription_1",
+      },
+    });
+
+    await expect(
+      api.admin.webhookReplay({ webhookId: createTestMikaId("webhook", 1) }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "webhook_1",
+        status: "completed",
+        affected: {
+          processed: 0,
+          failed: 0,
+        },
+      },
+    });
+    await expect(accountCollection.count({ type: "subscription" })).resolves.toBe(1);
+    await expect(accountCollection.count({ type: "entitlement" })).resolves.toBe(1);
   });
 
   it("keeps catalog and stock validation failures in the route layer", async () => {

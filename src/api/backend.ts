@@ -59,6 +59,7 @@ import type {
   CurrencyCode,
   ISODateTime,
   JsonObject,
+  JsonValue,
   MikaId,
   ProviderName,
   PurchaseMode,
@@ -86,6 +87,7 @@ import type {
   WishlistItemInput,
   WebhookReceiveDTO,
   WebhookReceiveInput,
+  WebhookReplayInput,
 } from "./types";
 
 type MikaApiFailure = Extract<MikaApiResult<never>, { readonly ok: false }>;
@@ -371,6 +373,7 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
           },
         };
       },
+      webhookReplay: async (replayInput) => replayWebhook(input, replayInput),
       ...input.overrides?.admin,
     },
     cart: {
@@ -820,6 +823,86 @@ async function receiveWebhook(
   };
 }
 
+async function replayWebhook(
+  input: CreateMikaBackendApiInput,
+  replayInput: WebhookReplayInput,
+): Promise<MikaApiResult<AdminActionResultDTO>> {
+  const webhook = await input.repositories.ops.findWebhookById(replayInput.webhookId);
+  if (!webhook) {
+    return {
+      ok: false,
+      status: 404,
+      error: {
+        code: "VALIDATION_FAILED",
+        message: `Webhook '${replayInput.webhookId}' was not found.`,
+        fieldErrors: { webhookId: "Webhook was not found." },
+      },
+    };
+  }
+
+  if (!isReplayableWebhookStatus(webhook.status)) {
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        id: webhook.id,
+        status: "completed",
+        message: `Webhook '${webhook.id}' is not eligible for replay.`,
+        affected: {
+          processed: 0,
+          failed: 0,
+        },
+      },
+    };
+  }
+
+  const event = storedWebhookEvent(webhook);
+  if (!event) {
+    const failed = await markWebhookFailed(
+      input,
+      webhook,
+      currentBackendISODateTime(input),
+      "Webhook payload could not be reconstructed for replay.",
+    );
+
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        id: failed.id,
+        status: "failed",
+        message: "Webhook payload could not be reconstructed for replay.",
+        affected: {
+          processed: 0,
+          failed: 1,
+        },
+      },
+    };
+  }
+
+  const processed = await processStoredWebhook(
+    input,
+    { now: currentBackendISODateTime(input) },
+    webhook,
+    event,
+  );
+  const processedCount = processed.status === "failed" ? 0 : 1;
+  const failedCount = processed.status === "failed" ? 1 : 0;
+
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      id: processed.id,
+      status: processed.status === "failed" ? "failed" : "completed",
+      affected: {
+        processed: processedCount,
+        failed: failedCount,
+      },
+    },
+  };
+}
+
 async function readWebhookRawBody(request: Request): Promise<Uint8Array | null> {
   try {
     return new Uint8Array(await request.clone().arrayBuffer());
@@ -848,7 +931,7 @@ function createWebhookDocument(
     status: "received" as const,
     attemptCount: 0,
     receivedAt: ctx.now,
-    rawPayloadJson: verified.parsed ?? event.raw,
+    rawPayloadJson: storedWebhookPayload(verified, event),
   };
 
   return {
@@ -865,6 +948,363 @@ function createWebhookDocument(
     createdAt: ctx.now,
     updatedAt: ctx.now,
   };
+}
+
+function storedWebhookPayload(
+  verified: MikaVerifiedWebhookPayload,
+  event: MikaProviderWebhookEvent,
+): JsonObject {
+  return jsonObject({
+    ...(verified.parsed ? { providerPayload: verified.parsed } : {}),
+    ...(event.raw ? { providerPayload: verified.parsed ?? event.raw } : {}),
+    normalizedEvent: webhookEventToJson(event),
+  });
+}
+
+function webhookEventToJson(event: MikaProviderWebhookEvent): JsonObject {
+  switch (event.kind) {
+    case "payment":
+      return jsonObject({
+        kind: event.kind,
+        provider: event.provider,
+        providerEventId: event.providerEventId,
+        type: event.type,
+        providerCheckoutId: event.providerCheckoutId,
+        providerPaymentId: event.providerPaymentId,
+        providerOrderId: event.providerOrderId,
+        customer: event.customer
+          ? jsonObject({
+              email: event.customer.email,
+              name: event.customer.name,
+              company: event.customer.company,
+              vatId: event.customer.vatId,
+            })
+          : undefined,
+        lines: event.lines.map(providerLineToJson),
+        totals: event.totals
+          ? jsonObject({
+              subtotal: event.totals.subtotal ? moneyToJson(event.totals.subtotal) : undefined,
+              discount: event.totals.discount ? moneyToJson(event.totals.discount) : undefined,
+              tax: event.totals.tax ? moneyToJson(event.totals.tax) : undefined,
+              total: event.totals.total ? moneyToJson(event.totals.total) : undefined,
+            })
+          : undefined,
+        invoiceUrl: event.invoiceUrl,
+        raw: event.raw,
+      });
+    case "subscription":
+      return jsonObject({
+        kind: event.kind,
+        provider: event.provider,
+        providerEventId: event.providerEventId,
+        type: event.type,
+        providerSubscriptionId: event.providerSubscriptionId,
+        providerCustomerId: event.providerCustomerId,
+        providerPriceId: event.providerPriceId,
+        status: event.status,
+        currentPeriodStart: event.currentPeriodStart,
+        currentPeriodEnd: event.currentPeriodEnd,
+        cancelAtPeriodEnd: event.cancelAtPeriodEnd,
+        raw: event.raw,
+      });
+    case "unknown":
+      return jsonObject({
+        kind: event.kind,
+        provider: event.provider,
+        providerEventId: event.providerEventId,
+        type: event.type,
+        raw: event.raw,
+      });
+  }
+}
+
+function providerLineToJson(line: MikaProviderLineItem): JsonObject {
+  return jsonObject({
+    sellableId: line.sellableId,
+    priceId: line.priceId,
+    contentRef: jsonObject({
+      collection: line.contentRef.collection,
+      id: line.contentRef.id,
+      locale: line.contentRef.locale,
+    }),
+    sku: line.sku,
+    title: line.title,
+    variantKey: line.variantKey,
+    variantOptions: line.variantOptions?.map((option) =>
+      jsonObject({
+        option: option.option,
+        value: option.value,
+        label: option.label,
+      }),
+    ),
+    providerProductId: line.providerProductId,
+    providerPriceId: line.providerPriceId,
+    quantity: line.quantity,
+    unitAmount: line.unitAmount,
+    currency: line.currency,
+    mode: line.mode,
+    fulfillmentKind: line.fulfillmentKind,
+    entitlementKey: line.entitlementKey,
+    metadata: line.metadata,
+  });
+}
+
+function moneyToJson(money: MoneyDTO): JsonObject {
+  return jsonObject({
+    amount: money.amount,
+    currency: money.currency,
+  });
+}
+
+function jsonObject(input: Record<string, JsonValue | undefined>): JsonObject {
+  return Object.fromEntries(
+    Object.entries(input).filter((entry): entry is [string, JsonValue] => entry[1] !== undefined),
+  ) as JsonObject;
+}
+
+function isReplayableWebhookStatus(status: WebhookDocument["status"]): boolean {
+  return (
+    status === "failed" ||
+    status === "received" ||
+    status === "processing" ||
+    (status as string) === "queued"
+  );
+}
+
+function storedWebhookEvent(webhook: WebhookDocument): MikaProviderWebhookEvent | null {
+  const payload = webhook.record.rawPayloadJson;
+  if (!payload) return null;
+
+  const eventPayload =
+    jsonChild(payload, "normalizedEvent") ?? (stringChild(payload, "kind") ? payload : null);
+  if (!eventPayload) return null;
+
+  const provider = stringChild(eventPayload, "provider");
+  const type = stringChild(eventPayload, "type");
+  if (provider !== webhook.provider || !type) return null;
+
+  switch (stringChild(eventPayload, "kind")) {
+    case "payment":
+      return {
+        kind: "payment",
+        provider: webhook.provider,
+        providerEventId: stringChild(eventPayload, "providerEventId") ?? webhook.providerEventId,
+        type,
+        providerCheckoutId: stringChild(eventPayload, "providerCheckoutId"),
+        providerPaymentId: stringChild(eventPayload, "providerPaymentId"),
+        providerOrderId: stringChild(eventPayload, "providerOrderId"),
+        customer: customerChild(eventPayload, "customer"),
+        lines: providerLineChildren(eventPayload, "lines"),
+        totals: totalsChild(eventPayload, "totals"),
+        invoiceUrl: stringChild(eventPayload, "invoiceUrl"),
+        raw: jsonChild(eventPayload, "raw"),
+      };
+    case "subscription": {
+      const status = stringChild(eventPayload, "status");
+      if (!isSubscriptionStatus(status)) return null;
+
+      return {
+        kind: "subscription",
+        provider: webhook.provider,
+        providerEventId: stringChild(eventPayload, "providerEventId") ?? webhook.providerEventId,
+        type,
+        providerSubscriptionId: stringChild(eventPayload, "providerSubscriptionId"),
+        providerCustomerId: stringChild(eventPayload, "providerCustomerId"),
+        providerPriceId: stringChild(eventPayload, "providerPriceId"),
+        status,
+        currentPeriodStart: isoChild(eventPayload, "currentPeriodStart"),
+        currentPeriodEnd: isoChild(eventPayload, "currentPeriodEnd"),
+        cancelAtPeriodEnd: booleanChild(eventPayload, "cancelAtPeriodEnd"),
+        raw: jsonChild(eventPayload, "raw"),
+      };
+    }
+    case "unknown":
+      return {
+        kind: "unknown",
+        provider: webhook.provider,
+        providerEventId: stringChild(eventPayload, "providerEventId") ?? webhook.providerEventId,
+        type,
+        raw: jsonChild(eventPayload, "raw"),
+      };
+    default:
+      return null;
+  }
+}
+
+function jsonChild(input: JsonObject, key: string): JsonObject | undefined {
+  const value = input[key];
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as JsonObject)
+    : undefined;
+}
+
+function stringChild(input: JsonObject, key: string): string | undefined {
+  const value = input[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function booleanChild(input: JsonObject, key: string): boolean | undefined {
+  const value = input[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function numberChild(input: JsonObject, key: string): number | undefined {
+  const value = input[key];
+  return typeof value === "number" ? value : undefined;
+}
+
+function isoChild(input: JsonObject, key: string): ISODateTime | undefined {
+  const value = stringChild(input, key);
+  return value ? createISODateTime(value) : undefined;
+}
+
+function customerChild(
+  input: JsonObject,
+  key: string,
+): MikaProviderPaymentEvent["customer"] | undefined {
+  const value = jsonChild(input, key);
+  if (!value) return undefined;
+
+  return {
+    email: stringChild(value, "email"),
+    name: stringChild(value, "name"),
+    company: stringChild(value, "company"),
+    vatId: stringChild(value, "vatId"),
+  };
+}
+
+function totalsChild(
+  input: JsonObject,
+  key: string,
+): MikaProviderPaymentEvent["totals"] | undefined {
+  const value = jsonChild(input, key);
+  if (!value) return undefined;
+
+  return {
+    subtotal: moneyChild(value, "subtotal"),
+    discount: moneyChild(value, "discount"),
+    tax: moneyChild(value, "tax"),
+    total: moneyChild(value, "total"),
+  };
+}
+
+function moneyChild(input: JsonObject, key: string): MoneyDTO | undefined {
+  const value = jsonChild(input, key);
+  const amount = value ? numberChild(value, "amount") : undefined;
+  const currency = value ? stringChild(value, "currency") : undefined;
+  if (amount === undefined || !currency) return undefined;
+
+  return { amount, currency: createCurrencyCode(currency) };
+}
+
+function providerLineChildren(input: JsonObject, key: string): readonly MikaProviderLineItem[] {
+  const value = input[key];
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((item) => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) return [];
+
+    const line = item as JsonObject;
+    const sellableId = stringChild(line, "sellableId");
+    const title = stringChild(line, "title");
+    const quantity = numberChild(line, "quantity");
+    const unitAmount = numberChild(line, "unitAmount");
+    const currency = stringChild(line, "currency");
+    const mode = stringChild(line, "mode");
+    const fulfillmentKind = stringChild(line, "fulfillmentKind");
+    if (
+      !sellableId ||
+      !title ||
+      quantity === undefined ||
+      unitAmount === undefined ||
+      !currency ||
+      (mode !== "payment" && mode !== "subscription") ||
+      !isFulfillmentKind(fulfillmentKind)
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        sellableId: createMikaId(sellableId),
+        priceId: mikaIdChild(line, "priceId"),
+        contentRef: contentRefChild(line, "contentRef") ?? { collection: "", id: "" },
+        sku: stringChild(line, "sku"),
+        title,
+        variantKey: stringChild(line, "variantKey"),
+        variantOptions: variantOptionChildren(line, "variantOptions"),
+        providerProductId: stringChild(line, "providerProductId"),
+        providerPriceId: stringChild(line, "providerPriceId"),
+        quantity,
+        unitAmount,
+        currency: createCurrencyCode(currency),
+        mode,
+        fulfillmentKind,
+        entitlementKey: stringChild(line, "entitlementKey"),
+        metadata: jsonChild(line, "metadata"),
+      },
+    ];
+  });
+}
+
+function contentRefChild(
+  input: JsonObject,
+  key: string,
+): MikaProviderLineItem["contentRef"] | undefined {
+  const value = jsonChild(input, key);
+  const collection = value ? stringChild(value, "collection") : undefined;
+  const id = value ? stringChild(value, "id") : undefined;
+  if (!value || !collection || !id) return undefined;
+
+  return { collection, id, locale: stringChild(value, "locale") };
+}
+
+function variantOptionChildren(
+  input: JsonObject,
+  key: string,
+): MikaProviderLineItem["variantOptions"] {
+  const value = input[key];
+  if (!Array.isArray(value)) return undefined;
+
+  return value.flatMap((item) => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) return [];
+
+    const option = item as JsonObject;
+    const optionName = stringChild(option, "option");
+    const optionValue = stringChild(option, "value");
+    if (!optionName || !optionValue) return [];
+
+    return [{ option: optionName, value: optionValue, label: stringChild(option, "label") }];
+  });
+}
+
+function mikaIdChild(input: JsonObject, key: string): MikaId | undefined {
+  const value = stringChild(input, key);
+  return value ? createMikaId(value) : undefined;
+}
+
+function isSubscriptionStatus(value: string | undefined): value is SubscriptionStatus {
+  return (
+    value === "incomplete" ||
+    value === "trialing" ||
+    value === "active" ||
+    value === "past_due" ||
+    value === "cancel_at_period_end" ||
+    value === "cancelled" ||
+    value === "expired"
+  );
+}
+
+function isFulfillmentKind(
+  value: string | undefined,
+): value is MikaProviderLineItem["fulfillmentKind"] {
+  return (
+    value === "none" ||
+    value === "download" ||
+    value === "license" ||
+    value === "entitlement" ||
+    value === "physical"
+  );
 }
 
 async function processStoredWebhook(
