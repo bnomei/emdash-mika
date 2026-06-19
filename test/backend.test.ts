@@ -203,6 +203,131 @@ describe("backend test storage helpers", () => {
   });
 });
 
+describe("backend repository characterization", () => {
+  it("finds catalog items and prices through current aggregate lookups", async () => {
+    const collection = createStorageCollection("catalog");
+    const repository = new CatalogRepository(collection);
+    const contentRef = createTestContentRef();
+    const inactiveSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 2),
+      active: false,
+      prices: [
+        createPriceDefinition({
+          id: createTestMikaId("price", 2),
+          active: false,
+          titleSnapshot: "Inactive price",
+        }),
+      ],
+    });
+    const firstCatalog = createCatalogItemDocument({
+      contentRef,
+      sellables: [createSellableDefinition(), inactiveSellable],
+    });
+    const duplicateContentCatalog: CatalogItemDocument = {
+      ...createCatalogItemDocument({
+        contentRef,
+        sellables: [
+          createSellableDefinition({
+            id: createTestMikaId("sellable", 3),
+            prices: [createPriceDefinition({ id: createTestMikaId("price", 3) })],
+          }),
+        ],
+      }),
+      id: createTestMikaId("catalog", 2),
+    };
+
+    await repository.put(duplicateContentCatalog);
+    await repository.put(firstCatalog);
+
+    await expect(repository.findItemByContent(contentRef)).resolves.toEqual(firstCatalog);
+    await expect(
+      repository.findItemByContent(createTestContentRef({ id: "missing-product" })),
+    ).resolves.toBeNull();
+    await expect(repository.findPriceById(createTestMikaId("price", 2))).resolves.toMatchObject({
+      catalog: { id: firstCatalog.id },
+      sellable: { id: inactiveSellable.id, active: false },
+      price: { id: "price_2", active: false },
+    });
+    await expect(repository.findPriceById(createTestMikaId("price", 404))).resolves.toBeNull();
+  });
+
+  it("finds checkout idempotency keys only from checkout metadata", async () => {
+    const collection = createStorageCollection("session");
+    const repository = new SessionRepository(collection);
+    const noMetadataCheckout = createCheckoutDocument({
+      id: createTestMikaId("checkout", 1),
+    });
+    const idempotentCheckout = createCheckoutDocument({
+      id: createTestMikaId("checkout", 2),
+      metadata: {
+        checkoutIdempotencyKey: "checkout_replay_key",
+        checkoutIdempotencyInputHash: "hash_1",
+      },
+    });
+    const sanitizedCheckout = createCheckoutDocument({
+      id: createTestMikaId("checkout", 3),
+      metadata: {
+        checkoutProviderStatus: "created",
+      },
+    });
+
+    await repository.put(noMetadataCheckout);
+    await repository.put(idempotentCheckout);
+    await repository.put(sanitizedCheckout);
+
+    await expect(repository.findCheckoutByIdempotencyKey("checkout_replay_key")).resolves.toEqual(
+      idempotentCheckout,
+    );
+    await expect(repository.findCheckoutByIdempotencyKey("missing_key")).resolves.toBeNull();
+    await expect(repository.findCheckoutByIdempotencyKey("")).resolves.toBeNull();
+  });
+
+  it("finds orders by nested download refs across lines", async () => {
+    const collection = createStorageCollection("ledger");
+    const repository = new LedgerRepository(collection);
+    const firstOrder = createOrderDocument({
+      aggregate: {
+        ...createOrderDocument().aggregate,
+        lines: [
+          {
+            ...createOrderDocument().aggregate.lines[0]!,
+            id: createTestMikaId("order_line", 1),
+            downloadRefs: ["download:first:line_1"],
+          },
+          {
+            ...createOrderDocument().aggregate.lines[0]!,
+            id: createTestMikaId("order_line", 2),
+            downloadRefs: ["download:first:line_2", "download:shared"],
+          },
+        ],
+      },
+    });
+    const secondOrder = createOrderDocument({
+      id: createTestMikaId("order", 2),
+      orderNumber: "M-1002",
+      aggregate: {
+        ...createOrderDocument().aggregate,
+        lines: [
+          {
+            ...createOrderDocument().aggregate.lines[0]!,
+            id: createTestMikaId("order_line", 3),
+            downloadRefs: ["download:shared"],
+          },
+        ],
+      },
+    });
+
+    await repository.put(secondOrder);
+    await repository.put(firstOrder);
+
+    await expect(repository.findOrderByDownloadRef("download:first:line_2")).resolves.toEqual(
+      firstOrder,
+    );
+    await expect(repository.findOrderByDownloadRef("download:shared")).resolves.toEqual(firstOrder);
+    await expect(repository.findOrderByDownloadRef("download:missing")).resolves.toBeNull();
+  });
+});
+
 describe("backend test Kysely stock database harness", () => {
   it("runs Mika stock migrations up and down", async () => {
     const db = createTestMikaDb();
@@ -2474,6 +2599,125 @@ describe("backend API composition", () => {
     });
   });
 
+  it("normalizes subscription change and renew provider failures with failed audit state", async () => {
+    const cases = [
+      {
+        action: "change" as const,
+        optionalMethod: "changeSubscription" as const,
+        message: "Provider change failed.",
+        priceId: createTestMikaId("price", 2),
+        expectedProviderPriceId: "price_failure",
+        seed: async (repositories: MikaBackendRepositories) => {
+          await repositories.catalog.put(
+            createCatalogItemDocument({
+              contentRef: createTestContentRef(),
+              sellables: [
+                createSellableDefinition({
+                  prices: [
+                    createPriceDefinition({
+                      id: createTestMikaId("price", 2),
+                      mode: "subscription",
+                      providerRefs: [
+                        {
+                          provider: TEST_PROVIDER,
+                          productId: "prod_failure",
+                          priceId: "price_failure",
+                        },
+                      ],
+                    }),
+                  ],
+                }),
+              ],
+            }),
+          );
+        },
+        run: (api: MikaApi, subscriptionId: MikaId, priceId?: MikaId) =>
+          api.subscription.change(createTestRequestContext(), { subscriptionId, priceId }),
+        calls: (fake: ReturnType<typeof createFakeMikaProvider>) =>
+          fake.getCalls().changeSubscription,
+      },
+      {
+        action: "renew" as const,
+        optionalMethod: "renewSubscription" as const,
+        message: "Provider renew failed.",
+        seed: async () => {},
+        run: (api: MikaApi, subscriptionId: MikaId) =>
+          api.subscription.renew(createTestRequestContext(), { subscriptionId }),
+        calls: (fake: ReturnType<typeof createFakeMikaProvider>) =>
+          fake.getCalls().renewSubscription,
+      },
+    ];
+
+    for (const failureCase of cases) {
+      const repositories = createTestBackendRepositories();
+      const fake = createFakeMikaProvider({
+        optionalMethods: [failureCase.optionalMethod],
+        overrides: {
+          [failureCase.optionalMethod]: async () => {
+            throw new Error(failureCase.message);
+          },
+        },
+      });
+      const subscription = createSubscriptionDocument();
+      const api = createMikaBackendApi(
+        createIncrementingBackendDependencies({
+          repositories,
+          providers: createMikaProviderRegistry([fake.provider]),
+        }),
+      );
+
+      await repositories.account.put(createCustomerDocument());
+      await repositories.account.put(subscription);
+      await failureCase.seed(repositories);
+
+      await expect(
+        failureCase.run(api, subscription.id, failureCase.priceId),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 502,
+        error: {
+          code: "PROVIDER_FAILED",
+          message: failureCase.message,
+        },
+      });
+
+      expect(failureCase.calls(fake)).toEqual([
+        {
+          subscriptionId: subscription.id,
+          providerSubscriptionId: "provider_subscription_1",
+          ...(failureCase.priceId ? { priceId: failureCase.priceId } : {}),
+          ...(failureCase.expectedProviderPriceId
+            ? { providerPriceId: failureCase.expectedProviderPriceId }
+            : {}),
+        },
+      ]);
+      await expect(repositories.account.findSubscriptionById(subscription.id)).resolves.toEqual(
+        subscription,
+      );
+      await expect(
+        repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
+      ).resolves.toMatchObject({
+        status: "failed",
+        record: {
+          action: `subscription.${failureCase.action}`,
+          targetType: "subscription",
+          targetId: subscription.id,
+          status: "failed",
+          metadata: {
+            provider: TEST_PROVIDER,
+            subscriptionId: subscription.id,
+            providerSubscriptionId: "provider_subscription_1",
+            ...(failureCase.priceId ? { priceId: failureCase.priceId } : {}),
+            ...(failureCase.expectedProviderPriceId
+              ? { providerPriceId: failureCase.expectedProviderPriceId }
+              : {}),
+            error: failureCase.message,
+          },
+        },
+      });
+    }
+  });
+
   it("runs subscription provider actions and updates stored subscription state", async () => {
     const contentRef = createTestContentRef();
     const replacementPrice = createPriceDefinition({
@@ -2607,6 +2851,36 @@ describe("backend API composition", () => {
         },
       },
     );
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
+    ).resolves.toMatchObject({
+      status: "completed",
+      record: {
+        action: "subscription.cancel",
+        status: "completed",
+        metadata: {
+          provider: TEST_PROVIDER,
+          subscriptionId: subscription.id,
+          providerSubscriptionId: "provider_subscription_1",
+          providerPriceId: "price_basic",
+        },
+      },
+    });
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 2)),
+    ).resolves.toMatchObject({
+      status: "completed",
+      record: {
+        action: "subscription.renew",
+        status: "completed",
+        metadata: {
+          provider: TEST_PROVIDER,
+          subscriptionId: subscription.id,
+          providerSubscriptionId: "provider_subscription_1",
+          providerPriceId: "price_basic",
+        },
+      },
+    });
     await expect(
       repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 3)),
     ).resolves.toMatchObject({
@@ -3001,6 +3275,65 @@ describe("backend API composition", () => {
           amount: 500,
           reason: "customer_request",
           error: "Provider refund failed.",
+        },
+      },
+    });
+  });
+
+  it("normalizes order cancellation provider failures and records failed audit state", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["cancelOrder"],
+      overrides: {
+        cancelOrder: async () => {
+          throw new Error("Provider cancel order failed.");
+        },
+      },
+    });
+    const order = createOrderDocument();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.ledger.put(order);
+
+    await expect(
+      api.admin.orderCancel({ orderId: order.id, reason: "customer_request" }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 502,
+      error: {
+        code: "PROVIDER_FAILED",
+        message: "Provider cancel order failed.",
+      },
+    });
+
+    expect(fake.getCalls().cancelOrder).toEqual([
+      {
+        orderId: order.id,
+        providerOrderId: "provider_order_1",
+        reason: "customer_request",
+      },
+    ]);
+    await expect(repositories.ledger.findOrderById(order.id)).resolves.toEqual(order);
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
+    ).resolves.toMatchObject({
+      status: "failed",
+      record: {
+        action: "order.cancel",
+        targetType: "order",
+        targetId: order.id,
+        status: "failed",
+        metadata: {
+          provider: TEST_PROVIDER,
+          orderId: order.id,
+          providerOrderId: "provider_order_1",
+          reason: "customer_request",
+          error: "Provider cancel order failed.",
         },
       },
     });
@@ -3602,6 +3935,65 @@ describe("backend API composition", () => {
     expect(fake.getCalls()).toMatchObject({
       verifyWebhook: [expect.any(Object), expect.any(Object), expect.any(Object)],
       parseWebhookEvent: [expect.any(Object), expect.any(Object), expect.any(Object)],
+    });
+  });
+
+  it("returns non-replayable duplicate responses for already processed webhooks", async () => {
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      ops: new OpsRepository(opsCollection),
+    };
+    const fake = createFakeMikaProvider({
+      id: TEST_PROVIDER,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "processed_duplicate_hash",
+            parsed: { delivery: "processed-duplicate" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createWebhookEvent(verified, {
+            providerEventId: "event_processed_duplicate",
+            type: "test.processed-duplicate",
+          }),
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(receiveWebhook(api, "processed-duplicate-first")).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "received", replayable: true },
+    });
+    const webhook = await repositories.ops.findWebhookById(createTestMikaId("webhook", 1));
+    if (!webhook) throw new Error("Expected processed duplicate webhook fixture.");
+    await repositories.ops.put({
+      ...webhook,
+      status: "processed",
+      record: {
+        ...webhook.record,
+        status: "processed",
+      },
+    });
+
+    const duplicate = await receiveWebhook(api, "processed-duplicate-second");
+    expect(duplicate).toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "duplicate" },
+    });
+    if (!duplicate.ok) throw new Error("Expected duplicate webhook result.");
+    expect(duplicate.data.replayable).toBeUndefined();
+    await expect(opsCollection.count({ type: "webhook" })).resolves.toBe(1);
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
+      status: "processed",
+      record: { status: "processed" },
     });
   });
 
@@ -4549,10 +4941,17 @@ describe("backend API composition", () => {
       {
         status: "received" as const,
         expected: { status: "completed", affected: { processed: 1, failed: 0 } },
+        storedStatus: "received" as const,
       },
       {
         status: "failed" as const,
         expected: { status: "failed", affected: { processed: 0, failed: 1 } },
+        storedStatus: "failed" as const,
+      },
+      {
+        status: "processing" as const,
+        expected: { status: "completed", affected: { processed: 1, failed: 0 } },
+        storedStatus: "processing" as const,
       },
       {
         status: "processed" as const,
@@ -4561,6 +4960,7 @@ describe("backend API composition", () => {
           message: `Webhook '${webhook.id}' is not eligible for replay.`,
           affected: { processed: 0, failed: 0 },
         },
+        storedStatus: "processed" as const,
       },
     ];
 
@@ -4581,7 +4981,87 @@ describe("backend API composition", () => {
         status: 200,
         data: replayCase.expected,
       });
+      await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
+        status: replayCase.storedStatus,
+        record: { status: replayCase.storedStatus },
+      });
     }
+  });
+
+  it("fails webhook replay when stored payload cannot be reconstructed", async () => {
+    const accountCollection = createStorageCollection("account");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+    };
+    const fake = createFakeMikaProvider({
+      id: TEST_PROVIDER,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "malformed_replay_hash",
+            parsed: { delivery: "malformed-replay" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createWebhookEvent(verified, {
+            providerEventId: "event_malformed_replay",
+            type: "test.malformed-replay",
+          }),
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(receiveWebhook(api, "malformed-replay")).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "received" },
+    });
+    const webhook = await repositories.ops.findWebhookById(createTestMikaId("webhook", 1));
+    if (!webhook) throw new Error("Expected malformed replay webhook fixture.");
+    await repositories.ops.put({
+      ...webhook,
+      status: "failed",
+      record: {
+        ...webhook.record,
+        status: "failed",
+        rawPayloadJson: { providerPayload: { delivery: "malformed-replay" } },
+      },
+    });
+
+    await expect(
+      api.admin.webhookReplay({ webhookId: createTestMikaId("webhook", 1) }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "webhook_1",
+        status: "failed",
+        message: "Webhook payload could not be reconstructed for replay.",
+        affected: {
+          processed: 0,
+          failed: 1,
+        },
+      },
+    });
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
+      status: "failed",
+      record: {
+        status: "failed",
+        attemptCount: 1,
+        lastError: "Webhook payload could not be reconstructed for replay.",
+      },
+    });
+    await expect(accountCollection.count()).resolves.toBe(0);
+    await expect(ledgerCollection.count()).resolves.toBe(0);
   });
 
   it("keeps catalog and stock validation failures in the route layer", async () => {
@@ -6122,9 +6602,26 @@ describe("backend API composition", () => {
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
       quantityReserved: 2,
     });
+    await expect(
+      repositories.stock.findEventById(createTestMikaId("stock_event", 1)),
+    ).resolves.toMatchObject({
+      status: "active",
+      quantityDelta: 2,
+    });
+    await expect(
+      repositories.stock.findEventById(createTestMikaId("stock_event", 2)),
+    ).resolves.toBeNull();
     await expect(repositories.session.findById(added.data.id)).resolves.toMatchObject({
       type: "cart",
       status: "checkout_pending",
+    });
+    await expect(
+      repositories.session.findById(createTestMikaId("checkout", 2)),
+    ).resolves.toBeNull();
+    await expect(
+      repositories.session.findCheckoutByIdempotencyKey("checkout_replay_1"),
+    ).resolves.toMatchObject({
+      id: "checkout_1",
     });
   });
 

@@ -1112,6 +1112,72 @@ describe("Mika client", () => {
     }
   });
 
+  it("keeps JSON client adapters aligned with operation metadata", () => {
+    const client = createMikaServerClient() as unknown as Record<string, Record<string, unknown>>;
+
+    for (const [namespace, methods] of Object.entries(mikaApiMethodNames)) {
+      expect(Object.keys(client[namespace] ?? {}).sort()).toEqual([...methods].sort());
+    }
+  });
+
+  it("dispatches JSON client adapters with operation route, method, and transport metadata", async () => {
+    const requests: Array<{
+      readonly url: string;
+      readonly method: string;
+      readonly body?: string;
+    }> = [];
+    const client = createMikaServerClient({
+      baseUrl: "https://shop.test",
+      fetch: async (url, init) => {
+        requests.push({
+          url: typeof url === "string" ? url : url instanceof URL ? url.toString() : url.url,
+          method: init?.method ?? "GET",
+          body: typeof init?.body === "string" ? init.body : undefined,
+        });
+
+        return Response.json({ ok: true, status: 200, data: {} });
+      },
+    });
+    const cases = [
+      {
+        run: () => client.catalog.sellables("products", "ring", { locale: "en-IE" }),
+        operation: mikaOperationDefinitions.catalogSellables,
+        expectedUrl:
+          "https://shop.test/_emdash/api/plugins/mika/catalog/sellables?collection=products&id=ring&locale=en-IE",
+      },
+      {
+        run: () => client.cart.get(),
+        operation: mikaOperationDefinitions.cartGet,
+        expectedUrl: "https://shop.test/_emdash/api/plugins/mika/cart",
+      },
+      {
+        run: () => client.cart.add({ sellableId: createMikaId("sellable_1"), quantity: 2 }),
+        operation: mikaOperationDefinitions.cartAdd,
+        expectedUrl: "https://shop.test/_emdash/api/plugins/mika/cart/items",
+        expectedBody: JSON.stringify({ sellableId: "sellable_1", quantity: 2 }),
+      },
+      {
+        run: () => client.checkout.status("checkout_1"),
+        operation: mikaOperationDefinitions.checkoutStatus,
+        expectedUrl:
+          "https://shop.test/_emdash/api/plugins/mika/checkout/status?checkoutId=checkout_1",
+      },
+    ];
+
+    for (const adapterCase of cases) {
+      requests.length = 0;
+      await adapterCase.run();
+
+      expect(requests).toEqual([
+        {
+          url: adapterCase.expectedUrl,
+          method: adapterCase.operation.httpMethod,
+          ...(adapterCase.expectedBody ? { body: adapterCase.expectedBody } : {}),
+        },
+      ]);
+    }
+  });
+
   it("keeps dynamic operation dispatch centralized", () => {
     const operationsSource = readFileSync(
       new URL("../src/api/operations.ts", import.meta.url),
