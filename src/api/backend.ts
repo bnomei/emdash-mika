@@ -1,5 +1,5 @@
 import type { MikaProviderRegistry } from "../provider";
-import type { MikaRepositories } from "../storage/repositories";
+import type { MikaRepositories, ReserveStockRepositoryResult } from "../storage/repositories";
 import {
   cartToDTO,
   cartWithItems,
@@ -96,6 +96,38 @@ export interface MikaBackendDependencies {
 
 export interface CreateMikaBackendApiInput extends MikaBackendDependencies {
   readonly overrides?: MikaApiOverrides;
+}
+
+export interface ReserveStockInput {
+  readonly stockItemId: MikaId;
+  readonly quantity: number;
+  readonly expiresAt: ISODateTime;
+  readonly now?: ISODateTime;
+  readonly cartId?: MikaId;
+  readonly checkoutSessionId?: MikaId;
+  readonly customerId?: MikaId;
+  readonly sessionId?: string;
+  readonly idempotencyKey?: string;
+  readonly metadata?: JsonObject;
+}
+
+export type ReserveStockResult = ReserveStockRepositoryResult;
+
+export interface MikaStockLifecycleService {
+  reserve(input: ReserveStockInput): Promise<ReserveStockResult>;
+}
+
+export function createMikaStockLifecycleService(
+  input: MikaBackendDependencies,
+): MikaStockLifecycleService {
+  return {
+    reserve: async (reservation) =>
+      input.repositories.stock.reserve({
+        ...reservation,
+        reservationEventId: input.createId("stock_event"),
+        now: reservation.now ?? currentBackendISODateTime(input),
+      }),
+  };
 }
 
 export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi {
@@ -1002,7 +1034,7 @@ async function resolveCartLine(
         fallbackTitle: catalog.aggregate.titleSnapshot ?? sellable.id,
       }),
       quantity,
-      addedAt: input.isoNow?.() ?? createISODateTime(input.now().toISOString()),
+      addedAt: currentBackendISODateTime(input),
     },
     sellable,
     stock,
@@ -1069,7 +1101,7 @@ async function resolveWishlistItem(
         price,
         fallbackTitle: catalog.aggregate.titleSnapshot ?? sellable.id,
       }),
-      addedAt: input.isoNow?.() ?? createISODateTime(input.now().toISOString()),
+      addedAt: currentBackendISODateTime(input),
     },
   };
 }
@@ -1151,6 +1183,10 @@ function variantOptionsMatch(
   return Object.entries(variantOptions).every(([option, value]) =>
     sellable.variantOptions.some((item) => item.option === option && item.value === value),
   );
+}
+
+function currentBackendISODateTime(input: MikaBackendDependencies): ISODateTime {
+  return input.isoNow?.() ?? createISODateTime(input.now().toISOString());
 }
 
 function validationFailed(field: string, message: string): MikaApiFailure {

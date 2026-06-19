@@ -1,7 +1,13 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { LibsqlDialect } from "@libsql/kysely-libsql";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
-import { sql } from "kysely";
+import { Kysely, sql } from "kysely";
 
 import {
+  createMikaStockLifecycleService,
   createMikaBackendApi,
   type CreateMikaBackendApiInput,
   type MikaBackendDependencies,
@@ -30,9 +36,11 @@ import {
   OpsRepository,
   SessionRepository,
   StockRepository,
+  type MikaDb,
   type MikaDbExecutor,
 } from "../src/storage/repositories";
 import { mikaInitialMigration } from "../src/storage/migrations";
+import type { MikaDatabase } from "../src/storage/schema";
 import { createCurrencyCode, createMikaId, createProviderName } from "../src/types/primitives";
 import {
   TEST_CURRENCY,
@@ -204,6 +212,239 @@ describe("backend test Kysely stock database harness", () => {
     } finally {
       await rollbackMikaInitialMigration(db);
       await db.destroy();
+    }
+  });
+
+  it("reserves finite stock atomically and records a reservation event", async () => {
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const repository = new StockRepository(db);
+    const service = createMikaStockLifecycleService(
+      createIncrementingBackendDependencies({
+        repositories: { ...createTestBackendRepositories(), stock: repository },
+      }),
+    );
+    const clock = createTestClock();
+    const stockItem = createStockRecord({
+      quantityOnHand: 10,
+      quantityReserved: 2,
+    });
+
+    try {
+      await mikaInitialMigration.up(db);
+      await repository.putItem(stockItem);
+
+      const result = await service.reserve({
+        stockItemId: stockItem.id,
+        quantity: 3,
+        expiresAt: clock.isoAt(15 * 60_000),
+        cartId: createTestMikaId("cart", 1),
+        checkoutSessionId: createTestMikaId("checkout", 1),
+        sessionId: "session_reserve_1",
+        idempotencyKey: "reserve_success_1",
+        metadata: { source: "backend-test" },
+      });
+
+      expect(result).toMatchObject({
+        status: "reserved",
+        event: {
+          id: "stock_event_1",
+          stockItemId: stockItem.id,
+          kind: "reservation",
+          status: "active",
+          cartId: "cart_1",
+          checkoutSessionId: "checkout_1",
+          sessionId: "session_reserve_1",
+          idempotencyKey: "reserve_success_1",
+          quantityDelta: 3,
+          expiresAt: "2026-01-01T00:15:00.000Z",
+          metadata: { source: "backend-test" },
+        },
+        stock: {
+          id: stockItem.id,
+          quantityReserved: 5,
+        },
+      });
+      await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+        quantityOnHand: 10,
+        quantityReserved: 5,
+      });
+      await expect(
+        repository.findEventByIdempotencyKey("reserve_success_1"),
+      ).resolves.toMatchObject({
+        id: "stock_event_1",
+        stockItemId: stockItem.id,
+        quantityDelta: 3,
+        status: "active",
+      });
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
+    }
+  });
+
+  it("rejects insufficient finite stock without increasing reserved quantity", async () => {
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const repository = new StockRepository(db);
+    const service = createMikaStockLifecycleService(
+      createIncrementingBackendDependencies({
+        repositories: { ...createTestBackendRepositories(), stock: repository },
+      }),
+    );
+    const stockItem = createStockRecord({
+      quantityOnHand: 5,
+      quantityReserved: 4,
+    });
+
+    try {
+      await mikaInitialMigration.up(db);
+      await repository.putItem(stockItem);
+
+      const result = await service.reserve({
+        stockItemId: stockItem.id,
+        quantity: 2,
+        expiresAt: createTestClock().isoAt(15 * 60_000),
+        idempotencyKey: "reserve_insufficient_1",
+      });
+
+      expect(result).toMatchObject({
+        status: "insufficient_stock",
+        stock: {
+          id: stockItem.id,
+          quantityReserved: 4,
+        },
+      });
+      await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+        quantityOnHand: 5,
+        quantityReserved: 4,
+      });
+      await expect(
+        repository.findEventByIdempotencyKey("reserve_insufficient_1"),
+      ).resolves.toBeNull();
+      await expect(countStockEvents(db)).resolves.toBe(0);
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
+    }
+  });
+
+  it("makes backorder, untracked, and manual reservation policy behavior explicit", async () => {
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const repository = new StockRepository(db);
+    const service = createMikaStockLifecycleService(
+      createIncrementingBackendDependencies({
+        repositories: { ...createTestBackendRepositories(), stock: repository },
+      }),
+    );
+    const cases = [
+      createStockRecord({
+        id: createTestMikaId("stock", 11),
+        sellableId: createTestMikaId("sellable", 11),
+        quantityOnHand: 1,
+        quantityReserved: 1,
+        allowBackorder: true,
+      }),
+      createStockRecord({
+        id: createTestMikaId("stock", 12),
+        sellableId: createTestMikaId("sellable", 12),
+        policy: "backorder",
+        quantityOnHand: 0,
+        quantityReserved: 0,
+      }),
+      createStockRecord({
+        id: createTestMikaId("stock", 13),
+        sellableId: createTestMikaId("sellable", 13),
+        policy: "untracked",
+        quantityOnHand: 0,
+        quantityReserved: 0,
+      }),
+      createStockRecord({
+        id: createTestMikaId("stock", 14),
+        sellableId: createTestMikaId("sellable", 14),
+        policy: "manual",
+        quantityOnHand: 0,
+        quantityReserved: 0,
+      }),
+    ];
+
+    try {
+      await mikaInitialMigration.up(db);
+
+      for (const stockItem of cases) {
+        await repository.putItem(stockItem);
+
+        const result = await service.reserve({
+          stockItemId: stockItem.id,
+          quantity: 3,
+          expiresAt: createTestClock().isoAt(15 * 60_000),
+          idempotencyKey: `reserve_${stockItem.id}`,
+        });
+
+        expect(result).toMatchObject({
+          status: "reserved",
+          stock: {
+            id: stockItem.id,
+            quantityReserved: stockItem.quantityReserved + 3,
+          },
+        });
+      }
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
+    }
+  });
+
+  it("replays reservation idempotency keys without double reserving stock", async () => {
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const repository = new StockRepository(db);
+    const service = createMikaStockLifecycleService(
+      createIncrementingBackendDependencies({
+        repositories: { ...createTestBackendRepositories(), stock: repository },
+      }),
+    );
+    const stockItem = createStockRecord({
+      quantityOnHand: 10,
+      quantityReserved: 0,
+    });
+
+    try {
+      await mikaInitialMigration.up(db);
+      await repository.putItem(stockItem);
+
+      await expect(
+        service.reserve({
+          stockItemId: stockItem.id,
+          quantity: 3,
+          expiresAt: createTestClock().isoAt(15 * 60_000),
+          idempotencyKey: "reserve_replay_1",
+        }),
+      ).resolves.toMatchObject({
+        status: "reserved",
+        event: { id: "stock_event_1" },
+        stock: { quantityReserved: 3 },
+      });
+      await expect(
+        service.reserve({
+          stockItemId: stockItem.id,
+          quantity: 3,
+          expiresAt: createTestClock().isoAt(15 * 60_000),
+          idempotencyKey: "reserve_replay_1",
+        }),
+      ).resolves.toMatchObject({
+        status: "replayed",
+        event: { id: "stock_event_1" },
+        stock: { quantityReserved: 3 },
+      });
+      await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+        quantityReserved: 3,
+      });
+      await expect(countStockEvents(db)).resolves.toBe(1);
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
     }
   });
 });
@@ -1666,6 +1907,24 @@ async function createSeededCollection(): Promise<StorageCollection<MemoryRecord>
   return collection;
 }
 
+function createTransactionTestMikaDb(): {
+  readonly db: MikaDb;
+  readonly destroy: () => Promise<void>;
+} {
+  const dir = mkdtempSync(join(tmpdir(), "emdash-mika-stock-"));
+  const db = new Kysely<MikaDatabase>({
+    dialect: new LibsqlDialect({ url: `file:${join(dir, "test.db")}` }),
+  });
+
+  return {
+    db,
+    destroy: async () => {
+      await db.destroy();
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
 async function listMikaTableNames(db: MikaDbExecutor): Promise<readonly string[]> {
   const result = await sql<{ name: string }>`
     select name
@@ -1675,6 +1934,14 @@ async function listMikaTableNames(db: MikaDbExecutor): Promise<readonly string[]
   `.execute(db);
 
   return result.rows.map((row) => row.name);
+}
+
+async function countStockEvents(db: MikaDbExecutor): Promise<number> {
+  const result = await sql<{ count: number }>`
+    select count(*) as count from mika_stock_events
+  `.execute(db);
+
+  return result.rows[0]?.count ?? 0;
 }
 
 async function rollbackMikaInitialMigration(db: MikaDbExecutor): Promise<void> {
@@ -1762,14 +2029,25 @@ function createTestStockRepository(
   stockBySellableId: ReadonlyMap<string, StockItemRecord> = new Map(),
 ): MikaBackendRepositories["stock"] {
   return {
+    async findItemById(stockItemId) {
+      return (
+        Array.from(stockBySellableId.values()).find((stock) => stock.id === stockItemId) ?? null
+      );
+    },
     async findBySellableId(sellableId) {
       return stockBySellableId.get(sellableId) ?? null;
+    },
+    async findEventByIdempotencyKey() {
+      return null;
     },
     async putItem() {
       // No-op test double.
     },
     async insertEvent() {
       // No-op test double.
+    },
+    async reserve() {
+      throw new Error("The test stock repository does not implement reserve().");
     },
   };
 }

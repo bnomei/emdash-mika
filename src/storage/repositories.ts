@@ -28,6 +28,7 @@ import {
   createISODateTime,
   createMikaId,
   type ContentRef,
+  type ISODateTime,
   type JsonObject,
   type MikaId,
 } from "../types/primitives";
@@ -40,10 +41,44 @@ import type {
   StorageWhereClause,
 } from "./collections";
 import type { MikaDatabase, MikaInsertable, MikaSelectable } from "./schema";
+import { reserveStockStatement } from "./statements";
 
 export type MikaDb = Kysely<MikaDatabase>;
 export type MikaTransaction = Transaction<MikaDatabase>;
 export type MikaDbExecutor = MikaDb | MikaTransaction;
+
+export interface ReserveStockRepositoryInput {
+  readonly reservationEventId: MikaId;
+  readonly stockItemId: MikaId;
+  readonly quantity: number;
+  readonly expiresAt: ISODateTime;
+  readonly now: ISODateTime;
+  readonly cartId?: MikaId;
+  readonly checkoutSessionId?: MikaId;
+  readonly customerId?: MikaId;
+  readonly sessionId?: string;
+  readonly idempotencyKey?: string;
+  readonly metadata?: JsonObject;
+}
+
+export type ReserveStockRepositoryResult =
+  | {
+      readonly status: "reserved";
+      readonly event: StockEventRecord;
+      readonly stock: StockItemRecord;
+    }
+  | {
+      readonly status: "replayed";
+      readonly event: StockEventRecord;
+      readonly stock: StockItemRecord | null;
+    }
+  | {
+      readonly status: "insufficient_stock";
+      readonly stock: StockItemRecord;
+    }
+  | {
+      readonly status: "not_found";
+    };
 
 type TypedDocument = {
   readonly type: string;
@@ -447,6 +482,10 @@ export class StockRepository {
     this.db = db;
   }
 
+  async findItemById(stockItemId: MikaId): Promise<StockItemRecord | null> {
+    return findStockItemById(this.db, stockItemId);
+  }
+
   async findBySellableId(sellableId: MikaId): Promise<StockItemRecord | null> {
     const row = await this.db
       .selectFrom("mika_stock_items")
@@ -455,6 +494,10 @@ export class StockRepository {
       .executeTakeFirst();
 
     return row ? mapStockItem(row) : null;
+  }
+
+  async findEventByIdempotencyKey(idempotencyKey: string): Promise<StockEventRecord | null> {
+    return findStockEventByIdempotencyKey(this.db, idempotencyKey);
   }
 
   async putItem(record: StockItemRecord): Promise<void> {
@@ -492,31 +535,93 @@ export class StockRepository {
   }
 
   async insertEvent(record: StockEventRecord): Promise<void> {
-    await this.db
-      .insertInto("mika_stock_events")
-      .values({
-        id: record.id,
-        stock_item_id: record.stockItemId,
-        kind: record.kind,
-        status: record.status,
-        reason: record.reason ?? null,
-        reservation_event_id: record.reservationEventId ?? null,
-        cart_id: record.cartId ?? null,
-        checkout_session_id: record.checkoutSessionId ?? null,
-        customer_id: record.customerId ?? null,
-        session_id: record.sessionId ?? null,
-        order_id: record.orderId ?? null,
-        order_line_id: record.orderLineId ?? null,
-        admin_audit_id: record.adminAuditId ?? null,
-        idempotency_key: record.idempotencyKey ?? null,
-        quantity_delta: record.quantityDelta,
-        expires_at: record.expiresAt ?? null,
-        metadata_json: record.metadata ? encodeJson(record.metadata) : null,
-        created_at: record.createdAt,
-        updated_at: record.updatedAt,
-      })
-      .execute();
+    await insertStockEvent(this.db, record);
   }
+
+  async reserve(input: ReserveStockRepositoryInput): Promise<ReserveStockRepositoryResult> {
+    assertReservationQuantity(input.quantity);
+
+    return withTransaction(this.db, async (executor) => {
+      const replayed =
+        input.idempotencyKey === undefined
+          ? null
+          : await findStockEventByIdempotencyKey(executor, input.idempotencyKey);
+      if (replayed) {
+        return {
+          status: "replayed",
+          event: replayed,
+          stock: await findStockItemById(executor, replayed.stockItemId),
+        };
+      }
+
+      const current = await findStockItemById(executor, input.stockItemId);
+      if (!current) {
+        return { status: "not_found" };
+      }
+
+      const result = await reserveStockStatement({
+        stockItemId: input.stockItemId,
+        quantity: input.quantity,
+        now: input.now,
+      }).execute(executor);
+      if (!mutationAffected(result)) {
+        return { status: "insufficient_stock", stock: current };
+      }
+
+      const event: StockEventRecord = {
+        id: input.reservationEventId,
+        stockItemId: input.stockItemId,
+        kind: "reservation",
+        status: "active",
+        cartId: input.cartId,
+        checkoutSessionId: input.checkoutSessionId,
+        customerId: input.customerId,
+        sessionId: input.sessionId,
+        idempotencyKey: input.idempotencyKey,
+        quantityDelta: input.quantity,
+        expiresAt: input.expiresAt,
+        createdAt: input.now,
+        updatedAt: input.now,
+        metadata: input.metadata,
+      };
+
+      await insertStockEvent(executor, event);
+
+      const stock = await findStockItemById(executor, input.stockItemId);
+      if (!stock) {
+        throw new Error(`Reserved stock item '${input.stockItemId}' could not be reloaded.`);
+      }
+
+      return { status: "reserved", event, stock };
+    });
+  }
+}
+
+async function insertStockEvent(executor: MikaDbExecutor, record: StockEventRecord): Promise<void> {
+  await executor
+    .insertInto("mika_stock_events")
+    .values({
+      id: record.id,
+      stock_item_id: record.stockItemId,
+      kind: record.kind,
+      status: record.status,
+      reason: record.reason ?? null,
+      reservation_event_id: record.reservationEventId ?? null,
+      cart_id: record.cartId ?? null,
+      checkout_session_id: record.checkoutSessionId ?? null,
+      customer_id: record.customerId ?? null,
+      session_id: record.sessionId ?? null,
+      order_id: record.orderId ?? null,
+      order_line_id: record.orderLineId ?? null,
+      admin_audit_id: record.adminAuditId ?? null,
+      idempotency_key: record.idempotencyKey ?? null,
+      quantity_delta: record.quantityDelta,
+      expires_at: record.expiresAt ?? null,
+      metadata_json: record.metadata ? encodeJson(record.metadata) : null,
+      created_at: record.createdAt,
+      updated_at: record.updatedAt,
+    })
+    .execute();
 }
 
 export class EphemeralRepository {
@@ -681,6 +786,56 @@ function mapStockItem(row: MikaSelectable<"mika_stock_items">): StockItemRecord 
   };
 }
 
+async function findStockItemById(
+  executor: MikaDbExecutor,
+  stockItemId: MikaId,
+): Promise<StockItemRecord | null> {
+  const row = await executor
+    .selectFrom("mika_stock_items")
+    .selectAll()
+    .where("id", "=", stockItemId)
+    .executeTakeFirst();
+
+  return row ? mapStockItem(row) : null;
+}
+
+async function findStockEventByIdempotencyKey(
+  executor: MikaDbExecutor,
+  idempotencyKey: string,
+): Promise<StockEventRecord | null> {
+  const row = await executor
+    .selectFrom("mika_stock_events")
+    .selectAll()
+    .where("idempotency_key", "=", idempotencyKey)
+    .executeTakeFirst();
+
+  return row ? mapStockEvent(row) : null;
+}
+
+function mapStockEvent(row: MikaSelectable<"mika_stock_events">): StockEventRecord {
+  return {
+    id: createMikaId(row.id),
+    stockItemId: createMikaId(row.stock_item_id),
+    kind: row.kind,
+    status: row.status,
+    reason: row.reason ? (row.reason as NonNullable<StockEventRecord["reason"]>) : undefined,
+    reservationEventId: mikaIdOrUndefined(row.reservation_event_id),
+    cartId: mikaIdOrUndefined(row.cart_id),
+    checkoutSessionId: mikaIdOrUndefined(row.checkout_session_id),
+    customerId: mikaIdOrUndefined(row.customer_id),
+    sessionId: undef(row.session_id),
+    orderId: mikaIdOrUndefined(row.order_id),
+    orderLineId: mikaIdOrUndefined(row.order_line_id),
+    adminAuditId: mikaIdOrUndefined(row.admin_audit_id),
+    idempotencyKey: undef(row.idempotency_key),
+    quantityDelta: row.quantity_delta,
+    expiresAt: isoOrUndefined(row.expires_at),
+    createdAt: createISODateTime(row.created_at),
+    updatedAt: createISODateTime(row.updated_at),
+    metadata: parseMetadata(row.metadata_json),
+  };
+}
+
 function mapEphemeral(row: MikaSelectable<"mika_ephemeral_records">): EphemeralRecord {
   return {
     key: row.key,
@@ -705,9 +860,46 @@ function undef<T>(value: T | null): T | undefined {
   return value ?? undefined;
 }
 
+function isoOrUndefined(value: string | null): ReturnType<typeof createISODateTime> | undefined {
+  return value === null ? undefined : createISODateTime(value);
+}
+
+function mikaIdOrUndefined(value: string | null): MikaId | undefined {
+  return value === null ? undefined : createMikaId(value);
+}
+
 function boolOrUndefined(value: 0 | 1 | null): boolean | undefined {
   if (value === null) return undefined;
   return value === 1;
+}
+
+function assertReservationQuantity(quantity: number): void {
+  if (!Number.isInteger(quantity) || quantity < 1) {
+    throw new RangeError("Stock reservation quantity must be a positive whole number.");
+  }
+}
+
+async function withTransaction<T>(
+  executor: MikaDbExecutor,
+  operation: (executor: MikaDbExecutor) => Promise<T>,
+): Promise<T> {
+  if (hasTransaction(executor)) {
+    return executor.transaction().execute(operation);
+  }
+
+  return operation(executor);
+}
+
+function hasTransaction(executor: MikaDbExecutor): executor is MikaDb {
+  return typeof (executor as { readonly transaction?: unknown }).transaction === "function";
+}
+
+function mutationAffected(result: {
+  readonly numAffectedRows?: bigint | number;
+  readonly numUpdatedRows?: bigint | number;
+  readonly numChangedRows?: bigint | number;
+}): boolean {
+  return affected(result.numAffectedRows ?? result.numUpdatedRows ?? result.numChangedRows);
 }
 
 function affected(count: bigint | number | undefined): boolean {
