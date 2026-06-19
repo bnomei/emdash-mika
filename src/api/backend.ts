@@ -1,4 +1,4 @@
-import type { MikaProviderRegistry } from "../provider";
+import type { MikaProviderLineItem, MikaProviderRegistry } from "../provider";
 import type {
   AdjustStockRepositoryResult,
   ConsumeReservedStockRepositoryResult,
@@ -14,6 +14,7 @@ import {
   cartWithoutCoupon,
   catalogSellablesToDTO,
   createCartAggregate,
+  createCheckoutAggregate,
   createWishlistAggregate,
   snapshotPrice,
   stockAvailabilityToDTO,
@@ -21,14 +22,21 @@ import {
 } from "../model/builders";
 import type {
   CartLine,
+  CheckoutLine,
   CouponSnapshot,
   PriceDefinition,
   SellableDefinition,
   WishlistItem,
 } from "../types/aggregates";
-import type { CartDocument, SessionDocument, WishlistDocument } from "../types/documents";
+import type {
+  CartDocument,
+  CheckoutDocument,
+  SessionDocument,
+  WishlistDocument,
+} from "../types/documents";
 import { createCurrencyCode, createISODateTime, createMikaId } from "../types/primitives";
 import type {
+  CheckoutStatus,
   CurrencyCode,
   ISODateTime,
   JsonObject,
@@ -48,9 +56,11 @@ import type {
   CartQuoteLineDTO,
   CheckoutPreviewDTO,
   CheckoutPreviewInput,
+  CheckoutSessionDTO,
   MikaError,
   MikaApiResult,
   MoneyDTO,
+  StartCheckoutInput,
   StockAdjustInput,
   WishlistDTO,
   WishlistItemInput,
@@ -689,6 +699,7 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
       ...input.overrides?.wishlist,
     },
     checkout: {
+      start: async (ctx, checkoutInput) => startCheckout(input, ctx, checkoutInput),
       preview: async (ctx, previewInput) => {
         const preview = await createCheckoutPreview(input, ctx, previewInput);
 
@@ -934,6 +945,604 @@ async function createCartQuote(
     warnings: warnings.length > 0 ? warnings : undefined,
     errors: errors.length > 0 ? errors : undefined,
   };
+}
+
+type CheckoutStartLineResolution = {
+  readonly line: CheckoutLine;
+  readonly stock: StockItemRecord | null;
+};
+
+type CheckoutStartResolution = {
+  readonly cart: CartDocument | null;
+  readonly currency: CurrencyCode;
+  readonly mode: PurchaseMode;
+  readonly coupon?: CouponSnapshot;
+  readonly lines: readonly CheckoutStartLineResolution[];
+};
+
+async function startCheckout(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  checkoutInput: StartCheckoutInput,
+): Promise<MikaApiResult<CheckoutSessionDTO>> {
+  const replayedCheckout = ctx.idempotencyKey
+    ? await input.repositories.session.findCheckoutByIdempotencyKey(ctx.idempotencyKey)
+    : null;
+  if (replayedCheckout) return checkoutDocumentResult(replayedCheckout);
+
+  const resolved = await resolveCheckoutStart(input, ctx, checkoutInput);
+  if (!resolved.ok) return resolved;
+
+  const providerName = checkoutInput.provider ?? input.defaults?.provider;
+  if (!providerName) {
+    return validationFailed("provider", "A checkout provider is required.");
+  }
+
+  const provider = input.providers.get(providerName);
+  if (!provider) return providerUnsupported(providerName);
+
+  try {
+    const capabilities = await provider.capabilities();
+    if (!capabilities.includes("hosted_checkout")) {
+      return providerUnsupported(providerName);
+    }
+  } catch {
+    return providerFailed("Checkout provider capabilities could not be verified.");
+  }
+
+  const checkoutId = input.createId("checkout");
+  const expiresAt = checkoutExpiresAt(input, ctx);
+  const reserved = await reserveCheckoutLines(input, ctx, checkoutId, resolved, expiresAt);
+  if (!reserved.ok) return reserved;
+
+  const providerSession = await (async () => {
+    try {
+      return await provider.createCheckoutSession({
+        idempotencyKey: ctx.idempotencyKey,
+        mode: resolved.mode,
+        provider: providerName,
+        customer: checkoutInput.customer,
+        lines: reserved.lines.map((line) => checkoutLineToProviderLine(providerName, line)),
+        successUrl: checkoutSuccessUrl(input, ctx, checkoutInput, checkoutId),
+        cancelUrl: checkoutCancelUrl(input, ctx, checkoutInput),
+        metadata: checkoutInput.customFields,
+      });
+    } catch {
+      await releaseCheckoutReservations(input, reserved.reservationIds, ctx.now);
+      return null;
+    }
+  })();
+  if (!providerSession) {
+    return providerFailed("Checkout provider failed to create a session.");
+  }
+
+  const providerCheckoutId = providerSession.providerCheckoutId ?? providerSession.id;
+  const checkoutDocument: CheckoutDocument = {
+    id: checkoutId,
+    type: "checkout",
+    schemaVersion: 1,
+    cartId: resolved.cart?.id,
+    sessionId: ctx.sessionId,
+    customerId: ctx.customerId,
+    provider: providerName,
+    providerCheckoutId,
+    status: checkoutDocumentStatus(providerSession.status),
+    expiresAt: providerSession.expiresAt ?? expiresAt,
+    aggregate: createCheckoutAggregate({
+      mode: resolved.mode,
+      currency: resolved.currency,
+      lines: reserved.lines,
+      coupon: resolved.coupon,
+      binding: {
+        provider: providerName,
+        providerCheckoutId,
+        providerCustomerId: providerSession.providerCustomerId,
+        returnPath: checkoutInput.returnTo ?? ctx.url?.pathname ?? "/",
+        cancelPath:
+          checkoutInput.cancelPath ?? input.config?.checkout?.cancelUrl ?? "/checkout/cancel",
+        successPath:
+          checkoutInput.successPath ?? input.config?.checkout?.successUrl ?? "/checkout/success",
+        cartHash: await input.hash(
+          JSON.stringify({
+            cartId: resolved.cart?.id,
+            currency: resolved.currency,
+            lines: reserved.lines.map((line) => ({
+              sellableId: line.item.sellableId,
+              priceId: line.item.priceId,
+              quantity: line.quantity,
+              unitAmount: line.item.unitAmount,
+              currency: line.item.currency,
+              reservationId: line.reservationId,
+            })),
+            coupon: resolved.coupon,
+          }),
+        ),
+      },
+      metadata: checkoutMetadata(checkoutInput.customFields, ctx.idempotencyKey, providerSession),
+    }),
+    createdAt: ctx.now,
+    updatedAt: ctx.now,
+  };
+
+  const persisted = await persistCheckoutStart(
+    input,
+    ctx,
+    checkoutDocument,
+    resolved.cart,
+    checkoutId,
+    reserved.lines,
+    reserved.reservationIds,
+  );
+  if (!persisted.ok) return persisted;
+
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      id: checkoutId,
+      status: providerSession.status,
+      mode: providerSession.mode,
+      provider: providerSession.provider,
+      redirectUrl: providerSession.redirectUrl,
+      expiresAt: providerSession.expiresAt ?? checkoutDocument.expiresAt,
+      paymentPending: providerSession.status === "pending" ? true : undefined,
+    },
+    effects: providerSession.redirectUrl
+      ? [{ type: "redirect", url: providerSession.redirectUrl }]
+      : undefined,
+  };
+}
+
+async function resolveCheckoutStart(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  checkoutInput: StartCheckoutInput,
+): Promise<({ readonly ok: true } & CheckoutStartResolution) | MikaApiFailure> {
+  const defaultCurrency = input.defaults?.currency ?? createCurrencyCode("EUR");
+  const cartResult = await findCheckoutStartCart(input, ctx, checkoutInput.cartId, defaultCurrency);
+  if (!cartResult.ok) return cartResult;
+  if (cartResult.expired) return checkoutExpired();
+
+  const lines: CheckoutStartLineResolution[] = [];
+  const currency = cartResult.cart?.aggregate.currency ?? defaultCurrency;
+
+  for (const cartLine of cartResult.cart?.aggregate.items ?? []) {
+    const line = await resolveCheckoutStartLine(input, {
+      sellableId: cartLine.item.sellableId,
+      priceId: cartLine.item.priceId,
+      quantity: cartLine.quantity,
+      currency,
+      cartLineId: cartLine.id,
+      metadata: cartLine.metadata,
+    });
+    if (!line.ok) return line;
+    lines.push(line);
+  }
+
+  if (checkoutInput.sellableId) {
+    const line = await resolveCheckoutStartLine(input, {
+      sellableId: checkoutInput.sellableId,
+      priceId: checkoutInput.priceId,
+      quantity: checkoutInput.quantity ?? 1,
+      currency,
+    });
+    if (!line.ok) return line;
+    lines.push(line);
+  }
+
+  if (lines.length === 0) return checkoutEmpty();
+
+  const modes = [...new Set(lines.map((line) => line.line.item.mode))];
+  if (modes.length !== 1 || modes[0] === undefined) {
+    return validationFailed("cartId", "Checkout requires lines with one purchase mode.");
+  }
+
+  return {
+    ok: true,
+    cart: cartResult.cart,
+    currency,
+    mode: modes[0],
+    coupon: cartResult.cart?.aggregate.coupon,
+    lines,
+  };
+}
+
+async function findCheckoutStartCart(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  cartId: MikaId | undefined,
+  currency: CurrencyCode,
+): Promise<
+  | { readonly ok: true; readonly cart: CartDocument | null; readonly expired: boolean }
+  | MikaApiFailure
+> {
+  const cartResult = await findQuoteCart(input, ctx, cartId, currency);
+  if (!cartResult.cart) return { ok: true, cart: null, expired: false };
+  if (cartResult.cart.status !== "open") {
+    return invalidCart("cartId", cartResult.cart.id);
+  }
+
+  return { ok: true, cart: cartResult.cart, expired: cartResult.expired };
+}
+
+async function resolveCheckoutStartLine(
+  input: CreateMikaBackendApiInput,
+  lineInput: {
+    readonly sellableId: MikaId;
+    readonly priceId?: MikaId;
+    readonly quantity: number;
+    readonly currency: CurrencyCode;
+    readonly cartLineId?: MikaId;
+    readonly metadata?: JsonObject;
+  },
+): Promise<({ readonly ok: true } & CheckoutStartLineResolution) | MikaApiFailure> {
+  if (!Number.isInteger(lineInput.quantity) || lineInput.quantity < 1) {
+    return validationFailed("quantity", "Quantity must be a positive whole number.");
+  }
+
+  const catalog = await input.repositories.catalog.findItemBySellableId(lineInput.sellableId);
+  if (!catalog) {
+    return {
+      ok: false,
+      status: 404,
+      error: {
+        code: "SELLABLE_NOT_FOUND",
+        message: `Sellable '${lineInput.sellableId}' was not found.`,
+      },
+    };
+  }
+
+  const sellable = catalog.aggregate.sellables.find((item) => item.id === lineInput.sellableId);
+  if (!sellable?.active) {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "SELLABLE_INACTIVE",
+        message: `Sellable '${lineInput.sellableId}' is inactive.`,
+      },
+    };
+  }
+
+  const price = selectCartPrice(sellable, lineInput.priceId, lineInput.currency);
+  if (!price) {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "PRICE_INACTIVE",
+        message: `No active price is available for sellable '${sellable.id}'.`,
+      },
+    };
+  }
+  if (price.currency !== lineInput.currency) {
+    return validationFailed("priceId", `Price '${price.id}' uses currency '${price.currency}'.`);
+  }
+
+  const stock = await input.repositories.stock.findBySellableId(sellable.id);
+  const quantityError = validateQuantityLimit(sellable, stock, lineInput.quantity);
+  if (quantityError) return quantityError;
+
+  return {
+    ok: true,
+    line: {
+      id: input.createId("checkout_line"),
+      cartLineId: lineInput.cartLineId,
+      item: snapshotPrice({
+        content: catalog.aggregate.content,
+        sellable,
+        price,
+        fallbackTitle: catalog.aggregate.titleSnapshot ?? sellable.id,
+      }),
+      quantity: lineInput.quantity,
+      metadata: lineInput.metadata,
+    },
+    stock,
+  };
+}
+
+async function reserveCheckoutLines(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  checkoutId: MikaId,
+  checkout: CheckoutStartResolution,
+  expiresAt: ISODateTime,
+): Promise<
+  | {
+      readonly ok: true;
+      readonly lines: readonly CheckoutLine[];
+      readonly reservationIds: readonly MikaId[];
+    }
+  | MikaApiFailure
+> {
+  const stock = createMikaStockLifecycleService(input);
+  const lines: CheckoutLine[] = [];
+  const reservationIds: MikaId[] = [];
+
+  for (const resolution of checkout.lines) {
+    if (!resolution.stock) {
+      lines.push(resolution.line);
+      continue;
+    }
+
+    const reservation = await stock.reserve({
+      stockItemId: resolution.stock.id,
+      quantity: resolution.line.quantity,
+      expiresAt,
+      now: ctx.now,
+      cartId: checkout.cart?.id,
+      checkoutSessionId: checkoutId,
+      customerId: ctx.customerId,
+      sessionId: ctx.sessionId,
+      idempotencyKey: checkoutReservationIdempotencyKey(ctx, resolution),
+      metadata: { source: "checkout.start" },
+    });
+
+    if (reservation.status === "insufficient_stock") {
+      await releaseCheckoutReservations(input, reservationIds, ctx.now);
+      return outOfStock(resolution.line.item.sellableId);
+    }
+    if (reservation.status === "not_found") {
+      await releaseCheckoutReservations(input, reservationIds, ctx.now);
+      return outOfStock(resolution.line.item.sellableId);
+    }
+    if (reservation.status === "replayed") {
+      await releaseCheckoutReservations(input, reservationIds, ctx.now);
+      return checkoutIdempotencyInProgress();
+    }
+
+    reservationIds.push(reservation.event.id);
+    lines.push({ ...resolution.line, reservationId: reservation.event.id });
+  }
+
+  return { ok: true, lines, reservationIds };
+}
+
+async function persistCheckoutStart(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  checkoutDocument: CheckoutDocument,
+  cart: CartDocument | null,
+  checkoutId: MikaId,
+  lines: readonly CheckoutLine[],
+  reservationIds: readonly MikaId[],
+): Promise<{ readonly ok: true } | MikaApiFailure> {
+  let checkoutPersisted = false;
+
+  try {
+    await input.repositories.session.put(checkoutDocument);
+    checkoutPersisted = true;
+    if (cart) {
+      await input.repositories.session.put(
+        cartWithCheckoutReservations(cart, checkoutId, lines, ctx.now),
+      );
+    }
+  } catch {
+    await releaseCheckoutReservations(input, reservationIds, ctx.now);
+    if (checkoutPersisted) {
+      await markCheckoutPersistenceFailed(input, checkoutDocument, ctx.now);
+    }
+
+    return checkoutPersistenceFailed();
+  }
+
+  return { ok: true };
+}
+
+async function markCheckoutPersistenceFailed(
+  input: CreateMikaBackendApiInput,
+  checkoutDocument: CheckoutDocument,
+  now: ISODateTime,
+): Promise<void> {
+  try {
+    await input.repositories.session.put({
+      ...checkoutDocument,
+      status: "failed",
+      updatedAt: now,
+      aggregate: {
+        ...checkoutDocument.aggregate,
+        metadata: checkoutFailedMetadata(checkoutDocument.aggregate.metadata),
+      },
+    });
+  } catch {
+    // Best effort: if the local store is unavailable, stock release already compensated inventory.
+  }
+}
+
+async function releaseCheckoutReservations(
+  input: CreateMikaBackendApiInput,
+  reservationIds: readonly MikaId[],
+  now: ISODateTime,
+): Promise<void> {
+  const stock = createMikaStockLifecycleService(input);
+
+  for (const reservationEventId of reservationIds) {
+    await stock.release({ reservationEventId, now });
+  }
+}
+
+function checkoutMetadata(
+  customFields: JsonObject | undefined,
+  idempotencyKey: string | undefined,
+  providerSession: {
+    readonly status: CheckoutSessionDTO["status"];
+    readonly redirectUrl?: string;
+  },
+): JsonObject {
+  return {
+    ...customFields,
+    checkoutProviderStatus: providerSession.status,
+    ...(idempotencyKey ? { checkoutIdempotencyKey: idempotencyKey } : {}),
+    ...(providerSession.redirectUrl ? { checkoutRedirectUrl: providerSession.redirectUrl } : {}),
+  };
+}
+
+function checkoutDocumentResult(document: CheckoutDocument): MikaApiResult<CheckoutSessionDTO> {
+  if (document.status === "failed") {
+    return checkoutFailedReplay(document.id);
+  }
+
+  const redirectUrl = metadataString(document.aggregate.metadata, "checkoutRedirectUrl");
+  const status =
+    metadataString(document.aggregate.metadata, "checkoutProviderStatus") ??
+    checkoutSessionStatus(document.status);
+
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      id: document.id,
+      status: checkoutSessionStatus(status),
+      mode: document.aggregate.mode,
+      provider: document.provider,
+      redirectUrl,
+      expiresAt: document.expiresAt,
+      paymentPending: status === "pending" ? true : undefined,
+    },
+    effects: redirectUrl ? [{ type: "redirect", url: redirectUrl }] : undefined,
+  };
+}
+
+function checkoutFailedMetadata(metadata: JsonObject | undefined): JsonObject {
+  return {
+    ...Object.fromEntries(
+      Object.entries(metadata ?? {}).filter(
+        ([key]) => key !== "checkoutRedirectUrl" && key !== "checkoutProviderStatus",
+      ),
+    ),
+    checkoutPersistenceFailed: true,
+    checkoutProviderStatus: "failed",
+  };
+}
+
+function metadataString(metadata: JsonObject | undefined, key: string): string | undefined {
+  const value = metadata?.[key];
+
+  return typeof value === "string" ? value : undefined;
+}
+
+function checkoutReservationIdempotencyKey(
+  ctx: MikaRequestContext,
+  resolution: CheckoutStartLineResolution,
+): string | undefined {
+  if (!ctx.idempotencyKey || !resolution.stock) return undefined;
+
+  return [
+    "checkout",
+    ctx.idempotencyKey,
+    resolution.stock.id,
+    resolution.line.item.sellableId,
+    resolution.line.item.priceId ?? "",
+  ].join(":");
+}
+
+function cartWithCheckoutReservations(
+  cart: CartDocument,
+  checkoutId: MikaId,
+  lines: readonly CheckoutLine[],
+  updatedAt: ISODateTime,
+): CartDocument {
+  const reservationByCartLineId = new Map(
+    lines.flatMap((line) =>
+      line.cartLineId && line.reservationId ? [[line.cartLineId, line.reservationId] as const] : [],
+    ),
+  );
+
+  const updated = updateCartDocument(
+    cart,
+    cart.aggregate.items.map((item) => ({
+      ...item,
+      reservationId: reservationByCartLineId.get(item.id) ?? item.reservationId,
+    })),
+    updatedAt,
+  );
+
+  return {
+    ...updated,
+    status: "checkout_pending",
+    aggregate: {
+      ...updated.aggregate,
+      metadata: {
+        ...updated.aggregate.metadata,
+        checkoutSessionId: checkoutId,
+      },
+    },
+  };
+}
+
+function checkoutLineToProviderLine(
+  provider: ProviderName,
+  line: CheckoutLine,
+): MikaProviderLineItem {
+  const providerRef = line.item.providerRefs?.find((ref) => ref.provider === provider);
+
+  return {
+    sellableId: line.item.sellableId,
+    priceId: line.item.priceId,
+    contentRef: line.item.content,
+    sku: line.item.sku,
+    title: line.item.titleSnapshot,
+    variantKey: line.item.variantKey,
+    variantOptions: line.item.variantOptions,
+    providerProductId: providerRef?.productId,
+    providerPriceId: providerRef?.priceId,
+    quantity: line.quantity,
+    unitAmount: line.item.unitAmount,
+    currency: line.item.currency,
+    mode: line.item.mode,
+    fulfillmentKind: line.item.fulfillmentKind,
+    entitlementKey: line.item.entitlementKey,
+    metadata: line.metadata ?? line.item.metadata,
+  };
+}
+
+function checkoutSuccessUrl(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  checkoutInput: StartCheckoutInput,
+  checkoutId: MikaId,
+): string {
+  const url = new URL(
+    checkoutInput.successPath ?? input.config?.checkout?.successUrl ?? "/checkout/success",
+    ctx.url ?? "http://mika.local",
+  );
+  url.searchParams.set("checkoutId", checkoutId);
+
+  return url.toString();
+}
+
+function checkoutCancelUrl(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  checkoutInput: StartCheckoutInput,
+): string {
+  return new URL(
+    checkoutInput.cancelPath ?? input.config?.checkout?.cancelUrl ?? "/checkout/cancel",
+    ctx.url ?? "http://mika.local",
+  ).toString();
+}
+
+function checkoutExpiresAt(input: CreateMikaBackendApiInput, ctx: MikaRequestContext): ISODateTime {
+  const ttlMs = input.config?.checkout?.ttlMs ?? 15 * 60_000;
+
+  return createISODateTime(new Date(new Date(ctx.now).getTime() + ttlMs).toISOString());
+}
+
+function checkoutDocumentStatus(status: CheckoutSessionDTO["status"]): CheckoutStatus {
+  return status === "pending" ? "created" : status === "binding_mismatch" ? "failed" : status;
+}
+
+function checkoutSessionStatus(status: string): CheckoutSessionDTO["status"] {
+  return status === "created" ||
+    status === "redirected" ||
+    status === "pending" ||
+    status === "completed" ||
+    status === "cancelled" ||
+    status === "expired" ||
+    status === "failed" ||
+    status === "binding_mismatch"
+    ? status
+    : "failed";
 }
 
 async function createCheckoutPreview(
@@ -1758,6 +2367,94 @@ function adminStockAdjustmentResult(
 
 function currentBackendISODateTime(input: MikaBackendDependencies): ISODateTime {
   return input.isoNow?.() ?? createISODateTime(input.now().toISOString());
+}
+
+function checkoutEmpty(): MikaApiFailure {
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "CHECKOUT_EMPTY",
+      message: "Checkout requires at least one cart line.",
+    },
+  };
+}
+
+function checkoutExpired(): MikaApiFailure {
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "CHECKOUT_EXPIRED",
+      message: "Checkout cannot start from an expired cart.",
+    },
+  };
+}
+
+function checkoutIdempotencyInProgress(): MikaApiFailure {
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "CONFLICT",
+      message: "Checkout idempotency replay is already in progress.",
+    },
+  };
+}
+
+function checkoutPersistenceFailed(): MikaApiFailure {
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "CONFLICT",
+      message: "Checkout could not be persisted after provider handoff.",
+    },
+  };
+}
+
+function checkoutFailedReplay(checkoutId: MikaId): MikaApiFailure {
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "CONFLICT",
+      message: `Checkout '${checkoutId}' failed and cannot be replayed.`,
+    },
+  };
+}
+
+function outOfStock(sellableId: MikaId): MikaApiFailure {
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "OUT_OF_STOCK",
+      message: `Sellable '${sellableId}' does not have enough stock.`,
+    },
+  };
+}
+
+function providerUnsupported(provider: ProviderName): MikaApiFailure {
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "PROVIDER_UNSUPPORTED",
+      message: `Provider '${provider}' does not support hosted checkout.`,
+    },
+  };
+}
+
+function providerFailed(message: string): MikaApiFailure {
+  return {
+    ok: false,
+    status: 502,
+    error: {
+      code: "PROVIDER_FAILED",
+      message,
+    },
+  };
 }
 
 function validationFailed(field: string, message: string): MikaApiFailure {

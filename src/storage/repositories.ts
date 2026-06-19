@@ -317,6 +317,16 @@ export class SessionRepository {
     });
   }
 
+  async findCheckoutByIdempotencyKey(idempotencyKey: string): Promise<CheckoutDocument | null> {
+    const result = await listByType(this.collection, "checkout");
+
+    return (
+      result.items.find(
+        (item) => item.data.aggregate.metadata?.["checkoutIdempotencyKey"] === idempotencyKey,
+      )?.data ?? null
+    );
+  }
+
   async put(document: SessionDocument): Promise<void> {
     await putByDocumentId(this.collection, document);
   }

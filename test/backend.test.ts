@@ -27,7 +27,7 @@ import type {
 import { createMikaProviderRegistry } from "../src/provider";
 import type { PriceDefinition, SellableDefinition } from "../src/types/aggregates";
 import type { CatalogItemDocument, MikaStorageDocuments } from "../src/types/documents";
-import type { StockItemRecord } from "../src/types/operational";
+import type { StockEventRecord, StockItemRecord } from "../src/types/operational";
 import {
   AccountRepository,
   CatalogRepository,
@@ -1662,7 +1662,10 @@ describe("backend API composition", () => {
       createCatalogItemDocument({ contentRef, sellables: [sellable] }),
     );
     const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
-    const ctx = createTestRequestContext({ customerId: false, userId: false });
+    const ctx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+    });
 
     await expect(
       api.cart.add(ctx, {
@@ -1701,7 +1704,10 @@ describe("backend API composition", () => {
 
   it("returns stable errors for missing cart lines on update and remove", async () => {
     const api = createMikaBackendApi(createIncrementingBackendDependencies());
-    const ctx = createTestRequestContext({ customerId: false, userId: false });
+    const ctx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+    });
 
     await expect(
       api.cart.update(ctx, { lineId: createTestMikaId("line", 404), quantity: 2 }),
@@ -1779,7 +1785,10 @@ describe("backend API composition", () => {
       createCatalogItemDocument({ contentRef, sellables: [sellable] }),
     );
     const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
-    const ctx = createTestRequestContext({ customerId: false, userId: false });
+    const ctx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+    });
 
     await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
 
@@ -2333,6 +2342,442 @@ describe("backend API composition", () => {
     await expect(
       repositories.session.findById(staleAvailabilityProofPreview.data.id!),
     ).resolves.toBeNull();
+  });
+
+  it("rejects checkout start for empty carts before provider handoff", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    await expect(api.checkout.start(ctx, {})).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: {
+        code: "CHECKOUT_EMPTY",
+      },
+    });
+    expect(Object.values(fake.getCalls()).flat()).toEqual([]);
+    await expect(
+      repositories.session.findOpenCartBySession("session_1", TEST_CURRENCY),
+    ).resolves.toBeNull();
+  });
+
+  it("rejects checkout start when current stock cannot satisfy the cart", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const stockBySellableId = new Map<string, StockItemRecord>([
+      [
+        sellable.id,
+        createStockRecord({ sellableId: sellable.id, quantityOnHand: 1, quantityReserved: 0 }),
+      ],
+    ]);
+    const repositories = createTestBackendRepositories({ stockBySellableId });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+    await repositories.stock.putItem(
+      createStockRecord({ sellableId: sellable.id, quantityOnHand: 1, quantityReserved: 1 }),
+    );
+
+    await expect(api.checkout.start(ctx, { cartId: added.data.id })).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: {
+        code: "OUT_OF_STOCK",
+      },
+    });
+    expect(fake.getCalls().createCheckoutSession).toEqual([]);
+    await expect(
+      repositories.session.findById(createTestMikaId("checkout", 1)),
+    ).resolves.toBeNull();
+  });
+
+  it("rejects checkout start for providers without hosted checkout support", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const stock = createStockRecord({
+      sellableId: sellable.id,
+      quantityOnHand: 5,
+      quantityReserved: 0,
+    });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([[sellable.id, stock]]),
+    });
+    const fake = createFakeMikaProvider({ capabilities: ["payments"] });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+
+    await expect(api.checkout.start(ctx, { cartId: added.data.id })).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: {
+        code: "PROVIDER_UNSUPPORTED",
+      },
+    });
+    expect(fake.getCalls().createCheckoutSession).toEqual([]);
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 0,
+    });
+  });
+
+  it("releases reserved stock when checkout provider creation fails", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider({
+      overrides: {
+        createCheckoutSession: async () => {
+          throw new Error("provider offline");
+        },
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+
+    await expect(api.checkout.start(ctx, { cartId: added.data.id })).resolves.toMatchObject({
+      ok: false,
+      status: 502,
+      error: {
+        code: "PROVIDER_FAILED",
+      },
+    });
+    expect(fake.getCalls().createCheckoutSession).toHaveLength(1);
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 0,
+    });
+    await expect(
+      repositories.session.findById(createTestMikaId("checkout", 1)),
+    ).resolves.toBeNull();
+    await expect(repositories.session.findById(added.data.id)).resolves.toMatchObject({
+      type: "cart",
+      status: "open",
+    });
+  });
+
+  it("starts hosted checkout, persists binding, and returns the redirect URL", async () => {
+    const contentRef = createTestContentRef();
+    const stripe = createProviderName("stripe");
+    const sellable = createSellableDefinition({
+      prices: [
+        createPriceDefinition({
+          providerRefs: [{ provider: stripe, productId: "prod_test", priceId: "price_test" }],
+        }),
+      ],
+    });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider({ id: stripe });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+
+    const checkout = await api.checkout.start(ctx, {
+      cartId: added.data.id,
+      provider: stripe,
+      customer: { email: "shopper@example.test" },
+    });
+
+    expect(checkout).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "checkout_1",
+        status: "created",
+        mode: "payment",
+        provider: "stripe",
+        redirectUrl: "https://checkout.example.test/session/checkout_fake",
+        expiresAt: "2026-01-01T01:00:00.000Z",
+      },
+      effects: [{ type: "redirect", url: "https://checkout.example.test/session/checkout_fake" }],
+    });
+    const providerCalls = fake.getCalls().createCheckoutSession;
+    expect(providerCalls).toHaveLength(1);
+    expect(providerCalls[0]).toMatchObject({
+      idempotencyKey: "idem_1",
+      mode: "payment",
+      provider: "stripe",
+      customer: { email: "shopper@example.test" },
+      successUrl: "https://shop.example.test/success?checkoutId=checkout_1",
+      cancelUrl: "https://shop.example.test/cancel",
+      lines: [
+        {
+          sellableId: sellable.id,
+          priceId: "price_1",
+          providerProductId: "prod_test",
+          providerPriceId: "price_test",
+          quantity: 2,
+          unitAmount: 1200,
+          currency: TEST_CURRENCY,
+        },
+      ],
+    });
+    await expect(
+      repositories.session.findById(createTestMikaId("checkout", 1)),
+    ).resolves.toMatchObject({
+      type: "checkout",
+      cartId: added.data.id,
+      provider: "stripe",
+      providerCheckoutId: "provider_checkout_fake",
+      status: "created",
+      aggregate: {
+        binding: {
+          provider: "stripe",
+          providerCheckoutId: "provider_checkout_fake",
+          providerCustomerId: undefined,
+        },
+        lines: [{ cartLineId: added.data.items[0]!.id, reservationId: "stock_event_1" }],
+      },
+    });
+    await expect(repositories.session.findById(added.data.id)).resolves.toMatchObject({
+      type: "cart",
+      status: "checkout_pending",
+      aggregate: {
+        items: [{ reservationId: "stock_event_1" }],
+        metadata: { checkoutSessionId: "checkout_1" },
+      },
+    });
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 2,
+    });
+  });
+
+  it("replays duplicate checkout starts locally without another provider handoff", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    let providerShouldFail = false;
+    const fake = createFakeMikaProvider({
+      overrides: {
+        createCheckoutSession: async () => {
+          if (providerShouldFail) {
+            throw new Error("duplicate provider call should not happen");
+          }
+
+          return {
+            id: createMikaId("checkout_fake"),
+            status: "created",
+            mode: "payment",
+            provider: TEST_PROVIDER,
+            redirectUrl: "https://checkout.example.test/session/checkout_fake",
+            expiresAt: createTestClock().isoAt(60 * 60_000),
+            providerCheckoutId: "provider_checkout_fake",
+          };
+        },
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      idempotencyKey: "checkout_replay_1",
+    });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+
+    const first = await api.checkout.start(ctx, { cartId: added.data.id });
+    providerShouldFail = true;
+    const replay = await api.checkout.start(ctx, { cartId: added.data.id });
+
+    expect(first).toMatchObject({
+      ok: true,
+      data: {
+        id: "checkout_1",
+        redirectUrl: "https://checkout.example.test/session/checkout_fake",
+      },
+    });
+    expect(replay).toMatchObject({
+      ok: true,
+      data: {
+        id: "checkout_1",
+        redirectUrl: "https://checkout.example.test/session/checkout_fake",
+      },
+    });
+    expect(fake.getCalls().createCheckoutSession).toHaveLength(1);
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 2,
+    });
+    await expect(repositories.session.findById(added.data.id)).resolves.toMatchObject({
+      type: "cart",
+      status: "checkout_pending",
+    });
+  });
+
+  it("compensates stock when local checkout persistence fails after provider success", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const originalSessionPut = repositories.session.put.bind(repositories.session);
+    (
+      repositories.session as {
+        put: typeof repositories.session.put;
+      }
+    ).put = async (document) => {
+      if (document.type === "cart" && document.status === "checkout_pending") {
+        throw new Error("cart persistence unavailable");
+      }
+
+      return originalSessionPut(document);
+    };
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      idempotencyKey: "checkout_persistence_failure_1",
+    });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+
+    await expect(api.checkout.start(ctx, { cartId: added.data.id })).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: {
+        code: "CONFLICT",
+      },
+    });
+    expect(fake.getCalls().createCheckoutSession).toHaveLength(1);
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 0,
+    });
+    const failedCheckout = await repositories.session.findById(createTestMikaId("checkout", 1));
+    expect(failedCheckout).toMatchObject({
+      type: "checkout",
+      status: "failed",
+      aggregate: {
+        metadata: {
+          checkoutPersistenceFailed: true,
+          checkoutProviderStatus: "failed",
+        },
+      },
+    });
+    if (!failedCheckout || failedCheckout.type !== "checkout") {
+      throw new Error("Expected failed checkout document to be persisted.");
+    }
+    expect(failedCheckout.aggregate.metadata?.["checkoutRedirectUrl"]).toBeUndefined();
+    await expect(repositories.session.findById(added.data.id)).resolves.toMatchObject({
+      type: "cart",
+      status: "open",
+    });
+
+    const replay = await api.checkout.start(ctx, { cartId: added.data.id });
+    expect(replay).toMatchObject({
+      ok: false,
+      status: 409,
+      error: {
+        code: "CONFLICT",
+      },
+    });
+    expect("effects" in replay).toBe(false);
+    expect(fake.getCalls().createCheckoutSession).toHaveLength(1);
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 0,
+    });
   });
 
   it("returns stable errors for invalid target cart and merge currency mismatches", async () => {
@@ -3043,32 +3488,125 @@ function createTestBackendRepositories(
 function createTestStockRepository(
   stockBySellableId: ReadonlyMap<string, StockItemRecord> = new Map(),
 ): MikaBackendRepositories["stock"] {
+  const stockItems =
+    stockBySellableId instanceof Map ? stockBySellableId : new Map(stockBySellableId);
+  const eventsById = new Map<string, StockEventRecord>();
+  const eventsByIdempotencyKey = new Map<string, StockEventRecord>();
+
   return {
     async findItemById(stockItemId) {
-      return (
-        Array.from(stockBySellableId.values()).find((stock) => stock.id === stockItemId) ?? null
-      );
+      return Array.from(stockItems.values()).find((stock) => stock.id === stockItemId) ?? null;
     },
     async findBySellableId(sellableId) {
-      return stockBySellableId.get(sellableId) ?? null;
+      return stockItems.get(sellableId) ?? null;
     },
-    async findEventByIdempotencyKey() {
-      return null;
+    async findEventByIdempotencyKey(idempotencyKey) {
+      return eventsByIdempotencyKey.get(idempotencyKey) ?? null;
     },
-    async findEventById() {
-      return null;
+    async findEventById(stockEventId) {
+      return eventsById.get(stockEventId) ?? null;
     },
-    async putItem() {
-      // No-op test double.
+    async putItem(stock) {
+      stockItems.set(stock.sellableId, stock);
     },
-    async insertEvent() {
-      // No-op test double.
+    async insertEvent(event) {
+      eventsById.set(event.id, event);
+      if (event.idempotencyKey) {
+        eventsByIdempotencyKey.set(event.idempotencyKey, event);
+      }
     },
-    async reserve() {
-      throw new Error("The test stock repository does not implement reserve().");
+    async reserve(reservation) {
+      const replayed = reservation.idempotencyKey
+        ? eventsByIdempotencyKey.get(reservation.idempotencyKey)
+        : undefined;
+      if (replayed) {
+        return {
+          status: "replayed",
+          event: replayed,
+          stock:
+            Array.from(stockItems.values()).find((stock) => stock.id === replayed.stockItemId) ??
+            null,
+        };
+      }
+
+      const current =
+        Array.from(stockItems.values()).find((stock) => stock.id === reservation.stockItemId) ??
+        null;
+      if (!current) return { status: "not_found" };
+
+      const availableQuantity = current.quantityOnHand - current.quantityReserved;
+      const canReserve =
+        current.availableOverride !== false &&
+        (current.availableOverride === true ||
+          current.policy !== "finite" ||
+          current.allowBackorder ||
+          reservation.quantity <= availableQuantity);
+      if (!canReserve) {
+        return { status: "insufficient_stock", stock: current };
+      }
+
+      const stock: StockItemRecord = {
+        ...current,
+        quantityReserved: current.quantityReserved + reservation.quantity,
+        updatedAt: reservation.now,
+      };
+      const event: StockEventRecord = {
+        id: reservation.reservationEventId,
+        stockItemId: reservation.stockItemId,
+        kind: "reservation",
+        status: "active",
+        cartId: reservation.cartId,
+        checkoutSessionId: reservation.checkoutSessionId,
+        customerId: reservation.customerId,
+        sessionId: reservation.sessionId,
+        idempotencyKey: reservation.idempotencyKey,
+        quantityDelta: reservation.quantity,
+        expiresAt: reservation.expiresAt,
+        createdAt: reservation.now,
+        updatedAt: reservation.now,
+        metadata: reservation.metadata,
+      };
+      stockItems.set(stock.sellableId, stock);
+      eventsById.set(event.id, event);
+      if (event.idempotencyKey) {
+        eventsByIdempotencyKey.set(event.idempotencyKey, event);
+      }
+
+      return { status: "reserved", event, stock };
     },
-    async release() {
-      throw new Error("The test stock repository does not implement release().");
+    async release(release) {
+      const event = eventsById.get(release.reservationEventId);
+      if (!event) return { status: "not_found" };
+
+      const current =
+        Array.from(stockItems.values()).find((stock) => stock.id === event.stockItemId) ?? null;
+      if (event.status !== "active") {
+        return { status: "not_active", event, stock: current };
+      }
+
+      const releasedEvent: StockEventRecord = {
+        ...event,
+        status: "released",
+        updatedAt: release.now,
+      };
+      const stock = current
+        ? {
+            ...current,
+            quantityReserved: Math.max(0, current.quantityReserved - event.quantityDelta),
+            updatedAt: release.now,
+          }
+        : null;
+      eventsById.set(releasedEvent.id, releasedEvent);
+      if (releasedEvent.idempotencyKey) {
+        eventsByIdempotencyKey.set(releasedEvent.idempotencyKey, releasedEvent);
+      }
+      if (stock) {
+        stockItems.set(stock.sellableId, stock);
+      }
+
+      return stock
+        ? { status: "released", event: releasedEvent, stock }
+        : { status: "not_active", event: releasedEvent, stock };
     },
     async consume() {
       throw new Error("The test stock repository does not implement consume().");
