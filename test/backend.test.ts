@@ -17,7 +17,9 @@ import type {
   MikaProviderWebhookVerificationInput,
 } from "../src/provider";
 import { createMikaProviderRegistry } from "../src/provider";
-import type { MikaStorageDocuments } from "../src/types/documents";
+import type { PriceDefinition, SellableDefinition } from "../src/types/aggregates";
+import type { CatalogItemDocument, MikaStorageDocuments } from "../src/types/documents";
+import type { StockItemRecord } from "../src/types/operational";
 import {
   AccountRepository,
   CatalogRepository,
@@ -25,7 +27,6 @@ import {
   LedgerRepository,
   OpsRepository,
   SessionRepository,
-  StockRepository,
   type MikaDbExecutor,
 } from "../src/storage/repositories";
 import { createCurrencyCode, createMikaId, createProviderName } from "../src/types/primitives";
@@ -382,6 +383,95 @@ describe("backend API composition", () => {
       data: [sellable],
     });
   });
+
+  it("returns active catalog sellables with stock availability", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition({ maxPerOrder: 3 });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([[sellable.id, createStockRecord({ sellableId: sellable.id })]]),
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createTestBackendDependencies({ repositories }));
+
+    await expect(api.catalog.sellables({ contentRef })).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: [
+        {
+          id: sellable.id,
+          contentRef,
+          title: "Test sellable",
+          active: true,
+          prices: [{ id: "price_1", active: true }],
+          availability: {
+            sellableId: sellable.id,
+            status: "low_stock",
+            availableQuantity: 2,
+            maxPerOrder: 3,
+          },
+        },
+      ],
+    });
+  });
+
+  it("returns an empty catalog sellables list for missing content", async () => {
+    const api = createMikaBackendApi(createTestBackendDependencies());
+
+    await expect(api.catalog.sellables({ contentRef: createTestContentRef() })).resolves.toEqual({
+      ok: true,
+      status: 200,
+      data: [],
+    });
+  });
+
+  it("filters inactive catalog sellables", async () => {
+    const contentRef = createTestContentRef();
+    const activeSellable = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
+    const inactiveSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 2),
+      active: false,
+    });
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({
+        contentRef,
+        sellables: [inactiveSellable, activeSellable],
+      }),
+    );
+    const api = createMikaBackendApi(createTestBackendDependencies({ repositories }));
+
+    await expect(api.catalog.sellables({ contentRef })).resolves.toMatchObject({
+      ok: true,
+      data: [{ id: activeSellable.id }],
+    });
+  });
+
+  it("filters inactive catalog sellable prices", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition({
+      prices: [
+        createPriceDefinition({ id: createTestMikaId("price", 1), active: false }),
+        createPriceDefinition({ id: createTestMikaId("price", 2), active: true }),
+      ],
+    });
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createTestBackendDependencies({ repositories }));
+    const result = await api.catalog.sellables({ contentRef });
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: [{ prices: [{ id: "price_2", active: true }] }],
+    });
+    if (!result.ok) {
+      throw new Error("Expected catalog sellables to succeed.");
+    }
+    expect(result.data[0]?.prices).toHaveLength(1);
+  });
 });
 
 describe("backend fixture helpers", () => {
@@ -539,7 +629,11 @@ function createTestBackendDependencies(
   };
 }
 
-function createTestBackendRepositories(): MikaBackendRepositories {
+function createTestBackendRepositories(
+  options: {
+    readonly stockBySellableId?: ReadonlyMap<string, StockItemRecord>;
+  } = {},
+): MikaBackendRepositories {
   const db = createUnusedDbExecutor();
 
   return {
@@ -548,9 +642,25 @@ function createTestBackendRepositories(): MikaBackendRepositories {
     account: new AccountRepository(createStorageCollection("account")),
     ledger: new LedgerRepository(createStorageCollection("ledger")),
     ops: new OpsRepository(createStorageCollection("ops")),
-    stock: new StockRepository(db),
+    stock: createTestStockRepository(options.stockBySellableId),
     ephemeral: new EphemeralRepository(db),
   } satisfies MikaBackendRepositories;
+}
+
+function createTestStockRepository(
+  stockBySellableId: ReadonlyMap<string, StockItemRecord> = new Map(),
+): MikaBackendRepositories["stock"] {
+  return {
+    async findBySellableId(sellableId) {
+      return stockBySellableId.get(sellableId) ?? null;
+    },
+    async putItem() {
+      // No-op test double.
+    },
+    async insertEvent() {
+      // No-op test double.
+    },
+  };
 }
 
 function createStorageCollection<TName extends keyof MikaStorageDocuments>(
@@ -561,6 +671,72 @@ function createStorageCollection<TName extends keyof MikaStorageDocuments>(
 
 function createUnusedDbExecutor(): MikaDbExecutor {
   return {} as MikaDbExecutor;
+}
+
+function createCatalogItemDocument(input: {
+  readonly contentRef: ReturnType<typeof createTestContentRef>;
+  readonly sellables: readonly SellableDefinition[];
+}): CatalogItemDocument {
+  return {
+    id: createTestMikaId("catalog", 1),
+    type: "catalogItem",
+    schemaVersion: 1,
+    contentCollection: input.contentRef.collection,
+    contentId: input.contentRef.id,
+    active: true,
+    titleSnapshot: "Test product",
+    aggregate: {
+      schemaVersion: 1,
+      content: input.contentRef,
+      titleSnapshot: "Test product",
+      sellables: input.sellables,
+    },
+    createdAt: TEST_NOW,
+    updatedAt: TEST_NOW,
+  };
+}
+
+function createSellableDefinition(overrides: Partial<SellableDefinition> = {}): SellableDefinition {
+  return {
+    id: createTestMikaId("sellable", 1),
+    sku: "TEST-SKU-1",
+    titleSnapshot: "Test sellable",
+    variantOptions: [],
+    active: true,
+    sortOrder: 1,
+    prices: [createPriceDefinition()],
+    ...overrides,
+  };
+}
+
+function createPriceDefinition(overrides: Partial<PriceDefinition> = {}): PriceDefinition {
+  return {
+    id: createTestMikaId("price", 1),
+    providerRefs: [],
+    amount: 1200,
+    currency: TEST_CURRENCY,
+    mode: "payment",
+    fulfillmentKind: "none",
+    active: true,
+    ...overrides,
+  };
+}
+
+function createStockRecord(overrides: Partial<StockItemRecord> = {}): StockItemRecord {
+  const sellableId = overrides.sellableId ?? createTestMikaId("sellable", 1);
+
+  return {
+    id: createTestMikaId("stock", 1),
+    sellableId,
+    policy: "finite",
+    quantityOnHand: 5,
+    quantityReserved: 3,
+    lowStockThreshold: 2,
+    allowBackorder: false,
+    createdAt: TEST_NOW,
+    updatedAt: TEST_NOW,
+    ...overrides,
+  };
 }
 
 function createCheckoutInput(

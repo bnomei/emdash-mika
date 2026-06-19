@@ -1,5 +1,6 @@
 import type { MikaProviderRegistry } from "../provider";
 import type { MikaRepositories } from "../storage/repositories";
+import { catalogSellablesToDTO } from "../model/builders";
 import type {
   CurrencyCode,
   ISODateTime,
@@ -67,5 +68,40 @@ export interface CreateMikaBackendApiInput extends MikaBackendDependencies {
 }
 
 export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi {
-  return createMikaApi(input.overrides);
+  return createMikaApi({
+    ...input.overrides,
+    catalog: {
+      sellables: async ({ contentRef }) => {
+        const catalogItem = await input.repositories.catalog.findItemByContent(contentRef);
+        if (!catalogItem) {
+          return { ok: true, status: 200, data: [] };
+        }
+
+        const activeSellables = catalogItem.aggregate.sellables.filter(
+          (sellable) => sellable.active,
+        );
+        const stockRecords = await Promise.all(
+          activeSellables.map(async (sellable) => ({
+            sellableId: sellable.id,
+            stock: await input.repositories.stock.findBySellableId(sellable.id),
+          })),
+        );
+        const stockBySellableId = new Map(
+          stockRecords.flatMap((record) =>
+            record.stock ? [[record.sellableId, record.stock] as const] : [],
+          ),
+        );
+
+        return {
+          ok: true,
+          status: 200,
+          data: catalogSellablesToDTO({
+            catalog: catalogItem.aggregate,
+            stockBySellableId,
+          }),
+        };
+      },
+      ...input.overrides?.catalog,
+    },
+  });
 }

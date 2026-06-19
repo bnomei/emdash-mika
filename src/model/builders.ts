@@ -56,7 +56,9 @@ export interface CatalogSellableDTOInput {
 export function catalogSellablesToDTO(input: CatalogSellableDTOInput): readonly SellableDTO[] {
   return input.catalog.sellables
     .filter((sellable) => input.includeInactive || sellable.active)
-    .map((sellable) => sellableToDTO(input.catalog, sellable, input.stockBySellableId));
+    .map((sellable) =>
+      sellableToDTO(input.catalog, sellable, input.stockBySellableId, input.includeInactive),
+    );
 }
 
 export function createCartAggregate(input: {
@@ -214,6 +216,7 @@ function sellableToDTO(
   catalog: CatalogCommerceAggregate,
   sellable: SellableDefinition,
   stockBySellableId?: ReadonlyMap<MikaId, StockItemRecord>,
+  includeInactive = false,
 ): SellableDTO {
   const fallbackTitle = catalog.titleSnapshot ?? sellable.id;
 
@@ -227,7 +230,9 @@ function sellableToDTO(
     variantOptions: sellable.variantOptions,
     variantGroups: sellable.variantGroups,
     imageRef: sellable.imageRef,
-    prices: sellable.prices.map((price) => priceToDTO(sellable.id, price)),
+    prices: sellable.prices
+      .filter((price) => includeInactive || price.active)
+      .map((price) => priceToDTO(sellable.id, price)),
     availability: stockAvailabilityToDTO(sellable, stockBySellableId?.get(sellable.id)),
   };
 }
