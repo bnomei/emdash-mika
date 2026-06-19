@@ -7,16 +7,19 @@ import {
   cartWithoutCoupon,
   catalogSellablesToDTO,
   createCartAggregate,
+  createWishlistAggregate,
   snapshotPrice,
   stockAvailabilityToDTO,
+  wishlistToDTO,
 } from "../model/builders";
 import type {
   CartLine,
   CouponSnapshot,
   PriceDefinition,
   SellableDefinition,
+  WishlistItem,
 } from "../types/aggregates";
-import type { CartDocument, SessionDocument } from "../types/documents";
+import type { CartDocument, SessionDocument, WishlistDocument } from "../types/documents";
 import { createCurrencyCode, createISODateTime, createMikaId } from "../types/primitives";
 import type {
   CurrencyCode,
@@ -28,7 +31,13 @@ import type {
 import type { StockItemRecord } from "../types/operational";
 import type { MikaRequestContext } from "./context";
 import { createMikaApi, type MikaApi, type MikaApiOverrides } from "./server";
-import type { AddCartItemInput, CartDTO, MikaApiResult } from "./types";
+import type {
+  AddCartItemInput,
+  CartDTO,
+  MikaApiResult,
+  WishlistDTO,
+  WishlistItemInput,
+} from "./types";
 
 type MikaApiFailure = Extract<MikaApiResult<never>, { readonly ok: false }>;
 
@@ -353,7 +362,112 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
       },
       ...input.overrides?.cart,
     },
+    wishlist: {
+      get: async (ctx) => {
+        const wishlist = await findOrCreateActiveWishlist(input, ctx);
+
+        return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, wishlist) };
+      },
+      add: async (ctx, itemInput) => {
+        const resolved = await resolveWishlistItem(input, itemInput);
+        if (!resolved.ok) return resolved;
+
+        const wishlist = await findOrCreateActiveWishlist(input, ctx);
+        const existingItem = wishlist.aggregate.items.find((item) =>
+          isEquivalentWishlistItem(item, resolved.item),
+        );
+        const items = existingItem
+          ? wishlist.aggregate.items
+          : [...wishlist.aggregate.items, resolved.item];
+        const updated = updateWishlistDocument(wishlist, items, ctx.now);
+
+        await input.repositories.session.put(updated);
+
+        return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, updated) };
+      },
+      remove: async (ctx, itemInput) => {
+        const wishlist = await findOrCreateActiveWishlist(input, ctx);
+        if (!wishlist.aggregate.items.some((item) => item.id === itemInput.itemId)) {
+          return wishlistItemNotFound(itemInput.itemId);
+        }
+
+        const updated = updateWishlistDocument(
+          wishlist,
+          wishlist.aggregate.items.filter((item) => item.id !== itemInput.itemId),
+          ctx.now,
+        );
+
+        await input.repositories.session.put(updated);
+
+        return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, updated) };
+      },
+      ...input.overrides?.wishlist,
+    },
   });
+}
+
+async function findOrCreateActiveWishlist(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+): Promise<WishlistDocument> {
+  const existing = await findActiveWishlist(input, ctx);
+  if (existing) return existing;
+
+  const wishlist = createWishlistDocument(input, ctx);
+  await input.repositories.session.put(wishlist);
+
+  return wishlist;
+}
+
+async function findActiveWishlist(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+): Promise<WishlistDocument | null> {
+  if (ctx.customerId) {
+    return input.repositories.session.findWishlistByCustomer(ctx.customerId);
+  }
+
+  return ctx.sessionId ? input.repositories.session.findWishlistBySession(ctx.sessionId) : null;
+}
+
+function createWishlistDocument(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+): WishlistDocument {
+  const now = ctx.now;
+
+  return {
+    id: input.createId("wishlist"),
+    type: "wishlist",
+    schemaVersion: 1,
+    sessionId: ctx.sessionId,
+    customerId: ctx.customerId,
+    userId: ctx.userId,
+    status: "active",
+    expiresAt: input.config?.wishlist?.ttlMs
+      ? createISODateTime(
+          new Date(new Date(now).getTime() + input.config.wishlist.ttlMs).toISOString(),
+        )
+      : undefined,
+    aggregate: createWishlistAggregate(),
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function updateWishlistDocument(
+  wishlist: WishlistDocument,
+  items: readonly WishlistItem[],
+  updatedAt: ISODateTime,
+): WishlistDocument {
+  return {
+    ...wishlist,
+    updatedAt,
+    aggregate: createWishlistAggregate({
+      items,
+      metadata: wishlist.aggregate.metadata,
+    }),
+  };
 }
 
 async function findOrCreateOpenCart(
@@ -580,6 +694,49 @@ async function cartDocumentToDTO(
   });
 }
 
+async function wishlistDocumentToDTO(
+  input: CreateMikaBackendApiInput,
+  wishlist: WishlistDocument,
+): Promise<WishlistDTO> {
+  const stockRecords = await Promise.all(
+    wishlist.aggregate.items.map(async (item) => ({
+      sellableId: item.item.sellableId,
+      stock: await input.repositories.stock.findBySellableId(item.item.sellableId),
+    })),
+  );
+  const availabilityBySellableId = new Map(
+    stockRecords
+      .flatMap((record) =>
+        record.stock
+          ? [
+              [
+                record.sellableId,
+                stockAvailabilityToDTO(
+                  {
+                    id: record.sellableId,
+                    active: true,
+                    sortOrder: 0,
+                    variantOptions: [],
+                    prices: [],
+                  },
+                  record.stock,
+                ),
+              ] as const,
+            ]
+          : [],
+      )
+      .filter((entry): entry is readonly [MikaId, NonNullable<(typeof entry)[1]>] =>
+        Boolean(entry[1]),
+      ),
+  );
+
+  return wishlistToDTO({
+    id: wishlist.id,
+    wishlist: wishlist.aggregate,
+    availabilityBySellableId,
+  });
+}
+
 async function resolveCartLine(
   input: CreateMikaBackendApiInput,
   itemInput: AddCartItemInput,
@@ -680,6 +837,71 @@ async function resolveCartLine(
   };
 }
 
+async function resolveWishlistItem(
+  input: CreateMikaBackendApiInput,
+  itemInput: WishlistItemInput,
+): Promise<
+  | {
+      readonly ok: true;
+      readonly item: WishlistItem;
+    }
+  | MikaApiFailure
+> {
+  const currency = input.defaults?.currency ?? createCurrencyCode("EUR");
+  const catalog = await input.repositories.catalog.findItemBySellableId(itemInput.sellableId);
+  if (!catalog) {
+    return {
+      ok: false,
+      status: 404,
+      error: {
+        code: "SELLABLE_NOT_FOUND",
+        message: `Sellable '${itemInput.sellableId}' was not found.`,
+      },
+    };
+  }
+
+  const sellable = catalog.aggregate.sellables.find((item) => item.id === itemInput.sellableId);
+  if (!sellable?.active) {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "SELLABLE_INACTIVE",
+        message: `Sellable '${itemInput.sellableId}' is inactive.`,
+      },
+    };
+  }
+
+  const price = selectCartPrice(sellable, itemInput.priceId, currency);
+  if (!price) {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "PRICE_INACTIVE",
+        message: `No active price is available for sellable '${sellable.id}'.`,
+      },
+    };
+  }
+  if (price.currency !== currency) {
+    return validationFailed("priceId", `Price '${price.id}' uses currency '${price.currency}'.`);
+  }
+
+  return {
+    ok: true,
+    item: {
+      id: input.createId("wishlist_item"),
+      item: snapshotPrice({
+        content: catalog.aggregate.content,
+        sellable,
+        price,
+        fallbackTitle: catalog.aggregate.titleSnapshot ?? sellable.id,
+      }),
+      addedAt: input.isoNow?.() ?? createISODateTime(input.now().toISOString()),
+    },
+  };
+}
+
 function selectCartPrice(
   sellable: SellableDefinition,
   priceId: MikaId | undefined,
@@ -740,6 +962,14 @@ function isEquivalentCartLine(left: CartLine, right: CartLine): boolean {
   );
 }
 
+function isEquivalentWishlistItem(left: WishlistItem, right: WishlistItem): boolean {
+  return (
+    left.item.sellableId === right.item.sellableId &&
+    left.item.priceId === right.item.priceId &&
+    left.item.variantKey === right.item.variantKey
+  );
+}
+
 function variantOptionsMatch(
   sellable: SellableDefinition,
   variantOptions: Record<string, string> | undefined,
@@ -771,6 +1001,18 @@ function cartLineNotFound(lineId: MikaId): MikaApiFailure {
       code: "VALIDATION_FAILED",
       message: `Cart line '${lineId}' was not found.`,
       fieldErrors: { lineId: "Cart line was not found." },
+    },
+  };
+}
+
+function wishlistItemNotFound(itemId: MikaId): MikaApiFailure {
+  return {
+    ok: false,
+    status: 404,
+    error: {
+      code: "VALIDATION_FAILED",
+      message: `Wishlist item '${itemId}' was not found.`,
+      fieldErrors: { itemId: "Wishlist item was not found." },
     },
   };
 }

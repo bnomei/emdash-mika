@@ -1050,6 +1050,176 @@ describe("backend API composition", () => {
       repositories.session.findOpenCartBySession("session_rejected", TEST_CURRENCY),
     ).resolves.toBeNull();
   });
+
+  it("returns or creates active wishlists for anonymous and customer identities", async () => {
+    const dependencies = createIncrementingBackendDependencies();
+    const api = createMikaBackendApi(dependencies);
+    const anonymousCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_wishlist_anonymous",
+    });
+    const customerCtx = createTestRequestContext({
+      customerId: "customer_wishlist_1",
+      userId: "user_wishlist_1",
+      sessionId: "session_wishlist_anonymous",
+    });
+
+    const anonymous = await api.wishlist.get(anonymousCtx);
+    const anonymousAgain = await api.wishlist.get(anonymousCtx);
+    const customer = await api.wishlist.get(customerCtx);
+
+    expect(anonymous).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "wishlist_1",
+        items: [],
+      },
+    });
+    expect(anonymousAgain).toMatchObject({ ok: true, data: { id: "wishlist_1" } });
+    expect(customer).toMatchObject({
+      ok: true,
+      data: {
+        id: "wishlist_2",
+        items: [],
+      },
+    });
+  });
+
+  it("adds active sellables with active prices to the current wishlist", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition({ maxPerOrder: 5 });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([[sellable.id, createStockRecord({ sellableId: sellable.id })]]),
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    await expect(
+      api.wishlist.add(ctx, {
+        sellableId: sellable.id,
+        priceId: createTestMikaId("price", 1),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        items: [
+          {
+            id: "wishlist_item_1",
+            sellableId: sellable.id,
+            priceId: "price_1",
+            title: "Test sellable",
+            sku: "TEST-SKU-1",
+            variantOptions: [],
+            addedAt: TEST_NOW,
+            availability: {
+              sellableId: sellable.id,
+              status: "low_stock",
+              availableQuantity: 2,
+            },
+          },
+        ],
+      },
+    });
+
+    await expect(api.wishlist.add(ctx, { sellableId: sellable.id })).resolves.toMatchObject({
+      ok: true,
+      data: {
+        items: [{ sellableId: sellable.id }],
+      },
+    });
+    const wishlist = await api.wishlist.get(ctx);
+    if (!wishlist.ok) {
+      throw new Error("Expected wishlist.get to succeed.");
+    }
+    expect(wishlist.data.items).toHaveLength(1);
+  });
+
+  it("rejects inactive sellables, inactive prices, and currency mismatches before creating a wishlist", async () => {
+    const contentRef = createTestContentRef();
+    const inactiveSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 1),
+      active: false,
+    });
+    const inactivePriceSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 2),
+      prices: [createPriceDefinition({ id: createTestMikaId("price", 2), active: false })],
+    });
+    const usdSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 3),
+      prices: [
+        createPriceDefinition({
+          id: createTestMikaId("price", 3),
+          currency: createTestCurrencyCode("USD"),
+        }),
+      ],
+    });
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({
+        contentRef,
+        sellables: [inactiveSellable, inactivePriceSellable, usdSellable],
+      }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_wishlist_rejected",
+    });
+
+    await expect(api.wishlist.add(ctx, { sellableId: inactiveSellable.id })).resolves.toMatchObject(
+      {
+        ok: false,
+        status: 409,
+        error: { code: "SELLABLE_INACTIVE" },
+      },
+    );
+    await expect(
+      api.wishlist.add(ctx, {
+        sellableId: inactivePriceSellable.id,
+        priceId: createTestMikaId("price", 2),
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "PRICE_INACTIVE" },
+    });
+    await expect(
+      api.wishlist.add(ctx, {
+        sellableId: usdSellable.id,
+        priceId: createTestMikaId("price", 3),
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 422,
+      error: { code: "VALIDATION_FAILED", fieldErrors: { priceId: expect.any(String) } },
+    });
+    await expect(
+      repositories.session.findWishlistBySession("session_wishlist_rejected"),
+    ).resolves.toBeNull();
+  });
+
+  it("returns stable errors for missing wishlist items on remove", async () => {
+    const api = createMikaBackendApi(createIncrementingBackendDependencies());
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    await expect(
+      api.wishlist.remove(ctx, { itemId: createTestMikaId("wishlist_item", 404) }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 404,
+      error: {
+        code: "VALIDATION_FAILED",
+        fieldErrors: { itemId: "Wishlist item was not found." },
+      },
+    });
+  });
 });
 
 describe("backend fixture helpers", () => {

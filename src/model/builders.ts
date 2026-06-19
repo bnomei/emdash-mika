@@ -1,4 +1,4 @@
-import type { AvailabilityDTO, CartDTO, PriceDTO, SellableDTO } from "../api/types";
+import type { AvailabilityDTO, CartDTO, PriceDTO, SellableDTO, WishlistDTO } from "../api/types";
 import type { StockItemRecord } from "../types/operational";
 import type {
   CartAggregate,
@@ -168,6 +168,26 @@ export function createWishlistAggregate(
     schemaVersion: 1,
     items: input.items ?? [],
     metadata: input.metadata,
+  };
+}
+
+export function wishlistToDTO(input: {
+  readonly id: MikaId;
+  readonly wishlist: WishlistAggregate;
+  readonly availabilityBySellableId?: ReadonlyMap<MikaId, AvailabilityDTO>;
+}): WishlistDTO {
+  return {
+    id: input.id,
+    items: input.wishlist.items.map((item) => ({
+      id: item.id,
+      sellableId: item.item.sellableId,
+      priceId: item.item.priceId,
+      title: item.item.titleSnapshot,
+      sku: item.item.sku,
+      variantOptions: item.item.variantOptions,
+      addedAt: item.addedAt,
+      availability: input.availabilityBySellableId?.get(item.item.sellableId),
+    })),
   };
 }
 
