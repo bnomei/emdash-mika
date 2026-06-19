@@ -355,6 +355,16 @@ export class AccountRepository {
     return findOneByType(this.collection, "customer", { emailHash });
   }
 
+  async findEntitlementById(entitlementId: MikaId): Promise<EntitlementDocument | null> {
+    const document = await this.collection.get(entitlementId);
+    return documentOfType(document, "entitlement");
+  }
+
+  async findLicenseById(licenseId: MikaId): Promise<LicenseDocument | null> {
+    const document = await this.collection.get(licenseId);
+    return documentOfType(document, "license");
+  }
+
   async findProviderAccount(
     provider: string,
     providerCustomerId: string,

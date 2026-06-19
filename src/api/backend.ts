@@ -28,11 +28,13 @@ import {
   stockAvailabilityToDTO,
   wishlistToDTO,
 } from "../model/builders";
+import { renderMikaEmail } from "../email";
 import type {
   CartLine,
   CheckoutLine,
   CouponSnapshot,
   CustomerSnapshot,
+  OrderLine,
   PriceDefinition,
   SellableDefinition,
   WishlistItem,
@@ -40,6 +42,9 @@ import type {
 import type {
   CartDocument,
   CheckoutDocument,
+  EmailDocument,
+  EntitlementDocument,
+  LicenseDocument,
   OrderDocument,
   SessionDocument,
   WebhookDocument,
@@ -883,8 +888,9 @@ async function processPaymentWebhook(
   if (existingOrder) {
     const order = await updatePaymentOrderFromEvent(input, ctx, existingOrder, event);
     await completeCheckoutForPaymentOrder(input, ctx, order, event);
+    const fulfilledOrder = await fulfillPaidOrder(input, ctx, order);
 
-    return markWebhookProcessed(input, webhook, ctx.now, order);
+    return markWebhookProcessed(input, webhook, ctx.now, fulfilledOrder);
   }
 
   const checkout = await findPaymentEventCheckout(input, event);
@@ -901,8 +907,9 @@ async function processPaymentWebhook(
   if (existingOrder) {
     const order = await updatePaymentOrderFromEvent(input, ctx, existingOrder, event);
     await completeCheckoutForPaymentOrder(input, ctx, order, event, checkout);
+    const fulfilledOrder = await fulfillPaidOrder(input, ctx, order);
 
-    return markWebhookProcessed(input, webhook, ctx.now, order);
+    return markWebhookProcessed(input, webhook, ctx.now, fulfilledOrder);
   }
 
   const order = await persistNewPaymentOrder(
@@ -913,8 +920,9 @@ async function processPaymentWebhook(
     checkout,
   );
   await completeCheckoutForPaymentOrder(input, ctx, order, event, checkout);
+  const fulfilledOrder = await fulfillPaidOrder(input, ctx, order);
 
-  return markWebhookProcessed(input, webhook, ctx.now, order);
+  return markWebhookProcessed(input, webhook, ctx.now, fulfilledOrder);
 }
 
 async function findExistingPaymentOrder(
@@ -1197,6 +1205,266 @@ function completedCheckoutMetadata(
     ...(event.providerPaymentId ? { providerPaymentId: event.providerPaymentId } : {}),
     ...(event.providerOrderId ? { providerOrderId: event.providerOrderId } : {}),
   };
+}
+
+async function fulfillPaidOrder(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  order: OrderDocument,
+): Promise<OrderDocument> {
+  const fulfilledLines: OrderLine[] = [];
+  let changed = false;
+
+  for (const line of order.aggregate.lines) {
+    const fulfilled = await fulfillPaidOrderLine(input, ctx, order, line);
+    fulfilledLines.push(fulfilled);
+    changed = changed || fulfilled !== line;
+  }
+
+  await queueOrderConfirmationEmail(input, ctx, order, fulfilledLines);
+
+  if (!changed) return order;
+
+  const fulfilledOrder: OrderDocument = {
+    ...order,
+    updatedAt: ctx.now,
+    aggregate: {
+      ...order.aggregate,
+      lines: fulfilledLines,
+      metadata: {
+        ...order.aggregate.metadata,
+        fulfilledAt: ctx.now,
+      },
+    },
+  };
+
+  await input.repositories.ledger.put(fulfilledOrder);
+
+  return fulfilledOrder;
+}
+
+async function fulfillPaidOrderLine(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  order: OrderDocument,
+  line: OrderLine,
+): Promise<OrderLine> {
+  const stockMovementId = await consumeOrderLineReservation(input, ctx, order, line);
+  let fulfilledLine: OrderLine =
+    stockMovementId && line.stockMovementId !== stockMovementId
+      ? { ...line, stockMovementId }
+      : line;
+
+  switch (line.item.fulfillmentKind) {
+    case "none":
+    case "external":
+      return fulfilledLine;
+    case "entitlement": {
+      const entitlement = createOrderLineEntitlementDocument(order, line, ctx.now);
+      const existing = await input.repositories.account.findEntitlementById(entitlement.id);
+      if (!existing) await input.repositories.account.put(entitlement);
+      return fulfilledLine.entitlementId === entitlement.id
+        ? fulfilledLine
+        : { ...fulfilledLine, entitlementId: entitlement.id };
+    }
+    case "download": {
+      const downloadRef = orderLineDownloadRef(order, line);
+      return fulfilledLine.downloadRefs?.includes(downloadRef)
+        ? fulfilledLine
+        : { ...fulfilledLine, downloadRefs: [...(fulfilledLine.downloadRefs ?? []), downloadRef] };
+    }
+    case "license": {
+      const license = await createOrderLineLicenseDocument(input, order, line, ctx.now);
+      const existing = await input.repositories.account.findLicenseById(license.id);
+      if (!existing) await input.repositories.account.put(license);
+      return fulfilledLine.licenseKeySuffix === license.record.displayKeySuffix
+        ? fulfilledLine
+        : { ...fulfilledLine, licenseKeySuffix: license.record.displayKeySuffix };
+    }
+  }
+}
+
+async function consumeOrderLineReservation(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  order: OrderDocument,
+  line: OrderLine,
+): Promise<MikaId | undefined> {
+  const reservationId = metadataMikaId(line.metadata, "reservationId");
+  if (!reservationId) return line.stockMovementId;
+  if (line.stockMovementId === reservationId) return line.stockMovementId;
+
+  const result = await createMikaStockLifecycleService(input).consume({
+    reservationEventId: reservationId,
+    now: ctx.now,
+    orderId: order.id,
+    orderLineId: line.id,
+  });
+
+  if (result.status === "consumed") return result.event.id;
+  if (result.status === "not_active" && result.event.status === "consumed") return result.event.id;
+
+  throw new Error(`Reservation '${reservationId}' for order line '${line.id}' was not active.`);
+}
+
+function createOrderLineEntitlementDocument(
+  order: OrderDocument,
+  line: OrderLine,
+  now: ISODateTime,
+): EntitlementDocument {
+  const id = fulfillmentDocumentId("entitlement", order.id, line.id);
+  const entitlementKey = line.item.entitlementKey ?? orderLineContentKey(line);
+  const record = {
+    id,
+    customerId: order.customerId ?? order.aggregate.customer.customerId,
+    userId: order.aggregate.customer.userId,
+    emailHash: order.aggregate.customer.emailHash,
+    entitlementKey,
+    contentCollection: line.item.content.collection,
+    contentId: line.item.content.id,
+    sellableId: line.item.sellableId,
+    orderId: order.id,
+    status: "active" as const,
+    sourceStatus: order.status,
+    grantedAt: now,
+    metadata: {
+      orderLineId: line.id,
+      fulfillmentKind: line.item.fulfillmentKind,
+    },
+  };
+
+  return {
+    id,
+    type: "entitlement",
+    schemaVersion: 1,
+    customerId: record.customerId,
+    userId: record.userId,
+    emailHash: record.emailHash,
+    entitlementKey: record.entitlementKey,
+    status: record.status,
+    orderId: record.orderId,
+    record,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+async function createOrderLineLicenseDocument(
+  input: CreateMikaBackendApiInput,
+  order: OrderDocument,
+  line: OrderLine,
+  now: ISODateTime,
+): Promise<LicenseDocument> {
+  const id = fulfillmentDocumentId("license", order.id, line.id);
+  const licenseKeyHash = await input.hash(`license:${order.id}:${line.id}`);
+  const displayKeySuffix = licenseKeyHash
+    .replace(/[^A-Za-z0-9]/g, "")
+    .slice(-6)
+    .toUpperCase();
+  const record = {
+    id,
+    orderId: order.id,
+    orderLineId: line.id,
+    entitlementId: line.entitlementId,
+    licenseKeyHash,
+    displayKeySuffix,
+    status: "active" as const,
+    createdAt: now,
+    metadata: {
+      fulfillmentKind: line.item.fulfillmentKind,
+      sellableId: line.item.sellableId,
+    },
+  };
+
+  return {
+    id,
+    type: "license",
+    schemaVersion: 1,
+    orderId: record.orderId,
+    orderLineId: record.orderLineId,
+    entitlementId: record.entitlementId,
+    status: record.status,
+    customerId: order.customerId ?? order.aggregate.customer.customerId,
+    record,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+async function queueOrderConfirmationEmail(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  order: OrderDocument,
+  lines: readonly OrderLine[],
+): Promise<void> {
+  const toEmail = order.aggregate.customer.email?.trim();
+  if (!toEmail) return;
+
+  const id = fulfillmentDocumentId("email", order.id, "order_confirmation");
+  const existing = await input.repositories.ops.findEmail(id);
+  if (existing) return;
+
+  const rendered = renderMikaEmail("order_confirmation", {
+    toEmail,
+    orderNumber: order.orderNumber,
+    total: order.aggregate.totals.total,
+    lines: lines.map((line) => ({
+      title: line.item.titleSnapshot,
+      quantity: line.quantity,
+      total: { amount: line.totalAmount, currency: line.item.currency },
+    })),
+  });
+  const record = {
+    id,
+    customerId: order.customerId ?? order.aggregate.customer.customerId,
+    orderId: order.id,
+    kind: "order_confirmation" as const,
+    toEmail,
+    subject: rendered.subject,
+    status: "queued" as const,
+    idempotencyKey: `order-confirmation:${order.id}`,
+    templateKey: rendered.template,
+    templateVersion: "1",
+    attemptCount: 0,
+    maxAttempts: 5,
+    nextAttemptAt: ctx.now,
+    createdAt: ctx.now,
+    metadata: {
+      orderLineIds: lines.map((line) => line.id),
+      fulfillmentKinds: [...new Set(lines.map((line) => line.item.fulfillmentKind))],
+    },
+  };
+  const document: EmailDocument = {
+    id,
+    type: "email",
+    schemaVersion: 1,
+    status: record.status,
+    nextAttemptAt: record.nextAttemptAt,
+    orderId: record.orderId,
+    kind: record.kind,
+    record,
+    createdAt: ctx.now,
+    updatedAt: ctx.now,
+  };
+
+  await input.repositories.ops.put(document);
+}
+
+function orderLineDownloadRef(order: OrderDocument, line: OrderLine): string {
+  return `download:${order.id}:${line.id}`;
+}
+
+function orderLineContentKey(line: OrderLine): string {
+  return `${line.item.content.collection}:${line.item.content.id}`;
+}
+
+function fulfillmentDocumentId(namespace: string, ...parts: readonly string[]): MikaId {
+  return createMikaId([namespace, ...parts].map(fulfillmentIdPart).join("_"));
+}
+
+function fulfillmentIdPart(value: string): string {
+  const sanitized = value.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return sanitized || "value";
 }
 
 async function markWebhookProcessed(

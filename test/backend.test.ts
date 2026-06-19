@@ -1557,6 +1557,261 @@ describe("backend API composition", () => {
     });
   });
 
+  it("creates fulfillment side effects once from replayed payment webhook events", async () => {
+    const stripe = createProviderName("stripe");
+    const accountCollection = createStorageCollection("account");
+    const sessionCollection = createStorageCollection("session");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const entitlementSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 1),
+      prices: [
+        createPriceDefinition({
+          id: createTestMikaId("price", 1),
+          fulfillmentKind: "entitlement",
+          entitlementKey: "course:test-product",
+          providerRefs: [{ provider: stripe, productId: "prod_ent", priceId: "price_ent" }],
+        }),
+      ],
+    });
+    const licenseSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 2),
+      prices: [
+        createPriceDefinition({
+          id: createTestMikaId("price", 2),
+          fulfillmentKind: "license",
+          providerRefs: [{ provider: stripe, productId: "prod_license", priceId: "price_license" }],
+        }),
+      ],
+    });
+    const downloadSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 3),
+      prices: [
+        createPriceDefinition({
+          id: createTestMikaId("price", 3),
+          fulfillmentKind: "download",
+          providerRefs: [
+            { provider: stripe, productId: "prod_download", priceId: "price_download" },
+          ],
+        }),
+      ],
+    });
+    const stockRepository = createTestStockRepository(
+      new Map([
+        [
+          entitlementSellable.id,
+          createStockRecord({
+            id: createTestMikaId("stock", 1),
+            sellableId: entitlementSellable.id,
+            quantityOnHand: 5,
+            quantityReserved: 0,
+          }),
+        ],
+        [
+          licenseSellable.id,
+          createStockRecord({
+            id: createTestMikaId("stock", 2),
+            sellableId: licenseSellable.id,
+            quantityOnHand: 5,
+            quantityReserved: 0,
+          }),
+        ],
+        [
+          downloadSellable.id,
+          createStockRecord({
+            id: createTestMikaId("stock", 3),
+            sellableId: downloadSellable.id,
+            quantityOnHand: 5,
+            quantityReserved: 0,
+          }),
+        ],
+      ]),
+    );
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      session: new SessionRepository(sessionCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+      stock: stockRepository,
+    };
+    const webhookDeliveries = [
+      { payloadHash: "fulfillment_hash_1", providerEventId: "event_fulfillment_1" },
+      { payloadHash: "fulfillment_hash_2", providerEventId: "event_fulfillment_2" },
+    ];
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) => {
+          const delivery = webhookDeliveries[0];
+          if (!delivery) throw new Error("Unexpected webhook verification call.");
+
+          return createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: delivery.payloadHash,
+            parsed: { delivery: delivery.providerEventId },
+          });
+        },
+        parseWebhookEvent: async (verified) => {
+          const delivery = webhookDeliveries.shift();
+          if (!delivery) throw new Error("Unexpected webhook parse call.");
+
+          return createPaymentWebhookEvent(verified, {
+            providerEventId: delivery.providerEventId,
+            providerCheckoutId: "provider_checkout_fake",
+            providerPaymentId: "payment_fulfillment_1",
+            providerOrderId: "provider_order_fulfillment_1",
+            customer: { email: "Fulfillment@Example.test", name: "Fulfillment Shopper" },
+          });
+        },
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({
+        contentRef: createTestContentRef(),
+        sellables: [entitlementSellable, licenseSellable, downloadSellable],
+      }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const shopperCtx = createTestRequestContext({
+      sessionId: "session_fulfillment",
+      customerId: createTestMikaId("customer", 1),
+      userId: "user_fulfillment",
+      idempotencyKey: "checkout_fulfillment_1",
+    });
+
+    const firstCart = await api.cart.add(shopperCtx, {
+      sellableId: entitlementSellable.id,
+      quantity: 1,
+    });
+    if (!firstCart.ok) throw new Error("Expected first cart.add to succeed.");
+    const secondCart = await api.cart.add(shopperCtx, {
+      sellableId: licenseSellable.id,
+      quantity: 1,
+    });
+    if (!secondCart.ok) throw new Error("Expected second cart.add to succeed.");
+    const cart = await api.cart.add(shopperCtx, {
+      sellableId: downloadSellable.id,
+      quantity: 1,
+    });
+    if (!cart.ok) throw new Error("Expected third cart.add to succeed.");
+    const checkout = await api.checkout.start(shopperCtx, {
+      cartId: cart.data.id,
+      provider: stripe,
+    });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+
+    await expect(receiveWebhook(api, "fulfillment-first", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "received" },
+    });
+    await expect(receiveWebhook(api, "fulfillment-replay", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_2", status: "received" },
+    });
+
+    await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(1);
+    await expect(accountCollection.count({ type: "entitlement" })).resolves.toBe(1);
+    await expect(accountCollection.count({ type: "license" })).resolves.toBe(1);
+    await expect(opsCollection.count({ type: "email" })).resolves.toBe(1);
+    await expect(accountCollection.get("entitlement_order_1_order_line_1")).resolves.toMatchObject({
+      type: "entitlement",
+      customerId: "customer_1",
+      entitlementKey: "course:test-product",
+      status: "active",
+      record: {
+        orderId: "order_1",
+        sellableId: entitlementSellable.id,
+      },
+    });
+    await expect(accountCollection.get("license_order_1_order_line_2")).resolves.toMatchObject({
+      type: "license",
+      customerId: "customer_1",
+      orderId: "order_1",
+      orderLineId: "order_line_2",
+      status: "active",
+      record: {
+        status: "active",
+        displayKeySuffix: expect.any(String),
+      },
+    });
+    await expect(opsCollection.get("email_order_1_order_confirmation")).resolves.toMatchObject({
+      type: "email",
+      status: "queued",
+      orderId: "order_1",
+      kind: "order_confirmation",
+      record: {
+        toEmail: "Fulfillment@Example.test",
+        status: "queued",
+        attemptCount: 0,
+        idempotencyKey: "order-confirmation:order_1",
+      },
+    });
+    await expect(
+      repositories.ledger.findOrderByProviderPayment(stripe, "payment_fulfillment_1"),
+    ).resolves.toMatchObject({
+      id: "order_1",
+      aggregate: {
+        lines: [
+          {
+            id: "order_line_1",
+            entitlementId: "entitlement_order_1_order_line_1",
+            stockMovementId: "stock_event_1",
+          },
+          {
+            id: "order_line_2",
+            licenseKeySuffix: expect.any(String),
+            stockMovementId: "stock_event_2",
+          },
+          {
+            id: "order_line_3",
+            downloadRefs: ["download:order_1:order_line_3"],
+            stockMovementId: "stock_event_3",
+          },
+        ],
+      },
+    });
+    await expect(
+      stockRepository.findEventById(createTestMikaId("stock_event", 1)),
+    ).resolves.toMatchObject({
+      status: "consumed",
+      orderId: "order_1",
+      orderLineId: "order_line_1",
+    });
+    await expect(
+      stockRepository.findEventById(createTestMikaId("stock_event", 2)),
+    ).resolves.toMatchObject({
+      status: "consumed",
+      orderId: "order_1",
+      orderLineId: "order_line_2",
+    });
+    await expect(
+      stockRepository.findEventById(createTestMikaId("stock_event", 3)),
+    ).resolves.toMatchObject({
+      status: "consumed",
+      orderId: "order_1",
+      orderLineId: "order_line_3",
+    });
+    await expect(stockRepository.findBySellableId(entitlementSellable.id)).resolves.toMatchObject({
+      quantityOnHand: 4,
+      quantityReserved: 0,
+    });
+    await expect(stockRepository.findBySellableId(licenseSellable.id)).resolves.toMatchObject({
+      quantityOnHand: 4,
+      quantityReserved: 0,
+    });
+    await expect(stockRepository.findBySellableId(downloadSellable.id)).resolves.toMatchObject({
+      quantityOnHand: 4,
+      quantityReserved: 0,
+    });
+  });
+
   it("recovers payment webhook processing when a concurrent order insert wins", async () => {
     const stripe = createProviderName("stripe");
     const sessionCollection = createStorageCollection("session");
@@ -4426,8 +4681,42 @@ function createTestStockRepository(
         ? { status: "released", event: releasedEvent, stock }
         : { status: "not_active", event: releasedEvent, stock };
     },
-    async consume() {
-      throw new Error("The test stock repository does not implement consume().");
+    async consume(consume) {
+      const event = eventsById.get(consume.reservationEventId);
+      if (!event || event.kind !== "reservation") return { status: "not_found" };
+
+      const current =
+        Array.from(stockItems.values()).find((stock) => stock.id === event.stockItemId) ?? null;
+      if (event.status !== "active") {
+        return { status: "not_active", event, stock: current };
+      }
+
+      const consumedEvent: StockEventRecord = {
+        ...event,
+        status: "consumed",
+        orderId: consume.orderId,
+        orderLineId: consume.orderLineId,
+        updatedAt: consume.now,
+      };
+      const stock = current
+        ? {
+            ...current,
+            quantityOnHand: current.quantityOnHand - event.quantityDelta,
+            quantityReserved: Math.max(0, current.quantityReserved - event.quantityDelta),
+            updatedAt: consume.now,
+          }
+        : null;
+      eventsById.set(consumedEvent.id, consumedEvent);
+      if (consumedEvent.idempotencyKey) {
+        eventsByIdempotencyKey.set(consumedEvent.idempotencyKey, consumedEvent);
+      }
+      if (stock) {
+        stockItems.set(stock.sellableId, stock);
+      }
+
+      return stock
+        ? { status: "consumed", event: consumedEvent, stock }
+        : { status: "not_active", event: consumedEvent, stock };
     },
     async releaseExpiredReservations() {
       return { scannedCount: 0, releasedCount: 0, stockItemsAffected: 0 };
