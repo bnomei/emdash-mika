@@ -277,6 +277,10 @@ export class SessionRepository {
     return this.collection.get(id);
   }
 
+  async findCheckoutById(id: MikaId): Promise<CheckoutDocument | null> {
+    return documentOfType(await this.collection.get(id), "checkout");
+  }
+
   async findOpenCartBySession(sessionId: string, currency: string): Promise<CartDocument | null> {
     return findOneByType(this.collection, "cart", {
       sessionId,

@@ -26,7 +26,11 @@ import type {
 } from "../src/provider";
 import { createMikaProviderRegistry } from "../src/provider";
 import type { PriceDefinition, SellableDefinition } from "../src/types/aggregates";
-import type { CatalogItemDocument, MikaStorageDocuments } from "../src/types/documents";
+import type {
+  CatalogItemDocument,
+  CheckoutDocument,
+  MikaStorageDocuments,
+} from "../src/types/documents";
 import type { StockEventRecord, StockItemRecord } from "../src/types/operational";
 import {
   AccountRepository,
@@ -2690,6 +2694,166 @@ describe("backend API composition", () => {
     });
   });
 
+  it("returns stored checkout status without a provider lookup", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+    const started = await api.checkout.start(ctx, { cartId: added.data.id });
+    if (!started.ok) {
+      throw new Error("Expected checkout.start to succeed.");
+    }
+
+    await expect(api.checkout.status({ checkoutId: started.data.id })).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "checkout_1",
+        status: "created",
+        mode: "payment",
+        provider: TEST_PROVIDER,
+        redirectUrl: "https://checkout.example.test/session/checkout_fake",
+        expiresAt: "2026-01-01T01:00:00.000Z",
+      },
+      effects: [{ type: "redirect", url: "https://checkout.example.test/session/checkout_fake" }],
+    });
+    expect(fake.getCalls().retrieveCheckoutSession).toEqual([]);
+  });
+
+  it("returns stable checkout status errors for missing, expired, and binding mismatch states", async () => {
+    const repositories = createTestBackendRepositories();
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+
+    await repositories.session.put(
+      createCheckoutDocument({
+        id: createTestMikaId("checkout", 1),
+        expiresAt: createTestClock().isoAt(-1),
+      }),
+    );
+    await repositories.session.put(
+      createCheckoutDocument({
+        id: createTestMikaId("checkout", 2),
+        providerCheckoutId: "provider_checkout_actual",
+        bindingProviderCheckoutId: "provider_checkout_stale",
+      }),
+    );
+
+    await expect(
+      api.checkout.status({ checkoutId: createTestMikaId("checkout", 404) }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 404,
+      error: {
+        code: "VALIDATION_FAILED",
+        fieldErrors: { checkoutId: "Checkout was not found." },
+      },
+    });
+    await expect(
+      api.checkout.status({ checkoutId: createTestMikaId("checkout", 1) }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "CHECKOUT_EXPIRED" },
+    });
+    await expect(
+      api.checkout.status({ checkoutId: createTestMikaId("checkout", 2) }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "CHECKOUT_BINDING_MISMATCH" },
+    });
+  });
+
+  it("maps terminal checkout documents to status DTOs after expiry", async () => {
+    const repositories = createTestBackendRepositories();
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+
+    await repositories.session.put(
+      createCheckoutDocument({
+        id: createTestMikaId("checkout", 1),
+        status: "completed",
+        expiresAt: createTestClock().isoAt(-1),
+        metadata: { checkoutProviderStatus: "completed", checkoutOrderId: "order_1" },
+      }),
+    );
+    await repositories.session.put(
+      createCheckoutDocument({
+        id: createTestMikaId("checkout", 2),
+        status: "failed",
+        expiresAt: createTestClock().isoAt(-1),
+        metadata: { checkoutProviderStatus: "failed" },
+      }),
+    );
+    await repositories.session.put(
+      createCheckoutDocument({
+        id: createTestMikaId("checkout", 3),
+        status: "cancelled",
+        expiresAt: createTestClock().isoAt(-1),
+        metadata: { checkoutProviderStatus: "cancelled" },
+      }),
+    );
+
+    await expect(
+      api.checkout.status({ checkoutId: createTestMikaId("checkout", 1) }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "checkout_1",
+        status: "completed",
+        mode: "payment",
+        provider: TEST_PROVIDER,
+        orderId: "order_1",
+      },
+    });
+    await expect(
+      api.checkout.status({ checkoutId: createTestMikaId("checkout", 2) }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "checkout_2",
+        status: "failed",
+        mode: "payment",
+        provider: TEST_PROVIDER,
+      },
+    });
+    await expect(
+      api.checkout.status({ checkoutId: createTestMikaId("checkout", 3) }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "checkout_3",
+        status: "cancelled",
+        mode: "payment",
+        provider: TEST_PROVIDER,
+      },
+    });
+  });
+
   it("compensates stock when local checkout persistence fails after provider success", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();
@@ -3705,6 +3869,50 @@ function createStockRecord(overrides: Partial<StockItemRecord> = {}): StockItemR
     createdAt: TEST_NOW,
     updatedAt: TEST_NOW,
     ...overrides,
+  };
+}
+
+function createCheckoutDocument(
+  overrides: {
+    readonly id?: CheckoutDocument["id"];
+    readonly status?: CheckoutDocument["status"];
+    readonly providerCheckoutId?: string;
+    readonly bindingProviderCheckoutId?: string;
+    readonly expiresAt?: CheckoutDocument["expiresAt"];
+    readonly metadata?: CheckoutDocument["aggregate"]["metadata"];
+  } = {},
+): CheckoutDocument {
+  const id = overrides.id ?? createTestMikaId("checkout", 1);
+  const providerCheckoutId = overrides.providerCheckoutId ?? "provider_checkout_fake";
+
+  return {
+    id,
+    type: "checkout",
+    schemaVersion: 1,
+    provider: TEST_PROVIDER,
+    providerCheckoutId,
+    status: overrides.status ?? "created",
+    expiresAt: overrides.expiresAt ?? createTestClock().isoAt(60 * 60_000),
+    aggregate: {
+      schemaVersion: 1,
+      mode: "payment",
+      currency: TEST_CURRENCY,
+      lines: [],
+      totals: {
+        subtotal: { amount: 0, currency: TEST_CURRENCY },
+        total: { amount: 0, currency: TEST_CURRENCY },
+      },
+      binding: {
+        provider: TEST_PROVIDER,
+        providerCheckoutId: overrides.bindingProviderCheckoutId ?? providerCheckoutId,
+        returnPath: "/checkout",
+        cancelPath: "/checkout/cancel",
+        successPath: "/checkout/success",
+      },
+      metadata: overrides.metadata,
+    },
+    createdAt: TEST_NOW,
+    updatedAt: TEST_NOW,
   };
 }
 

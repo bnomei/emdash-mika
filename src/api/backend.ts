@@ -700,6 +700,7 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
     },
     checkout: {
       start: async (ctx, checkoutInput) => startCheckout(input, ctx, checkoutInput),
+      status: async (statusInput) => checkoutStatus(input, createMikaId(statusInput.checkoutId)),
       preview: async (ctx, previewInput) => {
         const preview = await createCheckoutPreview(input, ctx, previewInput);
 
@@ -1382,10 +1383,32 @@ function checkoutDocumentResult(document: CheckoutDocument): MikaApiResult<Check
     return checkoutFailedReplay(document.id);
   }
 
+  return checkoutDocumentSuccessResult(document);
+}
+
+async function checkoutStatus(
+  input: CreateMikaBackendApiInput,
+  checkoutId: MikaId,
+): Promise<MikaApiResult<CheckoutSessionDTO>> {
+  const document = await input.repositories.session.findCheckoutById(checkoutId);
+  if (!document) return invalidCheckout("checkoutId", checkoutId);
+
+  const bindingError = checkoutBindingError(document);
+  if (bindingError) return bindingError;
+
+  if (checkoutIsExpired(input, document)) return checkoutStatusExpired(document);
+
+  return checkoutDocumentSuccessResult(document);
+}
+
+function checkoutDocumentSuccessResult(
+  document: CheckoutDocument,
+): MikaApiResult<CheckoutSessionDTO> {
   const redirectUrl = metadataString(document.aggregate.metadata, "checkoutRedirectUrl");
   const status =
     metadataString(document.aggregate.metadata, "checkoutProviderStatus") ??
     checkoutSessionStatus(document.status);
+  const orderId = metadataMikaId(document.aggregate.metadata, "checkoutOrderId");
 
   return {
     ok: true,
@@ -1398,8 +1421,50 @@ function checkoutDocumentResult(document: CheckoutDocument): MikaApiResult<Check
       redirectUrl,
       expiresAt: document.expiresAt,
       paymentPending: status === "pending" ? true : undefined,
+      orderId,
     },
     effects: redirectUrl ? [{ type: "redirect", url: redirectUrl }] : undefined,
+  };
+}
+
+function checkoutBindingError(document: CheckoutDocument): MikaApiFailure | null {
+  if (
+    document.provider === document.aggregate.binding.provider &&
+    document.providerCheckoutId === document.aggregate.binding.providerCheckoutId
+  ) {
+    return null;
+  }
+
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "CHECKOUT_BINDING_MISMATCH",
+      message: `Checkout '${document.id}' binding does not match stored provider state.`,
+    },
+  };
+}
+
+function checkoutIsExpired(input: CreateMikaBackendApiInput, document: CheckoutDocument): boolean {
+  if (document.status === "expired") return true;
+  if (!checkoutStatusCanExpire(document.status)) return false;
+  if (!document.expiresAt) return false;
+
+  return new Date(document.expiresAt).getTime() <= input.now().getTime();
+}
+
+function checkoutStatusCanExpire(status: CheckoutStatus): boolean {
+  return status === "created" || status === "redirected";
+}
+
+function checkoutStatusExpired(document: CheckoutDocument): MikaApiFailure {
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "CHECKOUT_EXPIRED",
+      message: `Checkout '${document.id}' has expired.`,
+    },
   };
 }
 
@@ -1419,6 +1484,12 @@ function metadataString(metadata: JsonObject | undefined, key: string): string |
   const value = metadata?.[key];
 
   return typeof value === "string" ? value : undefined;
+}
+
+function metadataMikaId(metadata: JsonObject | undefined, key: string): MikaId | undefined {
+  const value = metadataString(metadata, key);
+
+  return value ? createMikaId(value) : undefined;
 }
 
 function checkoutReservationIdempotencyKey(
@@ -2501,6 +2572,18 @@ function invalidCart(field: string, cartId: MikaId): MikaApiFailure {
       code: "VALIDATION_FAILED",
       message: `Cart '${cartId}' was not found.`,
       fieldErrors: { [field]: "Open cart was not found." },
+    },
+  };
+}
+
+function invalidCheckout(field: string, checkoutId: MikaId): MikaApiFailure {
+  return {
+    ok: false,
+    status: 404,
+    error: {
+      code: "VALIDATION_FAILED",
+      message: `Checkout '${checkoutId}' was not found.`,
+      fieldErrors: { [field]: "Checkout was not found." },
     },
   };
 }
