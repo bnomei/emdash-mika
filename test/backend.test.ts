@@ -414,30 +414,33 @@ describe("backend test Kysely stock database harness", () => {
       await mikaInitialMigration.up(db);
       await repository.putItem(stockItem);
 
-      await expect(
-        service.reserve({
-          stockItemId: stockItem.id,
-          quantity: 3,
-          expiresAt: createTestClock().isoAt(15 * 60_000),
-          idempotencyKey: "reserve_replay_1",
-        }),
-      ).resolves.toMatchObject({
+      const firstReservation = await service.reserve({
+        stockItemId: stockItem.id,
+        quantity: 3,
+        expiresAt: createTestClock().isoAt(15 * 60_000),
+        idempotencyKey: "reserve_replay_1",
+      });
+      expect(firstReservation).toMatchObject({
         status: "reserved",
         event: { id: "stock_event_1" },
         stock: { quantityReserved: 3 },
       });
-      await expect(
-        service.reserve({
-          stockItemId: stockItem.id,
-          quantity: 3,
-          expiresAt: createTestClock().isoAt(15 * 60_000),
-          idempotencyKey: "reserve_replay_1",
-        }),
-      ).resolves.toMatchObject({
+      const replayedReservation = await service.reserve({
+        stockItemId: stockItem.id,
+        quantity: 3,
+        expiresAt: createTestClock().isoAt(15 * 60_000),
+        idempotencyKey: "reserve_replay_1",
+      });
+      expect(replayedReservation).toMatchObject({
         status: "replayed",
         event: { id: "stock_event_1" },
         stock: { quantityReserved: 3 },
       });
+      if (firstReservation.status !== "reserved" || replayedReservation.status !== "replayed") {
+        throw new Error("Expected first reservation to apply and second reservation to replay.");
+      }
+      expect(replayedReservation.event).toEqual(firstReservation.event);
+      expect(replayedReservation.stock).toEqual(firstReservation.stock);
       await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
         quantityReserved: 3,
       });
@@ -596,6 +599,97 @@ describe("backend test Kysely stock database harness", () => {
         quantityReserved: 0,
       });
       await expect(countStockEvents(db)).resolves.toBe(1);
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
+    }
+  });
+
+  it("treats already released or consumed reservations as non-active conflicts", async () => {
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const repository = new StockRepository(db);
+    const service = createMikaStockLifecycleService(
+      createIncrementingBackendDependencies({
+        repositories: { ...createTestBackendRepositories(), stock: repository },
+      }),
+    );
+    const clock = createTestClock();
+    const stockItem = createStockRecord({
+      quantityOnHand: 10,
+      quantityReserved: 0,
+    });
+
+    try {
+      await mikaInitialMigration.up(db);
+      await repository.putItem(stockItem);
+
+      const releasedReservation = await service.reserve({
+        stockItemId: stockItem.id,
+        quantity: 2,
+        expiresAt: clock.isoAt(15 * 60_000),
+        idempotencyKey: "already_released_1",
+      });
+      const consumedReservation = await service.reserve({
+        stockItemId: stockItem.id,
+        quantity: 3,
+        expiresAt: clock.isoAt(15 * 60_000),
+        idempotencyKey: "already_consumed_1",
+      });
+      if (releasedReservation.status !== "reserved" || consumedReservation.status !== "reserved") {
+        throw new Error("Expected stock reservations to be created.");
+      }
+
+      await expect(
+        service.release({
+          reservationEventId: releasedReservation.event.id,
+          now: clock.isoAt(60_000),
+        }),
+      ).resolves.toMatchObject({
+        status: "released",
+        event: { status: "released" },
+        stock: { quantityOnHand: 10, quantityReserved: 3 },
+      });
+      await expect(
+        service.consume({
+          reservationEventId: releasedReservation.event.id,
+          now: clock.isoAt(120_000),
+        }),
+      ).resolves.toMatchObject({
+        status: "not_active",
+        event: {
+          id: releasedReservation.event.id,
+          status: "released",
+          updatedAt: "2026-01-01T00:01:00.000Z",
+        },
+        stock: { quantityOnHand: 10, quantityReserved: 3 },
+      });
+
+      await expect(
+        service.consume({
+          reservationEventId: consumedReservation.event.id,
+          now: clock.isoAt(180_000),
+        }),
+      ).resolves.toMatchObject({
+        status: "consumed",
+        event: { status: "consumed" },
+        stock: { quantityOnHand: 7, quantityReserved: 0 },
+      });
+      await expect(
+        service.release({
+          reservationEventId: consumedReservation.event.id,
+          now: clock.isoAt(240_000),
+        }),
+      ).resolves.toMatchObject({
+        status: "not_active",
+        event: {
+          id: consumedReservation.event.id,
+          status: "consumed",
+          updatedAt: "2026-01-01T00:03:00.000Z",
+        },
+        stock: { quantityOnHand: 7, quantityReserved: 0 },
+      });
+      await expect(countStockEvents(db)).resolves.toBe(2);
     } finally {
       await rollbackMikaInitialMigration(db);
       await database.destroy();
@@ -761,6 +855,52 @@ describe("backend test Kysely stock database harness", () => {
       await database.destroy();
     }
   });
+
+  it("rejects admin stock adjustment conflicts with a stable public error", async () => {
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const repository = new StockRepository(db);
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories: { ...createTestBackendRepositories(), stock: repository },
+      }),
+    );
+    const stockItem = createStockRecord({
+      quantityOnHand: 5,
+      quantityReserved: 1,
+    });
+
+    try {
+      await mikaInitialMigration.up(db);
+      await repository.putItem(stockItem);
+
+      await expect(
+        api.admin.stockAdjust({
+          stockItemId: stockItem.id,
+          quantityDelta: -6,
+          idempotencyKey: "stock_adjust_conflict_1",
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        status: 409,
+        error: {
+          code: "CONFLICT",
+          message: `Stock adjustment for '${stockItem.id}' would make on-hand quantity negative.`,
+        },
+      });
+      await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+        quantityOnHand: 5,
+        quantityReserved: 1,
+      });
+      await expect(
+        repository.findEventByIdempotencyKey("stock_adjust_conflict_1"),
+      ).resolves.toBeNull();
+      await expect(countStockEvents(db)).resolves.toBe(0);
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
+    }
+  });
 });
 
 describe("backend test provider helpers", () => {
@@ -869,7 +1009,12 @@ describe("backend test provider helpers", () => {
 describe("backend API composition", () => {
   it("declares catalog and stock service error codes in the public contract", () => {
     expect(MIKA_ERROR_CODES).toEqual(
-      expect.arrayContaining(["SELLABLE_NOT_FOUND", "VALIDATION_FAILED"]),
+      expect.arrayContaining([
+        "SELLABLE_NOT_FOUND",
+        "VALIDATION_FAILED",
+        "OUT_OF_STOCK",
+        "CONFLICT",
+      ]),
     );
   });
 
@@ -1719,7 +1864,7 @@ describe("backend API composition", () => {
     });
   });
 
-  it("rejects inactive sellables, inactive prices, currency mismatches, and max quantity before creating a cart", async () => {
+  it("rejects inactive sellables, inactive prices, currency mismatches, max quantity, and unavailable stock before creating a cart", async () => {
     const contentRef = createTestContentRef();
     const inactiveSellable = createSellableDefinition({
       id: createTestMikaId("sellable", 1),
@@ -1742,11 +1887,31 @@ describe("backend API composition", () => {
       id: createTestMikaId("sellable", 4),
       maxPerOrder: 2,
     });
-    const repositories = createTestBackendRepositories();
+    const outOfStockSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 5),
+    });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          outOfStockSellable.id,
+          createStockRecord({
+            sellableId: outOfStockSellable.id,
+            quantityOnHand: 1,
+            quantityReserved: 1,
+          }),
+        ],
+      ]),
+    });
     await repositories.catalog.put(
       createCatalogItemDocument({
         contentRef,
-        sellables: [inactiveSellable, inactivePriceSellable, usdSellable, limitedSellable],
+        sellables: [
+          inactiveSellable,
+          inactivePriceSellable,
+          usdSellable,
+          limitedSellable,
+          outOfStockSellable,
+        ],
       }),
     );
     const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
@@ -1784,6 +1949,14 @@ describe("backend API composition", () => {
       ok: false,
       status: 409,
       error: { code: "MAX_PER_ORDER_EXCEEDED" },
+    });
+    await expect(api.cart.add(ctx, { sellableId: outOfStockSellable.id })).resolves.toEqual({
+      ok: false,
+      status: 409,
+      error: {
+        code: "OUT_OF_STOCK",
+        message: `Sellable '${outOfStockSellable.id}' does not have enough stock.`,
+      },
     });
     await expect(
       repositories.session.findOpenCartBySession("session_rejected", TEST_CURRENCY),
