@@ -1,4 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
+import { sql } from "kysely";
 
 import {
   createMikaBackendApi,
@@ -28,8 +29,10 @@ import {
   LedgerRepository,
   OpsRepository,
   SessionRepository,
+  StockRepository,
   type MikaDbExecutor,
 } from "../src/storage/repositories";
+import { mikaInitialMigration } from "../src/storage/migrations";
 import { createCurrencyCode, createMikaId, createProviderName } from "../src/types/primitives";
 import {
   TEST_CURRENCY,
@@ -39,6 +42,7 @@ import {
   createTestContentRef,
   createTestCurrencyCode,
   createTestHash,
+  createTestMikaDb,
   createTestMikaId,
   createTestProviderName,
   createTestRequestContext,
@@ -147,6 +151,60 @@ describe("backend test storage helpers", () => {
       hasMore: false,
     });
     expect(secondPage.cursor).toBeUndefined();
+  });
+});
+
+describe("backend test Kysely stock database harness", () => {
+  it("runs Mika stock migrations up and down", async () => {
+    const db = createTestMikaDb();
+
+    try {
+      await mikaInitialMigration.up(db);
+
+      await expect(listMikaTableNames(db)).resolves.toEqual([
+        "mika_ephemeral_records",
+        "mika_stock_events",
+        "mika_stock_items",
+      ]);
+
+      await rollbackMikaInitialMigration(db);
+
+      await expect(listMikaTableNames(db)).resolves.toEqual([]);
+    } finally {
+      await db.destroy();
+    }
+  });
+
+  it("persists and loads stock items through a real Kysely executor", async () => {
+    const db = createTestMikaDb();
+    const repository = new StockRepository(db);
+    const stockItem: StockItemRecord = {
+      id: createTestMikaId("stock", 1),
+      sellableId: createTestMikaId("sellable", 1),
+      policy: "finite",
+      quantityOnHand: 10,
+      quantityReserved: 2,
+      lowStockThreshold: 3,
+      allowBackorder: false,
+      availableOverride: true,
+      createdAt: TEST_NOW,
+      updatedAt: TEST_NOW,
+      metadata: { source: "backend-test" },
+    };
+
+    try {
+      await mikaInitialMigration.up(db);
+
+      await repository.putItem(stockItem);
+
+      await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toEqual(stockItem);
+      await expect(
+        repository.findBySellableId(createTestMikaId("sellable", 2)),
+      ).resolves.toBeNull();
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await db.destroy();
+    }
   });
 });
 
@@ -1606,6 +1664,25 @@ async function createSeededCollection(): Promise<StorageCollection<MemoryRecord>
   ]);
 
   return collection;
+}
+
+async function listMikaTableNames(db: MikaDbExecutor): Promise<readonly string[]> {
+  const result = await sql<{ name: string }>`
+    select name
+    from sqlite_master
+    where type = 'table' and name like 'mika_%'
+    order by name
+  `.execute(db);
+
+  return result.rows.map((row) => row.name);
+}
+
+async function rollbackMikaInitialMigration(db: MikaDbExecutor): Promise<void> {
+  if (!mikaInitialMigration.down) {
+    throw new Error("Mika initial migration is missing a down migration.");
+  }
+
+  await mikaInitialMigration.down(db);
 }
 
 function createRecord(overrides: Partial<MemoryRecord> = {}): MemoryRecord {

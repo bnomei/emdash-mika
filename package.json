@@ -94,6 +94,7 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.3",
+    "@libsql/kysely-libsql": "^0.4.1",
     "@types/react": "^19.2.7",
     "ajv": "^8.20.0",
     "astro": "^6.4.4",

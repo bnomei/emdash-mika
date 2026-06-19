@@ -1,4 +1,9 @@
+import { LibsqlDialect } from "@libsql/kysely-libsql";
+import { Kysely } from "kysely";
+
 import { createMikaRequestContext, type MikaRequestContext } from "../../src/api/context";
+import type { MikaDb } from "../../src/storage/repositories";
+import type { MikaDatabase } from "../../src/storage/schema";
 import type { ContentRefDTO, PriceDTO, SellableDTO } from "../../src/api/types";
 import {
   createCurrencyCode,
@@ -56,6 +61,12 @@ export function createTestProviderName(provider = "fake"): ProviderName {
 
 export function createTestCurrencyCode(currency = "EUR"): CurrencyCode {
   return createCurrencyCode(currency);
+}
+
+export function createTestMikaDb(): MikaDb {
+  return new Kysely<MikaDatabase>({
+    dialect: new LibsqlDialect({ url: "file::memory:" }),
+  });
 }
 
 export function createTestHash(input = "mika:test"): string {
