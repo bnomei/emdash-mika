@@ -1217,6 +1217,149 @@ describe("backend API composition", () => {
     });
   });
 
+  it("queues a pending token and email for magic link requests", async () => {
+    const harness = await createMagicLinkHarness({ ttlMs: 60_000 });
+
+    try {
+      await expect(
+        harness.api.magicLink.request(
+          createTestRequestContext({ customerId: false, userId: false }),
+          { email: "Subscriber@Example.test", returnTo: "/account" },
+        ),
+      ).resolves.toEqual({ ok: true, status: 200, data: { sent: true } });
+
+      const tokenHash = createTestHash("magic-link-token:magic_link_token_1");
+      await expect(harness.repositories.ephemeral.get(tokenHash)).resolves.toMatchObject({
+        key: tokenHash,
+        kind: "token",
+        subjectHash: createTestHash("email:subscriber@example.test"),
+        status: "pending",
+        count: 0,
+        expiresAt: "2026-01-01T00:01:00.000Z",
+        data: {
+          purpose: "magic_link",
+          tokenId: "magic_link_token_1",
+          email: "Subscriber@Example.test",
+          returnTo: "/account",
+        },
+      });
+
+      const emails = await harness.opsCollection.query({ where: { type: "email" } });
+      expect(emails.items).toHaveLength(1);
+      const queuedEmail = emails.items[0]?.data;
+      if (!queuedEmail || queuedEmail.type !== "email") {
+        throw new Error("Expected a queued magic link email document.");
+      }
+      expect(queuedEmail).toMatchObject({
+        id: "email_1",
+        type: "email",
+        status: "queued",
+        tokenId: "magic_link_token_1",
+        kind: "magic_link",
+        record: {
+          toEmail: "Subscriber@Example.test",
+          subject: "Sign in to Mika",
+          status: "queued",
+          idempotencyKey: `magic-link:${tokenHash}`,
+          nextAttemptAt: "2026-01-01T00:00:00.000Z",
+          metadata: {
+            expiresAt: "2026-01-01T00:01:00.000Z",
+            returnTo: "/account",
+          },
+        },
+      });
+      expect(queuedEmail.record.metadata?.["link"]).toBe(
+        "https://shop.example.test/_emdash/api/plugins/mika/magic-link/verify?token=magic_link_token_1&returnTo=%2Faccount",
+      );
+    } finally {
+      await harness.destroy();
+    }
+  });
+
+  it("verifies magic links once and returns the matching account DTO", async () => {
+    const harness = await createMagicLinkHarness();
+
+    try {
+      await harness.accountCollection.put("customer_document_1", createCustomerDocument());
+      await harness.api.magicLink.request(createTestRequestContext(), {
+        email: "subscriber@example.test",
+      });
+
+      await expect(
+        harness.api.magicLink.verify(createTestRequestContext(), {
+          token: "magic_link_token_1",
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        status: 200,
+        data: {
+          customer: {
+            id: "customer_1",
+            userId: "user_1",
+            email: "Subscriber@Example.test",
+            name: "Subscriber One",
+          },
+          orders: [],
+          subscriptions: [],
+          entitlements: [],
+          downloads: [],
+        },
+      });
+
+      await expect(
+        harness.repositories.ephemeral.get(createTestHash("magic-link-token:magic_link_token_1")),
+      ).resolves.toMatchObject({
+        status: "consumed",
+        version: 2,
+      });
+      await expect(
+        harness.api.magicLink.verify(createTestRequestContext(), {
+          token: "magic_link_token_1",
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 410,
+        error: { code: "TOKEN_USED" },
+      });
+    } finally {
+      await harness.destroy();
+    }
+  });
+
+  it("returns stable magic link token errors for invalid and expired tokens", async () => {
+    const harness = await createMagicLinkHarness({ ttlMs: 1 });
+
+    try {
+      await expect(
+        harness.api.magicLink.verify(createTestRequestContext(), { token: "missing" }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 400,
+        error: { code: "TOKEN_INVALID" },
+      });
+
+      await harness.api.magicLink.request(createTestRequestContext(), {
+        email: "subscriber@example.test",
+      });
+      await expect(
+        harness.api.magicLink.verify(createTestRequestContext({ now: createTestClock().at(2) }), {
+          token: "magic_link_token_1",
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 410,
+        error: { code: "TOKEN_EXPIRED" },
+      });
+      await expect(
+        harness.repositories.ephemeral.get(createTestHash("magic-link-token:magic_link_token_1")),
+      ).resolves.toMatchObject({
+        status: "pending",
+      });
+    } finally {
+      await harness.destroy();
+    }
+  });
+
   it("rejects webhooks that fail provider verification", async () => {
     const opsCollection = createStorageCollection("ops");
     const repositories = {
@@ -4901,6 +5044,48 @@ function createTestBackendRepositories(
     stock: createTestStockRepository(options.stockBySellableId),
     ephemeral: new EphemeralRepository(db),
   } satisfies MikaBackendRepositories;
+}
+
+async function createMagicLinkHarness(options: { readonly ttlMs?: number } = {}): Promise<{
+  readonly api: MikaApi;
+  readonly repositories: MikaBackendRepositories;
+  readonly accountCollection: StorageCollection<MikaStorageDocuments["account"]>;
+  readonly opsCollection: StorageCollection<MikaStorageDocuments["ops"]>;
+  readonly destroy: () => Promise<void>;
+}> {
+  const db = createTestMikaDb();
+  const accountCollection = createStorageCollection("account");
+  const opsCollection = createStorageCollection("ops");
+
+  await mikaInitialMigration.up(db);
+
+  const repositories = {
+    ...createTestBackendRepositories(),
+    account: new AccountRepository(accountCollection),
+    ops: new OpsRepository(opsCollection),
+    ephemeral: new EphemeralRepository(db),
+  } satisfies MikaBackendRepositories;
+  const api = createMikaBackendApi(
+    createIncrementingBackendDependencies({
+      repositories,
+      config: {
+        magicLink: {
+          ttlMs: options.ttlMs,
+        },
+      },
+    }),
+  );
+
+  return {
+    api,
+    repositories,
+    accountCollection,
+    opsCollection,
+    destroy: async () => {
+      await rollbackMikaInitialMigration(db);
+      await db.destroy();
+    },
+  };
 }
 
 function createTestStockRepository(

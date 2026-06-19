@@ -31,6 +31,7 @@ import {
   wishlistToDTO,
 } from "../model/builders";
 import { renderMikaEmail } from "../email";
+import { mikaPluginRoute } from "./routes";
 import type {
   CartLine,
   CheckoutLine,
@@ -44,6 +45,7 @@ import type {
 import type {
   CartDocument,
   CheckoutDocument,
+  CustomerDocument,
   EmailDocument,
   EntitlementDocument,
   LicenseDocument,
@@ -70,6 +72,7 @@ import type { MikaRequestContext } from "./context";
 import { createMikaApi, type MikaApi, type MikaApiOverrides } from "./server";
 import type {
   AddCartItemInput,
+  AccountDTO,
   AdminActionResultDTO,
   CartDTO,
   CartQuoteDTO,
@@ -81,8 +84,12 @@ import type {
   MikaError,
   MikaApiResult,
   MoneyDTO,
+  DownloadDTO,
+  EntitlementDTO,
+  OrderSummaryDTO,
   StartCheckoutInput,
   StockAdjustInput,
+  SubscriptionDTO,
   WishlistDTO,
   WishlistItemInput,
   WebhookReceiveDTO,
@@ -733,11 +740,249 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
       },
       ...input.overrides?.checkout,
     },
+    magicLink: {
+      request: async (ctx, requestInput) => requestMagicLink(input, ctx, requestInput),
+      verify: async (ctx, verifyInput) => verifyMagicLink(input, ctx, verifyInput),
+      ...input.overrides?.magicLink,
+    },
     webhook: {
       receive: async (ctx, webhookInput) => receiveWebhook(input, ctx, webhookInput),
       ...input.overrides?.webhook,
     },
   });
+}
+
+async function requestMagicLink(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  requestInput: { readonly email: string; readonly returnTo?: string },
+): Promise<MikaApiResult<{ sent: boolean }>> {
+  const email = requestInput.email.trim();
+  const normalizedEmail = email.toLowerCase();
+  const emailHash = await input.hash(`email:${normalizedEmail}`);
+  const token = input.createId("magic_link_token");
+  const tokenHash = await hashMagicLinkToken(input, token);
+  const tokenId = token;
+  const now = ctx.now;
+  const expiresAt = addMilliseconds(now, input.config?.magicLink?.ttlMs ?? 15 * 60_000);
+  const customer = await input.repositories.account.findCustomerByEmailHash(emailHash);
+
+  await input.repositories.ephemeral.put({
+    key: tokenHash,
+    kind: "token",
+    subjectHash: emailHash,
+    status: "pending",
+    count: 0,
+    expiresAt,
+    version: 1,
+    createdAt: now,
+    updatedAt: now,
+    data: {
+      purpose: "magic_link",
+      tokenId,
+      email,
+      emailHash,
+      ...(customer?.customerId ? { customerId: customer.customerId } : {}),
+      ...(requestInput.returnTo ? { returnTo: requestInput.returnTo } : {}),
+    },
+  });
+
+  const link = magicLinkUrl(ctx, token, requestInput.returnTo);
+  const rendered = renderMikaEmail("magic_link", {
+    toEmail: email,
+    url: link,
+    purpose: "sign_in",
+    expiresAt,
+  });
+  const emailId = input.createId("email");
+  const emailRecord = {
+    id: emailId,
+    customerId: customer?.customerId,
+    tokenId,
+    kind: "magic_link" as const,
+    toEmail: email,
+    subject: rendered.subject,
+    status: "queued" as const,
+    idempotencyKey: `magic-link:${tokenHash}`,
+    templateKey: rendered.template,
+    templateVersion: "1",
+    attemptCount: 0,
+    maxAttempts: 5,
+    nextAttemptAt: now,
+    createdAt: now,
+    metadata: {
+      purpose: "sign_in",
+      expiresAt,
+      link,
+      ...(requestInput.returnTo ? { returnTo: requestInput.returnTo } : {}),
+    },
+  };
+
+  await input.repositories.ops.put({
+    id: emailId,
+    type: "email",
+    schemaVersion: 1,
+    status: emailRecord.status,
+    nextAttemptAt: emailRecord.nextAttemptAt,
+    tokenId: emailRecord.tokenId,
+    kind: emailRecord.kind,
+    record: emailRecord,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return { ok: true, status: 200, data: { sent: true } };
+}
+
+async function verifyMagicLink(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  verifyInput: { readonly token: string; readonly returnTo?: string },
+): Promise<MikaApiResult<AccountDTO>> {
+  const tokenHash = await hashMagicLinkToken(input, verifyInput.token.trim());
+  const record = await input.repositories.ephemeral.get(tokenHash);
+  const tokenError = magicLinkTokenError(record, ctx.now);
+  if (tokenError) return tokenError;
+
+  const consumed = await input.repositories.ephemeral.consumeToken(tokenHash, ctx.now);
+  if (!consumed) {
+    const current = await input.repositories.ephemeral.get(tokenHash);
+    return (
+      magicLinkTokenError(current, ctx.now) ??
+      tokenResult("TOKEN_INVALID", "Magic link token is invalid.")
+    );
+  }
+
+  const customer = record?.subjectHash
+    ? await input.repositories.account.findCustomerByEmailHash(record.subjectHash)
+    : null;
+  if (customer) {
+    await ctx.session?.set("mika.customerId", customer.customerId);
+    if (customer.userId) await ctx.session?.set("mika.userId", customer.userId);
+
+    return { ok: true, status: 200, data: await accountDTOForCustomer(input, customer) };
+  }
+
+  const email = record?.data ? stringChild(record.data, "email") : undefined;
+  if (record?.subjectHash) await ctx.session?.set("mika.emailHash", record.subjectHash);
+
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      customer: email ? { email } : undefined,
+      orders: [],
+      subscriptions: [],
+      entitlements: [],
+      downloads: [],
+    },
+  };
+}
+
+async function accountDTOForCustomer(
+  input: CreateMikaBackendApiInput,
+  customer: CustomerDocument,
+): Promise<AccountDTO> {
+  const [orders, subscriptions, entitlements] = await Promise.all([
+    input.repositories.ledger.listOrdersByCustomer(customer.customerId),
+    input.repositories.account.listSubscriptionsByCustomer(customer.customerId),
+    input.repositories.account.listEntitlementsByCustomer(customer.customerId),
+  ]);
+
+  const orderSummaries = orders.items.map((item) => orderSummaryDTO(item.data));
+
+  return {
+    customer: {
+      id: customer.customerId,
+      userId: customer.userId,
+      email: customer.aggregate.email,
+      name: customer.aggregate.name,
+    },
+    orders: orderSummaries,
+    subscriptions: subscriptions.items.map((item) => subscriptionDTO(item.data)),
+    entitlements: entitlements.items.map((item) => entitlementDTO(item.data)),
+    downloads: orders.items.flatMap((item) => orderDownloadDTOs(item.data)),
+  };
+}
+
+function orderSummaryDTO(order: OrderDocument): OrderSummaryDTO {
+  return {
+    id: order.id,
+    orderNumber: order.orderNumber,
+    status: order.status,
+    paymentStatus: order.paymentStatus,
+    total: order.aggregate.totals.total,
+    createdAt: order.createdAt,
+    invoiceUrl: order.aggregate.invoiceUrl,
+  };
+}
+
+function subscriptionDTO(subscription: SubscriptionDocument): SubscriptionDTO {
+  return {
+    id: subscription.id,
+    title: subscription.aggregate.sellable.titleSnapshot,
+    status: subscription.status,
+    currentPeriodEnd: subscription.currentPeriodEnd,
+    cancelAtPeriodEnd: subscription.aggregate.cancelAtPeriodEnd,
+  };
+}
+
+function entitlementDTO(entitlement: EntitlementDocument): EntitlementDTO {
+  return {
+    key: entitlement.entitlementKey,
+    status: entitlement.status,
+    source: entitlement.orderId ? "order" : entitlement.subscriptionId ? "subscription" : "manual",
+    expiresAt: entitlement.record.currentPeriodEnd,
+  };
+}
+
+function orderDownloadDTOs(order: OrderDocument): readonly DownloadDTO[] {
+  return order.aggregate.lines.flatMap((line) =>
+    (line.downloadRefs ?? []).map((downloadRef) => ({
+      id: createMikaId(downloadRef),
+      title: line.item.titleSnapshot,
+      href: downloadRef,
+    })),
+  );
+}
+
+async function hashMagicLinkToken(
+  input: CreateMikaBackendApiInput,
+  token: string,
+): Promise<string> {
+  return input.hash(`magic-link-token:${token}`);
+}
+
+function magicLinkUrl(ctx: MikaRequestContext, token: string, returnTo?: string): string {
+  return mikaPluginRoute("magicLinkVerify", {
+    origin: ctx.url?.origin,
+    search: { token, returnTo },
+  });
+}
+
+function magicLinkTokenError(
+  record: Awaited<ReturnType<MikaBackendRepositories["ephemeral"]["get"]>>,
+  now: ISODateTime,
+): MikaApiFailure | null {
+  if (!record || record.kind !== "token") {
+    return tokenResult("TOKEN_INVALID", "Magic link token is invalid.");
+  }
+  if (record.status !== "pending") {
+    return tokenResult("TOKEN_USED", "Magic link token has already been used.");
+  }
+  if (record.expiresAt <= now) {
+    return tokenResult("TOKEN_EXPIRED", "Magic link token has expired.");
+  }
+
+  return null;
+}
+
+function tokenResult(code: MikaError["code"], message: string): MikaApiFailure {
+  return {
+    ok: false,
+    status: code === "TOKEN_INVALID" ? 400 : 410,
+    error: { code, message },
+  };
 }
 
 async function receiveWebhook(
@@ -3990,6 +4235,10 @@ function adminStockAdjustmentResult(
 
 function currentBackendISODateTime(input: MikaBackendDependencies): ISODateTime {
   return input.isoNow?.() ?? createISODateTime(input.now().toISOString());
+}
+
+function addMilliseconds(value: ISODateTime, milliseconds: number): ISODateTime {
+  return createISODateTime(new Date(Date.parse(value) + milliseconds).toISOString());
 }
 
 function checkoutEmpty(): MikaApiFailure {
