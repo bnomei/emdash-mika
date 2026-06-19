@@ -93,8 +93,13 @@ import type {
   MikaApiResult,
   MoneyDTO,
   DownloadDTO,
+  DownloadIssueInput,
   DownloadResolutionDTO,
   EntitlementDTO,
+  EntitlementGrantInput,
+  EntitlementRevokeInput,
+  EmailResendInput,
+  LicenseRevokeInput,
   OrderCancelInput,
   OrderRefundInput,
   OrderSummaryDTO,
@@ -399,6 +404,11 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
       webhookReplay: async (replayInput) => replayWebhook(input, replayInput),
       orderRefund: async (refundInput) => refundOrder(input, refundInput),
       orderCancel: async (cancelInput) => cancelOrder(input, cancelInput),
+      entitlementGrant: async (grantInput) => grantEntitlement(input, grantInput),
+      entitlementRevoke: async (revokeInput) => revokeEntitlement(input, revokeInput),
+      emailResend: async (resendInput) => resendEmail(input, resendInput),
+      licenseRevoke: async (revokeInput) => revokeLicense(input, revokeInput),
+      downloadIssue: async (issueInput) => issueDownload(input, issueInput),
       ...input.overrides?.admin,
     },
     cart: {
@@ -1554,6 +1564,576 @@ async function cancelOrder(
 
     return providerFailed(message);
   }
+}
+
+async function grantEntitlement(
+  input: CreateMikaBackendApiInput,
+  grantInput: EntitlementGrantInput,
+): Promise<MikaApiResult<AdminActionResultDTO>> {
+  const now = currentBackendISODateTime(input);
+  const email = grantInput.email?.trim();
+  const emailHash = email ? await input.hash(`email:${email.toLowerCase()}`) : undefined;
+  const entitlementId = input.createId("entitlement");
+  const audit = createAdminAuditDocument(input, {
+    action: "entitlement.grant",
+    targetType: "entitlement",
+    targetId: entitlementId,
+    status: "started",
+    createdAt: now,
+    metadata: {
+      entitlementKey: grantInput.entitlementKey,
+      ...(grantInput.customerId ? { customerId: grantInput.customerId } : {}),
+      ...(grantInput.userId ? { userId: grantInput.userId } : {}),
+      ...(emailHash ? { emailHash } : {}),
+      ...(grantInput.expiresAt ? { expiresAt: grantInput.expiresAt } : {}),
+    },
+  });
+  await input.repositories.ops.writeAudit(audit);
+
+  try {
+    const entitlement = createManualEntitlementDocument(entitlementId, grantInput, now, emailHash);
+    await input.repositories.account.put(entitlement);
+    await completeAdminAudit(input, audit);
+
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        id: entitlement.id,
+        status: "completed",
+        affected: {
+          entitlements: 1,
+        },
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Entitlement grant failed.";
+    await failAdminAudit(input, audit, message);
+    return adminActionFailed(message);
+  }
+}
+
+async function revokeEntitlement(
+  input: CreateMikaBackendApiInput,
+  revokeInput: EntitlementRevokeInput,
+): Promise<MikaApiResult<AdminActionResultDTO>> {
+  const entitlement = await findEntitlementForRevoke(input, revokeInput);
+  if (!entitlement) {
+    return missingTargetWithAudit(input, {
+      action: "entitlement.revoke",
+      targetType: "entitlement",
+      field: "entitlementId",
+      value: revokeInput.entitlementId ?? revokeInput.entitlementKey ?? "unknown",
+      targetId: revokeInput.entitlementId,
+      metadata: {
+        ...(revokeInput.entitlementKey ? { entitlementKey: revokeInput.entitlementKey } : {}),
+        ...(revokeInput.customerId ? { customerId: revokeInput.customerId } : {}),
+      },
+    });
+  }
+
+  const now = currentBackendISODateTime(input);
+  const audit = createAdminAuditDocument(input, {
+    action: "entitlement.revoke",
+    targetType: "entitlement",
+    targetId: entitlement.id,
+    status: "started",
+    createdAt: now,
+    metadata: {
+      entitlementId: entitlement.id,
+      entitlementKey: entitlement.entitlementKey,
+      ...(entitlement.customerId ? { customerId: entitlement.customerId } : {}),
+      ...(revokeInput.reason ? { reason: revokeInput.reason } : {}),
+    },
+  });
+  await input.repositories.ops.writeAudit(audit);
+
+  try {
+    const updated: EntitlementDocument = {
+      ...entitlement,
+      status: "revoked",
+      updatedAt: now,
+      record: {
+        ...entitlement.record,
+        status: "revoked",
+        revokedAt: now,
+        metadata: {
+          ...entitlement.record.metadata,
+          ...(revokeInput.reason ? { revokeReason: revokeInput.reason } : {}),
+        },
+      },
+    };
+    await input.repositories.account.put(updated);
+    await completeAdminAudit(input, audit);
+
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        id: updated.id,
+        status: "completed",
+        affected: {
+          entitlements: 1,
+        },
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Entitlement revoke failed.";
+    await failAdminAudit(input, audit, message);
+    return adminActionFailed(message);
+  }
+}
+
+async function resendEmail(
+  input: CreateMikaBackendApiInput,
+  resendInput: EmailResendInput,
+): Promise<MikaApiResult<AdminActionResultDTO>> {
+  const email = await input.repositories.ops.findEmail(resendInput.emailId);
+  if (!email) {
+    return missingTargetWithAudit(input, {
+      action: "email.resend",
+      targetType: "email",
+      field: "emailId",
+      value: resendInput.emailId,
+      targetId: resendInput.emailId,
+    });
+  }
+
+  const now = currentBackendISODateTime(input);
+  const audit = createAdminAuditDocument(input, {
+    action: "email.resend",
+    targetType: "email",
+    targetId: email.id,
+    status: "started",
+    createdAt: now,
+    metadata: {
+      emailId: email.id,
+      kind: email.kind,
+    },
+  });
+  await input.repositories.ops.writeAudit(audit);
+
+  try {
+    await input.repositories.ops.put({
+      ...email,
+      status: "queued",
+      nextAttemptAt: now,
+      updatedAt: now,
+      record: {
+        ...email.record,
+        status: "queued",
+        nextAttemptAt: now,
+        lastError: undefined,
+        metadata: {
+          ...email.record.metadata,
+          resentAt: now,
+          adminAuditId: audit.id,
+        },
+      },
+    });
+    await completeAdminAudit(input, audit);
+
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        id: email.id,
+        status: "completed",
+        affected: {
+          emails: 1,
+        },
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Email resend failed.";
+    await failAdminAudit(input, audit, message);
+    return adminActionFailed(message);
+  }
+}
+
+async function revokeLicense(
+  input: CreateMikaBackendApiInput,
+  revokeInput: LicenseRevokeInput,
+): Promise<MikaApiResult<AdminActionResultDTO>> {
+  const license = await input.repositories.account.findLicenseById(revokeInput.licenseId);
+  if (!license) {
+    return missingTargetWithAudit(input, {
+      action: "license.revoke",
+      targetType: "license",
+      field: "licenseId",
+      value: revokeInput.licenseId,
+      targetId: revokeInput.licenseId,
+    });
+  }
+
+  const now = currentBackendISODateTime(input);
+  const audit = createAdminAuditDocument(input, {
+    action: "license.revoke",
+    targetType: "license",
+    targetId: license.id,
+    status: "started",
+    createdAt: now,
+    metadata: {
+      licenseId: license.id,
+      ...(license.customerId ? { customerId: license.customerId } : {}),
+      ...(license.orderId ? { orderId: license.orderId } : {}),
+      ...(license.orderLineId ? { orderLineId: license.orderLineId } : {}),
+      ...(revokeInput.reason ? { reason: revokeInput.reason } : {}),
+    },
+  });
+  await input.repositories.ops.writeAudit(audit);
+
+  try {
+    const updated: LicenseDocument = {
+      ...license,
+      status: "revoked",
+      updatedAt: now,
+      record: {
+        ...license.record,
+        status: "revoked",
+        revokedAt: now,
+        metadata: {
+          ...license.record.metadata,
+          ...(revokeInput.reason ? { revokeReason: revokeInput.reason } : {}),
+        },
+      },
+    };
+    await input.repositories.account.put(updated);
+    await completeAdminAudit(input, audit);
+
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        id: updated.id,
+        status: "completed",
+        affected: {
+          licenses: 1,
+        },
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "License revoke failed.";
+    await failAdminAudit(input, audit, message);
+    return adminActionFailed(message);
+  }
+}
+
+async function issueDownload(
+  input: CreateMikaBackendApiInput,
+  issueInput: DownloadIssueInput,
+): Promise<MikaApiResult<AdminActionResultDTO>> {
+  const target = await resolveDownloadIssueTarget(input, issueInput);
+  if (!target) {
+    return missingTargetWithAudit(input, {
+      action: "download.issue",
+      targetType: "download",
+      field: "orderId",
+      value: issueInput.orderId ?? issueInput.entitlementId ?? "unknown",
+      targetId: issueInput.orderId,
+      metadata: {
+        ...(issueInput.entitlementId ? { entitlementId: issueInput.entitlementId } : {}),
+        ...(issueInput.orderLineId ? { orderLineId: issueInput.orderLineId } : {}),
+      },
+    });
+  }
+
+  const now = currentBackendISODateTime(input);
+  const expiresAt =
+    issueInput.expiresAt ?? addMilliseconds(now, input.config?.download?.tokenTtlMs ?? 15 * 60_000);
+  const downloadToken = input.createId("download_token");
+  const downloadTokenHash = await hashDownloadToken(input, downloadToken);
+  const audit = createAdminAuditDocument(input, {
+    action: "download.issue",
+    targetType: "download",
+    targetId: createMikaId(target.downloadRef),
+    status: "started",
+    createdAt: now,
+    metadata: {
+      orderId: target.order.id,
+      orderLineId: target.line.id,
+      downloadRef: target.downloadRef,
+      ...(issueInput.entitlementId ? { entitlementId: issueInput.entitlementId } : {}),
+      ...(target.license?.id ? { licenseId: target.license.id } : {}),
+      expiresAt,
+    },
+  });
+  await input.repositories.ops.writeAudit(audit);
+
+  try {
+    if (!target.line.downloadRefs?.includes(target.downloadRef)) {
+      await input.repositories.ledger.put(
+        addDownloadRefToOrder(target.order, target.line.id, target.downloadRef, now),
+      );
+    }
+
+    await input.repositories.ephemeral.put({
+      key: downloadTokenHash,
+      kind: "token",
+      ...(target.order.customerId ? { subjectHash: target.order.customerId } : {}),
+      status: "pending",
+      count: 0,
+      expiresAt,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+      data: {
+        purpose: "download",
+        tokenId: downloadToken,
+        downloadRef: target.downloadRef,
+        orderId: target.order.id,
+        orderLineId: target.line.id,
+        ...(issueInput.entitlementId ? { entitlementId: issueInput.entitlementId } : {}),
+        ...(target.license?.id ? { licenseId: target.license.id } : {}),
+        title: target.line.item.titleSnapshot,
+        redirectUrl: target.downloadRef,
+        adminAuditId: audit.id,
+      },
+    });
+    await completeAdminAudit(input, audit);
+
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        id: createMikaId(target.downloadRef),
+        status: "completed",
+        affected: {
+          downloads: 1,
+          tokens: 1,
+        },
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Download issue failed.";
+    await failAdminAudit(input, audit, message);
+    return adminActionFailed(message);
+  }
+}
+
+function createManualEntitlementDocument(
+  entitlementId: MikaId,
+  grantInput: EntitlementGrantInput,
+  now: ISODateTime,
+  emailHash?: string,
+): EntitlementDocument {
+  const record = {
+    id: entitlementId,
+    ...(grantInput.customerId ? { customerId: grantInput.customerId } : {}),
+    ...(grantInput.userId ? { userId: grantInput.userId } : {}),
+    ...(emailHash ? { emailHash } : {}),
+    entitlementKey: grantInput.entitlementKey,
+    status: "active" as const,
+    ...(grantInput.expiresAt ? { currentPeriodEnd: grantInput.expiresAt } : {}),
+    grantedAt: now,
+    metadata: {
+      source: "admin",
+    },
+  };
+
+  return {
+    id: entitlementId,
+    type: "entitlement",
+    schemaVersion: 1,
+    ...(record.customerId ? { customerId: record.customerId } : {}),
+    ...(record.userId ? { userId: record.userId } : {}),
+    ...(record.emailHash ? { emailHash: record.emailHash } : {}),
+    entitlementKey: record.entitlementKey,
+    status: record.status,
+    record,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+async function findEntitlementForRevoke(
+  input: CreateMikaBackendApiInput,
+  revokeInput: EntitlementRevokeInput,
+): Promise<EntitlementDocument | null> {
+  if (revokeInput.entitlementId) {
+    return input.repositories.account.findEntitlementById(revokeInput.entitlementId);
+  }
+
+  if (!revokeInput.customerId || !revokeInput.entitlementKey) return null;
+
+  const entitlements = await input.repositories.account.listEntitlementsByCustomer(
+    revokeInput.customerId,
+  );
+  return (
+    entitlements.items.find(
+      (item) =>
+        item.data.entitlementKey === revokeInput.entitlementKey && item.data.status === "active",
+    )?.data ?? null
+  );
+}
+
+async function resolveDownloadIssueTarget(
+  input: CreateMikaBackendApiInput,
+  issueInput: DownloadIssueInput,
+): Promise<{
+  readonly order: OrderDocument;
+  readonly line: OrderLine;
+  readonly downloadRef: string;
+  readonly license?: LicenseDocument;
+} | null> {
+  const entitlement = issueInput.entitlementId
+    ? await input.repositories.account.findEntitlementById(issueInput.entitlementId)
+    : null;
+  if (issueInput.entitlementId && (!entitlement || entitlement.status !== "active")) return null;
+
+  const orderId = issueInput.orderId ?? entitlement?.orderId;
+  if (!orderId) return null;
+
+  const order = await input.repositories.ledger.findOrderById(orderId);
+  if (!order) return null;
+
+  const line =
+    order.aggregate.lines.find((candidate) => candidate.id === issueInput.orderLineId) ??
+    order.aggregate.lines.find(
+      (candidate) => candidate.entitlementId === issueInput.entitlementId,
+    ) ??
+    order.aggregate.lines[0];
+  if (!line || (issueInput.orderLineId && line.id !== issueInput.orderLineId)) return null;
+
+  const downloadRef = line.downloadRefs?.[0] ?? orderLineDownloadRef(order, line);
+  const license = await findLicenseForDownload(input, order, line, issueInput.entitlementId);
+
+  return { order, line, downloadRef, ...(license ? { license } : {}) };
+}
+
+async function findLicenseForDownload(
+  input: CreateMikaBackendApiInput,
+  order: OrderDocument,
+  line: OrderLine,
+  entitlementId?: MikaId,
+): Promise<LicenseDocument | null> {
+  if (!order.customerId) return null;
+
+  const licenses = await input.repositories.account.listLicensesByCustomer(order.customerId);
+  return (
+    licenses.items.find(
+      (item) =>
+        item.data.status === "active" &&
+        item.data.orderId === order.id &&
+        item.data.orderLineId === line.id &&
+        (!entitlementId || item.data.entitlementId === entitlementId),
+    )?.data ?? null
+  );
+}
+
+function addDownloadRefToOrder(
+  order: OrderDocument,
+  orderLineId: MikaId,
+  downloadRef: string,
+  now: ISODateTime,
+): OrderDocument {
+  return {
+    ...order,
+    updatedAt: now,
+    aggregate: {
+      ...order.aggregate,
+      lines: order.aggregate.lines.map((line) =>
+        line.id === orderLineId
+          ? { ...line, downloadRefs: [...(line.downloadRefs ?? []), downloadRef] }
+          : line,
+      ),
+      metadata: {
+        ...order.aggregate.metadata,
+        lastAdminAction: "download.issue",
+      },
+    },
+  };
+}
+
+async function completeAdminAudit(
+  input: CreateMikaBackendApiInput,
+  audit: AdminAuditDocument,
+): Promise<void> {
+  await input.repositories.ops.writeAudit({
+    ...audit,
+    status: "completed",
+    updatedAt: currentBackendISODateTime(input),
+    record: {
+      ...audit.record,
+      status: "completed",
+    },
+  });
+}
+
+async function failAdminAudit(
+  input: CreateMikaBackendApiInput,
+  audit: AdminAuditDocument,
+  message: string,
+): Promise<void> {
+  await input.repositories.ops.writeAudit({
+    ...audit,
+    status: "failed",
+    updatedAt: currentBackendISODateTime(input),
+    record: {
+      ...audit.record,
+      status: "failed",
+      metadata: {
+        ...audit.record.metadata,
+        error: message,
+      },
+    },
+  });
+}
+
+function missingTarget(targetType: string, field: string, value: string): MikaApiFailure {
+  const label = targetType[0]?.toUpperCase() + targetType.slice(1);
+
+  return {
+    ok: false,
+    status: 404,
+    error: {
+      code: "VALIDATION_FAILED",
+      message: `${label} '${value}' was not found.`,
+      fieldErrors: { [field]: `${label} was not found.` },
+    },
+  };
+}
+
+async function missingTargetWithAudit(
+  input: CreateMikaBackendApiInput,
+  missing: {
+    readonly action: string;
+    readonly targetType: string;
+    readonly field: string;
+    readonly value: string;
+    readonly targetId?: MikaId;
+    readonly metadata?: JsonObject;
+  },
+): Promise<MikaApiFailure> {
+  const failure = missingTarget(missing.targetType, missing.field, missing.value);
+  const now = currentBackendISODateTime(input);
+  const audit = createAdminAuditDocument(input, {
+    action: missing.action,
+    targetType: missing.targetType,
+    ...(missing.targetId ? { targetId: missing.targetId } : {}),
+    status: "failed",
+    createdAt: now,
+    metadata: {
+      ...missing.metadata,
+      error: failure.error.message,
+      field: missing.field,
+      value: missing.value,
+    },
+  });
+  await input.repositories.ops.writeAudit(audit);
+
+  return failure;
+}
+
+function adminActionFailed(message: string): MikaApiFailure {
+  return {
+    ok: false,
+    status: 500,
+    error: {
+      code: "CONFLICT",
+      message,
+    },
+  };
 }
 
 async function requestMagicLink(

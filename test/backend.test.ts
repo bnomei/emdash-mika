@@ -33,6 +33,7 @@ import type {
   CatalogItemDocument,
   CheckoutDocument,
   CustomerDocument,
+  EmailDocument,
   ProviderAccountDocument,
   EntitlementDocument,
   LicenseDocument,
@@ -2579,6 +2580,272 @@ describe("backend API composition", () => {
         },
       },
     });
+  });
+
+  it("runs repository-backed admin actions and records audit state", async () => {
+    const db = createTestMikaDb();
+    await mikaInitialMigration.up(db);
+    const repositories = {
+      ...createTestBackendRepositories(),
+      ephemeral: new EphemeralRepository(db),
+    } satisfies MikaBackendRepositories;
+    const baseOrder = createOrderDocument();
+    const baseLine = baseOrder.aggregate.lines[0]!;
+    const baseEntitlement = createEntitlementDocument({ id: createTestMikaId("entitlement", 2) });
+    const baseLicense = createLicenseDocument({ entitlementId: baseEntitlement.id });
+    const baseEmail = createEmailDocument();
+    const order = createOrderDocument({
+      aggregate: {
+        ...baseOrder.aggregate,
+        lines: [
+          {
+            ...baseLine,
+            entitlementId: createTestMikaId("entitlement", 2),
+            downloadRefs: [],
+          },
+        ],
+      },
+    });
+    const entitlement = createEntitlementDocument({
+      id: createTestMikaId("entitlement", 2),
+      orderId: order.id,
+      record: {
+        ...baseEntitlement.record,
+        orderId: order.id,
+      },
+    });
+    const license = createLicenseDocument({
+      entitlementId: entitlement.id,
+      record: {
+        ...baseLicense.record,
+        entitlementId: entitlement.id,
+      },
+    });
+    const email = createEmailDocument({
+      status: "failed",
+      record: {
+        ...baseEmail.record,
+        status: "failed",
+        lastError: "SMTP failed.",
+      },
+    });
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+
+    await repositories.ledger.put(order);
+    await repositories.account.put(entitlement);
+    await repositories.account.put(license);
+    await repositories.ops.put(email);
+
+    await expect(
+      api.admin.entitlementGrant({
+        entitlementKey: "downloads.vip",
+        customerId: createTestMikaId("customer", 1),
+        email: "VIP@Example.test",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: createTestMikaId("entitlement", 1),
+        status: "completed",
+        affected: { entitlements: 1 },
+      },
+    });
+    const downloadIssueResult = await api.admin.downloadIssue({
+      entitlementId: entitlement.id,
+      orderId: order.id,
+      orderLineId: createTestMikaId("order_line", 1),
+    });
+    expect(downloadIssueResult).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "download:order_1:order_line_1",
+        status: "completed",
+        affected: {
+          downloads: 1,
+          tokens: 1,
+        },
+      },
+    });
+    await expect(
+      api.admin.entitlementRevoke({
+        entitlementId: entitlement.id,
+        reason: "manual_review",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: entitlement.id,
+        status: "completed",
+        affected: { entitlements: 1 },
+      },
+    });
+    await expect(api.admin.emailResend({ emailId: email.id })).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: email.id,
+        status: "completed",
+        affected: { emails: 1 },
+      },
+    });
+    await expect(
+      api.admin.licenseRevoke({ licenseId: license.id, reason: "fraud" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: license.id,
+        status: "completed",
+        affected: { licenses: 1 },
+      },
+    });
+
+    await expect(
+      repositories.account.findEntitlementById(createTestMikaId("entitlement", 1)),
+    ).resolves.toMatchObject({
+      status: "active",
+      entitlementKey: "downloads.vip",
+      emailHash: createTestHash("email:vip@example.test"),
+    });
+    await expect(repositories.account.findEntitlementById(entitlement.id)).resolves.toMatchObject({
+      status: "revoked",
+      record: {
+        status: "revoked",
+        revokedAt: TEST_NOW,
+        metadata: {
+          revokeReason: "manual_review",
+        },
+      },
+    });
+    await expect(repositories.ops.findEmail(email.id)).resolves.toMatchObject({
+      status: "queued",
+      nextAttemptAt: TEST_NOW,
+      record: {
+        status: "queued",
+        nextAttemptAt: TEST_NOW,
+        metadata: {
+          resentAt: TEST_NOW,
+          adminAuditId: createTestMikaId("admin_audit", 4),
+        },
+      },
+    });
+    await expect(repositories.account.findLicenseById(license.id)).resolves.toMatchObject({
+      status: "revoked",
+      record: {
+        status: "revoked",
+        revokedAt: TEST_NOW,
+        metadata: {
+          revokeReason: "fraud",
+        },
+      },
+    });
+    await expect(repositories.ledger.findOrderById(order.id)).resolves.toMatchObject({
+      aggregate: {
+        lines: [
+          {
+            downloadRefs: ["download:order_1:order_line_1"],
+          },
+        ],
+        metadata: {
+          lastAdminAction: "download.issue",
+        },
+      },
+    });
+    await expect(
+      repositories.ephemeral.get(createTestHash("download-token:download_token_1")),
+    ).resolves.toMatchObject({
+      status: "pending",
+      data: {
+        purpose: "download",
+        orderId: order.id,
+        orderLineId: createTestMikaId("order_line", 1),
+        entitlementId: entitlement.id,
+        downloadRef: "download:order_1:order_line_1",
+        adminAuditId: createTestMikaId("admin_audit", 2),
+      },
+    });
+
+    for (const [auditId, action] of [
+      [createTestMikaId("admin_audit", 1), "entitlement.grant"],
+      [createTestMikaId("admin_audit", 2), "download.issue"],
+      [createTestMikaId("admin_audit", 3), "entitlement.revoke"],
+      [createTestMikaId("admin_audit", 4), "email.resend"],
+      [createTestMikaId("admin_audit", 5), "license.revoke"],
+    ] as const) {
+      await expect(repositories.ops.findAdminAudit(auditId)).resolves.toMatchObject({
+        status: "completed",
+        record: {
+          action,
+          status: "completed",
+        },
+      });
+    }
+
+    await db.destroy();
+  });
+
+  it("returns stable missing target errors for repository-backed admin actions", async () => {
+    const repositories = createTestBackendRepositories();
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+
+    await expect(
+      api.admin.entitlementRevoke({ entitlementId: createTestMikaId("entitlement", 404) }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 404,
+      error: {
+        code: "VALIDATION_FAILED",
+        fieldErrors: { entitlementId: "Entitlement was not found." },
+      },
+    });
+    await expect(
+      api.admin.emailResend({ emailId: createTestMikaId("email", 404) }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 404,
+      error: {
+        code: "VALIDATION_FAILED",
+        fieldErrors: { emailId: "Email was not found." },
+      },
+    });
+    await expect(
+      api.admin.licenseRevoke({ licenseId: createTestMikaId("license", 404) }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 404,
+      error: {
+        code: "VALIDATION_FAILED",
+        fieldErrors: { licenseId: "License was not found." },
+      },
+    });
+    await expect(
+      api.admin.downloadIssue({ orderId: createTestMikaId("order", 404) }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 404,
+      error: {
+        code: "VALIDATION_FAILED",
+        fieldErrors: { orderId: "Download was not found." },
+      },
+    });
+
+    for (const [auditId, action] of [
+      [createTestMikaId("admin_audit", 1), "entitlement.revoke"],
+      [createTestMikaId("admin_audit", 2), "email.resend"],
+      [createTestMikaId("admin_audit", 3), "license.revoke"],
+      [createTestMikaId("admin_audit", 4), "download.issue"],
+    ] as const) {
+      await expect(repositories.ops.findAdminAudit(auditId)).resolves.toMatchObject({
+        status: "failed",
+        record: {
+          action,
+          status: "failed",
+        },
+      });
+    }
   });
 
   it("returns stable magic link token errors for invalid and expired tokens", async () => {
@@ -6815,6 +7082,39 @@ function createLicenseDocument(overrides: Partial<LicenseDocument> = {}): Licens
     entitlementId: record.entitlementId,
     status: record.status,
     customerId: createTestMikaId("customer", 1),
+    record,
+    createdAt: TEST_NOW,
+    updatedAt: TEST_NOW,
+    ...overrides,
+  };
+}
+
+function createEmailDocument(overrides: Partial<EmailDocument> = {}): EmailDocument {
+  const record = {
+    id: overrides.id ?? createTestMikaId("email", 1),
+    customerId: createTestMikaId("customer", 1),
+    orderId: createTestMikaId("order", 1),
+    kind: "download" as const,
+    toEmail: "subscriber@example.test",
+    subject: "Your download",
+    status: "queued" as const,
+    templateKey: "download",
+    templateVersion: "1",
+    attemptCount: 1,
+    maxAttempts: 5,
+    nextAttemptAt: TEST_NOW,
+    createdAt: TEST_NOW,
+    ...overrides.record,
+  };
+
+  return {
+    id: record.id,
+    type: "email",
+    schemaVersion: 1,
+    status: record.status,
+    nextAttemptAt: record.nextAttemptAt,
+    tokenId: record.tokenId,
+    kind: record.kind,
     record,
     createdAt: TEST_NOW,
     updatedAt: TEST_NOW,
