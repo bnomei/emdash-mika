@@ -371,9 +371,17 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
           );
         }
 
-        const result = await input.repositories.stock.adjustStock({
-          ...adjustment,
-          movementEventId: input.createId("stock_event"),
+        const result = await createMikaStockLifecycleService(input).adjust({
+          stockItemId: adjustment.stockItemId,
+          quantityDelta: adjustment.quantityDelta,
+          ...(adjustment.reason !== undefined ? { reason: adjustment.reason } : {}),
+          ...(adjustment.adminAuditId !== undefined
+            ? { adminAuditId: adjustment.adminAuditId }
+            : {}),
+          ...(adjustment.idempotencyKey !== undefined
+            ? { idempotencyKey: adjustment.idempotencyKey }
+            : {}),
+          ...(adjustment.metadata !== undefined ? { metadata: adjustment.metadata } : {}),
           now: currentBackendISODateTime(input),
         });
 
@@ -407,7 +415,7 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
         };
       },
       releaseExpiredReservations: async (releaseInput = {}) => {
-        const result = await input.repositories.stock.releaseExpiredReservations({
+        const result = await createMikaStockLifecycleService(input).releaseExpiredReservations({
           now: releaseInput.now ?? currentBackendISODateTime(input),
         });
 

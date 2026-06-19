@@ -926,6 +926,57 @@ describe("Mika client", () => {
     ]);
   });
 
+  it("keeps operation policy classes aligned with public and agent projections", () => {
+    const operations = Object.values(mikaOperationDefinitions);
+    const publicOperations = operations.filter((operation) => operation.public);
+    const defaultManifestNames = new Set<string>(
+      createMikaAgentManifest().operations.map((operation) => operation.name),
+    );
+    const actionOperationNames = new Set<string>(
+      Object.values(mikaActionDefinitions).map((definition) => definition.operation.name),
+    );
+
+    expect(publicOperations.map((operation) => operation.name)).toEqual([
+      "catalog.sellables",
+      "stock.availability",
+    ]);
+    for (const operation of publicOperations) {
+      expect(operation.httpMethod).toBe("GET");
+      expect(operation.transport).toBe("search");
+      expect(operation.requiresRequestContext).toBe(false);
+      expect(operation.agent).toMatchObject({
+        visible: "public",
+        effect: "read",
+        risk: "none",
+        requiresActor: "none",
+        confirmation: "none",
+        idempotency: "not_needed",
+      });
+      expect(defaultManifestNames.has(operation.name)).toBe(true);
+      expect(actionOperationNames.has(operation.name)).toBe(true);
+    }
+
+    for (const operation of operations) {
+      if (operation.agent.visible === "hidden" || operation.agent.visible === "admin") {
+        expect(defaultManifestNames.has(operation.name)).toBe(false);
+        expect(actionOperationNames.has(operation.name)).toBe(false);
+      }
+
+      const isTrustedOrAdmin =
+        operation.agent.visible === "trusted" || operation.agent.visible === "admin";
+      const mutatesServerState =
+        operation.agent.effect !== "read" && operation.agent.effect !== "download_resolution";
+      if (isTrustedOrAdmin && mutatesServerState) {
+        expect(operation.agent.idempotency).not.toBe("not_needed");
+        expect(operation.agent.idempotencyKey).toMatchObject({
+          keyHeader: MIKA_AGENT_IDEMPOTENCY_KEY_HEADER,
+          owner: "host",
+          replay: "same_key_same_input",
+        });
+      }
+    }
+  });
+
   it("pins action descriptors to their operation metadata", () => {
     expect(
       Object.entries(mikaActionDefinitions).map(([key, definition]) =>

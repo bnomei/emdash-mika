@@ -770,6 +770,177 @@ describe("backend test Kysely stock database harness", () => {
         },
       );
     });
+
+    it(`${repositoryKind} stock repository contract preserves terminal reservation invariants`, async () => {
+      const scenarios = [
+        {
+          name: "release twice",
+          run: async (
+            service: ReturnType<typeof createMikaStockLifecycleService>,
+            stockItem: StockItemRecord,
+            idempotencyKey: string,
+          ) => {
+            const clock = createTestClock();
+            const reservation = await service.reserve({
+              stockItemId: stockItem.id,
+              quantity: 3,
+              expiresAt: clock.isoAt(15 * 60_000),
+              idempotencyKey,
+            });
+            if (reservation.status !== "reserved") {
+              throw new Error(`Expected reservation, received '${reservation.status}'.`);
+            }
+
+            await expect(
+              service.release({
+                reservationEventId: reservation.event.id,
+                now: clock.isoAt(60_000),
+              }),
+            ).resolves.toMatchObject({ status: "released", event: { status: "released" } });
+            await expect(
+              service.release({
+                reservationEventId: reservation.event.id,
+                now: clock.isoAt(120_000),
+              }),
+            ).resolves.toMatchObject({ status: "not_active", event: { status: "released" } });
+
+            return { eventId: reservation.event.id, status: "released" as const };
+          },
+          expectedStock: { quantityOnHand: 8, quantityReserved: 0 },
+        },
+        {
+          name: "consume then release",
+          run: async (
+            service: ReturnType<typeof createMikaStockLifecycleService>,
+            stockItem: StockItemRecord,
+            idempotencyKey: string,
+          ) => {
+            const clock = createTestClock();
+            const reservation = await service.reserve({
+              stockItemId: stockItem.id,
+              quantity: 3,
+              expiresAt: clock.isoAt(15 * 60_000),
+              idempotencyKey,
+            });
+            if (reservation.status !== "reserved") {
+              throw new Error(`Expected reservation, received '${reservation.status}'.`);
+            }
+
+            await expect(
+              service.consume({
+                reservationEventId: reservation.event.id,
+                orderId: createTestMikaId("order", 1),
+                orderLineId: createTestMikaId("order_line", 1),
+                now: clock.isoAt(60_000),
+              }),
+            ).resolves.toMatchObject({ status: "consumed", event: { status: "consumed" } });
+            await expect(
+              service.release({
+                reservationEventId: reservation.event.id,
+                now: clock.isoAt(120_000),
+              }),
+            ).resolves.toMatchObject({ status: "not_active", event: { status: "consumed" } });
+
+            return { eventId: reservation.event.id, status: "consumed" as const };
+          },
+          expectedStock: { quantityOnHand: 5, quantityReserved: 0 },
+        },
+        {
+          name: "expire then release expired",
+          run: async (
+            service: ReturnType<typeof createMikaStockLifecycleService>,
+            stockItem: StockItemRecord,
+            idempotencyKey: string,
+          ) => {
+            const clock = createTestClock();
+            const reservation = await service.reserve({
+              stockItemId: stockItem.id,
+              quantity: 3,
+              expiresAt: clock.isoAt(30_000),
+              idempotencyKey,
+            });
+            if (reservation.status !== "reserved") {
+              throw new Error(`Expected reservation, received '${reservation.status}'.`);
+            }
+
+            await expect(
+              service.releaseExpiredReservations({ now: clock.isoAt(60_000) }),
+            ).resolves.toMatchObject({
+              scannedCount: 1,
+              releasedCount: 1,
+              stockItemsAffected: 1,
+            });
+            await expect(
+              service.releaseExpiredReservations({ now: clock.isoAt(120_000) }),
+            ).resolves.toMatchObject({
+              scannedCount: 0,
+              releasedCount: 0,
+              stockItemsAffected: 0,
+            });
+
+            return { eventId: reservation.event.id, status: "expired" as const };
+          },
+          expectedStock: { quantityOnHand: 8, quantityReserved: 0 },
+        },
+        {
+          name: "reserve replay",
+          run: async (
+            service: ReturnType<typeof createMikaStockLifecycleService>,
+            stockItem: StockItemRecord,
+            idempotencyKey: string,
+          ) => {
+            const clock = createTestClock();
+            const reservation = await service.reserve({
+              stockItemId: stockItem.id,
+              quantity: 3,
+              expiresAt: clock.isoAt(15 * 60_000),
+              idempotencyKey,
+            });
+            const replay = await service.reserve({
+              stockItemId: stockItem.id,
+              quantity: 3,
+              expiresAt: clock.isoAt(15 * 60_000),
+              idempotencyKey,
+            });
+            if (reservation.status !== "reserved" || replay.status !== "replayed") {
+              throw new Error("Expected reservation replay to reuse the original event.");
+            }
+
+            expect(replay.event).toEqual(reservation.event);
+            expect(replay.stock).toEqual(reservation.stock);
+
+            return { eventId: reservation.event.id, status: "active" as const };
+          },
+          expectedStock: { quantityOnHand: 8, quantityReserved: 3 },
+        },
+      ];
+
+      for (const scenario of scenarios) {
+        const stockItem = createStockRecord({
+          quantityOnHand: 8,
+          quantityReserved: 0,
+        });
+        const idempotencyKey = `${repositoryKind}_${scenario.name.replaceAll(" ", "_")}`;
+
+        await withStockRepositoryContractHarness(
+          repositoryKind,
+          stockItem,
+          async ({ repository, service }) => {
+            const terminal = await scenario.run(service, stockItem, idempotencyKey);
+
+            await expect(repository.findEventById(terminal.eventId)).resolves.toMatchObject({
+              status: terminal.status,
+            });
+            await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject(
+              scenario.expectedStock,
+            );
+            const finalStock = await repository.findBySellableId(stockItem.sellableId);
+            expect(finalStock?.quantityOnHand ?? -1).toBeGreaterThanOrEqual(0);
+            expect(finalStock?.quantityReserved ?? -1).toBeGreaterThanOrEqual(0);
+          },
+        );
+      }
+    });
   }
 
   it("treats already released or consumed reservations as non-active conflicts", async () => {
@@ -971,6 +1142,7 @@ describe("backend test Kysely stock database harness", () => {
         adminAuditId: createTestMikaId("admin_audit", 1),
         idempotencyKey: "stock_adjust_1",
         metadata: { source: "backend-test" },
+        now: createTestClock().isoAt(60_000),
       };
 
       await expect(api.admin.stockAdjust(input)).resolves.toMatchObject({
@@ -998,6 +1170,8 @@ describe("backend test Kysely stock database harness", () => {
         adminAuditId: "admin_audit_1",
         idempotencyKey: "stock_adjust_1",
         quantityDelta: 4,
+        createdAt: TEST_NOW,
+        updatedAt: TEST_NOW,
         metadata: { source: "backend-test" },
       });
 
@@ -1565,6 +1739,104 @@ describe("backend API composition", () => {
     });
   });
 
+  it("resolves account identity through customer, user-only, and session email hash paths", async () => {
+    const customerRepositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(createStorageCollection("account")),
+    } satisfies MikaBackendRepositories;
+    await customerRepositories.account.put(createCustomerDocument());
+    await customerRepositories.account.put(createEntitlementDocument());
+
+    const customerApi = createMikaBackendApi(
+      createTestBackendDependencies({ repositories: customerRepositories }),
+    );
+    await expect(customerApi.account.get(createTestRequestContext())).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        customer: { id: "customer_1", userId: "user_1" },
+        entitlements: [{ key: "downloads.pro", status: "active" }],
+      },
+    });
+
+    const userOnlyRepositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(createStorageCollection("account")),
+    } satisfies MikaBackendRepositories;
+    const userOnlyEntitlement = createEntitlementDocument({
+      id: createTestMikaId("entitlement", 2),
+    });
+    await userOnlyRepositories.account.put({
+      ...userOnlyEntitlement,
+      customerId: undefined,
+      userId: "user_only",
+      emailHash: undefined,
+      entitlementKey: "downloads.user",
+      record: {
+        ...userOnlyEntitlement.record,
+        customerId: undefined,
+        userId: "user_only",
+        emailHash: undefined,
+        entitlementKey: "downloads.user",
+      },
+    });
+
+    const userOnlyApi = createMikaBackendApi(
+      createTestBackendDependencies({ repositories: userOnlyRepositories }),
+    );
+    const userOnlyResult = await userOnlyApi.account.get(
+      createTestRequestContext({ customerId: false, userId: "user_only" }),
+    );
+    expect(userOnlyResult).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        entitlements: [{ key: "downloads.user", status: "active" }],
+      },
+    });
+    if (!userOnlyResult.ok) throw new Error("Expected user-only account lookup to succeed.");
+    expect("customer" in userOnlyResult.data).toBe(false);
+
+    const emailHash = createTestHash("email:session@example.test");
+    const emailHashRepositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(createStorageCollection("account")),
+    } satisfies MikaBackendRepositories;
+    const emailHashEntitlement = createEntitlementDocument({
+      id: createTestMikaId("entitlement", 3),
+    });
+    await emailHashRepositories.account.put({
+      ...emailHashEntitlement,
+      customerId: undefined,
+      userId: undefined,
+      emailHash,
+      entitlementKey: "downloads.email",
+      record: {
+        ...emailHashEntitlement.record,
+        customerId: undefined,
+        userId: undefined,
+        emailHash,
+        entitlementKey: "downloads.email",
+      },
+    });
+
+    const emailHashApi = createMikaBackendApi(
+      createTestBackendDependencies({ repositories: emailHashRepositories }),
+    );
+    const emailHashContext = createTestRequestContext({ customerId: false, userId: false });
+    void emailHashContext.session?.set("mika.emailHash", emailHash);
+    const emailHashResult = await emailHashApi.account.get(emailHashContext);
+    expect(emailHashResult).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        entitlements: [{ key: "downloads.email", status: "active" }],
+      },
+    });
+    if (!emailHashResult.ok) throw new Error("Expected email-hash account lookup to succeed.");
+    expect("customer" in emailHashResult.data).toBe(false);
+  });
+
   it("requires identity for account overview", async () => {
     const api = createMikaBackendApi(createTestBackendDependencies());
 
@@ -1654,6 +1926,78 @@ describe("backend API composition", () => {
         ok: false,
         status: 410,
         error: { code: "TOKEN_USED" },
+      });
+    } finally {
+      await harness.destroy();
+    }
+  });
+
+  it("forbids account export status and download access for unrelated identities", async () => {
+    const harness = await createAccountServicesHarness({ exportTtlMs: 60_000 });
+    const otherEmailHash = createTestHash("email:other@example.test");
+
+    try {
+      await harness.repositories.account.put(createCustomerDocument());
+      await harness.repositories.account.put(
+        createCustomerDocument({
+          id: createTestMikaId("customer_document", 2),
+          customerId: createTestMikaId("customer", 2),
+          userId: "user_2",
+          emailHash: otherEmailHash,
+          aggregate: {
+            schemaVersion: 1,
+            email: "other@example.test",
+            emailHash: otherEmailHash,
+            name: "Other Customer",
+          },
+        }),
+      );
+
+      await expect(
+        harness.api.account.export(
+          createTestRequestContext({ customerId: createTestMikaId("customer", 1) }),
+          {},
+        ),
+      ).resolves.toMatchObject({
+        ok: true,
+        status: 202,
+        data: { id: "account_export_1" },
+      });
+
+      const unrelatedContext = createTestRequestContext({
+        customerId: createTestMikaId("customer", 2),
+        userId: "user_2",
+      });
+      await expect(
+        harness.api.account.exportStatus(unrelatedContext, {
+          exportId: createTestMikaId("account_export", 1),
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 403,
+        error: { code: "FORBIDDEN" },
+      });
+      await expect(
+        harness.api.account.exportDownload(unrelatedContext, {
+          exportId: createTestMikaId("account_export", 1),
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 403,
+        error: { code: "FORBIDDEN" },
+      });
+      await expect(
+        harness.api.account.exportDownload(
+          createTestRequestContext({ customerId: false, userId: false }),
+          {
+            exportId: createTestMikaId("account_export", 1),
+            token: "wrong-token",
+          },
+        ),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 400,
+        error: { code: "TOKEN_INVALID" },
       });
     } finally {
       await harness.destroy();
@@ -4020,9 +4364,17 @@ describe("backend API composition", () => {
       status: 200,
       data: { id: "webhook_1", status: "failed", replayable: true },
     });
+    await expect(
+      receiveWebhook(api, "subscription-unknown-duplicate", stripe),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "duplicate", replayable: true },
+    });
 
     await expect(accountCollection.count({ type: "subscription" })).resolves.toBe(0);
     await expect(accountCollection.count({ type: "entitlement" })).resolves.toBe(0);
+    await expect(opsCollection.count({ type: "webhook" })).resolves.toBe(1);
     await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
       status: "failed",
       record: {
@@ -4155,6 +4507,81 @@ describe("backend API composition", () => {
     });
     await expect(accountCollection.count({ type: "subscription" })).resolves.toBe(1);
     await expect(accountCollection.count({ type: "entitlement" })).resolves.toBe(1);
+  });
+
+  it("applies webhook replay eligibility by stored status", async () => {
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      ops: new OpsRepository(opsCollection),
+    };
+    const fake = createFakeMikaProvider({
+      id: TEST_PROVIDER,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "replay_status_hash",
+            parsed: { delivery: "replay-status" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createWebhookEvent(verified, {
+            providerEventId: "event_replay_status",
+            type: "test.replay-status",
+          }),
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(receiveWebhook(api, "replay-status")).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "received", replayable: true },
+    });
+    const webhook = await repositories.ops.findWebhookById(createTestMikaId("webhook", 1));
+    if (!webhook) throw new Error("Expected webhook replay status fixture.");
+
+    const cases = [
+      {
+        status: "received" as const,
+        expected: { status: "completed", affected: { processed: 1, failed: 0 } },
+      },
+      {
+        status: "failed" as const,
+        expected: { status: "failed", affected: { processed: 0, failed: 1 } },
+      },
+      {
+        status: "processed" as const,
+        expected: {
+          status: "completed",
+          message: `Webhook '${webhook.id}' is not eligible for replay.`,
+          affected: { processed: 0, failed: 0 },
+        },
+      },
+    ];
+
+    for (const replayCase of cases) {
+      await repositories.ops.put({
+        ...webhook,
+        status: replayCase.status,
+        record: {
+          ...webhook.record,
+          status: replayCase.status,
+        },
+      });
+
+      await expect(
+        api.admin.webhookReplay({ webhookId: createTestMikaId("webhook", 1) }),
+      ).resolves.toMatchObject({
+        ok: true,
+        status: 200,
+        data: replayCase.expected,
+      });
+    }
   });
 
   it("keeps catalog and stock validation failures in the route layer", async () => {
@@ -5341,6 +5768,13 @@ describe("backend API composition", () => {
     await expect(
       repositories.session.findOpenCartBySession("session_1", TEST_CURRENCY),
     ).resolves.toBeNull();
+    await expectCheckoutFailureInvariant({
+      repositories,
+      provider: fake,
+      providerCheckoutCalls: 0,
+      checkoutId: createTestMikaId("checkout", 1),
+      checkoutStatus: null,
+    });
   });
 
   it("rejects checkout start when current stock cannot satisfy the cart", async () => {
@@ -5384,6 +5818,15 @@ describe("backend API composition", () => {
     await expect(
       repositories.session.findById(createTestMikaId("checkout", 1)),
     ).resolves.toBeNull();
+    await expectCheckoutFailureInvariant({
+      repositories,
+      provider: fake,
+      providerCheckoutCalls: 0,
+      stockSellableId: sellable.id,
+      quantityReserved: 1,
+      checkoutId: createTestMikaId("checkout", 1),
+      checkoutStatus: null,
+    });
   });
 
   it("rejects checkout start for providers without hosted checkout support", async () => {
@@ -5424,6 +5867,15 @@ describe("backend API composition", () => {
     expect(fake.getCalls().createCheckoutSession).toEqual([]);
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
       quantityReserved: 0,
+    });
+    await expectCheckoutFailureInvariant({
+      repositories,
+      provider: fake,
+      providerCheckoutCalls: 0,
+      stockSellableId: sellable.id,
+      quantityReserved: 0,
+      checkoutId: createTestMikaId("checkout", 1),
+      checkoutStatus: null,
     });
   });
 
@@ -5478,6 +5930,17 @@ describe("backend API composition", () => {
     await expect(repositories.session.findById(added.data.id)).resolves.toMatchObject({
       type: "cart",
       status: "open",
+    });
+    await expectCheckoutFailureInvariant({
+      repositories,
+      provider: fake,
+      providerCheckoutCalls: 1,
+      stockSellableId: sellable.id,
+      quantityReserved: 0,
+      cartId: added.data.id,
+      cartStatus: "open",
+      checkoutId: createTestMikaId("checkout", 1),
+      checkoutStatus: null,
     });
   });
 
@@ -6047,6 +6510,17 @@ describe("backend API composition", () => {
     expect(fake.getCalls().createCheckoutSession).toHaveLength(1);
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
       quantityReserved: 0,
+    });
+    await expectCheckoutFailureInvariant({
+      repositories,
+      provider: fake,
+      providerCheckoutCalls: 1,
+      stockSellableId: sellable.id,
+      quantityReserved: 0,
+      cartId: added.data.id,
+      cartStatus: "open",
+      checkoutId: createTestMikaId("checkout", 1),
+      checkoutStatus: "failed",
     });
   });
 
@@ -7675,6 +8149,46 @@ function createCheckoutInput(
     cancelUrl: "https://shop.example.test/cancel",
     ...overrides,
   };
+}
+
+async function expectCheckoutFailureInvariant(input: {
+  readonly repositories: MikaBackendRepositories;
+  readonly provider: ReturnType<typeof createFakeMikaProvider>;
+  readonly providerCheckoutCalls: number;
+  readonly stockSellableId?: MikaId;
+  readonly quantityReserved?: number;
+  readonly cartId?: MikaId;
+  readonly cartStatus?: string;
+  readonly checkoutId?: MikaId;
+  readonly checkoutStatus?: string | null;
+}): Promise<void> {
+  expect(input.provider.getCalls().createCheckoutSession).toHaveLength(input.providerCheckoutCalls);
+
+  if (input.stockSellableId !== undefined && input.quantityReserved !== undefined) {
+    await expect(
+      input.repositories.stock.findBySellableId(input.stockSellableId),
+    ).resolves.toMatchObject({
+      quantityReserved: input.quantityReserved,
+    });
+  }
+
+  if (input.cartId !== undefined && input.cartStatus !== undefined) {
+    await expect(input.repositories.session.findById(input.cartId)).resolves.toMatchObject({
+      type: "cart",
+      status: input.cartStatus,
+    });
+  }
+
+  if (input.checkoutId !== undefined) {
+    if (input.checkoutStatus === null) {
+      await expect(input.repositories.session.findById(input.checkoutId)).resolves.toBeNull();
+    } else if (input.checkoutStatus !== undefined) {
+      await expect(input.repositories.session.findById(input.checkoutId)).resolves.toMatchObject({
+        type: "checkout",
+        status: input.checkoutStatus,
+      });
+    }
+  }
 }
 
 function receiveWebhook(api: MikaApi, marker: string, provider = TEST_PROVIDER) {
