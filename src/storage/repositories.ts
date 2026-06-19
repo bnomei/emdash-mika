@@ -42,6 +42,7 @@ import type {
 } from "./collections";
 import type { MikaDatabase, MikaInsertable, MikaSelectable, MikaUpdateable } from "./schema";
 import {
+  adjustStockStatement,
   consumeReservedStockStatement,
   releaseStockStatement,
   reserveStockStatement,
@@ -95,6 +96,46 @@ export interface ConsumeReservedStockRepositoryInput {
   readonly orderId?: MikaId;
   readonly orderLineId?: MikaId;
 }
+
+export interface ReleaseExpiredReservationsRepositoryInput {
+  readonly now: ISODateTime;
+}
+
+export interface ReleaseExpiredReservationsRepositoryResult {
+  readonly scannedCount: number;
+  readonly releasedCount: number;
+  readonly stockItemsAffected: number;
+}
+
+export interface AdjustStockRepositoryInput {
+  readonly movementEventId: MikaId;
+  readonly stockItemId: MikaId;
+  readonly quantityDelta: number;
+  readonly now: ISODateTime;
+  readonly reason?: NonNullable<StockEventRecord["reason"]>;
+  readonly adminAuditId?: MikaId;
+  readonly idempotencyKey?: string;
+  readonly metadata?: JsonObject;
+}
+
+export type AdjustStockRepositoryResult =
+  | {
+      readonly status: "adjusted";
+      readonly event: StockEventRecord;
+      readonly stock: StockItemRecord;
+    }
+  | {
+      readonly status: "replayed";
+      readonly event: StockEventRecord;
+      readonly stock: StockItemRecord | null;
+    }
+  | {
+      readonly status: "would_go_negative";
+      readonly stock: StockItemRecord;
+    }
+  | {
+      readonly status: "not_found";
+    };
 
 type ReservationEventMutationRepositoryResult<TStatus extends "released" | "consumed"> =
   | {
@@ -673,6 +714,117 @@ export class StockRepository {
         }).execute(executor),
     });
   }
+
+  async releaseExpiredReservations(
+    input: ReleaseExpiredReservationsRepositoryInput,
+  ): Promise<ReleaseExpiredReservationsRepositoryResult> {
+    return withTransaction(this.db, async (executor) => {
+      const expiredRows = await executor
+        .selectFrom("mika_stock_events")
+        .selectAll()
+        .where("kind", "=", "reservation")
+        .where("status", "=", "active")
+        .where("expires_at", "is not", null)
+        .where("expires_at", "<=", input.now)
+        .orderBy("id", "asc")
+        .execute();
+      let releasedCount = 0;
+      const affectedStockItemIds = new Set<MikaId>();
+
+      for (const row of expiredRows) {
+        const event = mapStockEvent(row);
+        const eventMutation = await executor
+          .updateTable("mika_stock_events")
+          .set({
+            status: "expired",
+            updated_at: input.now,
+          })
+          .where("id", "=", event.id)
+          .where("kind", "=", "reservation")
+          .where("status", "=", "active")
+          .where("expires_at", "is not", null)
+          .where("expires_at", "<=", input.now)
+          .executeTakeFirst();
+
+        if (!mutationAffected(eventMutation)) continue;
+
+        const stockMutation = await releaseStockStatement({
+          stockItemId: event.stockItemId,
+          quantity: event.quantityDelta,
+          now: input.now,
+        }).execute(executor);
+        if (!mutationAffected(stockMutation)) {
+          throw new Error(
+            `Stock item '${event.stockItemId}' for expired reservation event '${event.id}' could not be updated.`,
+          );
+        }
+
+        releasedCount += 1;
+        affectedStockItemIds.add(event.stockItemId);
+      }
+
+      return {
+        scannedCount: expiredRows.length,
+        releasedCount,
+        stockItemsAffected: affectedStockItemIds.size,
+      };
+    });
+  }
+
+  async adjustStock(input: AdjustStockRepositoryInput): Promise<AdjustStockRepositoryResult> {
+    assertStockAdjustmentQuantity(input.quantityDelta);
+
+    return withTransaction(this.db, async (executor) => {
+      const replayed =
+        input.idempotencyKey === undefined
+          ? null
+          : await findStockEventByIdempotencyKey(executor, input.idempotencyKey);
+      if (replayed) {
+        return {
+          status: "replayed",
+          event: replayed,
+          stock: await findStockItemById(executor, replayed.stockItemId),
+        };
+      }
+
+      const current = await findStockItemById(executor, input.stockItemId);
+      if (!current) {
+        return { status: "not_found" };
+      }
+
+      const stockMutation = await adjustStockStatement({
+        stockItemId: input.stockItemId,
+        quantityDelta: input.quantityDelta,
+        now: input.now,
+      }).execute(executor);
+      if (!mutationAffected(stockMutation)) {
+        return { status: "would_go_negative", stock: current };
+      }
+
+      const event: StockEventRecord = {
+        id: input.movementEventId,
+        stockItemId: input.stockItemId,
+        kind: "movement",
+        status: "recorded",
+        reason: input.reason ?? "manual_adjustment",
+        adminAuditId: input.adminAuditId,
+        idempotencyKey: input.idempotencyKey,
+        quantityDelta: input.quantityDelta,
+        createdAt: input.now,
+        updatedAt: input.now,
+        metadata: input.metadata,
+      };
+
+      await insertStockEvent(executor, event);
+
+      const stock = await findStockItemById(executor, input.stockItemId);
+      if (!stock) {
+        throw new Error(`Adjusted stock item '${input.stockItemId}' could not be reloaded.`);
+      }
+
+      return { status: "adjusted", event, stock };
+    });
+  }
 }
 
 async function mutateActiveReservationEvent<TStatus extends "released" | "consumed">(input: {
@@ -1040,6 +1192,12 @@ function boolOrUndefined(value: 0 | 1 | null): boolean | undefined {
 function assertReservationQuantity(quantity: number): void {
   if (!Number.isInteger(quantity) || quantity < 1) {
     throw new RangeError("Stock reservation quantity must be a positive whole number.");
+  }
+}
+
+function assertStockAdjustmentQuantity(quantityDelta: number): void {
+  if (!Number.isInteger(quantityDelta) || quantityDelta === 0) {
+    throw new RangeError("Stock adjustment quantity must be a non-zero whole number.");
   }
 }
 

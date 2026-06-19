@@ -52,6 +52,7 @@ import {
   type JsonObject,
   type MikaId,
   type ProviderName,
+  type StockMovementReason,
 } from "../types/primitives";
 
 export { z };
@@ -105,6 +106,14 @@ export const optionalJsonObjectSchema = z.preprocess(
   parseJsonFormValue,
   jsonObjectSchema.optional(),
 );
+export const stockMovementReasonSchema = z.enum([
+  "manual_adjustment",
+  "reservation",
+  "release",
+  "sale",
+  "refund",
+  "sync",
+]) satisfies z.ZodType<StockMovementReason>;
 export const variantOptionsSchema = z.preprocess(
   parseJsonFormValue,
   z.record(z.string(), z.string()).optional(),
@@ -356,7 +365,10 @@ export const providerSyncInputSchema = z.object({
 export const stockAdjustInputSchema = z.object({
   stockItemId: mikaIdSchema,
   quantityDelta: integerSchema,
-  reason: optionalStringSchema,
+  reason: stockMovementReasonSchema.optional(),
+  adminAuditId: optionalMikaIdSchema,
+  idempotencyKey: optionalStringSchema,
+  metadata: optionalJsonObjectSchema,
 }) satisfies z.ZodType<StockAdjustInput>;
 
 export const releaseExpiredReservationsInputSchema = z.object({

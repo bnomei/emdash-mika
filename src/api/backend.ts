@@ -1,7 +1,9 @@
 import type { MikaProviderRegistry } from "../provider";
 import type {
+  AdjustStockRepositoryResult,
   ConsumeReservedStockRepositoryResult,
   MikaRepositories,
+  ReleaseExpiredReservationsRepositoryResult,
   ReleaseReservedStockRepositoryResult,
   ReserveStockRepositoryResult,
 } from "../storage/repositories";
@@ -38,8 +40,10 @@ import type { MikaRequestContext } from "./context";
 import { createMikaApi, type MikaApi, type MikaApiOverrides } from "./server";
 import type {
   AddCartItemInput,
+  AdminActionResultDTO,
   CartDTO,
   MikaApiResult,
+  StockAdjustInput,
   WishlistDTO,
   WishlistItemInput,
 } from "./types";
@@ -134,10 +138,26 @@ export interface ConsumeReservedStockInput {
 
 export type ConsumeReservedStockResult = ConsumeReservedStockRepositoryResult;
 
+export interface ReleaseExpiredReservationsInput {
+  readonly now?: ISODateTime;
+}
+
+export type ReleaseExpiredReservationsResult = ReleaseExpiredReservationsRepositoryResult;
+
+export interface AdjustStockInput extends StockAdjustInput {
+  readonly now?: ISODateTime;
+}
+
+export type AdjustStockResult = AdjustStockRepositoryResult;
+
 export interface MikaStockLifecycleService {
   reserve(input: ReserveStockInput): Promise<ReserveStockResult>;
   release(input: ReleaseReservedStockInput): Promise<ReleaseReservedStockResult>;
   consume(input: ConsumeReservedStockInput): Promise<ConsumeReservedStockResult>;
+  releaseExpiredReservations(
+    input?: ReleaseExpiredReservationsInput,
+  ): Promise<ReleaseExpiredReservationsResult>;
+  adjust(input: AdjustStockInput): Promise<AdjustStockResult>;
 }
 
 export function createMikaStockLifecycleService(
@@ -159,6 +179,16 @@ export function createMikaStockLifecycleService(
       input.repositories.stock.consume({
         ...reservation,
         now: reservation.now ?? currentBackendISODateTime(input),
+      }),
+    releaseExpiredReservations: async (reservation = {}) =>
+      input.repositories.stock.releaseExpiredReservations({
+        now: reservation.now ?? currentBackendISODateTime(input),
+      }),
+    adjust: async (adjustment) =>
+      input.repositories.stock.adjustStock({
+        ...adjustment,
+        movementEventId: input.createId("stock_event"),
+        now: adjustment.now ?? currentBackendISODateTime(input),
       }),
   };
 }
@@ -238,6 +268,70 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
         return { ok: true, status: 200, data: availability };
       },
       ...input.overrides?.stock,
+    },
+    admin: {
+      stockAdjust: async (adjustment) => {
+        if (!Number.isInteger(adjustment.quantityDelta) || adjustment.quantityDelta === 0) {
+          return validationFailed(
+            "quantityDelta",
+            "Quantity delta must be a non-zero whole number.",
+          );
+        }
+
+        const result = await input.repositories.stock.adjustStock({
+          ...adjustment,
+          movementEventId: input.createId("stock_event"),
+          now: currentBackendISODateTime(input),
+        });
+
+        if (result.status === "not_found") {
+          return {
+            ok: false,
+            status: 404,
+            error: {
+              code: "VALIDATION_FAILED",
+              message: `Stock item '${adjustment.stockItemId}' was not found.`,
+              fieldErrors: { stockItemId: "Stock item was not found." },
+            },
+          };
+        }
+
+        if (result.status === "would_go_negative") {
+          return {
+            ok: false,
+            status: 409,
+            error: {
+              code: "CONFLICT",
+              message: `Stock adjustment for '${adjustment.stockItemId}' would make on-hand quantity negative.`,
+            },
+          };
+        }
+
+        return {
+          ok: true,
+          status: 200,
+          data: adminStockAdjustmentResult(result),
+        };
+      },
+      releaseExpiredReservations: async (releaseInput = {}) => {
+        const result = await input.repositories.stock.releaseExpiredReservations({
+          now: releaseInput.now ?? currentBackendISODateTime(input),
+        });
+
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            status: "completed",
+            affected: {
+              reservationsScanned: result.scannedCount,
+              reservationsReleased: result.releasedCount,
+              stockItems: result.stockItemsAffected,
+            },
+          },
+        };
+      },
+      ...input.overrides?.admin,
     },
     cart: {
       get: async (ctx) => {
@@ -1216,6 +1310,22 @@ function variantOptionsMatch(
   return Object.entries(variantOptions).every(([option, value]) =>
     sellable.variantOptions.some((item) => item.option === option && item.value === value),
   );
+}
+
+function adminStockAdjustmentResult(
+  result: Extract<AdjustStockRepositoryResult, { readonly status: "adjusted" | "replayed" }>,
+): AdminActionResultDTO {
+  const applied = result.status === "adjusted";
+
+  return {
+    id: result.event.id,
+    status: "completed",
+    ...(applied ? {} : { message: "Stock adjustment idempotency key was replayed." }),
+    affected: {
+      stockItems: applied ? 1 : 0,
+      movements: applied ? 1 : 0,
+    },
+  };
 }
 
 function currentBackendISODateTime(input: MikaBackendDependencies): ISODateTime {

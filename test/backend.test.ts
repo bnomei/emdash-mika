@@ -601,6 +601,166 @@ describe("backend test Kysely stock database harness", () => {
       await database.destroy();
     }
   });
+
+  it("releases expired active reservations once and reports admin affected counts", async () => {
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const repository = new StockRepository(db);
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories: { ...createTestBackendRepositories(), stock: repository },
+      }),
+    );
+    const service = createMikaStockLifecycleService(
+      createIncrementingBackendDependencies({
+        repositories: { ...createTestBackendRepositories(), stock: repository },
+      }),
+    );
+    const clock = createTestClock();
+    const stockItem = createStockRecord({
+      quantityOnHand: 10,
+      quantityReserved: 0,
+    });
+
+    try {
+      await mikaInitialMigration.up(db);
+      await repository.putItem(stockItem);
+
+      const expiredReservation = await service.reserve({
+        stockItemId: stockItem.id,
+        quantity: 3,
+        expiresAt: clock.isoAt(30_000),
+        idempotencyKey: "release_expired_1",
+      });
+      const activeReservation = await service.reserve({
+        stockItemId: stockItem.id,
+        quantity: 2,
+        expiresAt: clock.isoAt(15 * 60_000),
+        idempotencyKey: "release_expired_2",
+      });
+      if (expiredReservation.status !== "reserved" || activeReservation.status !== "reserved") {
+        throw new Error("Expected stock reservations to be created.");
+      }
+
+      await expect(
+        api.admin.releaseExpiredReservations({ now: clock.isoAt(60_000) }),
+      ).resolves.toMatchObject({
+        ok: true,
+        status: 200,
+        data: {
+          status: "completed",
+          affected: {
+            reservationsScanned: 1,
+            reservationsReleased: 1,
+            stockItems: 1,
+          },
+        },
+      });
+      await expect(repository.findEventById(expiredReservation.event.id)).resolves.toMatchObject({
+        status: "expired",
+        updatedAt: "2026-01-01T00:01:00.000Z",
+      });
+      await expect(repository.findEventById(activeReservation.event.id)).resolves.toMatchObject({
+        status: "active",
+      });
+      await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+        quantityOnHand: 10,
+        quantityReserved: 2,
+      });
+      await expect(
+        api.admin.releaseExpiredReservations({ now: clock.isoAt(120_000) }),
+      ).resolves.toMatchObject({
+        ok: true,
+        data: {
+          affected: {
+            reservationsScanned: 0,
+            reservationsReleased: 0,
+            stockItems: 0,
+          },
+        },
+      });
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
+    }
+  });
+
+  it("applies admin stock adjustment once and records movement audit metadata", async () => {
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const repository = new StockRepository(db);
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories: { ...createTestBackendRepositories(), stock: repository },
+      }),
+    );
+    const stockItem = createStockRecord({
+      quantityOnHand: 5,
+      quantityReserved: 1,
+    });
+
+    try {
+      await mikaInitialMigration.up(db);
+      await repository.putItem(stockItem);
+
+      const input = {
+        stockItemId: stockItem.id,
+        quantityDelta: 4,
+        reason: "sync" as const,
+        adminAuditId: createTestMikaId("admin_audit", 1),
+        idempotencyKey: "stock_adjust_1",
+        metadata: { source: "backend-test" },
+      };
+
+      await expect(api.admin.stockAdjust(input)).resolves.toMatchObject({
+        ok: true,
+        status: 200,
+        data: {
+          id: "stock_event_1",
+          status: "completed",
+          affected: {
+            stockItems: 1,
+            movements: 1,
+          },
+        },
+      });
+      await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+        quantityOnHand: 9,
+        quantityReserved: 1,
+      });
+      await expect(repository.findEventByIdempotencyKey("stock_adjust_1")).resolves.toMatchObject({
+        id: "stock_event_1",
+        stockItemId: stockItem.id,
+        kind: "movement",
+        status: "recorded",
+        reason: "sync",
+        adminAuditId: "admin_audit_1",
+        idempotencyKey: "stock_adjust_1",
+        quantityDelta: 4,
+        metadata: { source: "backend-test" },
+      });
+
+      await expect(api.admin.stockAdjust(input)).resolves.toMatchObject({
+        ok: true,
+        data: {
+          id: "stock_event_1",
+          status: "completed",
+          affected: {
+            stockItems: 0,
+            movements: 0,
+          },
+        },
+      });
+      await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+        quantityOnHand: 9,
+        quantityReserved: 1,
+      });
+      await expect(countStockEvents(db)).resolves.toBe(1);
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
+    }
+  });
 });
 
 describe("backend test provider helpers", () => {
@@ -2211,6 +2371,12 @@ function createTestStockRepository(
     },
     async consume() {
       throw new Error("The test stock repository does not implement consume().");
+    },
+    async releaseExpiredReservations() {
+      return { scannedCount: 0, releasedCount: 0, stockItemsAffected: 0 };
+    },
+    async adjustStock() {
+      throw new Error("The test stock repository does not implement adjustStock().");
     },
   };
 }

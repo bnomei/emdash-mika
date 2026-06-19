@@ -8,6 +8,7 @@ import type {
   PaymentStatus,
   ProviderName,
   PurchaseMode,
+  StockMovementReason,
   SubscriptionStatus,
 } from "../types/primitives";
 import type { MikaAgentProofKind, MikaAgentProofRef } from "./agent-types";
@@ -551,6 +552,7 @@ export interface AdminActionResultDTO {
   readonly status: "queued" | "running" | "completed" | "failed" | "unsupported";
   readonly message?: string;
   readonly redirectUrl?: string;
+  readonly affected?: Record<string, number>;
 }
 
 export interface ProviderHealthInput {
@@ -565,7 +567,10 @@ export interface ProviderSyncInput {
 export interface StockAdjustInput {
   readonly stockItemId: MikaId;
   readonly quantityDelta: number;
-  readonly reason?: string;
+  readonly reason?: StockMovementReason;
+  readonly adminAuditId?: MikaId;
+  readonly idempotencyKey?: string;
+  readonly metadata?: JsonObject;
 }
 
 export interface ReleaseExpiredReservationsInput {
