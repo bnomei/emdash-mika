@@ -1,0 +1,7 @@
+.DS_Store
+/.orchid/
+/.frigg/
+/dist/
+/docs/
+/node_modules/
+/specs/

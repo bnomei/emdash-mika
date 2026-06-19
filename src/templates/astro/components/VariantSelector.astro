@@ -1,0 +1,58 @@
+---
+import type { SellableDTO } from "@bnomei/emdash-mika/types";
+import {
+  formatMikaSellable,
+  isMikaPurchasable
+} from "@bnomei/emdash-mika/astro";
+
+interface Props {
+  sellables: readonly SellableDTO[];
+  selectedSellableId?: string;
+  label?: string;
+  class?: string;
+  [attribute: string]: unknown;
+}
+
+const {
+  sellables,
+  selectedSellableId,
+  label = "Variant",
+  class: className,
+  ...attrs
+} = Astro.props;
+const activeSellables = sellables.filter((sellable) => sellable.active);
+const enabledSellables = activeSellables.filter(
+  (sellable) => isMikaPurchasable(sellable.availability)
+);
+const selectedCandidate = enabledSellables.find(
+  (sellable) => sellable.id === selectedSellableId
+);
+const selected = selectedCandidate?.id ?? enabledSellables[0]?.id;
+const hiddenValue = selected ?? activeSellables[0]?.id ?? "";
+---
+
+{activeSellables.length > 1 ? (
+  <fieldset {...attrs} data-mika-variants class={className}>
+    <legend>{label}</legend>
+    {activeSellables.map((sellable) => (
+      <label>
+        <input
+          type="radio"
+          name="sellableId"
+          value={sellable.id}
+          checked={sellable.id === selected}
+          disabled={!isMikaPurchasable(sellable.availability)}
+        />
+        <span>{formatMikaSellable(sellable)}</span>
+      </label>
+    ))}
+  </fieldset>
+) : (
+  <input
+    {...attrs}
+    class={className}
+    type="hidden"
+    name="sellableId"
+    value={hiddenValue}
+  />
+)}

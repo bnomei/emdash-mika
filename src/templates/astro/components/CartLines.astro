@@ -1,0 +1,103 @@
+---
+import { actions } from "astro:actions";
+import type { CartDTO } from "@bnomei/emdash-mika/types";
+import {
+  formatMikaMoney,
+  formatMikaVariant,
+  mikaMaxPurchaseQuantity,
+  mikaReturnTo
+} from "@bnomei/emdash-mika/astro";
+
+interface Props {
+  cart?: CartDTO | null;
+  returnTo?: string;
+  emptyLabel?: string;
+  quantityLabel?: string;
+  updateLabel?: string;
+  removeLabel?: string;
+  saveForLaterLabel?: string;
+  class?: string;
+  [attribute: string]: unknown;
+}
+
+const {
+  cart,
+  returnTo = mikaReturnTo(Astro.url),
+  emptyLabel = "Your cart is empty.",
+  quantityLabel = "Quantity",
+  updateLabel = "Update",
+  removeLabel = "Remove",
+  saveForLaterLabel = "Save for later",
+  class: className,
+  ...attrs
+} = Astro.props;
+const hasEmptySlot = Astro.slots.has("empty");
+---
+
+<div {...attrs} data-mika-cart-lines class={className}>
+  {cart?.items.length ? (
+    <ul>
+      {cart.items.map((line) => (
+        <li data-mika-cart-line={line.id}>
+          <div>
+            <strong>{line.title}</strong>
+            {line.variantOptions.length > 0 && (
+              <small>{formatMikaVariant(line.variantOptions)}</small>
+            )}
+          </div>
+
+          <form action={actions.mika.cart.update} method="post">
+            <input type="hidden" name="lineId" value={line.id} />
+            <input type="hidden" name="returnTo" value={returnTo} />
+            <label>
+              <span>{quantityLabel}</span>
+              <input
+                name="quantity"
+                type="number"
+                min="1"
+                max={mikaMaxPurchaseQuantity(line.availability)}
+                inputmode="numeric"
+                value={String(line.quantity)}
+                aria-label={`${quantityLabel} for ${line.title}`}
+              />
+            </label>
+            <button
+              type="submit"
+              aria-label={`${updateLabel} ${line.title}`}
+            >
+              {updateLabel}
+            </button>
+          </form>
+
+          <form action={actions.mika.cart.remove} method="post">
+            <input type="hidden" name="lineId" value={line.id} />
+            <input type="hidden" name="returnTo" value={returnTo} />
+            <button
+              type="submit"
+              aria-label={`${removeLabel} ${line.title}`}
+            >
+              {removeLabel}
+            </button>
+          </form>
+
+          <form action={actions.mika.wishlist.saveForLater} method="post">
+            <input type="hidden" name="lineId" value={line.id} />
+            <input type="hidden" name="returnTo" value={returnTo} />
+            <button
+              type="submit"
+              aria-label={`${saveForLaterLabel} ${line.title}`}
+            >
+              {saveForLaterLabel}
+            </button>
+          </form>
+
+          <output>{formatMikaMoney(line.total)}</output>
+        </li>
+      ))}
+    </ul>
+  ) : hasEmptySlot ? (
+    <slot name="empty" />
+  ) : (
+    <p>{emptyLabel}</p>
+  )}
+</div>

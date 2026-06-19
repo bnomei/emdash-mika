@@ -1,0 +1,121 @@
+{
+  "name": "@bnomei/emdash-mika",
+  "version": "0.0.0",
+  "description": "Lightweight commerce primitives for EmDash and Astro.",
+  "keywords": [
+    "astro",
+    "cart",
+    "cms",
+    "commerce",
+    "ecommerce",
+    "emdash",
+    "emdash-plugin",
+    "subscription",
+    "typescript"
+  ],
+  "homepage": "https://github.com/bnomei/emdash-mika#readme",
+  "bugs": {
+    "url": "https://github.com/bnomei/emdash-mika/issues"
+  },
+  "license": "MIT",
+  "author": "Bruno Meilick <b@bnomei.com> (https://bnomei.com)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bnomei/emdash-mika.git"
+  },
+  "files": [
+    "dist",
+    "src/templates"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    },
+    "./agent": {
+      "types": "./dist/agent.d.mts",
+      "import": "./dist/agent.mjs"
+    },
+    "./admin": {
+      "types": "./dist/admin.d.mts",
+      "import": "./dist/admin.mjs"
+    },
+    "./astro": {
+      "types": "./dist/astro.d.mts",
+      "import": "./dist/astro.mjs"
+    },
+    "./astro-actions": {
+      "types": "./dist/astro-actions.d.mts",
+      "import": "./dist/astro-actions.mjs"
+    },
+    "./client": {
+      "types": "./dist/api/client.d.mts",
+      "import": "./dist/api/client.mjs"
+    },
+    "./email": {
+      "types": "./dist/email.d.mts",
+      "import": "./dist/email.mjs"
+    },
+    "./provider": {
+      "types": "./dist/provider.d.mts",
+      "import": "./dist/provider.mjs"
+    },
+    "./react": {
+      "types": "./dist/react.d.mts",
+      "import": "./dist/react.mjs"
+    },
+    "./server": {
+      "types": "./dist/server.d.mts",
+      "import": "./dist/server.mjs"
+    },
+    "./templates/*": "./src/templates/*",
+    "./types": {
+      "types": "./dist/types/index.d.mts",
+      "import": "./dist/types/index.mjs"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "npm run build:pack -- --clean",
+    "build:pack": "vp pack src/index.ts src/agent.ts src/admin.ts src/astro.ts src/astro-actions.ts src/api/client.ts src/email.ts src/provider.ts src/react.ts src/server.ts src/types/index.ts --format esm --dts --tsconfig tsconfig.json --deps.never-bundle astro:actions --deps.never-bundle astro/zod --deps.never-bundle react",
+    "check": "vp check .",
+    "pack:check": "npm run build:pack -- --clean --publint",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run check && npm run typecheck && npm run test && npm run pack:check && npm run types:check",
+    "test": "vp test run test/*.test.ts && tsc -p test/tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "types:check": "attw --pack . --profile esm-only --no-summary && tsc -p test/package-exports.tsconfig.json"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.3",
+    "@types/react": "^19.2.7",
+    "ajv": "^8.20.0",
+    "astro": "^6.4.4",
+    "emdash": "^0.19.0",
+    "kysely": "^0.28.0",
+    "publint": "^0.3.21",
+    "react": "^19.2.3",
+    "typescript": "^6.0.3",
+    "vite-plus": "^0.1.24"
+  },
+  "peerDependencies": {
+    "astro": "^5.0.0 || ^6.0.0",
+    "emdash": ">=0.19.0",
+    "react": "^18.3.0 || ^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "packageManager": "npm@11.16.0"
+}

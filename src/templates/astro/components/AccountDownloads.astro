@@ -1,0 +1,42 @@
+---
+import type { DownloadDTO } from "@bnomei/emdash-mika/types";
+
+interface Props {
+  downloads: readonly DownloadDTO[];
+  headingLabel?: string;
+  emptyLabel?: string;
+  class?: string;
+  [attribute: string]: unknown;
+}
+
+const {
+  downloads,
+  headingLabel = "Downloads",
+  emptyLabel = "No downloads.",
+  class: className,
+  ...attrs
+} = Astro.props;
+const hasEmptySlot = Astro.slots.has("empty");
+---
+
+<section {...attrs} data-mika-account-downloads class={className}>
+  <h2><slot name="heading">{headingLabel}</slot></h2>
+  {downloads.length ? (
+    <ul>
+      {downloads.map((download) => (
+        <li>
+          <a href={download.href}>{download.title}</a>
+          {download.expiresAt && (
+            <time datetime={download.expiresAt}>
+              {new Date(download.expiresAt).toLocaleDateString()}
+            </time>
+          )}
+        </li>
+      ))}
+    </ul>
+  ) : hasEmptySlot ? (
+    <slot name="empty" />
+  ) : (
+    <p>{emptyLabel}</p>
+  )}
+</section>

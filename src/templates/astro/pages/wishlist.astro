@@ -1,0 +1,23 @@
+---
+import { actions } from "astro:actions";
+import { createMika } from "@bnomei/emdash-mika/astro";
+import WishlistList from "../components/WishlistList.astro";
+
+export const prerender = false;
+
+const Mika = createMika(Astro);
+
+const removeResult = Astro.getActionResult(actions.mika.wishlist.remove);
+const moveToCartResult = Astro.getActionResult(actions.mika.wishlist.moveToCart);
+const actionError = removeResult?.error?.message ?? moveToCartResult?.error?.message;
+const wishlistResult = await Mika.wishlist.get();
+const wishlist = wishlistResult.ok ? wishlistResult.data : null;
+const error = actionError ?? (wishlistResult.ok ? null : wishlistResult.error.message);
+---
+
+<main data-mika-wishlist-page>
+  <h1>Wishlist</h1>
+  {error && <p role="alert">{error}</p>}
+  {moveToCartResult?.data && <p role="status">Item moved to cart.</p>}
+  <WishlistList wishlist={wishlist} />
+</main>

@@ -1,0 +1,462 @@
+---
+import type { AvailabilityStatus, PriceDTO, SellableDTO } from "@bnomei/emdash-mika/types";
+
+type JsonLdUrl = string | URL;
+type JsonLdPrimitive = string | number | boolean | null;
+type JsonLdValue = JsonLdPrimitive | JsonLdObject | readonly JsonLdValue[];
+interface JsonLdObject {
+  readonly [key: string]: JsonLdValue | undefined;
+}
+
+interface ProductStructuredDataIdentifiers {
+  readonly sku?: string;
+  readonly mpn?: string;
+  readonly gtin?: string;
+  readonly productID?: string;
+  readonly productGroupID?: string;
+}
+
+interface ProductStructuredDataBrand {
+  readonly name: string;
+  readonly url?: JsonLdUrl;
+  readonly logo?: JsonLdUrl;
+}
+
+interface ProductStructuredDataMerchant {
+  readonly name: string;
+  readonly url?: JsonLdUrl;
+}
+
+interface ProductStructuredDataProduct {
+  readonly name: string;
+  readonly description?: string;
+  readonly url?: JsonLdUrl;
+  readonly images?: readonly JsonLdUrl[];
+  readonly brand?: string | ProductStructuredDataBrand;
+  readonly identifiers?: ProductStructuredDataIdentifiers;
+  readonly category?: string;
+  readonly itemCondition?: string;
+}
+
+interface ProductStructuredDataVariants {
+  readonly urls?: Record<string, JsonLdUrl>;
+  readonly images?: Record<string, readonly JsonLdUrl[]>;
+  readonly identifiers?: Record<string, ProductStructuredDataIdentifiers>;
+  readonly names?: Record<string, string>;
+}
+
+interface ProductStructuredDataOffers {
+  readonly seller?: string | ProductStructuredDataMerchant;
+  readonly priceValidUntil?: string;
+  readonly itemCondition?: string;
+  readonly shippingDetails?: JsonLdObject | readonly JsonLdObject[];
+  readonly hasMerchantReturnPolicy?: JsonLdObject | readonly JsonLdObject[];
+}
+
+interface Props {
+  sellables: readonly SellableDTO[];
+  product?: ProductStructuredDataProduct;
+  name?: string;
+  description?: string;
+  url?: JsonLdUrl;
+  images?: readonly JsonLdUrl[];
+  sku?: string;
+  brand?: string | ProductStructuredDataBrand;
+  variants?: false | ProductStructuredDataVariants;
+  offers?: ProductStructuredDataOffers;
+}
+
+const {
+  sellables,
+  product,
+  name,
+  description,
+  url,
+  images,
+  sku,
+  brand,
+  variants,
+  offers: offerOptions = {},
+} = Astro.props;
+const activeSellables = sellables.filter((sellable) => sellable.active);
+const productInput = normalizeProductInput();
+const productUrl = toAbsoluteUrl(productInput.url) ?? Astro.url.toString();
+const productId = `${productUrl}#product`;
+const productImages = resolveImages(productInput.images, activeSellables);
+const hasVariants =
+  variants !== false && activeSellables.some((sellable) => sellable.variantOptions.length > 0);
+const productStructuredData = withContext(
+  hasVariants ? productGroupStructuredData() : productStructuredDataNode(activeSellables),
+);
+
+function normalizeProductInput(): ProductStructuredDataProduct {
+  return {
+    name: product?.name ?? name ?? activeSellables[0]?.title ?? "Product",
+    description: product?.description ?? description,
+    url: product?.url ?? url,
+    images: product?.images ?? images,
+    brand: product?.brand ?? brand,
+    identifiers: product?.identifiers ?? (sku ? { sku } : undefined),
+    category: product?.category,
+    itemCondition: product?.itemCondition,
+  };
+}
+
+function withContext(node: JsonLdObject): JsonLdObject {
+  return {
+    "@context": "https://schema.org",
+    ...node,
+  };
+}
+
+function productStructuredDataNode(productSellables: readonly SellableDTO[]): JsonLdObject {
+  const productOffers = productSellables.flatMap((sellable) => productOffersForSellable(sellable));
+
+  return removeUndefined({
+    "@type": "Product",
+    "@id": productId,
+    name: productInput.name,
+    description: productInput.description,
+    url: productUrl,
+    image: productImages.length > 0 ? productImages : undefined,
+    ...productIdentifiers(productInput.identifiers),
+    brand: brandNode(productInput.brand),
+    category: productInput.category,
+    offers: offersValue(productOffers),
+  });
+}
+
+function productGroupStructuredData(): JsonLdObject {
+  const groupId = `${productUrl}#product-group`;
+  const productGroupID = productGroupIdentifier();
+  const variantNodes = activeSellables.map((sellable) =>
+    variantProductNode(sellable, groupId, productGroupID),
+  );
+  const productOffers = activeSellables.flatMap((sellable) => productOffersForSellable(sellable));
+
+  return removeUndefined({
+    "@type": "ProductGroup",
+    "@id": groupId,
+    name: productInput.name,
+    description: productInput.description,
+    url: productUrl,
+    image: productImages.length > 0 ? productImages : undefined,
+    ...productIdentifiers(productInput.identifiers),
+    productGroupID,
+    brand: brandNode(productInput.brand),
+    category: productInput.category,
+    variesBy: variesBy(),
+    hasVariant: variantNodes.length > 0 ? variantNodes : undefined,
+    offers: comparableAggregateOffer(productOffers),
+  });
+}
+
+function variantProductNode(
+  sellable: SellableDTO,
+  groupId: string,
+  productGroupID: string | undefined,
+): JsonLdObject {
+  const variantUrl = variantUrlFor(sellable);
+  const variantImages = resolveImages(variantImagesFor(sellable), [sellable]);
+
+  return removeUndefined({
+    "@type": "Product",
+    "@id": `${variantUrl}#product-${sellable.id}`,
+    name: variantNameFor(sellable),
+    description: productInput.description,
+    url: variantUrl,
+    image: variantImages.length > 0 ? variantImages : undefined,
+    ...productIdentifiers(variantIdentifiersFor(sellable) ?? productInput.identifiers),
+    sku: variantIdentifiersFor(sellable)?.sku ?? sellable.sku ?? productInput.identifiers?.sku,
+    brand: brandNode(productInput.brand),
+    category: productInput.category,
+    isVariantOf: {
+      "@type": "ProductGroup",
+      "@id": groupId,
+      name: productInput.name,
+    },
+    inProductGroupWithID: productGroupID,
+    ...variantSchemaProperties(sellable),
+    additionalProperty: variantProperties(sellable),
+    offers: offersValue(productOffersForSellable(sellable)),
+  });
+}
+
+function productOffersForSellable(sellable: SellableDTO): readonly JsonLdObject[] {
+  return sellable.prices
+    .filter((price) => price.active)
+    .map((price) => productOffer(sellable, price));
+}
+
+function productOffer(sellable: SellableDTO, price: PriceDTO): JsonLdObject {
+  const offerUrl = variantUrlFor(sellable);
+  const condition = offerOptions.itemCondition ?? productInput.itemCondition;
+
+  return removeUndefined({
+    "@type": "Offer",
+    "@id": `${offerUrl}#offer-${price.id}`,
+    url: offerUrl,
+    sku: sellable.sku ?? variantIdentifiersFor(sellable)?.sku ?? productInput.identifiers?.sku,
+    price: priceAmount(price),
+    priceCurrency: price.currency,
+    availability: schemaAvailability(sellable.availability?.status),
+    itemCondition: condition,
+    priceValidUntil: offerOptions.priceValidUntil,
+    seller: merchantNode(offerOptions.seller),
+    shippingDetails: offerOptions.shippingDetails,
+    hasMerchantReturnPolicy: offerOptions.hasMerchantReturnPolicy,
+    priceSpecification: price.mode === "subscription" ? subscriptionPriceSpecification(price) : undefined,
+  });
+}
+
+function offersValue(productOffers: readonly JsonLdObject[]): JsonLdValue | undefined {
+  if (productOffers.length === 0) return undefined;
+  if (productOffers.length === 1) return productOffers[0];
+  return comparableAggregateOffer(productOffers) ?? productOffers;
+}
+
+function comparableAggregateOffer(productOffers: readonly JsonLdObject[]): JsonLdObject | undefined {
+  if (productOffers.length === 0) return undefined;
+  const currency = productOffers[0]?.priceCurrency;
+  const comparable =
+    typeof currency === "string" &&
+    productOffers.every(
+      (offer) =>
+        offer.priceCurrency === currency &&
+        typeof offer.price === "string" &&
+        offer.priceSpecification === undefined,
+    );
+  if (!comparable) return undefined;
+
+  const prices = productOffers.map((offer) => Number(offer.price));
+
+  return removeUndefined({
+    "@type": "AggregateOffer",
+    offerCount: productOffers.length,
+    lowPrice: Math.min(...prices).toFixed(2),
+    highPrice: Math.max(...prices).toFixed(2),
+    priceCurrency: currency,
+    offers: productOffers,
+  });
+}
+
+function productIdentifiers(
+  identifiers?: ProductStructuredDataIdentifiers,
+): Record<string, string | undefined> {
+  return {
+    sku: identifiers?.sku,
+    mpn: identifiers?.mpn,
+    gtin: identifiers?.gtin,
+    productID: identifiers?.productID,
+  };
+}
+
+function productGroupIdentifier(): string | undefined {
+  return (
+    productInput.identifiers?.productGroupID ??
+    productInput.identifiers?.productID ??
+    productInput.identifiers?.sku ??
+    activeSellables[0]?.sku ??
+    activeSellables[0]?.id ??
+    productUrl
+  );
+}
+
+function brandNode(input?: string | ProductStructuredDataBrand): JsonLdObject | undefined {
+  if (!input) return undefined;
+  if (typeof input === "string") {
+    return {
+      "@type": "Brand",
+      name: input,
+    };
+  }
+
+  return removeUndefined({
+    "@type": "Brand",
+    name: input.name,
+    url: toAbsoluteUrl(input.url),
+    logo: toAbsoluteUrl(input.logo),
+  });
+}
+
+function merchantNode(input?: string | ProductStructuredDataMerchant): JsonLdObject | undefined {
+  if (!input) return undefined;
+  if (typeof input === "string") {
+    return {
+      "@type": "Organization",
+      name: input,
+    };
+  }
+
+  return removeUndefined({
+    "@type": "Organization",
+    name: input.name,
+    url: toAbsoluteUrl(input.url),
+  });
+}
+
+function resolveImages(
+  input: readonly JsonLdUrl[] | undefined,
+  fallbackSellables: readonly SellableDTO[],
+): readonly string[] {
+  const resolved = input?.map(toAbsoluteUrl).filter((image): image is string => Boolean(image));
+  if (resolved && resolved.length > 0) return resolved;
+
+  return fallbackSellables
+    .map((sellable) => toAbsoluteUrl(sellable.imageRef))
+    .filter((image): image is string => Boolean(image));
+}
+
+function variantUrlFor(sellable: SellableDTO): string {
+  const variantUrl = variants && variants.urls?.[sellable.id];
+  return toAbsoluteUrl(variantUrl) ?? productUrl;
+}
+
+function variantImagesFor(sellable: SellableDTO): readonly JsonLdUrl[] | undefined {
+  return variants ? variants.images?.[sellable.id] : undefined;
+}
+
+function variantIdentifiersFor(
+  sellable: SellableDTO,
+): ProductStructuredDataIdentifiers | undefined {
+  return variants ? variants.identifiers?.[sellable.id] : undefined;
+}
+
+function variantNameFor(sellable: SellableDTO): string {
+  if (variants && variants.names?.[sellable.id]) return variants.names[sellable.id] as string;
+  const labels = sellable.variantOptions.map((option) => option.label ?? option.value);
+  return labels.length > 0 ? `${productInput.name} - ${labels.join(" / ")}` : sellable.title;
+}
+
+function variantProperties(sellable: SellableDTO): readonly JsonLdObject[] | undefined {
+  if (sellable.variantOptions.length === 0) return undefined;
+
+  return sellable.variantOptions.map((option) =>
+    removeUndefined({
+      "@type": "PropertyValue",
+      name: option.option,
+      value: option.label ?? option.value,
+    }),
+  );
+}
+
+function variantSchemaProperties(sellable: SellableDTO): Record<string, string> {
+  return Object.fromEntries(
+    sellable.variantOptions.flatMap((option) => {
+      const name = schemaVariantPropertyName(option.option);
+      return name ? [[name, option.label ?? option.value]] : [];
+    }),
+  );
+}
+
+function variesBy(): readonly string[] | undefined {
+  const options = [
+    ...new Set(activeSellables.flatMap((sellable) => sellable.variantOptions.map((option) => option.option))),
+  ];
+
+  return options.length > 0 ? options.map(schemaVariantPropertyUrl) : undefined;
+}
+
+function schemaVariantPropertyUrl(option: string): string {
+  switch (normalizeVariantOptionName(option)) {
+    case "color":
+    case "colour":
+      return "https://schema.org/color";
+    case "size":
+      return "https://schema.org/size";
+    case "suggestedage":
+    case "age":
+      return "https://schema.org/suggestedAge";
+    case "suggestedgender":
+    case "gender":
+      return "https://schema.org/suggestedGender";
+    case "material":
+      return "https://schema.org/material";
+    case "pattern":
+      return "https://schema.org/pattern";
+    default:
+      return option;
+  }
+}
+
+function schemaVariantPropertyName(option: string): "color" | "size" | "material" | "pattern" | undefined {
+  switch (normalizeVariantOptionName(option)) {
+    case "color":
+    case "colour":
+      return "color";
+    case "size":
+      return "size";
+    case "material":
+      return "material";
+    case "pattern":
+      return "pattern";
+    default:
+      return undefined;
+  }
+}
+
+function normalizeVariantOptionName(option: string): string {
+  return option.trim().toLowerCase().replace(/[\s_-]+/g, "");
+}
+
+function toAbsoluteUrl(value?: JsonLdUrl): string | undefined {
+  if (!value) return undefined;
+  return value instanceof URL ? value.toString() : new URL(value, Astro.url).toString();
+}
+
+function priceAmount(price: PriceDTO): string {
+  return (price.amount / 100).toFixed(2);
+}
+
+function subscriptionPriceSpecification(price: PriceDTO): JsonLdObject {
+  return removeUndefined({
+    "@type": "UnitPriceSpecification",
+    price: priceAmount(price),
+    priceCurrency: price.currency,
+    billingDuration: subscriptionDuration(price),
+    unitText: subscriptionUnitText(price),
+  });
+}
+
+function subscriptionDuration(price: PriceDTO): string | undefined {
+  if (!price.interval) return undefined;
+  const count = price.intervalCount ?? 1;
+  const unit = price.interval === "year" ? "Y" : "M";
+  return `P${count}${unit}`;
+}
+
+function subscriptionUnitText(price: PriceDTO): string | undefined {
+  if (!price.interval) return undefined;
+  const count = price.intervalCount ?? 1;
+  return count === 1 ? price.interval : `${count} ${price.interval}s`;
+}
+
+function schemaAvailability(status: AvailabilityStatus | undefined): string | undefined {
+  switch (status) {
+    case "available":
+    case "untracked":
+      return "https://schema.org/InStock";
+    case "low_stock":
+    case "manual":
+      return "https://schema.org/LimitedAvailability";
+    case "backorder":
+      return "https://schema.org/BackOrder";
+    case "out_of_stock":
+      return "https://schema.org/OutOfStock";
+    default:
+      return undefined;
+  }
+}
+
+function removeUndefined<T extends JsonLdObject>(input: T): T {
+  return Object.fromEntries(
+    Object.entries(input).filter(([, value]) => value !== undefined),
+  ) as T;
+}
+
+function jsonLdSource(input: JsonLdObject): string {
+  return JSON.stringify(input).replaceAll("<", "\\u003C");
+}
+---
+
+<script type="application/ld+json" set:html={jsonLdSource(productStructuredData)} />

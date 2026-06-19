@@ -1,0 +1,84 @@
+---
+import { actions } from "astro:actions";
+import type { CartDTO } from "@bnomei/emdash-mika/types";
+import { mikaReturnTo } from "@bnomei/emdash-mika/astro";
+import { mikaTemplateRoutes } from "../lib/routes";
+
+interface Props {
+  cart?: CartDTO | null;
+  successPath?: string;
+  cancelPath?: string;
+  returnTo?: string;
+  email?: string;
+  name?: string;
+  company?: string;
+  vatId?: string;
+  emailLabel?: string;
+  nameLabel?: string;
+  companyLabel?: string;
+  vatIdLabel?: string;
+  customerLegend?: string;
+  showCustomerFields?: boolean;
+  label?: string;
+  class?: string;
+  [attribute: string]: unknown;
+}
+
+const {
+  cart,
+  successPath = mikaTemplateRoutes.checkoutSuccess,
+  cancelPath = mikaTemplateRoutes.checkoutCancel,
+  returnTo = mikaReturnTo(Astro.url),
+  email,
+  name,
+  company,
+  vatId,
+  emailLabel = "Email",
+  nameLabel = "Name",
+  companyLabel = "Company",
+  vatIdLabel = "VAT ID",
+  customerLegend = "Customer details",
+  showCustomerFields = true,
+  label = "Checkout",
+  class: className,
+  ...attrs
+} = Astro.props;
+const disabled = !cart || cart.items.length === 0;
+---
+
+<form
+  {...attrs}
+  data-mika-checkout
+  class={className}
+  action={actions.mika.checkout.start}
+  method="post"
+>
+  {cart?.id && <input type="hidden" name="cartId" value={cart.id} />}
+  <input type="hidden" name="successPath" value={successPath} />
+  <input type="hidden" name="cancelPath" value={cancelPath} />
+  <input type="hidden" name="returnTo" value={returnTo} />
+
+  {showCustomerFields && (
+    <fieldset data-mika-checkout-customer>
+      <legend>{customerLegend}</legend>
+      <label>
+        <span>{emailLabel}</span>
+        <input name="email" type="email" autocomplete="email" value={email} />
+      </label>
+      <label>
+        <span>{nameLabel}</span>
+        <input name="name" autocomplete="name" value={name} />
+      </label>
+      <label>
+        <span>{companyLabel}</span>
+        <input name="company" autocomplete="organization" value={company} />
+      </label>
+      <label>
+        <span>{vatIdLabel}</span>
+        <input name="vatId" value={vatId} />
+      </label>
+    </fieldset>
+  )}
+
+  <button type="submit" disabled={disabled}>{label}</button>
+</form>

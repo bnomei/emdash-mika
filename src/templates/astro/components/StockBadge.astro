@@ -1,0 +1,29 @@
+---
+import type { AvailabilityDTO } from "@bnomei/emdash-mika/types";
+
+interface Props {
+  availability?: AvailabilityDTO;
+  labels?: Partial<Record<string, string>>;
+  class?: string;
+  [attribute: string]: unknown;
+}
+
+const { availability, labels = {}, class: className, ...attrs } = Astro.props;
+const status = availability?.status ?? "untracked";
+const labelByStatus: Record<string, string> = {
+  available: "Available",
+  low_stock: "Low stock",
+  out_of_stock: "Out of stock",
+  backorder: "Backorder",
+  untracked: "Available",
+  manual: "Available"
+};
+const label = labels[status] ?? labelByStatus[status] ?? status;
+---
+
+<span {...attrs} data-mika-stock={status} class={className} aria-live="polite">
+  {label}
+  {availability?.availableQuantity !== undefined && status !== "out_of_stock" && (
+    <span> ({availability.availableQuantity})</span>
+  )}
+</span>

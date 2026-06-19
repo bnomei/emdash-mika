@@ -1,0 +1,64 @@
+---
+import { actions } from "astro:actions";
+import { mikaTemplateRoutes } from "../lib/routes";
+
+interface Props {
+  id?: string;
+  returnTo?: string;
+  label?: string;
+  emailLabel?: string;
+  emailValue?: string;
+  emailId?: string;
+  emailError?: string;
+  emailErrorId?: string;
+  class?: string;
+  [attribute: string]: unknown;
+}
+
+const {
+  id: formId,
+  returnTo = mikaTemplateRoutes.account,
+  label = "Send link",
+  emailLabel = "Email",
+  emailValue = "",
+  emailId,
+  emailError,
+  emailErrorId,
+  class: className,
+  ...attrs
+} = Astro.props;
+const resolvedEmailId = emailId ?? (formId ? `${formId}-email` : "mika-magic-link-email");
+const resolvedEmailErrorId = emailError
+  ? emailErrorId ?? `${resolvedEmailId}-error`
+  : undefined;
+---
+
+<form
+  {...attrs}
+  id={formId}
+  data-mika-magic-link
+  class={className}
+  action={actions.mika.magicLink.request}
+  method="post"
+>
+  <input type="hidden" name="returnTo" value={returnTo} />
+  <label>
+    <span>{emailLabel}</span>
+    <input
+      id={resolvedEmailId}
+      name="email"
+      type="email"
+      autocomplete="email"
+      required
+      value={emailValue}
+      aria-invalid={emailError ? "true" : undefined}
+      aria-describedby={resolvedEmailErrorId}
+    />
+  </label>
+  {emailError && (
+    <p id={resolvedEmailErrorId} role="alert">
+      {emailError}
+    </p>
+  )}
+  <button type="submit">{label}</button>
+</form>

@@ -1,0 +1,102 @@
+---
+import type { VariantOptionGroupDTO } from "@bnomei/emdash-mika/types";
+import type { MikaPurchaseVariantMapItem } from "@bnomei/emdash-mika/astro";
+
+interface Props {
+  variantGroups: readonly VariantOptionGroupDTO[];
+  variantOptionMap: readonly MikaPurchaseVariantMapItem[];
+  selectedSellableId?: string;
+  includePriceId?: boolean;
+  label?: string;
+  class?: string;
+  [attribute: string]: unknown;
+}
+
+const {
+  variantGroups,
+  variantOptionMap,
+  selectedSellableId,
+  includePriceId = false,
+  label = "Options",
+  class: className,
+  ...attrs
+} = Astro.props;
+const selected =
+  variantOptionMap.find((sellable) => sellable.id === selectedSellableId) ??
+  variantOptionMap.find((sellable) => !sellable.disabled) ??
+  variantOptionMap[0];
+const selectedOptions = selected?.options ?? {};
+---
+
+{variantGroups.length > 0 ? (
+  <fieldset
+    {...attrs}
+    data-mika-variant-groups
+    data-mika-sellables={JSON.stringify(variantOptionMap)}
+    class={className}
+  >
+    <legend>{label}</legend>
+    <input type="hidden" name="sellableId" value={selected?.id ?? ""} />
+    {includePriceId && selected?.priceId && (
+      <input type="hidden" name="priceId" value={selected.priceId} />
+    )}
+    {variantGroups.map((group) => (
+      <label>
+        <span>{group.label}</span>
+        <select data-mika-variant-option={group.option}>
+          {group.values.map((value) => (
+            <option
+              value={value.value}
+              selected={selectedOptions[group.option] === value.value}
+            >
+              {value.label ?? value.value}
+            </option>
+          ))}
+        </select>
+      </label>
+    ))}
+  </fieldset>
+) : null}
+
+<script>
+  for (const root of document.querySelectorAll("[data-mika-variant-groups]")) {
+    const input = root.querySelector('input[name="sellableId"]');
+    const priceInput = root.querySelector('input[name="priceId"]');
+    const controls = [...root.querySelectorAll("[data-mika-variant-option]")];
+    const sellables = JSON.parse(root.getAttribute("data-mika-sellables") ?? "[]");
+
+    const update = () => {
+      const selected = Object.fromEntries(
+        controls.map((control) => [control.dataset.mikaVariantOption, control.value])
+      );
+      const sellable = sellables.find(
+        (candidate) =>
+          !candidate.disabled &&
+            Object.entries(selected).every(([option, value]) => candidate.options[option] === value)
+      );
+
+      const sellableId = sellable?.id ?? "";
+      const priceId = sellable?.priceId ?? "";
+
+      if (input) input.value = sellableId;
+      if (priceInput) priceInput.value = priceId;
+      root.dataset.mikaSelectedSellableId = sellableId;
+      root.dataset.mikaSelectedPriceId = priceId;
+      root.dataset.mikaSelectedMaxQuantity =
+        sellable?.maxQuantity === undefined ? "" : String(sellable.maxQuantity);
+      root.dispatchEvent(
+        new CustomEvent("mika:variant-change", {
+          bubbles: true,
+          detail: {
+            sellableId,
+            priceId,
+            maxQuantity: sellable?.maxQuantity,
+          },
+        })
+      );
+    };
+
+    for (const control of controls) control.addEventListener("change", update);
+    update();
+  }
+</script>

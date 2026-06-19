@@ -1,0 +1,26 @@
+---
+import type { AvailabilityDTO } from "@bnomei/emdash-mika/types";
+
+interface Props {
+  availability?: AvailabilityDTO;
+  label?: string;
+  class?: string;
+  [attribute: string]: unknown;
+}
+
+const {
+  availability,
+  label = "Only a few left.",
+  class: className,
+  ...attrs
+} = Astro.props;
+const show =
+  availability?.status === "low_stock" ||
+  availability?.lowStock === true;
+---
+
+{show && (
+  <p {...attrs} data-mika-low-stock class={className} role="status">
+    {label}
+  </p>
+)}

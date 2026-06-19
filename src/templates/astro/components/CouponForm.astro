@@ -1,0 +1,45 @@
+---
+import { actions } from "astro:actions";
+import type { CartDTO } from "@bnomei/emdash-mika/types";
+import { mikaReturnTo } from "@bnomei/emdash-mika/astro";
+
+interface Props {
+  cart?: CartDTO | null;
+  returnTo?: string;
+  codeLabel?: string;
+  applyLabel?: string;
+  removeLabel?: string;
+  class?: string;
+  [attribute: string]: unknown;
+}
+
+const {
+  cart,
+  returnTo = mikaReturnTo(Astro.url),
+  codeLabel = "Coupon code",
+  applyLabel = "Apply",
+  removeLabel = "Remove coupon",
+  class: className,
+  ...attrs
+} = Astro.props;
+---
+
+<div {...attrs} data-mika-coupon class={className}>
+  <form action={actions.mika.cart.applyCoupon} method="post">
+    {cart?.id && <input type="hidden" name="cartId" value={cart.id} />}
+    <input type="hidden" name="returnTo" value={returnTo} />
+    <label>
+      <span>{codeLabel}</span>
+      <input name="code" autocomplete="off" />
+    </label>
+    <button type="submit">{applyLabel}</button>
+  </form>
+
+  {cart?.coupon && (
+    <form action={actions.mika.cart.removeCoupon} method="post">
+      {cart.id && <input type="hidden" name="cartId" value={cart.id} />}
+      <input type="hidden" name="returnTo" value={returnTo} />
+      <button type="submit">{removeLabel}</button>
+    </form>
+  )}
+</div>

@@ -1,0 +1,123 @@
+import { createMikaAdminActionsManifest } from "../admin";
+import { createMikaRequestContext, type MikaSessionAccess } from "./context";
+import {
+  callMikaOperation,
+  mikaRoutedOperationDefinitions,
+  type MikaRouteOperation,
+} from "./operations";
+import { mikaPluginRoutes, type MikaPluginRouteName } from "./routes";
+import { createMikaApi, type MikaApi } from "./server";
+import { parseMikaInput, searchParamsObject, type z } from "./validation";
+
+export interface MikaRouteContext<TInput = unknown> {
+  readonly input: TInput;
+  readonly request: Request;
+  readonly sessionId?: string;
+  readonly session?: MikaSessionAccess;
+  readonly currentLocale?: string;
+}
+
+export interface MikaPluginRoute<TInput = unknown> {
+  readonly public?: boolean;
+  readonly handler: (ctx: MikaRouteContext<TInput>) => Promise<unknown>;
+}
+
+export type MikaPluginRoutePath = (typeof mikaPluginRoutes)[MikaPluginRouteName];
+export type MikaPluginRoutes = Record<MikaPluginRoutePath, MikaPluginRoute>;
+
+export function createMikaPluginRoutes(api: MikaApi = createMikaApi()): MikaPluginRoutes {
+  const routes: Partial<MikaPluginRoutes> = {
+    [mikaPluginRoutes.actionsManifest]: {
+      public: false,
+      handler: async () => createMikaAdminActionsManifest(),
+    },
+  };
+
+  for (const [path, operations] of routeOperationsByPath()) {
+    routes[path] = {
+      public: operations.some((operation) => operation.public),
+      handler: async (ctx) => handleRouteOperation(api, ctx, operations),
+    };
+  }
+
+  return routes as MikaPluginRoutes;
+}
+
+function routeOperationsByPath(): Map<MikaPluginRoutePath, readonly MikaRouteOperation[]> {
+  const operationsByPath = new Map<MikaPluginRoutePath, MikaRouteOperation[]>();
+
+  for (const operation of mikaRoutedOperationDefinitions) {
+    const path = operation.routePath as MikaPluginRoutePath;
+    const operations = operationsByPath.get(path) ?? [];
+    operations.push(operation);
+    operationsByPath.set(path, operations);
+  }
+
+  return operationsByPath;
+}
+
+async function handleRouteOperation(
+  api: MikaApi,
+  ctx: MikaRouteContext,
+  operations: readonly MikaRouteOperation[],
+): Promise<unknown> {
+  const operation = selectRouteOperation(ctx.request, operations);
+  if (!operation) return methodNotAllowed(ctx.request, operations);
+
+  const parsedInput = parseRouteOperationInput(operation, ctx);
+  if (!parsedInput.ok) return parsedInput.result;
+
+  return callMikaOperation(operation, api, requestContext(ctx), parsedInput.data);
+}
+
+function selectRouteOperation(
+  request: Request,
+  operations: readonly MikaRouteOperation[],
+): MikaRouteOperation | undefined {
+  const method = request.method.toUpperCase();
+  return operations.find((candidate) => candidate.httpMethod === method);
+}
+
+function methodNotAllowed(request: Request, operations: readonly MikaRouteOperation[]) {
+  const allowed = [...new Set(operations.map((operation) => operation.httpMethod))].sort();
+
+  return {
+    ok: false,
+    status: 405,
+    error: {
+      code: "VALIDATION_FAILED",
+      message: `Mika route does not support ${request.method.toUpperCase()}.`,
+      fieldErrors: {
+        method: `Expected ${allowed.join(", ")}.`,
+      },
+    },
+  } as const;
+}
+
+function parseRouteOperationInput(operation: MikaRouteOperation, ctx: MikaRouteContext) {
+  if (operation.transport === "none") {
+    return { ok: true as const, data: undefined };
+  }
+
+  const schema = "schema" in operation ? operation.schema : undefined;
+  if (!schema) {
+    throw new Error(`Mika operation '${operation.name}' is missing an input schema.`);
+  }
+
+  const input =
+    operation.transport === "search"
+      ? searchParamsObject(new URL(ctx.request.url), operation.searchKeys ?? [])
+      : (ctx.input ?? {});
+
+  return parseMikaInput(schema as z.ZodType<unknown>, input);
+}
+
+function requestContext(ctx: MikaRouteContext) {
+  return createMikaRequestContext({
+    request: ctx.request,
+    url: ctx.request.url,
+    sessionId: ctx.sessionId,
+    session: ctx.session,
+    locale: ctx.currentLocale,
+  });
+}

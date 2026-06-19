@@ -1,0 +1,43 @@
+---
+import { actions, isInputError } from "astro:actions";
+import MagicLinkForm from "../../components/MagicLinkForm.astro";
+import { mikaTemplateRoutes } from "../../lib/routes";
+
+export const prerender = false;
+
+const requestResult = Astro.getActionResult(actions.mika.magicLink.request);
+const verifyResult = Astro.getActionResult(actions.mika.magicLink.verify);
+const requestInputErrors = isInputError(requestResult?.error)
+  ? requestResult.error.fields
+  : {};
+const requestError = isInputError(requestResult?.error)
+  ? null
+  : requestResult?.error?.message;
+const token = Astro.url.searchParams.get("token");
+
+if (verifyResult?.data) {
+  return Astro.redirect(mikaTemplateRoutes.account);
+}
+---
+
+<main data-mika-magic-link-page>
+  <h1>Account</h1>
+
+  {requestResult?.data?.sent && <p role="status">Email sent.</p>}
+  {requestError && <p role="alert">{requestError}</p>}
+  {verifyResult?.error && <p role="alert">{verifyResult.error.message}</p>}
+
+  {token ? (
+    <form action={actions.mika.magicLink.verify} method="post">
+      <input type="hidden" name="token" value={token} />
+      <input type="hidden" name="returnTo" value={mikaTemplateRoutes.account} />
+      <button type="submit">Continue</button>
+    </form>
+  ) : (
+    <MagicLinkForm
+      id="mika-account-magic-link"
+      returnTo={mikaTemplateRoutes.account}
+      emailError={requestInputErrors.email?.join(", ")}
+    />
+  )}
+</main>

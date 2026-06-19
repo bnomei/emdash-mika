@@ -1,0 +1,55 @@
+---
+import type { CartDTO } from "@bnomei/emdash-mika/types";
+import { formatMikaMoney } from "@bnomei/emdash-mika/astro";
+
+interface Props {
+  cart?: CartDTO | null;
+  subtotalLabel?: string;
+  discountLabel?: string;
+  taxLabel?: string;
+  shippingLabel?: string;
+  totalLabel?: string;
+  class?: string;
+  [attribute: string]: unknown;
+}
+
+const {
+  cart,
+  subtotalLabel = "Subtotal",
+  discountLabel = "Discount",
+  taxLabel = "Tax",
+  shippingLabel = "Shipping",
+  totalLabel = "Total",
+  class: className,
+  ...attrs
+} = Astro.props;
+---
+
+<dl {...attrs} data-mika-cart-summary class={className}>
+  <div>
+    <dt>{subtotalLabel}</dt>
+    <dd>{formatMikaMoney(cart?.subtotal)}</dd>
+  </div>
+  {cart?.discount && (
+    <div>
+      <dt>{discountLabel}</dt>
+      <dd>{formatMikaMoney(cart.discount)}</dd>
+    </div>
+  )}
+  {cart?.tax && (
+    <div>
+      <dt>{taxLabel}</dt>
+      <dd>{formatMikaMoney(cart.tax)}</dd>
+    </div>
+  )}
+  {cart?.shipping && (
+    <div>
+      <dt>{shippingLabel}</dt>
+      <dd>{formatMikaMoney(cart.shipping)}</dd>
+    </div>
+  )}
+  <div>
+    <dt>{totalLabel}</dt>
+    <dd>{formatMikaMoney(cart?.total)}</dd>
+  </div>
+</dl>

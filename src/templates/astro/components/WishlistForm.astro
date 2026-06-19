@@ -1,0 +1,57 @@
+---
+import { actions } from "astro:actions";
+import { mikaReturnTo } from "@bnomei/emdash-mika/astro";
+
+interface Props {
+  sellableId: string;
+  priceId?: string;
+  returnTo?: string;
+  label?: string;
+  disabled?: boolean;
+  buttonClass?: string;
+  class?: string;
+  [attribute: string]: unknown;
+}
+
+const {
+  sellableId,
+  priceId,
+  returnTo = mikaReturnTo(Astro.url),
+  label = "Save",
+  disabled = false,
+  buttonClass,
+  class: className,
+  ...attrs
+} = Astro.props;
+---
+
+<form
+  {...attrs}
+  data-mika-wishlist
+  class={className}
+  action={actions.mika.wishlist.add}
+  method="post"
+>
+  <input
+    type="hidden"
+    name="sellableId"
+    value={sellableId}
+    data-mika-selected-sellable-id
+  />
+  <input
+    type="hidden"
+    name="priceId"
+    value={priceId ?? ""}
+    data-mika-selected-price-id
+  />
+  <input type="hidden" name="returnTo" value={returnTo} />
+  <button
+    type="submit"
+    class={buttonClass}
+    disabled={disabled}
+    data-mika-purchase-submit
+    data-mika-initial-disabled={disabled ? "true" : "false"}
+  >
+    <slot>{label}</slot>
+  </button>
+</form>

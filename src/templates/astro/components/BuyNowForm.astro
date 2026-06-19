@@ -1,0 +1,67 @@
+---
+import { actions } from "astro:actions";
+import { mikaReturnTo } from "@bnomei/emdash-mika/astro";
+import { mikaTemplateRoutes } from "../lib/routes";
+
+interface Props {
+  sellableId: string;
+  priceId?: string;
+  quantity?: number;
+  successPath?: string;
+  cancelPath?: string;
+  returnTo?: string;
+  label?: string;
+  disabled?: boolean;
+  buttonClass?: string;
+  class?: string;
+  [attribute: string]: unknown;
+}
+
+const {
+  sellableId,
+  priceId,
+  quantity = 1,
+  successPath = mikaTemplateRoutes.checkoutSuccess,
+  cancelPath = mikaTemplateRoutes.checkoutCancel,
+  returnTo = mikaReturnTo(Astro.url),
+  label = "Buy now",
+  disabled = false,
+  buttonClass,
+  class: className,
+  ...attrs
+} = Astro.props;
+---
+
+<form
+  {...attrs}
+  data-mika-buy-now
+  class={className}
+  action={actions.mika.checkout.start}
+  method="post"
+>
+  <input
+    type="hidden"
+    name="sellableId"
+    value={sellableId}
+    data-mika-selected-sellable-id
+  />
+  <input
+    type="hidden"
+    name="priceId"
+    value={priceId ?? ""}
+    data-mika-selected-price-id
+  />
+  <input type="hidden" name="quantity" value={String(quantity)} />
+  <input type="hidden" name="successPath" value={successPath} />
+  <input type="hidden" name="cancelPath" value={cancelPath} />
+  <input type="hidden" name="returnTo" value={returnTo} />
+  <button
+    type="submit"
+    class={buttonClass}
+    disabled={disabled}
+    data-mika-purchase-submit
+    data-mika-initial-disabled={disabled ? "true" : "false"}
+  >
+    <slot>{label}</slot>
+  </button>
+</form>

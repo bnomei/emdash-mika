@@ -1,0 +1,52 @@
+---
+import type { OrderSummaryDTO } from "@bnomei/emdash-mika/types";
+import { formatMikaMoney } from "@bnomei/emdash-mika/astro";
+
+interface Props {
+  orders: readonly OrderSummaryDTO[];
+  orderHref?: (order: OrderSummaryDTO) => string | undefined;
+  headingLabel?: string;
+  emptyLabel?: string;
+  invoiceLabel?: string;
+  class?: string;
+  [attribute: string]: unknown;
+}
+
+const {
+  orders,
+  orderHref,
+  headingLabel = "Orders",
+  emptyLabel = "No orders yet.",
+  invoiceLabel = "Invoice",
+  class: className,
+  ...attrs
+} = Astro.props;
+const hasEmptySlot = Astro.slots.has("empty");
+---
+
+<section {...attrs} data-mika-account-orders class={className}>
+  <h2><slot name="heading">{headingLabel}</slot></h2>
+  {orders.length ? (
+    <ul>
+      {orders.map((order) => {
+        const href = orderHref?.(order);
+        return (
+        <li>
+          {href ? (
+            <a href={href}>{order.orderNumber}</a>
+          ) : (
+            <span>{order.orderNumber}</span>
+          )}
+          <span>{order.status}</span>
+          <span>{formatMikaMoney(order.total)}</span>
+          {order.invoiceUrl && <a href={order.invoiceUrl}>{invoiceLabel}</a>}
+        </li>
+        );
+      })}
+    </ul>
+  ) : hasEmptySlot ? (
+    <slot name="empty" />
+  ) : (
+    <p>{emptyLabel}</p>
+  )}
+</section>

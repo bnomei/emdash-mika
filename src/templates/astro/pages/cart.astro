@@ -1,0 +1,42 @@
+---
+import { actions } from "astro:actions";
+import { createMika } from "@bnomei/emdash-mika/astro";
+import CartLines from "../components/CartLines.astro";
+import CartSummary from "../components/CartSummary.astro";
+import CheckoutForm from "../components/CheckoutForm.astro";
+import CouponForm from "../components/CouponForm.astro";
+
+export const prerender = false;
+
+const Mika = createMika(Astro);
+
+const checkoutResult = Astro.getActionResult(actions.mika.checkout.start);
+if (checkoutResult?.data?.redirectUrl) {
+  return Astro.redirect(checkoutResult.data.redirectUrl);
+}
+
+const updateResult = Astro.getActionResult(actions.mika.cart.update);
+const removeResult = Astro.getActionResult(actions.mika.cart.remove);
+const couponApplyResult = Astro.getActionResult(actions.mika.cart.applyCoupon);
+const couponRemoveResult = Astro.getActionResult(actions.mika.cart.removeCoupon);
+const saveForLaterResult = Astro.getActionResult(actions.mika.wishlist.saveForLater);
+const actionError =
+  checkoutResult?.error?.message ??
+  updateResult?.error?.message ??
+  removeResult?.error?.message ??
+  couponApplyResult?.error?.message ??
+  couponRemoveResult?.error?.message ??
+  saveForLaterResult?.error?.message;
+const cartResult = await Mika.cart.get();
+const cart = cartResult.ok ? cartResult.data : null;
+const error = actionError ?? (cartResult.ok ? null : cartResult.error.message);
+---
+
+<main data-mika-cart-page>
+  <h1>Cart</h1>
+  {error && <p role="alert">{error}</p>}
+  <CartLines cart={cart} />
+  <CouponForm cart={cart} />
+  <CartSummary cart={cart} />
+  <CheckoutForm cart={cart} />
+</main>

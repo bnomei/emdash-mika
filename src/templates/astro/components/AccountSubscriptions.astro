@@ -1,0 +1,113 @@
+---
+import { actions } from "astro:actions";
+import type { SubscriptionDTO } from "@bnomei/emdash-mika/types";
+import { mikaReturnTo } from "@bnomei/emdash-mika/astro";
+
+interface Props {
+  subscriptions: readonly SubscriptionDTO[];
+  returnTo?: string;
+  error?: string;
+  headingLabel?: string;
+  emptyLabel?: string;
+  cancelLabel?: string;
+  renewLabel?: string;
+  changeLabel?: string;
+  showChangeAction?: boolean;
+  changePriceIds?: Readonly<Record<string, string>>;
+  class?: string;
+  [attribute: string]: unknown;
+}
+
+const {
+  subscriptions,
+  returnTo = mikaReturnTo(Astro.url),
+  error,
+  headingLabel = "Subscriptions",
+  emptyLabel = "No subscriptions.",
+  cancelLabel = "Cancel",
+  renewLabel = "Renew",
+  changeLabel = "Change",
+  showChangeAction = false,
+  changePriceIds = {},
+  class: className,
+  ...attrs
+} = Astro.props;
+const hasEmptySlot = Astro.slots.has("empty");
+---
+
+<section {...attrs} data-mika-account-subscriptions class={className}>
+  <h2><slot name="heading">{headingLabel}</slot></h2>
+  {error && <p role="alert">{error}</p>}
+  {subscriptions.length ? (
+    <ul>
+      {subscriptions.map((subscription) => (
+        <li>
+          <strong>{subscription.title}</strong>
+          <span>{subscription.status}</span>
+          {subscription.currentPeriodEnd && (
+            <time datetime={subscription.currentPeriodEnd}>
+              {new Date(subscription.currentPeriodEnd).toLocaleDateString()}
+            </time>
+          )}
+          {subscription.providerActions?.includes("cancel") && (
+            <form action={actions.mika.subscription.cancel} method="post">
+              <input
+                type="hidden"
+                name="subscriptionId"
+                value={subscription.id}
+              />
+              <input type="hidden" name="returnTo" value={returnTo} />
+              <button
+                type="submit"
+                aria-label={`${cancelLabel} ${subscription.title}`}
+              >
+                {cancelLabel}
+              </button>
+            </form>
+          )}
+          {subscription.providerActions?.includes("renew") && (
+            <form action={actions.mika.subscription.renew} method="post">
+              <input
+                type="hidden"
+                name="subscriptionId"
+                value={subscription.id}
+              />
+              <input type="hidden" name="returnTo" value={returnTo} />
+              <button
+                type="submit"
+                aria-label={`${renewLabel} ${subscription.title}`}
+              >
+                {renewLabel}
+              </button>
+            </form>
+          )}
+          {showChangeAction && subscription.providerActions?.includes("change") && changePriceIds[subscription.id] && (
+            <form action={actions.mika.subscription.change} method="post">
+              <input
+                type="hidden"
+                name="subscriptionId"
+                value={subscription.id}
+              />
+              <input
+                type="hidden"
+                name="priceId"
+                value={changePriceIds[subscription.id] ?? ""}
+              />
+              <input type="hidden" name="returnTo" value={returnTo} />
+              <button
+                type="submit"
+                aria-label={`${changeLabel} ${subscription.title}`}
+              >
+                {changeLabel}
+              </button>
+            </form>
+          )}
+        </li>
+      ))}
+    </ul>
+  ) : hasEmptySlot ? (
+    <slot name="empty" />
+  ) : (
+    <p>{emptyLabel}</p>
+  )}
+</section>

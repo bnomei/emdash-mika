@@ -1,0 +1,27 @@
+---
+import type { AvailabilityDTO } from "@bnomei/emdash-mika/types";
+import { isMikaPurchasable } from "@bnomei/emdash-mika/astro";
+
+interface Props {
+  availability?: AvailabilityDTO;
+  show?: boolean;
+  label?: string;
+  class?: string;
+  [attribute: string]: unknown;
+}
+
+const {
+  availability,
+  show,
+  label = "This item is currently unavailable.",
+  class: className,
+  ...attrs
+} = Astro.props;
+const visible = show ?? !isMikaPurchasable(availability);
+---
+
+{visible && (
+  <p {...attrs} data-mika-unavailable class={className} role="status">
+    {label}
+  </p>
+)}

@@ -1,0 +1,12 @@
+---
+import { mikaTemplateRoutes } from "../../lib/routes";
+
+export const prerender = false;
+
+const cartHref = mikaTemplateRoutes.cart;
+---
+
+<main data-mika-checkout-cancel>
+  <h1>Checkout cancelled</h1>
+  <a href={cartHref}>Return to cart</a>
+</main>

@@ -1,0 +1,65 @@
+---
+import { actions } from "astro:actions";
+import type { WishlistDTO } from "@bnomei/emdash-mika/types";
+import { mikaReturnTo } from "@bnomei/emdash-mika/astro";
+
+interface Props {
+  wishlist?: WishlistDTO | null;
+  returnTo?: string;
+  headingLabel?: string;
+  emptyLabel?: string;
+  removeLabel?: string;
+  moveToCartLabel?: string;
+  class?: string;
+  [attribute: string]: unknown;
+}
+
+const {
+  wishlist,
+  returnTo = mikaReturnTo(Astro.url),
+  headingLabel = "Wishlist",
+  emptyLabel = "No saved items.",
+  removeLabel = "Remove",
+  moveToCartLabel = "Move to cart",
+  class: className,
+  ...attrs
+} = Astro.props;
+const hasEmptySlot = Astro.slots.has("empty");
+---
+
+<section {...attrs} data-mika-wishlist-list class={className}>
+  <h2><slot name="heading">{headingLabel}</slot></h2>
+  {wishlist?.items.length ? (
+    <ul>
+      {wishlist.items.map((item) => (
+        <li>
+          <span>{item.title}</span>
+          <form action={actions.mika.wishlist.remove} method="post">
+            <input type="hidden" name="itemId" value={item.id} />
+            <input type="hidden" name="returnTo" value={returnTo} />
+            <button
+              type="submit"
+              aria-label={`${removeLabel} ${item.title}`}
+            >
+              {removeLabel}
+            </button>
+          </form>
+          <form action={actions.mika.wishlist.moveToCart} method="post">
+            <input type="hidden" name="itemId" value={item.id} />
+            <input type="hidden" name="returnTo" value={returnTo} />
+            <button
+              type="submit"
+              aria-label={`${moveToCartLabel} ${item.title}`}
+            >
+              {moveToCartLabel}
+            </button>
+          </form>
+        </li>
+      ))}
+    </ul>
+  ) : hasEmptySlot ? (
+    <slot name="empty" />
+  ) : (
+    <p>{emptyLabel}</p>
+  )}
+</section>

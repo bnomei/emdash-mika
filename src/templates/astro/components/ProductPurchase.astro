@@ -1,0 +1,92 @@
+---
+import type { SellableDTO } from "@bnomei/emdash-mika/types";
+import {
+  createMikaPurchaseModel,
+  mikaMaxPurchaseQuantity,
+  mikaReturnTo
+} from "@bnomei/emdash-mika/astro";
+import AddToCartForm from "./AddToCartForm.astro";
+import BuyNowForm from "./BuyNowForm.astro";
+import ProductPurchaseSync from "./ProductPurchaseSync.astro";
+import VariantOptionGroups from "./VariantOptionGroups.astro";
+import WishlistForm from "./WishlistForm.astro";
+
+interface Props {
+  sellables: readonly SellableDTO[];
+  returnTo?: string;
+  class?: string;
+  [attribute: string]: unknown;
+}
+
+const {
+  sellables,
+  returnTo = mikaReturnTo(Astro.url),
+  class: className,
+  ...attrs
+} = Astro.props;
+const purchase = createMikaPurchaseModel(sellables);
+const primary = purchase.selectedSellable;
+const primaryPrice = purchase.selectedPrice;
+const needsPurchaseSync = purchase.useGroupedVariantControls || purchase.options.length > 1;
+---
+
+<mika-product-purchase {...attrs} data-mika-product-purchase class={className}>
+  {purchase.useGroupedVariantControls ? (
+    <VariantOptionGroups
+      variantGroups={purchase.variantGroups}
+      variantOptionMap={purchase.variantOptionMap}
+      selectedSellableId={purchase.selectedSellable?.id}
+      includePriceId
+    />
+  ) : purchase.options.length > 1 ? (
+    <fieldset data-mika-shared-purchase-options>
+      <legend>Purchase</legend>
+      {purchase.options.map((option, index) => (
+        <label>
+          <input
+            type="radio"
+            name="mikaPurchase"
+            value={option.fields.purchase}
+            data-mika-purchase-option
+            data-mika-purchase-sellable-id={option.fields.sellableId}
+            data-mika-purchase-price-id={option.fields.priceId}
+            data-mika-purchase-max-quantity={mikaMaxPurchaseQuantity(option.sellable.availability) ?? ""}
+            checked={index === purchase.selectedOptionIndex}
+            disabled={option.disabled}
+          />
+          <span>{option.label}</span>
+        </label>
+      ))}
+    </fieldset>
+  ) : null}
+
+  <AddToCartForm
+    sellables={sellables}
+    purchase={purchase}
+    showPurchaseControls={false}
+    returnTo={returnTo}
+  />
+  {primary && (
+    <WishlistForm
+      sellableId={primary.id}
+      priceId={primaryPrice?.id}
+      returnTo={returnTo}
+      disabled={purchase.unavailable}
+    />
+  )}
+  {primary && (
+    <BuyNowForm
+      sellableId={primary.id}
+      priceId={primaryPrice?.id}
+      returnTo={returnTo}
+      disabled={!purchase.selectedOption || purchase.selectedOption.disabled}
+    />
+  )}
+  {needsPurchaseSync && <ProductPurchaseSync />}
+</mika-product-purchase>
+
+<style>
+  mika-product-purchase {
+    display: block;
+  }
+</style>

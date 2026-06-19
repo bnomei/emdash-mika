@@ -1,0 +1,87 @@
+<script>
+  if (!customElements.get("mika-product-purchase")) {
+    customElements.define(
+      "mika-product-purchase",
+      class extends HTMLElement {
+        connectedCallback() {
+          if (this.dataset.mikaProductPurchaseReady === "true") return;
+          this.dataset.mikaProductPurchaseReady = "true";
+
+          const sync = (sellableId, priceId, maxQuantity) => {
+            this.querySelectorAll("[data-mika-selected-sellable-id]").forEach(
+              (input) => {
+                input.value = sellableId ?? "";
+              }
+            );
+            this.querySelectorAll("[data-mika-selected-price-id]").forEach((input) => {
+              input.value = priceId ?? "";
+            });
+            syncSubmitButtons(this, sellableId ?? "");
+            syncQuantityInputs(this, sellableId ?? "", maxQuantity ?? "");
+            syncAvailabilityPanels(this, sellableId ?? "");
+          };
+
+          const syncSubmitButtons = (scope, sellableId) => {
+            for (const button of scope.querySelectorAll("[data-mika-purchase-submit]")) {
+              button.disabled =
+                sellableId === "" || button.dataset.mikaInitialDisabled === "true";
+            }
+          };
+
+          const syncQuantityInputs = (scope, sellableId, maxQuantity) => {
+            for (const input of scope.querySelectorAll("[data-mika-purchase-quantity]")) {
+              input.disabled =
+                sellableId === "" || input.dataset.mikaInitialDisabled === "true";
+              if (maxQuantity === "") {
+                input.removeAttribute("max");
+              } else {
+                input.setAttribute("max", maxQuantity);
+                if (Number(input.value) > Number(maxQuantity)) input.value = maxQuantity;
+              }
+            }
+          };
+
+          const syncAvailabilityPanels = (scope, sellableId) => {
+            for (const panel of scope.querySelectorAll("[data-mika-availability-for]")) {
+              panel.hidden = panel.dataset.mikaAvailabilityFor !== sellableId;
+            }
+          };
+
+          const updateFromVariantGroups = (groups, detail = {}) => {
+            const sellableId =
+              detail.sellableId ?? groups.dataset.mikaSelectedSellableId ?? "";
+            const priceId = detail.priceId ?? groups.dataset.mikaSelectedPriceId ?? "";
+            const maxQuantity =
+              detail.maxQuantity === undefined
+                ? groups.dataset.mikaSelectedMaxQuantity ?? ""
+                : String(detail.maxQuantity);
+
+            sync(sellableId, priceId, maxQuantity);
+          };
+
+          const updateFromPurchaseOption = () => {
+            const option = this.querySelector("[data-mika-purchase-option]:checked");
+            sync(
+              option?.dataset.mikaPurchaseSellableId ?? "",
+              option?.dataset.mikaPurchasePriceId ?? "",
+              option?.dataset.mikaPurchaseMaxQuantity ?? ""
+            );
+          };
+
+          const options = this.querySelectorAll("[data-mika-purchase-option]");
+          for (const option of options) {
+            option.addEventListener("change", updateFromPurchaseOption);
+          }
+          if (options.length > 0) updateFromPurchaseOption();
+
+          for (const groups of this.querySelectorAll("[data-mika-variant-groups]")) {
+            groups.addEventListener("mika:variant-change", (event) =>
+              updateFromVariantGroups(groups, event.detail)
+            );
+            updateFromVariantGroups(groups);
+          }
+        }
+      }
+    );
+  }
+</script>
