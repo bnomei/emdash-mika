@@ -139,6 +139,16 @@ export class CatalogRepository {
     });
   }
 
+  async findItemBySellableId(sellableId: MikaId): Promise<CatalogItemDocument | null> {
+    const result = await listByType(this.collection, "catalogItem");
+
+    return (
+      result.items.find((item) =>
+        item.data.aggregate.sellables.some((sellable) => sellable.id === sellableId),
+      )?.data ?? null
+    );
+  }
+
   async put(document: CatalogDocument): Promise<void> {
     await putByDocumentId(this.collection, document);
   }

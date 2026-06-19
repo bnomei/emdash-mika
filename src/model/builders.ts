@@ -1,4 +1,4 @@
-import type { AvailabilityDTO, PriceDTO, SellableDTO } from "../api/types";
+import type { AvailabilityDTO, CartDTO, PriceDTO, SellableDTO } from "../api/types";
 import type { StockItemRecord } from "../types/operational";
 import type {
   CartAggregate,
@@ -75,6 +75,66 @@ export function createCartAggregate(input: {
     totals: calculateTotals(input.currency, input.items ?? [], input.coupon),
     metadata: input.metadata,
   };
+}
+
+export function cartToDTO(input: {
+  readonly id: MikaId;
+  readonly status: CartDTO["status"];
+  readonly cart: CartAggregate;
+  readonly availabilityBySellableId?: ReadonlyMap<MikaId, AvailabilityDTO>;
+  readonly checkoutSessionId?: MikaId;
+}): CartDTO {
+  const totals = input.cart.totals ?? calculateTotals(input.cart.currency, input.cart.items);
+
+  return {
+    id: input.id,
+    status: input.status,
+    currency: input.cart.currency,
+    items: input.cart.items.map((line) => {
+      const subtotalAmount = line.item.unitAmount * line.quantity;
+
+      return {
+        id: line.id,
+        sellableId: line.item.sellableId,
+        priceId: line.item.priceId,
+        title: line.item.titleSnapshot,
+        sku: line.item.sku,
+        variantOptions: line.item.variantOptions,
+        quantity: line.quantity,
+        unitAmount: money(line.item.unitAmount, line.item.currency),
+        subtotal: money(subtotalAmount, line.item.currency),
+        total: money(subtotalAmount, line.item.currency),
+        availability: input.availabilityBySellableId?.get(line.item.sellableId),
+      };
+    }),
+    coupon: input.cart.coupon
+      ? {
+          label: input.cart.coupon.label,
+          discount: input.cart.coupon.discountAmount
+            ? money(input.cart.coupon.discountAmount, input.cart.currency)
+            : undefined,
+          providerCouponId: input.cart.coupon.providerRef?.priceId,
+        }
+      : undefined,
+    subtotal: totals.subtotal,
+    discount: totals.discount,
+    tax: totals.tax,
+    shipping: totals.shipping,
+    total: totals.total,
+    checkoutSessionId: input.checkoutSessionId,
+  };
+}
+
+export function cartWithItems(input: {
+  readonly cart: CartAggregate;
+  readonly items: readonly CartLine[];
+}): CartAggregate {
+  return createCartAggregate({
+    currency: input.cart.currency,
+    items: input.items,
+    coupon: input.cart.coupon,
+    metadata: input.cart.metadata,
+  });
 }
 
 export function createWishlistAggregate(

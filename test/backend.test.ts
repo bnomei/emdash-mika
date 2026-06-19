@@ -729,6 +729,188 @@ describe("backend API composition", () => {
     }
     expect(result.data[0]?.prices).toHaveLength(1);
   });
+
+  it("returns or creates open carts for anonymous and customer identities", async () => {
+    const dependencies = createIncrementingBackendDependencies();
+    const api = createMikaBackendApi(dependencies);
+    const anonymousCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_anonymous",
+    });
+    const customerCtx = createTestRequestContext({
+      customerId: "customer_1",
+      userId: "user_1",
+      sessionId: "session_anonymous",
+    });
+
+    const anonymous = await api.cart.get(anonymousCtx);
+    const anonymousAgain = await api.cart.get(anonymousCtx);
+    const customer = await api.cart.get(customerCtx);
+
+    expect(anonymous).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "cart_1",
+        status: "open",
+        currency: TEST_CURRENCY,
+        items: [],
+      },
+    });
+    expect(anonymousAgain).toMatchObject({ ok: true, data: { id: "cart_1" } });
+    expect(customer).toMatchObject({
+      ok: true,
+      data: {
+        id: "cart_2",
+        status: "open",
+        currency: TEST_CURRENCY,
+        items: [],
+      },
+    });
+  });
+
+  it("adds duplicate cart lines by merging quantities", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition({ maxPerOrder: 5 });
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    await expect(
+      api.cart.add(ctx, {
+        sellableId: sellable.id,
+        priceId: createTestMikaId("price", 1),
+        quantity: 1,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        items: [{ sellableId: sellable.id, quantity: 1, total: { amount: 1200 } }],
+        total: { amount: 1200 },
+      },
+    });
+    await expect(
+      api.cart.add(ctx, {
+        sellableId: sellable.id,
+        priceId: createTestMikaId("price", 1),
+        quantity: 2,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        items: [{ sellableId: sellable.id, quantity: 3, total: { amount: 3600 } }],
+        total: { amount: 3600 },
+      },
+    });
+
+    const cart = await api.cart.get(ctx);
+    expect(cart).toMatchObject({ ok: true, data: { items: [{ quantity: 3 }] } });
+    if (!cart.ok) {
+      throw new Error("Expected cart.get to succeed.");
+    }
+    expect(cart.data.items).toHaveLength(1);
+  });
+
+  it("returns stable errors for missing cart lines on update and remove", async () => {
+    const api = createMikaBackendApi(createIncrementingBackendDependencies());
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    await expect(
+      api.cart.update(ctx, { lineId: createTestMikaId("line", 404), quantity: 2 }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 404,
+      error: {
+        code: "VALIDATION_FAILED",
+        fieldErrors: { lineId: "Cart line was not found." },
+      },
+    });
+    await expect(
+      api.cart.remove(ctx, { lineId: createTestMikaId("line", 404) }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 404,
+      error: {
+        code: "VALIDATION_FAILED",
+        fieldErrors: { lineId: "Cart line was not found." },
+      },
+    });
+  });
+
+  it("rejects inactive sellables, inactive prices, currency mismatches, and max quantity before creating a cart", async () => {
+    const contentRef = createTestContentRef();
+    const inactiveSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 1),
+      active: false,
+    });
+    const inactivePriceSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 2),
+      prices: [createPriceDefinition({ id: createTestMikaId("price", 2), active: false })],
+    });
+    const usdSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 3),
+      prices: [
+        createPriceDefinition({
+          id: createTestMikaId("price", 3),
+          currency: createTestCurrencyCode("USD"),
+        }),
+      ],
+    });
+    const limitedSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 4),
+      maxPerOrder: 2,
+    });
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({
+        contentRef,
+        sellables: [inactiveSellable, inactivePriceSellable, usdSellable, limitedSellable],
+      }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_rejected",
+    });
+
+    await expect(api.cart.add(ctx, { sellableId: inactiveSellable.id })).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "SELLABLE_INACTIVE" },
+    });
+    await expect(
+      api.cart.add(ctx, {
+        sellableId: inactivePriceSellable.id,
+        priceId: createTestMikaId("price", 2),
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "PRICE_INACTIVE" },
+    });
+    await expect(
+      api.cart.add(ctx, { sellableId: usdSellable.id, priceId: createTestMikaId("price", 3) }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 422,
+      error: { code: "VALIDATION_FAILED", fieldErrors: { priceId: expect.any(String) } },
+    });
+    await expect(
+      api.cart.add(ctx, { sellableId: limitedSellable.id, quantity: 3 }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "MAX_PER_ORDER_EXCEEDED" },
+    });
+    await expect(
+      repositories.session.findOpenCartBySession("session_rejected", TEST_CURRENCY),
+    ).resolves.toBeNull();
+  });
 });
 
 describe("backend fixture helpers", () => {
@@ -884,6 +1066,22 @@ function createTestBackendDependencies(
     },
     ...overrides,
   };
+}
+
+function createIncrementingBackendDependencies(
+  overrides: Partial<CreateMikaBackendApiInput> = {},
+): CreateMikaBackendApiInput {
+  const counts = new Map<string, number>();
+
+  return createTestBackendDependencies({
+    createId: (namespace) => {
+      const count = (counts.get(namespace) ?? 0) + 1;
+      counts.set(namespace, count);
+
+      return createTestMikaId(namespace, count);
+    },
+    ...overrides,
+  });
 }
 
 function createTestBackendRepositories(
