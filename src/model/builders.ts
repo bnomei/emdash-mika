@@ -239,6 +239,8 @@ export function createOrderAggregate(input: {
   readonly customer: CustomerSnapshot;
   readonly checkout: CheckoutAggregate;
   readonly lines: readonly OrderLine[];
+  readonly providerPaymentId?: string;
+  readonly providerOrderId?: string;
   readonly invoiceUrl?: string;
   readonly receiptUrl?: string;
   readonly metadata?: JsonObject;
@@ -253,6 +255,8 @@ export function createOrderAggregate(input: {
       {
         provider: input.checkout.binding.provider,
         checkoutId: input.checkout.binding.providerCheckoutId,
+        paymentId: input.providerPaymentId,
+        orderId: input.providerOrderId,
         customerId: input.checkout.binding.providerCustomerId,
       },
     ],

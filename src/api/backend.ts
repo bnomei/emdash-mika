@@ -1,5 +1,6 @@
 import type {
   MikaProviderLineItem,
+  MikaProviderPaymentEvent,
   MikaProviderRegistry,
   MikaProviderWebhookEvent,
   MikaVerifiedWebhookPayload,
@@ -20,7 +21,9 @@ import {
   catalogSellablesToDTO,
   createCartAggregate,
   createCheckoutAggregate,
+  createOrderAggregate,
   createWishlistAggregate,
+  orderLineFromCheckoutLine,
   snapshotPrice,
   stockAvailabilityToDTO,
   wishlistToDTO,
@@ -29,6 +32,7 @@ import type {
   CartLine,
   CheckoutLine,
   CouponSnapshot,
+  CustomerSnapshot,
   PriceDefinition,
   SellableDefinition,
   WishlistItem,
@@ -36,6 +40,7 @@ import type {
 import type {
   CartDocument,
   CheckoutDocument,
+  OrderDocument,
   SessionDocument,
   WebhookDocument,
   WishlistDocument,
@@ -793,12 +798,14 @@ async function receiveWebhook(
     return providerFailed("Webhook could not be stored.");
   }
 
+  const processedWebhook = await processStoredWebhook(input, ctx, webhook, event);
+
   return {
     ok: true,
     status: 200,
     data: {
-      id: webhook.id,
-      status: "received",
+      id: processedWebhook.id,
+      status: processedWebhook.status === "failed" ? "failed" : "received",
       replayable: true,
     },
   };
@@ -849,6 +856,404 @@ function createWebhookDocument(
     createdAt: ctx.now,
     updatedAt: ctx.now,
   };
+}
+
+async function processStoredWebhook(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  webhook: WebhookDocument,
+  event: MikaProviderWebhookEvent,
+): Promise<WebhookDocument> {
+  if (event.kind !== "payment") return webhook;
+
+  try {
+    return await processPaymentWebhook(input, ctx, webhook, event);
+  } catch {
+    return markWebhookFailed(input, webhook, ctx.now, "Payment webhook could not be processed.");
+  }
+}
+
+async function processPaymentWebhook(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  webhook: WebhookDocument,
+  event: MikaProviderPaymentEvent,
+): Promise<WebhookDocument> {
+  let existingOrder = await findExistingPaymentOrder(input, event);
+  if (existingOrder) {
+    const order = await updatePaymentOrderFromEvent(input, ctx, existingOrder, event);
+    await completeCheckoutForPaymentOrder(input, ctx, order, event);
+
+    return markWebhookProcessed(input, webhook, ctx.now, order);
+  }
+
+  const checkout = await findPaymentEventCheckout(input, event);
+  if (!checkout) {
+    return markWebhookFailed(
+      input,
+      webhook,
+      ctx.now,
+      "Payment event could not be linked to a checkout.",
+    );
+  }
+
+  existingOrder = await findExistingPaymentOrder(input, event, checkout.id);
+  if (existingOrder) {
+    const order = await updatePaymentOrderFromEvent(input, ctx, existingOrder, event);
+    await completeCheckoutForPaymentOrder(input, ctx, order, event, checkout);
+
+    return markWebhookProcessed(input, webhook, ctx.now, order);
+  }
+
+  const order = await persistNewPaymentOrder(
+    input,
+    ctx,
+    await createPaymentOrderDocument(input, ctx, checkout, event),
+    event,
+    checkout,
+  );
+  await completeCheckoutForPaymentOrder(input, ctx, order, event, checkout);
+
+  return markWebhookProcessed(input, webhook, ctx.now, order);
+}
+
+async function findExistingPaymentOrder(
+  input: CreateMikaBackendApiInput,
+  event: MikaProviderPaymentEvent,
+  checkoutSessionId?: MikaId,
+): Promise<OrderDocument | null> {
+  if (event.providerPaymentId) {
+    const order = await input.repositories.ledger.findOrderByProviderPayment(
+      event.provider,
+      event.providerPaymentId,
+    );
+    if (order) return order;
+  }
+
+  if (event.providerOrderId) {
+    const order = await input.repositories.ledger.findOrderByProviderOrder(
+      event.provider,
+      event.providerOrderId,
+    );
+    if (order) return order;
+  }
+
+  if (event.providerCheckoutId) {
+    const order = await input.repositories.ledger.findOrderByProviderCheckout(
+      event.provider,
+      event.providerCheckoutId,
+    );
+    if (order) return order;
+  }
+
+  if (checkoutSessionId) {
+    const order = await input.repositories.ledger.findOrderByCheckoutSession(checkoutSessionId);
+    if (order) return order;
+  }
+
+  return null;
+}
+
+async function persistNewPaymentOrder(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  order: OrderDocument,
+  event: MikaProviderPaymentEvent,
+  checkout: CheckoutDocument,
+): Promise<OrderDocument> {
+  try {
+    await input.repositories.ledger.put(order);
+
+    return order;
+  } catch (error) {
+    const existingOrder = await findExistingPaymentOrder(input, event, checkout.id);
+    if (!existingOrder) throw error;
+
+    return updatePaymentOrderFromEvent(input, ctx, existingOrder, event);
+  }
+}
+
+async function findPaymentEventCheckout(
+  input: CreateMikaBackendApiInput,
+  event: MikaProviderPaymentEvent,
+): Promise<CheckoutDocument | null> {
+  if (!event.providerCheckoutId) return null;
+
+  return input.repositories.session.findCheckoutByProvider(
+    event.provider,
+    event.providerCheckoutId,
+  );
+}
+
+async function createPaymentOrderDocument(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  checkout: CheckoutDocument,
+  event: MikaProviderPaymentEvent,
+): Promise<OrderDocument> {
+  const orderId = input.createId("order");
+  const total = checkout.aggregate.totals.total;
+  const lines = checkout.aggregate.lines.map((line) =>
+    orderLineFromCheckoutLine({
+      id: input.createId("order_line"),
+      line,
+      metadata: paymentOrderLineMetadata(line, event),
+    }),
+  );
+
+  return {
+    id: orderId,
+    type: "order",
+    schemaVersion: 1,
+    orderNumber: orderId,
+    customerId: checkout.customerId,
+    provider: event.provider,
+    providerCheckoutId:
+      event.providerCheckoutId ??
+      checkout.providerCheckoutId ??
+      checkout.aggregate.binding.providerCheckoutId,
+    providerPaymentId: event.providerPaymentId,
+    providerOrderId: event.providerOrderId,
+    checkoutSessionId: checkout.id,
+    status: "paid",
+    paymentStatus: "paid",
+    currency: total.currency,
+    totalAmount: total.amount,
+    paidAt: ctx.now,
+    aggregate: createOrderAggregate({
+      customer: await paymentCustomerSnapshot(input, checkout, event),
+      checkout: checkout.aggregate,
+      lines,
+      providerPaymentId: event.providerPaymentId,
+      providerOrderId: event.providerOrderId,
+      invoiceUrl: event.invoiceUrl,
+      metadata: paymentOrderMetadata(event, checkout.id),
+    }),
+    createdAt: ctx.now,
+    updatedAt: ctx.now,
+  };
+}
+
+async function updatePaymentOrderFromEvent(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  order: OrderDocument,
+  event: MikaProviderPaymentEvent,
+): Promise<OrderDocument> {
+  const updated: OrderDocument = {
+    ...order,
+    providerPaymentId: order.providerPaymentId ?? event.providerPaymentId,
+    providerOrderId: order.providerOrderId ?? event.providerOrderId,
+    status: "paid",
+    paymentStatus: "paid",
+    paidAt: order.paidAt ?? ctx.now,
+    updatedAt: ctx.now,
+    aggregate: {
+      ...order.aggregate,
+      invoiceUrl: event.invoiceUrl ?? order.aggregate.invoiceUrl,
+      providerRefs: mergePaymentProviderRefs(order.aggregate.providerRefs, order, event),
+      metadata: {
+        ...order.aggregate.metadata,
+        ...paymentOrderMetadata(event, order.checkoutSessionId),
+      },
+    },
+  };
+
+  await input.repositories.ledger.put(updated);
+
+  return updated;
+}
+
+function mergePaymentProviderRefs(
+  refs: OrderDocument["aggregate"]["providerRefs"],
+  order: OrderDocument,
+  event: MikaProviderPaymentEvent,
+): OrderDocument["aggregate"]["providerRefs"] {
+  const providerCheckoutId = event.providerCheckoutId ?? order.providerCheckoutId;
+  const index = refs.findIndex(
+    (ref) =>
+      ref.provider === event.provider &&
+      ((providerCheckoutId !== undefined && ref.checkoutId === providerCheckoutId) ||
+        (event.providerPaymentId !== undefined && ref.paymentId === event.providerPaymentId) ||
+        (event.providerOrderId !== undefined && ref.orderId === event.providerOrderId)),
+  );
+  const existing = refs[index] ?? { provider: event.provider };
+  const merged = {
+    ...existing,
+    checkoutId: existing.checkoutId ?? providerCheckoutId,
+    paymentId: existing.paymentId ?? event.providerPaymentId,
+    orderId: existing.orderId ?? event.providerOrderId,
+  };
+
+  return index >= 0
+    ? refs.map((ref, refIndex) => (refIndex === index ? merged : ref))
+    : [...refs, merged];
+}
+
+async function completeCheckoutForPaymentOrder(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  order: OrderDocument,
+  event: MikaProviderPaymentEvent,
+  knownCheckout?: CheckoutDocument,
+): Promise<void> {
+  const checkout = knownCheckout ?? (await findOrderCheckout(input, order, event));
+  if (!checkout) return;
+
+  const completedCheckout: CheckoutDocument = {
+    ...checkout,
+    status: "completed",
+    updatedAt: ctx.now,
+    aggregate: {
+      ...checkout.aggregate,
+      metadata: completedCheckoutMetadata(checkout.aggregate.metadata, order, event),
+    },
+  };
+  await input.repositories.session.put(completedCheckout);
+
+  if (!checkout.cartId) return;
+
+  const document = await input.repositories.session.findById(checkout.cartId);
+  if (!document || document.type !== "cart") return;
+
+  await input.repositories.session.put({
+    ...document,
+    status: "converted",
+    updatedAt: ctx.now,
+    aggregate: {
+      ...document.aggregate,
+      metadata: {
+        ...document.aggregate.metadata,
+        checkoutSessionId: checkout.id,
+        checkoutOrderId: order.id,
+      },
+    },
+  });
+}
+
+async function findOrderCheckout(
+  input: CreateMikaBackendApiInput,
+  order: OrderDocument,
+  event: MikaProviderPaymentEvent,
+): Promise<CheckoutDocument | null> {
+  if (order.checkoutSessionId) {
+    const checkout = await input.repositories.session.findCheckoutById(order.checkoutSessionId);
+    if (checkout) return checkout;
+  }
+
+  const providerCheckoutId = event.providerCheckoutId ?? order.providerCheckoutId;
+  if (!providerCheckoutId) return null;
+
+  return input.repositories.session.findCheckoutByProvider(event.provider, providerCheckoutId);
+}
+
+async function paymentCustomerSnapshot(
+  input: CreateMikaBackendApiInput,
+  checkout: CheckoutDocument,
+  event: MikaProviderPaymentEvent,
+): Promise<CustomerSnapshot> {
+  const normalizedEmail = event.customer?.email?.trim().toLowerCase();
+
+  return {
+    customerId: checkout.customerId,
+    email: event.customer?.email,
+    emailHash: normalizedEmail ? await input.hash(`email:${normalizedEmail}`) : undefined,
+    name: event.customer?.name,
+    company: event.customer?.company,
+    vatId: event.customer?.vatId,
+  };
+}
+
+function paymentOrderMetadata(
+  event: MikaProviderPaymentEvent,
+  checkoutSessionId?: MikaId,
+): JsonObject {
+  return {
+    source: "webhook.payment",
+    ...(checkoutSessionId ? { checkoutSessionId } : {}),
+    ...(event.providerEventId ? { providerEventId: event.providerEventId } : {}),
+    ...(event.providerPaymentId ? { providerPaymentId: event.providerPaymentId } : {}),
+    ...(event.providerOrderId ? { providerOrderId: event.providerOrderId } : {}),
+  };
+}
+
+function paymentOrderLineMetadata(line: CheckoutLine, event: MikaProviderPaymentEvent): JsonObject {
+  return {
+    checkoutLineId: line.id,
+    ...(line.reservationId ? { reservationId: line.reservationId } : {}),
+    ...(event.providerEventId ? { providerEventId: event.providerEventId } : {}),
+  };
+}
+
+function completedCheckoutMetadata(
+  metadata: JsonObject | undefined,
+  order: OrderDocument,
+  event: MikaProviderPaymentEvent,
+): JsonObject {
+  return {
+    ...metadata,
+    checkoutProviderStatus: "completed",
+    checkoutOrderId: order.id,
+    ...(event.providerPaymentId ? { providerPaymentId: event.providerPaymentId } : {}),
+    ...(event.providerOrderId ? { providerOrderId: event.providerOrderId } : {}),
+  };
+}
+
+async function markWebhookProcessed(
+  input: CreateMikaBackendApiInput,
+  webhook: WebhookDocument,
+  now: ISODateTime,
+  order: OrderDocument,
+): Promise<WebhookDocument> {
+  const processed: WebhookDocument = {
+    ...webhook,
+    status: "processed",
+    record: {
+      ...webhook.record,
+      status: "processed",
+      attemptCount: webhook.record.attemptCount + 1,
+      processedAt: now,
+      relatedCustomerId: order.customerId,
+      relatedOrderId: order.id,
+    },
+    updatedAt: now,
+  };
+
+  return putWebhookBestEffort(input, processed);
+}
+
+async function markWebhookFailed(
+  input: CreateMikaBackendApiInput,
+  webhook: WebhookDocument,
+  now: ISODateTime,
+  lastError: string,
+): Promise<WebhookDocument> {
+  const failed: WebhookDocument = {
+    ...webhook,
+    status: "failed",
+    record: {
+      ...webhook.record,
+      status: "failed",
+      attemptCount: webhook.record.attemptCount + 1,
+      lastError,
+    },
+    updatedAt: now,
+  };
+
+  return putWebhookBestEffort(input, failed);
+}
+
+async function putWebhookBestEffort(
+  input: CreateMikaBackendApiInput,
+  webhook: WebhookDocument,
+): Promise<WebhookDocument> {
+  try {
+    await input.repositories.ops.put(webhook);
+  } catch {
+    // The webhook has already been accepted; callers still receive the in-memory state.
+  }
+
+  return webhook;
 }
 
 function webhookDuplicateResult(duplicate: WebhookDocument): MikaApiResult<WebhookReceiveDTO> {

@@ -440,6 +440,26 @@ export class LedgerRepository {
     });
   }
 
+  async findOrderByProviderCheckout(
+    provider: string,
+    providerCheckoutId: string,
+  ): Promise<OrderDocument | null> {
+    return findOneByType(this.collection, "order", {
+      provider,
+      providerCheckoutId,
+    });
+  }
+
+  async findOrderByProviderOrder(
+    provider: string,
+    providerOrderId: string,
+  ): Promise<OrderDocument | null> {
+    return findOneByType(this.collection, "order", {
+      provider,
+      providerOrderId,
+    });
+  }
+
   async findOrderByCheckoutSession(checkoutSessionId: MikaId): Promise<OrderDocument | null> {
     return findOneByType(this.collection, "order", { checkoutSessionId });
   }

@@ -33,6 +33,7 @@ import type {
   CatalogItemDocument,
   CheckoutDocument,
   MikaStorageDocuments,
+  OrderDocument,
 } from "../src/types/documents";
 import type { StockEventRecord, StockItemRecord } from "../src/types/operational";
 import {
@@ -1389,6 +1390,316 @@ describe("backend API composition", () => {
     expect(fake.getCalls()).toMatchObject({
       verifyWebhook: [expect.any(Object), expect.any(Object), expect.any(Object)],
       parseWebhookEvent: [expect.any(Object), expect.any(Object), expect.any(Object)],
+    });
+  });
+
+  it("creates one paid order from replayed payment webhook events", async () => {
+    const stripe = createProviderName("stripe");
+    const sessionCollection = createStorageCollection("session");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      session: new SessionRepository(sessionCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+    };
+    const sellable = createSellableDefinition({
+      prices: [
+        createPriceDefinition({
+          providerRefs: [{ provider: stripe, productId: "prod_payment", priceId: "price_payment" }],
+        }),
+      ],
+    });
+    const webhookDeliveries = [
+      { payloadHash: "payment_hash_1", providerEventId: "event_payment_1" },
+      { payloadHash: "payment_hash_2", providerEventId: "event_payment_2" },
+    ];
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) => {
+          const delivery = webhookDeliveries[0];
+          if (!delivery) throw new Error("Unexpected webhook verification call.");
+
+          return createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: delivery.payloadHash,
+            parsed: { delivery: delivery.providerEventId },
+          });
+        },
+        parseWebhookEvent: async (verified) => {
+          const delivery = webhookDeliveries.shift();
+          if (!delivery) throw new Error("Unexpected webhook parse call.");
+
+          return createPaymentWebhookEvent(verified, {
+            providerEventId: delivery.providerEventId,
+            providerCheckoutId: "provider_checkout_fake",
+            providerPaymentId: "payment_1",
+            providerOrderId: "provider_order_1",
+            invoiceUrl: "https://invoice.example.test/payment_1",
+            customer: { email: "Shopper@Example.test", name: "Shopper One" },
+          });
+        },
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef: createTestContentRef(), sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const shopperCtx = createTestRequestContext({
+      sessionId: "session_payment",
+      customerId: createTestMikaId("customer", 1),
+      userId: "user_payment",
+      idempotencyKey: "checkout_payment_1",
+    });
+
+    const cart = await api.cart.add(shopperCtx, { sellableId: sellable.id, quantity: 2 });
+    if (!cart.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+    const checkout = await api.checkout.start(shopperCtx, {
+      cartId: cart.data.id,
+      provider: stripe,
+    });
+    if (!checkout.ok) {
+      throw new Error("Expected checkout.start to succeed.");
+    }
+
+    await expect(receiveWebhook(api, "payment-first", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "webhook_1",
+        status: "received",
+        replayable: true,
+      },
+    });
+    await expect(receiveWebhook(api, "payment-replay", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "webhook_2",
+        status: "received",
+        replayable: true,
+      },
+    });
+
+    await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(1);
+    await expect(
+      repositories.ledger.findOrderByProviderPayment(stripe, "payment_1"),
+    ).resolves.toMatchObject({
+      id: "order_1",
+      provider: "stripe",
+      providerCheckoutId: "provider_checkout_fake",
+      providerPaymentId: "payment_1",
+      providerOrderId: "provider_order_1",
+      checkoutSessionId: "checkout_1",
+      status: "paid",
+      paymentStatus: "paid",
+      currency: TEST_CURRENCY,
+      totalAmount: 2400,
+      paidAt: TEST_NOW,
+      aggregate: {
+        customer: {
+          customerId: "customer_1",
+          email: "Shopper@Example.test",
+          emailHash: createTestHash("email:shopper@example.test"),
+        },
+        invoiceUrl: "https://invoice.example.test/payment_1",
+        lines: [
+          {
+            id: "order_line_1",
+            quantity: 2,
+            totalAmount: 2400,
+          },
+        ],
+        providerRefs: [
+          {
+            provider: "stripe",
+            checkoutId: "provider_checkout_fake",
+            paymentId: "payment_1",
+            orderId: "provider_order_1",
+          },
+        ],
+      },
+    });
+    await expect(
+      repositories.session.findById(createTestMikaId("checkout", 1)),
+    ).resolves.toMatchObject({
+      type: "checkout",
+      status: "completed",
+      aggregate: {
+        metadata: {
+          checkoutOrderId: "order_1",
+          checkoutProviderStatus: "completed",
+          providerPaymentId: "payment_1",
+          providerOrderId: "provider_order_1",
+        },
+      },
+    });
+    await expect(repositories.session.findById(cart.data.id)).resolves.toMatchObject({
+      type: "cart",
+      status: "converted",
+      aggregate: { metadata: { checkoutSessionId: "checkout_1", checkoutOrderId: "order_1" } },
+    });
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
+      status: "processed",
+      record: { status: "processed", relatedOrderId: "order_1" },
+    });
+    await expect(opsCollection.get("webhook_2")).resolves.toMatchObject({
+      status: "processed",
+      record: { status: "processed", relatedOrderId: "order_1" },
+    });
+  });
+
+  it("recovers payment webhook processing when a concurrent order insert wins", async () => {
+    const stripe = createProviderName("stripe");
+    const sessionCollection = createStorageCollection("session");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const baseLedger = new LedgerRepository(ledgerCollection);
+    let concurrentOrder: OrderDocument | null = null;
+    let createPutAttempts = 0;
+    const racingLedger: MikaBackendRepositories["ledger"] = {
+      findOrderById: (orderId) => baseLedger.findOrderById(orderId),
+      findOrderByNumber: (orderNumber) => baseLedger.findOrderByNumber(orderNumber),
+      findOrderByProviderPayment: async (provider, providerPaymentId) =>
+        concurrentOrder?.provider === provider &&
+        concurrentOrder.providerPaymentId === providerPaymentId
+          ? concurrentOrder
+          : baseLedger.findOrderByProviderPayment(provider, providerPaymentId),
+      findOrderByProviderCheckout: async (provider, providerCheckoutId) =>
+        concurrentOrder?.provider === provider &&
+        concurrentOrder.providerCheckoutId === providerCheckoutId
+          ? concurrentOrder
+          : baseLedger.findOrderByProviderCheckout(provider, providerCheckoutId),
+      findOrderByProviderOrder: async (provider, providerOrderId) =>
+        concurrentOrder?.provider === provider &&
+        concurrentOrder.providerOrderId === providerOrderId
+          ? concurrentOrder
+          : baseLedger.findOrderByProviderOrder(provider, providerOrderId),
+      findOrderByCheckoutSession: async (checkoutSessionId) =>
+        concurrentOrder?.checkoutSessionId === checkoutSessionId
+          ? concurrentOrder
+          : baseLedger.findOrderByCheckoutSession(checkoutSessionId),
+      listOrdersByCustomer: (customerId, limit) =>
+        baseLedger.listOrdersByCustomer(customerId, limit),
+      put: async (document) => {
+        if (
+          document.type === "order" &&
+          document.providerPaymentId === "payment_race" &&
+          !concurrentOrder
+        ) {
+          createPutAttempts += 1;
+          concurrentOrder = {
+            ...document,
+            id: createTestMikaId("order", 99),
+            orderNumber: "order_99",
+          };
+          await baseLedger.put(concurrentOrder);
+          throw new Error("unique constraint failed: provider payment id");
+        }
+
+        await baseLedger.put(document);
+      },
+    };
+    const repositories = {
+      ...createTestBackendRepositories(),
+      session: new SessionRepository(sessionCollection),
+      ledger: racingLedger,
+      ops: new OpsRepository(opsCollection),
+    };
+    const sellable = createSellableDefinition();
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "payment_race_hash",
+            parsed: { delivery: "payment_race" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createPaymentWebhookEvent(verified, {
+            providerEventId: "event_payment_race",
+            providerCheckoutId: "provider_checkout_fake",
+            providerPaymentId: "payment_race",
+            providerOrderId: "provider_order_race",
+          }),
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef: createTestContentRef(), sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const shopperCtx = createTestRequestContext({
+      sessionId: "session_payment_race",
+      customerId: createTestMikaId("customer", 1),
+      userId: "user_payment_race",
+      idempotencyKey: "checkout_payment_race",
+    });
+
+    const cart = await api.cart.add(shopperCtx, { sellableId: sellable.id, quantity: 1 });
+    if (!cart.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+    const checkout = await api.checkout.start(shopperCtx, {
+      cartId: cart.data.id,
+      provider: stripe,
+    });
+    if (!checkout.ok) {
+      throw new Error("Expected checkout.start to succeed.");
+    }
+
+    await expect(receiveWebhook(api, "payment-race", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "webhook_1",
+        status: "received",
+        replayable: true,
+      },
+    });
+
+    expect(createPutAttempts).toBe(1);
+    await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(1);
+    await expect(
+      baseLedger.findOrderByProviderPayment(stripe, "payment_race"),
+    ).resolves.toMatchObject({
+      id: "order_99",
+      providerPaymentId: "payment_race",
+      providerOrderId: "provider_order_race",
+      checkoutSessionId: "checkout_1",
+      status: "paid",
+      paymentStatus: "paid",
+      aggregate: {
+        lines: [{ id: "order_line_1", quantity: 1 }],
+        metadata: {
+          providerEventId: "event_payment_race",
+          providerPaymentId: "payment_race",
+          providerOrderId: "provider_order_race",
+        },
+      },
+    });
+    await expect(
+      repositories.session.findById(createTestMikaId("checkout", 1)),
+    ).resolves.toMatchObject({
+      type: "checkout",
+      status: "completed",
+      aggregate: { metadata: { checkoutOrderId: "order_99" } },
+    });
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
+      status: "processed",
+      record: { status: "processed", relatedOrderId: "order_99" },
     });
   });
 
@@ -4283,7 +4594,7 @@ function createCheckoutInput(
   };
 }
 
-function receiveWebhook(api: MikaApi, marker: string) {
+function receiveWebhook(api: MikaApi, marker: string, provider = TEST_PROVIDER) {
   return api.webhook.receive(
     createTestRequestContext({
       request: createWebhookRequest(JSON.stringify({ marker })),
@@ -4292,7 +4603,7 @@ function receiveWebhook(api: MikaApi, marker: string) {
       userId: false,
       idempotencyKey: false,
     }),
-    { provider: TEST_PROVIDER },
+    { provider },
   );
 }
 
@@ -4335,6 +4646,32 @@ function createWebhookEvent(
     provider: verified.provider,
     providerEventId: overrides.providerEventId,
     type: overrides.type ?? "test.webhook",
+  };
+}
+
+function createPaymentWebhookEvent(
+  verified: MikaVerifiedWebhookPayload,
+  overrides: {
+    readonly providerEventId?: string;
+    readonly type?: string;
+    readonly providerCheckoutId?: string;
+    readonly providerPaymentId?: string;
+    readonly providerOrderId?: string;
+    readonly invoiceUrl?: string;
+    readonly customer?: Extract<MikaProviderWebhookEvent, { readonly kind: "payment" }>["customer"];
+  } = {},
+): MikaProviderWebhookEvent {
+  return {
+    kind: "payment",
+    provider: verified.provider,
+    providerEventId: overrides.providerEventId,
+    type: overrides.type ?? "payment.completed",
+    providerCheckoutId: overrides.providerCheckoutId,
+    providerPaymentId: overrides.providerPaymentId,
+    providerOrderId: overrides.providerOrderId,
+    customer: overrides.customer,
+    lines: [],
+    invoiceUrl: overrides.invoiceUrl,
   };
 }
 
