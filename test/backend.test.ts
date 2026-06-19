@@ -1624,6 +1624,114 @@ describe("backend API composition", () => {
     }
   });
 
+  it("creates a provider portal session for a known provider account", async () => {
+    const accountCollection = createStorageCollection("account");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+    } satisfies MikaBackendRepositories;
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["createPortalSession"],
+    });
+    const api = createMikaBackendApi(
+      createTestBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.account.put(createCustomerDocument());
+    await repositories.account.put(createProviderAccountDocument());
+
+    await expect(
+      api.account.portal(createTestRequestContext({ url: "https://shop.example.test/current" }), {
+        returnTo: "/account",
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      status: 200,
+      data: { redirectUrl: "https://portal.example.test/session/portal_fake" },
+    });
+    expect(fake.getCalls().createPortalSession).toEqual([
+      {
+        providerCustomerId: "provider_customer_1",
+        returnUrl: "https://shop.example.test/account",
+      },
+    ]);
+  });
+
+  it("returns provider unsupported when portal adapter support is unavailable", async () => {
+    const missingAdapterRepositories = createTestBackendRepositories();
+    await missingAdapterRepositories.account.put(createCustomerDocument());
+    await missingAdapterRepositories.account.put(
+      createProviderAccountDocument({ provider: createTestProviderName("missing") }),
+    );
+    const missingAdapterApi = createMikaBackendApi(
+      createTestBackendDependencies({
+        repositories: missingAdapterRepositories,
+        providers: createMikaProviderRegistry([]),
+      }),
+    );
+
+    await expect(
+      missingAdapterApi.account.portal(createTestRequestContext(), {}),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "PROVIDER_UNSUPPORTED" },
+    });
+
+    const missingMethodRepositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({ optionalMethods: "none" });
+    await missingMethodRepositories.account.put(createCustomerDocument());
+    await missingMethodRepositories.account.put(createProviderAccountDocument());
+    const missingMethodApi = createMikaBackendApi(
+      createTestBackendDependencies({
+        repositories: missingMethodRepositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(
+      missingMethodApi.account.portal(createTestRequestContext(), {}),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "PROVIDER_UNSUPPORTED" },
+    });
+    expect(fake.getCalls().createPortalSession).toEqual([]);
+  });
+
+  it("returns provider failed when portal session creation fails", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["createPortalSession"],
+      overrides: {
+        createPortalSession: async () => {
+          throw new Error("Portal session failed.");
+        },
+      },
+    });
+    const api = createMikaBackendApi(
+      createTestBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.account.put(createCustomerDocument());
+    await repositories.account.put(createProviderAccountDocument());
+
+    await expect(api.account.portal(createTestRequestContext(), {})).resolves.toMatchObject({
+      ok: false,
+      status: 502,
+      error: {
+        code: "PROVIDER_FAILED",
+        message: "Portal session failed.",
+      },
+    });
+  });
+
   it("returns stable magic link token errors for invalid and expired tokens", async () => {
     const harness = await createMagicLinkHarness({ ttlMs: 1 });
 

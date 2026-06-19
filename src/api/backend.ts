@@ -756,6 +756,7 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
       exportDownload: async (ctx, downloadInput) =>
         downloadAccountExport(input, ctx, downloadInput),
       delete: async (ctx) => requestAccountDelete(input, ctx),
+      portal: async (ctx, portalInput) => createAccountPortalSession(input, ctx, portalInput),
       ...input.overrides?.account,
     },
     webhook: {
@@ -1034,6 +1035,60 @@ async function requestAccountDelete(
   await input.repositories.ops.put(document);
 
   return { ok: true, status: 202, data: { requested: true } };
+}
+
+async function createAccountPortalSession(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  portalInput: { readonly returnTo?: string },
+): Promise<MikaApiResult<{ redirectUrl: string }>> {
+  const identity = await resolveAccountIdentity(input, ctx);
+  if (!identity?.customer) {
+    return authRequired("Account portal requires an authenticated customer identity.");
+  }
+
+  const providerAccount = (
+    await input.repositories.account.listProviderAccountsByCustomer(identity.customer.customerId, 1)
+  ).items[0]?.data;
+  if (!providerAccount) {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "PROVIDER_UNSUPPORTED",
+        message: "No provider account is available for portal sessions.",
+      },
+    };
+  }
+
+  const provider = input.providers.get(providerAccount.provider);
+  if (!provider?.createPortalSession) {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "PROVIDER_UNSUPPORTED",
+        message: `Provider '${providerAccount.provider}' does not support portal sessions.`,
+      },
+    };
+  }
+
+  try {
+    const session = await provider.createPortalSession({
+      providerCustomerId: providerAccount.providerCustomerId,
+      returnUrl: accountPortalReturnUrl(ctx, portalInput.returnTo),
+    });
+
+    return {
+      ok: true,
+      status: 200,
+      data: { redirectUrl: session.redirectUrl },
+    };
+  } catch (error) {
+    return providerFailed(
+      error instanceof Error ? error.message : "Provider portal session failed.",
+    );
+  }
 }
 
 async function requestMagicLink(
@@ -1350,6 +1405,13 @@ function magicLinkUrl(ctx: MikaRequestContext, token: string, returnTo?: string)
     origin: ctx.url?.origin,
     search: { token, returnTo },
   });
+}
+
+function accountPortalReturnUrl(ctx: MikaRequestContext, returnTo?: string): string {
+  if (!returnTo) return ctx.url?.href ?? "/";
+  if (!ctx.url) return returnTo;
+
+  return new URL(returnTo, ctx.url.origin).toString();
 }
 
 function magicLinkTokenError(
