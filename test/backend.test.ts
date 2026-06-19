@@ -1,12 +1,31 @@
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
+import {
+  createMikaBackendApi,
+  type CreateMikaBackendApiInput,
+  type MikaBackendDependencies,
+  type MikaBackendRepositories,
+} from "../src/api/backend";
 import type { StorageCollection } from "../src/storage/collections";
 import type { MikaProviderCapability } from "../src/api/types";
+import type { MikaApi } from "../src/api/server";
 import type {
   MikaProviderAdapter,
   MikaProviderCheckoutInput,
   MikaProviderWebhookVerificationInput,
 } from "../src/provider";
+import { createMikaProviderRegistry } from "../src/provider";
+import type { MikaStorageDocuments } from "../src/types/documents";
+import {
+  AccountRepository,
+  CatalogRepository,
+  EphemeralRepository,
+  LedgerRepository,
+  OpsRepository,
+  SessionRepository,
+  StockRepository,
+  type MikaDbExecutor,
+} from "../src/storage/repositories";
 import { createCurrencyCode, createMikaId, createProviderName } from "../src/types/primitives";
 import {
   TEST_CURRENCY,
@@ -230,6 +249,58 @@ describe("backend test provider helpers", () => {
   });
 });
 
+describe("backend API composition", () => {
+  it("defines injectable dependencies from backend test helpers", () => {
+    const dependencies = createTestBackendDependencies();
+
+    expectTypeOf(dependencies).toEqualTypeOf<CreateMikaBackendApiInput>();
+    expectTypeOf(dependencies).toMatchTypeOf<MikaBackendDependencies>();
+    expect(dependencies.providers.get(TEST_PROVIDER)?.id).toBe(TEST_PROVIDER);
+    expect(dependencies.defaults).toEqual({
+      currency: TEST_CURRENCY,
+      locale: "en-IE",
+      provider: TEST_PROVIDER,
+    });
+    expect(dependencies.now().toISOString()).toBe("2026-01-01T00:00:00.000Z");
+    expect(dependencies.createId("checkout")).toBe("checkout_1");
+    expect(dependencies.hash("checkout:1")).toBe(createTestHash("checkout:1"));
+  });
+
+  it("creates a complete Mika API with focused overrides and stub defaults", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createTestSellableDTO({ contentRef });
+    const dependencies = createTestBackendDependencies({
+      overrides: {
+        catalog: {
+          sellables: async (input) => ({
+            ok: true,
+            status: 200,
+            data: input.contentRef.id === contentRef.id ? [sellable] : [],
+          }),
+        },
+      },
+    });
+    const api = createMikaBackendApi(dependencies);
+
+    expectTypeOf(api).toEqualTypeOf<MikaApi>();
+    await expect(api.catalog.sellables({ contentRef })).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: [sellable],
+    });
+    await expect(
+      api.stock.availability({ sellableId: createTestMikaId("sellable", 1) }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 501,
+      error: {
+        code: "NOT_IMPLEMENTED",
+        message: "Mika API 'stock.availability' has not been wired yet.",
+      },
+    });
+  });
+});
+
 describe("backend fixture helpers", () => {
   it("returns deterministic time, IDs, providers, currency, and hashes", () => {
     const clock = createTestClock();
@@ -355,6 +426,58 @@ function createRecord(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
     createdAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
   };
+}
+
+function createTestBackendDependencies(
+  overrides: Partial<CreateMikaBackendApiInput> = {},
+): CreateMikaBackendApiInput {
+  const providers = createMikaProviderRegistry([createFakeMikaProvider().provider]);
+
+  return {
+    repositories: createTestBackendRepositories(),
+    providers,
+    now: () => createTestClock().now,
+    isoNow: () => createTestClock().iso,
+    createId: (namespace) => createTestMikaId(namespace, 1),
+    hash: (input) =>
+      createTestHash(typeof input === "string" ? input : new TextDecoder().decode(input)),
+    defaults: {
+      currency: TEST_CURRENCY,
+      locale: "en-IE",
+      provider: TEST_PROVIDER,
+    },
+    config: {
+      checkout: {
+        successUrl: "https://shop.example.test/success",
+        cancelUrl: "https://shop.example.test/cancel",
+      },
+    },
+    ...overrides,
+  };
+}
+
+function createTestBackendRepositories(): MikaBackendRepositories {
+  const db = createUnusedDbExecutor();
+
+  return {
+    catalog: new CatalogRepository(createStorageCollection("catalog")),
+    session: new SessionRepository(createStorageCollection("session")),
+    account: new AccountRepository(createStorageCollection("account")),
+    ledger: new LedgerRepository(createStorageCollection("ledger")),
+    ops: new OpsRepository(createStorageCollection("ops")),
+    stock: new StockRepository(db),
+    ephemeral: new EphemeralRepository(db),
+  } satisfies MikaBackendRepositories;
+}
+
+function createStorageCollection<TName extends keyof MikaStorageDocuments>(
+  _name: TName,
+): StorageCollection<MikaStorageDocuments[TName]> {
+  return createMemoryStorageCollection<MikaStorageDocuments[TName]>();
+}
+
+function createUnusedDbExecutor(): MikaDbExecutor {
+  return {} as MikaDbExecutor;
 }
 
 function createCheckoutInput(
