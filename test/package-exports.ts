@@ -19,8 +19,11 @@ import type { MikaEmailInput, renderMikaEmail } from "@bnomei/emdash-mika/email"
 import type { createMikaProviderRegistry, MikaProviderAdapter } from "@bnomei/emdash-mika/provider";
 import type { MikaProvider } from "@bnomei/emdash-mika/react";
 import type {
+  CreateMikaBackendApiInput,
+  createMikaBackendApi,
   createMikaServerClient,
   MikaApi,
+  MikaBackendDependencies,
   MikaApiOverrides,
   MikaServerClient,
 } from "@bnomei/emdash-mika/server";
@@ -69,6 +72,9 @@ export type PackageEntryContract = {
   readonly react: typeof MikaProvider;
   readonly server: typeof createMikaServerClient;
   readonly serverFacade: MikaServerClient;
+  readonly backend: typeof createMikaBackendApi;
+  readonly backendInput: CreateMikaBackendApiInput;
+  readonly backendDependencies: MikaBackendDependencies;
   readonly api: MikaApi;
   readonly apiOverrides: MikaApiOverrides;
   readonly result: MikaApiResult<CartDTO | CartQuoteDTO | CheckoutPreviewDTO | ProviderHealthDTO>;
@@ -93,6 +99,10 @@ export type MissingRootMikaApi =
 export type MissingRootMikaApiOverrides =
   // @ts-expect-error Server API contracts are intentionally exported from the server subpath.
   import("@bnomei/emdash-mika").MikaApiOverrides;
+
+export type MissingRootCreateMikaBackendApi =
+  // @ts-expect-error Backend API composition is intentionally exported from the server subpath.
+  typeof import("@bnomei/emdash-mika").createMikaBackendApi;
 
 export type MissingApiSubpath =
   // @ts-expect-error The API internals are intentionally not a package subpath.

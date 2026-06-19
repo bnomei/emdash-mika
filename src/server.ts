@@ -11,6 +11,19 @@ export {
   type MikaApiOverrides,
 } from "./api/server";
 export {
+  createMikaBackendApi,
+  type CreateMikaBackendApiInput,
+  type MikaBackendConfig,
+  type MikaBackendDefaults,
+  type MikaBackendDependencies,
+  type MikaBackendHashHelper,
+  type MikaBackendHashInput,
+  type MikaBackendISODateTime,
+  type MikaBackendIdFactory,
+  type MikaBackendNow,
+  type MikaBackendRepositories,
+} from "./api/backend";
+export {
   createMikaServerClient,
   type MikaServerClient,
   type MikaServerClientOptions,

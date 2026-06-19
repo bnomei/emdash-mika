@@ -22,8 +22,10 @@ import type { renderMikaEmail as PackageRenderMikaEmail } from "@bnomei/emdash-m
 import type { createMikaProviderRegistry as PackageCreateMikaProviderRegistry } from "@bnomei/emdash-mika/provider";
 import type { MikaProvider as PackageMikaProvider } from "@bnomei/emdash-mika/react";
 import type {
+  createMikaBackendApi as PackageCreateMikaBackendApi,
   createMikaServerClient as PackageCreateMikaServerClient,
   mikaApiMethodNames as PackageMikaApiMethodNames,
+  MikaBackendDependencies as PackageMikaBackendDependencies,
 } from "@bnomei/emdash-mika/server";
 import type {
   MIKA_ERROR_CODES as PACKAGE_MIKA_ERROR_CODES,
@@ -66,10 +68,12 @@ import {
   type MikaAdminActionId,
 } from "../src/admin";
 import {
+  createMikaBackendApi,
   createMikaRequestContext,
   createMikaApi,
   createMikaServerClient,
   mikaApiMethodNames,
+  type MikaBackendDependencies,
   type MikaApi,
   type MikaApiOverrides,
   type MikaServerClient,
@@ -186,6 +190,9 @@ export type MissingRootMikaApi =
 export type MissingRootMikaApiOverrides =
   // @ts-expect-error Server API contracts are intentionally exported from the server subpath.
   import("@bnomei/emdash-mika").MikaApiOverrides;
+export type MissingRootCreateMikaBackendApi =
+  // @ts-expect-error Backend API composition is intentionally exported from the server subpath.
+  typeof import("@bnomei/emdash-mika").createMikaBackendApi;
 export type MissingMikaCartAddActionInput =
   // @ts-expect-error Form input helper aliases are intentionally not public exports.
   import("@bnomei/emdash-mika/astro-actions").MikaCartAddActionInput;
@@ -1886,6 +1893,8 @@ describe("public types", () => {
     expectTypeOf<typeof PackageCreateMikaProviderRegistry>().toBeFunction();
     expectTypeOf<typeof PackageMikaProvider>().toBeFunction();
     expectTypeOf<typeof PackageCreateMikaServerClient>().toBeFunction();
+    expectTypeOf<typeof PackageCreateMikaBackendApi>().toEqualTypeOf<typeof createMikaBackendApi>();
+    expectTypeOf<PackageMikaBackendDependencies>().toEqualTypeOf<MikaBackendDependencies>();
     expectTypeOf<typeof PackageMikaApiMethodNames>().toEqualTypeOf<typeof mikaApiMethodNames>();
     expectTypeOf<typeof PACKAGE_MIKA_ERROR_CODES>().toEqualTypeOf<typeof MIKA_ERROR_CODES>();
     expectTypeOf<typeof PackageCreateMikaId>().toEqualTypeOf<typeof createMikaId>();
