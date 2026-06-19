@@ -2211,11 +2211,25 @@ describe("backend API composition", () => {
     const repositories = createTestBackendRepositories({
       stockBySellableId: new Map([[sellable.id, stock]]),
     });
+    const catalogPutCalls: unknown[] = [];
+    const stockPutCalls: StockItemRecord[] = [];
+    const catalogPut = repositories.catalog.put.bind(repositories.catalog);
+    const stockPutItem = repositories.stock.putItem.bind(repositories.stock);
+    repositories.catalog.put = async (document) => {
+      catalogPutCalls.push(document);
+      await catalogPut(document);
+    };
+    repositories.stock.putItem = async (record) => {
+      stockPutCalls.push(record);
+      await stockPutItem(record);
+    };
     const fake = createFakeMikaProvider({
       optionalMethods: ["syncCatalog"],
     });
     const catalog = createCatalogItemDocument({ contentRef, sellables: [sellable] });
     await repositories.catalog.put(catalog);
+    catalogPutCalls.length = 0;
+    stockPutCalls.length = 0;
     const api = createMikaBackendApi(
       createIncrementingBackendDependencies({
         repositories,
@@ -2233,15 +2247,24 @@ describe("backend API composition", () => {
     });
 
     expect(fake.getCalls().syncCatalog).toEqual([{ mode: "dry_run" }]);
+    expect(catalogPutCalls).toEqual([]);
+    expect(stockPutCalls).toEqual([]);
     await expect(repositories.catalog.findItemByContent(contentRef)).resolves.toEqual(catalog);
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toEqual(stock);
     await expect(
       repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
-    ).resolves.toMatchObject({
+    ).resolves.toEqual({
+      id: createTestMikaId("admin_audit", 1),
+      type: "adminAudit",
+      schemaVersion: 1,
       status: "completed",
+      createdAt: TEST_NOW,
+      updatedAt: TEST_NOW,
       record: {
+        id: createTestMikaId("admin_audit", 1),
         action: "provider.syncCatalog",
         status: "completed",
+        createdAt: TEST_NOW,
         metadata: {
           provider: TEST_PROVIDER,
           mode: "dry_run",
@@ -2260,18 +2283,49 @@ describe("backend API composition", () => {
 
     await expect(
       api.admin.providerHealth({ provider: createTestProviderName("missing") }),
-    ).resolves.toMatchObject({
+    ).resolves.toEqual({
       ok: false,
       status: 409,
-      error: { code: "PROVIDER_UNSUPPORTED" },
+      error: {
+        code: "PROVIDER_UNSUPPORTED",
+        message: "Provider 'missing' is not configured.",
+      },
     });
 
-    await expect(api.admin.providerSync({ provider: fake.provider.id })).resolves.toMatchObject({
+    await expect(api.admin.providerSync({ provider: fake.provider.id })).resolves.toEqual({
       ok: false,
       status: 409,
-      error: { code: "PROVIDER_UNSUPPORTED" },
+      error: {
+        code: "PROVIDER_UNSUPPORTED",
+        message: "Provider 'fake' does not support catalog sync.",
+      },
     });
     expect(fake.getCalls().syncCatalog).toEqual([]);
+    await expect(
+      api.admin.providerSync({ provider: createTestProviderName("missing") }),
+    ).resolves.toEqual({
+      ok: false,
+      status: 409,
+      error: {
+        code: "PROVIDER_UNSUPPORTED",
+        message: "Provider 'missing' is not configured.",
+      },
+    });
+    await expect(
+      createMikaBackendApi(
+        createIncrementingBackendDependencies({
+          providers: createMikaProviderRegistry([]),
+          defaults: {},
+        }),
+      ).admin.providerSync({}),
+    ).resolves.toEqual({
+      ok: false,
+      status: 409,
+      error: {
+        code: "PROVIDER_UNSUPPORTED",
+        message: "No provider is configured.",
+      },
+    });
   });
 
   it("normalizes provider health failures", async () => {
@@ -2329,11 +2383,18 @@ describe("backend API composition", () => {
     expect(fake.getCalls().syncCatalog).toEqual([{ mode: "apply" }]);
     await expect(
       repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
-    ).resolves.toMatchObject({
+    ).resolves.toEqual({
+      id: createTestMikaId("admin_audit", 1),
+      type: "adminAudit",
+      schemaVersion: 1,
       status: "failed",
+      createdAt: TEST_NOW,
+      updatedAt: TEST_NOW,
       record: {
+        id: createTestMikaId("admin_audit", 1),
         action: "provider.syncCatalog",
         status: "failed",
+        createdAt: TEST_NOW,
         metadata: {
           provider: TEST_PROVIDER,
           mode: "apply",
