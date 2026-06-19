@@ -47,6 +47,7 @@ import type {
   CheckoutDocument,
   AccountDeleteRequestDocument,
   AccountExportDocument,
+  AdminAuditDocument,
   CustomerDocument,
   EmailDocument,
   EntitlementDocument,
@@ -92,6 +93,9 @@ import type {
   DownloadResolutionDTO,
   EntitlementDTO,
   OrderSummaryDTO,
+  ProviderHealthDTO,
+  ProviderHealthInput,
+  ProviderSyncInput,
   StartCheckoutInput,
   StockAdjustInput,
   SubscriptionDTO,
@@ -324,6 +328,8 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
       ...input.overrides?.stock,
     },
     admin: {
+      providerHealth: async (healthInput) => providerHealth(input, healthInput),
+      providerSync: async (syncInput) => providerSync(input, syncInput),
       stockAdjust: async (adjustment) => {
         if (!Number.isInteger(adjustment.quantityDelta) || adjustment.quantityDelta === 0) {
           return validationFailed(
@@ -1093,6 +1099,96 @@ async function createAccountPortalSession(
     return providerFailed(
       error instanceof Error ? error.message : "Provider portal session failed.",
     );
+  }
+}
+
+async function providerHealth(
+  input: CreateMikaBackendApiInput,
+  healthInput: ProviderHealthInput,
+): Promise<MikaApiResult<ProviderHealthDTO>> {
+  const providerName = healthInput.provider ?? input.defaults?.provider;
+  if (!providerName) return providerUnsupportedForAction("No provider is configured.");
+
+  const provider = input.providers.get(providerName);
+  if (!provider)
+    return providerUnsupportedForAction(`Provider '${providerName}' is not configured.`);
+
+  try {
+    const health =
+      (await provider.health?.()) ??
+      ({
+        provider: providerName,
+        ok: true,
+        capabilities: await provider.capabilities(),
+        checkedAt: currentBackendISODateTime(input),
+      } satisfies ProviderHealthDTO);
+
+    return { ok: true, status: 200, data: health };
+  } catch (error) {
+    return providerFailed(error instanceof Error ? error.message : "Provider health check failed.");
+  }
+}
+
+async function providerSync(
+  input: CreateMikaBackendApiInput,
+  syncInput: ProviderSyncInput,
+): Promise<MikaApiResult<AdminActionResultDTO>> {
+  const providerName = syncInput.provider ?? input.defaults?.provider;
+  if (!providerName) return providerUnsupportedForAction("No provider is configured.");
+
+  const provider = input.providers.get(providerName);
+  if (!provider?.syncCatalog) {
+    return providerUnsupportedForAction(
+      provider
+        ? `Provider '${providerName}' does not support catalog sync.`
+        : `Provider '${providerName}' is not configured.`,
+    );
+  }
+
+  const now = currentBackendISODateTime(input);
+  const audit = createAdminAuditDocument(input, {
+    action: "provider.syncCatalog",
+    status: "started",
+    createdAt: now,
+    metadata: {
+      provider: providerName,
+      mode: syncInput.mode ?? "dry_run",
+    },
+  });
+  await input.repositories.ops.writeAudit(audit);
+
+  try {
+    const result = await provider.syncCatalog({
+      mode: syncInput.mode ?? "dry_run",
+    });
+    await input.repositories.ops.writeAudit({
+      ...audit,
+      status: "completed",
+      updatedAt: currentBackendISODateTime(input),
+      record: {
+        ...audit.record,
+        status: "completed",
+      },
+    });
+
+    return { ok: true, status: 200, data: result };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Provider catalog sync failed.";
+    await input.repositories.ops.writeAudit({
+      ...audit,
+      status: "failed",
+      updatedAt: currentBackendISODateTime(input),
+      record: {
+        ...audit.record,
+        status: "failed",
+        metadata: {
+          ...audit.record.metadata,
+          error: message,
+        },
+      },
+    });
+
+    return providerFailed(message);
   }
 }
 
@@ -4899,6 +4995,17 @@ function providerUnsupported(provider: ProviderName): MikaApiFailure {
   };
 }
 
+function providerUnsupportedForAction(message: string): MikaApiFailure {
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "PROVIDER_UNSUPPORTED",
+      message,
+    },
+  };
+}
+
 function providerFailed(message: string): MikaApiFailure {
   return {
     ok: false,
@@ -4907,6 +5014,29 @@ function providerFailed(message: string): MikaApiFailure {
       code: "PROVIDER_FAILED",
       message,
     },
+  };
+}
+
+function createAdminAuditDocument(
+  input: CreateMikaBackendApiInput,
+  record: Omit<AdminAuditDocument["record"], "id">,
+): AdminAuditDocument {
+  const id = input.createId("admin_audit");
+
+  return {
+    id,
+    type: "adminAudit",
+    schemaVersion: 1,
+    actorId: record.actorId,
+    targetType: record.targetType,
+    targetId: record.targetId,
+    status: record.status,
+    record: {
+      id,
+      ...record,
+    },
+    createdAt: record.createdAt,
+    updatedAt: record.createdAt,
   };
 }
 

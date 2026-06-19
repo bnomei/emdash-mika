@@ -627,6 +627,11 @@ export class OpsRepository {
     return documentOfType(document, "providerSyncRun");
   }
 
+  async findAdminAudit(auditId: MikaId): Promise<AdminAuditDocument | null> {
+    const document = await this.collection.get(auditId);
+    return documentOfType(document, "adminAudit");
+  }
+
   async findEmail(emailId: MikaId): Promise<EmailDocument | null> {
     const document = await this.collection.get(emailId);
     return documentOfType(document, "email");

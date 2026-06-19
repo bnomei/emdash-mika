@@ -1911,6 +1911,196 @@ describe("backend API composition", () => {
     });
   });
 
+  it("checks provider health with adapter health and capability fallback", async () => {
+    const stripe = createTestProviderName("stripe");
+    const healthProvider = createFakeMikaProvider({
+      id: stripe,
+      optionalMethods: ["health"],
+      capabilities: ["hosted_checkout", "product_sync"],
+    });
+    const fallbackProvider = createFakeMikaProvider({
+      id: "fallback",
+      optionalMethods: "none",
+      capabilities: ["payments", "stock_sync"],
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        providers: createMikaProviderRegistry([healthProvider.provider, fallbackProvider.provider]),
+      }),
+    );
+
+    await expect(api.admin.providerHealth({ provider: stripe })).resolves.toEqual({
+      ok: true,
+      status: 200,
+      data: {
+        provider: stripe,
+        ok: true,
+        capabilities: ["hosted_checkout", "product_sync"],
+        checkedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    expect(healthProvider.getCalls().health).toEqual([undefined]);
+    expect(healthProvider.getCalls().capabilities).toEqual([]);
+
+    await expect(
+      api.admin.providerHealth({ provider: createTestProviderName("fallback") }),
+    ).resolves.toEqual({
+      ok: true,
+      status: 200,
+      data: {
+        provider: "fallback",
+        ok: true,
+        capabilities: ["payments", "stock_sync"],
+        checkedAt: TEST_NOW,
+      },
+    });
+    expect(fallbackProvider.getCalls().health).toEqual([]);
+    expect(fallbackProvider.getCalls().capabilities).toEqual([undefined]);
+  });
+
+  it("runs provider sync in dry-run mode without catalog or stock mutation", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const stock = createStockRecord({
+      sellableId: sellable.id,
+      quantityOnHand: 4,
+      quantityReserved: 1,
+    });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([[sellable.id, stock]]),
+    });
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["syncCatalog"],
+    });
+    const catalog = createCatalogItemDocument({ contentRef, sellables: [sellable] });
+    await repositories.catalog.put(catalog);
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(api.admin.providerSync({ mode: "dry_run" })).resolves.toEqual({
+      ok: true,
+      status: 200,
+      data: {
+        id: "catalog_sync",
+        status: "completed",
+      },
+    });
+
+    expect(fake.getCalls().syncCatalog).toEqual([{ mode: "dry_run" }]);
+    await expect(repositories.catalog.findItemByContent(contentRef)).resolves.toEqual(catalog);
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toEqual(stock);
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
+    ).resolves.toMatchObject({
+      status: "completed",
+      record: {
+        action: "provider.syncCatalog",
+        status: "completed",
+        metadata: {
+          provider: TEST_PROVIDER,
+          mode: "dry_run",
+        },
+      },
+    });
+  });
+
+  it("returns provider unsupported for missing provider health or sync support", async () => {
+    const fake = createFakeMikaProvider({ optionalMethods: "none" });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(
+      api.admin.providerHealth({ provider: createTestProviderName("missing") }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "PROVIDER_UNSUPPORTED" },
+    });
+
+    await expect(api.admin.providerSync({ provider: fake.provider.id })).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "PROVIDER_UNSUPPORTED" },
+    });
+    expect(fake.getCalls().syncCatalog).toEqual([]);
+  });
+
+  it("normalizes provider health failures", async () => {
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["health"],
+      overrides: {
+        health: async () => {
+          throw new Error("Provider health failed.");
+        },
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(api.admin.providerHealth({})).resolves.toMatchObject({
+      ok: false,
+      status: 502,
+      error: {
+        code: "PROVIDER_FAILED",
+        message: "Provider health failed.",
+      },
+    });
+    expect(fake.getCalls().health).toEqual([undefined]);
+  });
+
+  it("normalizes provider sync failures and records failed audit state", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["syncCatalog"],
+      overrides: {
+        syncCatalog: async () => {
+          throw new Error("Provider sync failed.");
+        },
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(api.admin.providerSync({ mode: "apply" })).resolves.toMatchObject({
+      ok: false,
+      status: 502,
+      error: {
+        code: "PROVIDER_FAILED",
+        message: "Provider sync failed.",
+      },
+    });
+
+    expect(fake.getCalls().syncCatalog).toEqual([{ mode: "apply" }]);
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
+    ).resolves.toMatchObject({
+      status: "failed",
+      record: {
+        action: "provider.syncCatalog",
+        status: "failed",
+        metadata: {
+          provider: TEST_PROVIDER,
+          mode: "apply",
+          error: "Provider sync failed.",
+        },
+      },
+    });
+  });
+
   it("returns stable magic link token errors for invalid and expired tokens", async () => {
     const harness = await createMagicLinkHarness({ ttlMs: 1 });
 
