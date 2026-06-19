@@ -1,6 +1,7 @@
 import type { MikaProviderRegistry } from "../provider";
 import type { MikaRepositories } from "../storage/repositories";
-import { catalogSellablesToDTO } from "../model/builders";
+import { catalogSellablesToDTO, stockAvailabilityToDTO } from "../model/builders";
+import { createMikaId } from "../types/primitives";
 import type {
   CurrencyCode,
   ISODateTime,
@@ -102,6 +103,46 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
         };
       },
       ...input.overrides?.catalog,
+    },
+    stock: {
+      availability: async ({ sellableId }) => {
+        const stock = await input.repositories.stock.findBySellableId(createMikaId(sellableId));
+        if (!stock) {
+          return {
+            ok: false,
+            status: 404,
+            error: {
+              code: "SELLABLE_NOT_FOUND",
+              message: `Sellable '${sellableId}' was not found.`,
+            },
+          };
+        }
+
+        const availability = stockAvailabilityToDTO(
+          {
+            id: stock.sellableId,
+            active: true,
+            sortOrder: 0,
+            variantOptions: [],
+            prices: [],
+          },
+          stock,
+        );
+
+        if (!availability) {
+          return {
+            ok: false,
+            status: 404,
+            error: {
+              code: "SELLABLE_NOT_FOUND",
+              message: `Sellable '${sellableId}' was not found.`,
+            },
+          };
+        }
+
+        return { ok: true, status: 200, data: availability };
+      },
+      ...input.overrides?.stock,
     },
   });
 }

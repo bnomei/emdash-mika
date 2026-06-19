@@ -343,10 +343,10 @@ describe("backend API composition", () => {
       api.stock.availability({ sellableId: createTestMikaId("sellable", 1) }),
     ).resolves.toMatchObject({
       ok: false,
-      status: 501,
+      status: 404,
       error: {
-        code: "NOT_IMPLEMENTED",
-        message: "Mika API 'stock.availability' has not been wired yet.",
+        code: "SELLABLE_NOT_FOUND",
+        message: "Sellable 'sellable_1' was not found.",
       },
     });
   });
@@ -423,6 +423,171 @@ describe("backend API composition", () => {
       ok: true,
       status: 200,
       data: [],
+    });
+  });
+
+  it("returns stock availability for each stock status", async () => {
+    const cases = [
+      {
+        id: createTestMikaId("sellable", 1),
+        stock: createStockRecord({
+          sellableId: createTestMikaId("sellable", 1),
+          quantityOnHand: 8,
+          quantityReserved: 3,
+          lowStockThreshold: 2,
+        }),
+        expected: {
+          sellableId: "sellable_1",
+          status: "available",
+          availableQuantity: 5,
+          lowStock: false,
+        },
+      },
+      {
+        id: createTestMikaId("sellable", 2),
+        stock: createStockRecord({
+          sellableId: createTestMikaId("sellable", 2),
+          quantityOnHand: 5,
+          quantityReserved: 3,
+          lowStockThreshold: 2,
+        }),
+        expected: {
+          sellableId: "sellable_2",
+          status: "low_stock",
+          availableQuantity: 2,
+          lowStock: true,
+        },
+      },
+      {
+        id: createTestMikaId("sellable", 3),
+        stock: createStockRecord({
+          sellableId: createTestMikaId("sellable", 3),
+          quantityOnHand: 3,
+          quantityReserved: 3,
+          lowStockThreshold: 2,
+        }),
+        expected: {
+          sellableId: "sellable_3",
+          status: "out_of_stock",
+          availableQuantity: 0,
+          lowStock: false,
+        },
+      },
+      {
+        id: createTestMikaId("sellable", 4),
+        stock: createStockRecord({
+          sellableId: createTestMikaId("sellable", 4),
+          quantityOnHand: 0,
+          quantityReserved: 0,
+          allowBackorder: true,
+        }),
+        expected: {
+          sellableId: "sellable_4",
+          status: "backorder",
+          availableQuantity: 0,
+          lowStock: false,
+        },
+      },
+      {
+        id: createTestMikaId("sellable", 5),
+        stock: createStockRecord({
+          sellableId: createTestMikaId("sellable", 5),
+          policy: "untracked",
+        }),
+        expected: {
+          sellableId: "sellable_5",
+          status: "untracked",
+        },
+      },
+      {
+        id: createTestMikaId("sellable", 6),
+        stock: createStockRecord({
+          sellableId: createTestMikaId("sellable", 6),
+          policy: "manual",
+        }),
+        expected: {
+          sellableId: "sellable_6",
+          status: "manual",
+          availableQuantity: 2,
+          lowStock: true,
+        },
+      },
+    ];
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map(cases.map((testCase) => [testCase.id, testCase.stock])),
+    });
+    const api = createMikaBackendApi(createTestBackendDependencies({ repositories }));
+
+    for (const testCase of cases) {
+      await expect(api.stock.availability({ sellableId: testCase.id })).resolves.toMatchObject({
+        ok: true,
+        status: 200,
+        data: testCase.expected,
+      });
+    }
+  });
+
+  it("honors stock availability overrides", async () => {
+    const forcedOut = createTestMikaId("sellable", 1);
+    const forcedAvailable = createTestMikaId("sellable", 2);
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          forcedOut,
+          createStockRecord({
+            sellableId: forcedOut,
+            quantityOnHand: 10,
+            quantityReserved: 0,
+            availableOverride: false,
+          }),
+        ],
+        [
+          forcedAvailable,
+          createStockRecord({
+            sellableId: forcedAvailable,
+            quantityOnHand: 0,
+            quantityReserved: 0,
+            availableOverride: true,
+          }),
+        ],
+      ]),
+    });
+    const api = createMikaBackendApi(createTestBackendDependencies({ repositories }));
+
+    await expect(api.stock.availability({ sellableId: forcedOut })).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        sellableId: forcedOut,
+        status: "out_of_stock",
+        availableQuantity: 10,
+        lowStock: false,
+      },
+    });
+    await expect(api.stock.availability({ sellableId: forcedAvailable })).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        sellableId: forcedAvailable,
+        status: "available",
+        availableQuantity: 0,
+        lowStock: false,
+      },
+    });
+  });
+
+  it("returns stable not found for missing stock availability", async () => {
+    const api = createMikaBackendApi(createTestBackendDependencies());
+
+    await expect(
+      api.stock.availability({ sellableId: createTestMikaId("sellable", 404) }),
+    ).resolves.toEqual({
+      ok: false,
+      status: 404,
+      error: {
+        code: "SELLABLE_NOT_FOUND",
+        message: "Sellable 'sellable_404' was not found.",
+      },
     });
   });
 

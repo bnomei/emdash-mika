@@ -251,7 +251,7 @@ function priceToDTO(sellableId: MikaId, price: PriceDefinition): PriceDTO {
   };
 }
 
-function stockAvailabilityToDTO(
+export function stockAvailabilityToDTO(
   sellable: SellableDefinition,
   stock?: StockItemRecord,
 ): AvailabilityDTO | undefined {
