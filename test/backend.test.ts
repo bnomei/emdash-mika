@@ -5716,6 +5716,90 @@ describe("backend API composition", () => {
     });
   });
 
+  it("ignores caller-controlled checkout metadata keys for idempotency replay", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const hijackedKey = "checkout_replay_hijack_1";
+    const anonymousCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      idempotencyKey: false,
+    });
+
+    await expect(
+      api.checkout.start(anonymousCtx, {
+        sellableId: sellable.id,
+        quantity: 1,
+        customFields: {
+          publicNote: "keep",
+          checkoutIdempotencyKey: hijackedKey,
+          checkoutIdempotencyInputHash: "attacker_hash",
+          checkoutProviderStatus: "completed",
+          checkoutRedirectUrl: "https://evil.example.test",
+          checkoutPersistenceFailed: true,
+          checkoutOrderId: "order_999",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        id: "checkout_1",
+        status: "created",
+        redirectUrl: "https://checkout.example.test/session/checkout_fake",
+      },
+    });
+
+    const stored = await repositories.session.findCheckoutById(createTestMikaId("checkout", 1));
+    expect(stored?.aggregate.metadata).toMatchObject({
+      publicNote: "keep",
+      checkoutProviderStatus: "created",
+      checkoutRedirectUrl: "https://checkout.example.test/session/checkout_fake",
+    });
+    expect(stored?.aggregate.metadata?.["checkoutIdempotencyKey"]).toBeUndefined();
+    expect(stored?.aggregate.metadata?.["checkoutIdempotencyInputHash"]).toBeUndefined();
+    expect(stored?.aggregate.metadata?.["checkoutPersistenceFailed"]).toBeUndefined();
+    expect(stored?.aggregate.metadata?.["checkoutOrderId"]).toBeUndefined();
+    await expect(
+      repositories.session.findCheckoutByIdempotencyKey(hijackedKey),
+    ).resolves.toBeNull();
+
+    const idempotentCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      idempotencyKey: hijackedKey,
+    });
+    await expect(
+      api.checkout.start(idempotentCtx, { sellableId: sellable.id, quantity: 1 }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        id: "checkout_2",
+      },
+    });
+    expect(fake.getCalls().createCheckoutSession).toHaveLength(2);
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 2,
+    });
+  });
+
   it("returns stored checkout status without a provider lookup", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();

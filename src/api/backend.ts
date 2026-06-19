@@ -120,6 +120,14 @@ type MikaApiFailure = Extract<MikaApiResult<never>, { readonly ok: false }>;
 
 const DEFAULT_BACKEND_CURRENCY = createCurrencyCode("EUR");
 const CHECKOUT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY = "checkoutIdempotencyInputHash";
+const CHECKOUT_INTERNAL_METADATA_KEYS = new Set<string>([
+  "checkoutIdempotencyKey",
+  CHECKOUT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY,
+  "checkoutProviderStatus",
+  "checkoutRedirectUrl",
+  "checkoutPersistenceFailed",
+  "checkoutOrderId",
+]);
 
 function defaultBackendCurrency(input: { readonly defaults?: MikaBackendDefaults }): CurrencyCode {
   return input.defaults?.currency ?? DEFAULT_BACKEND_CURRENCY;
@@ -4744,7 +4752,7 @@ function checkoutMetadata(input: {
   };
 }): JsonObject {
   return {
-    ...input.customFields,
+    ...checkoutCustomMetadata(input.customFields),
     checkoutProviderStatus: input.providerSession.status,
     ...(input.idempotencyKey ? { checkoutIdempotencyKey: input.idempotencyKey } : {}),
     ...(input.idempotencyInputHash
@@ -4754,6 +4762,12 @@ function checkoutMetadata(input: {
       ? { checkoutRedirectUrl: input.providerSession.redirectUrl }
       : {}),
   };
+}
+
+function checkoutCustomMetadata(customFields: JsonObject | undefined): JsonObject {
+  return Object.fromEntries(
+    Object.entries(customFields ?? {}).filter(([key]) => !CHECKOUT_INTERNAL_METADATA_KEYS.has(key)),
+  ) as JsonObject;
 }
 
 async function checkoutIdempotencyInputHash(
