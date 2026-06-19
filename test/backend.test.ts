@@ -32,6 +32,8 @@ import type { PriceDefinition, SellableDefinition } from "../src/types/aggregate
 import type {
   CatalogItemDocument,
   CheckoutDocument,
+  CustomerDocument,
+  ProviderAccountDocument,
   MikaStorageDocuments,
   OrderDocument,
 } from "../src/types/documents";
@@ -49,7 +51,12 @@ import {
 } from "../src/storage/repositories";
 import { mikaInitialMigration } from "../src/storage/migrations";
 import type { MikaDatabase } from "../src/storage/schema";
-import { createCurrencyCode, createMikaId, createProviderName } from "../src/types/primitives";
+import {
+  createCurrencyCode,
+  createISODateTime,
+  createMikaId,
+  createProviderName,
+} from "../src/types/primitives";
 import {
   TEST_CURRENCY,
   TEST_NOW,
@@ -1955,6 +1962,211 @@ describe("backend API composition", () => {
     await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
       status: "processed",
       record: { status: "processed", relatedOrderId: "order_99" },
+    });
+  });
+
+  it("updates subscription status, periods, and entitlement from webhook events", async () => {
+    const stripe = createProviderName("stripe");
+    const accountCollection = createStorageCollection("account");
+    const opsCollection = createStorageCollection("ops");
+    const subscriptionSellable = createSellableDefinition({
+      prices: [
+        createPriceDefinition({
+          id: createTestMikaId("price", 1),
+          mode: "subscription",
+          fulfillmentKind: "entitlement",
+          entitlementKey: "course:subscription-product",
+          providerRefs: [{ provider: stripe, productId: "prod_sub", priceId: "price_sub" }],
+        }),
+      ],
+    });
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      ops: new OpsRepository(opsCollection),
+    };
+    const deliveries = [
+      {
+        payloadHash: "subscription_hash_1",
+        providerEventId: "event_subscription_1",
+        status: "active" as const,
+        currentPeriodStart: createISODateTime("2026-01-01T00:00:00.000Z"),
+        currentPeriodEnd: createISODateTime("2026-02-01T00:00:00.000Z"),
+      },
+      {
+        payloadHash: "subscription_hash_2",
+        providerEventId: "event_subscription_2",
+        status: "cancel_at_period_end" as const,
+        currentPeriodStart: createISODateTime("2026-02-01T00:00:00.000Z"),
+        currentPeriodEnd: createISODateTime("2026-03-01T00:00:00.000Z"),
+        cancelAtPeriodEnd: true,
+      },
+      {
+        payloadHash: "subscription_hash_2",
+        providerEventId: "event_subscription_2",
+        status: "cancel_at_period_end" as const,
+        currentPeriodStart: createISODateTime("2026-02-01T00:00:00.000Z"),
+        currentPeriodEnd: createISODateTime("2026-03-01T00:00:00.000Z"),
+        cancelAtPeriodEnd: true,
+      },
+    ];
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) => {
+          const delivery = deliveries[0];
+          if (!delivery) throw new Error("Unexpected webhook verification call.");
+
+          return createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: delivery.payloadHash,
+            parsed: { delivery: delivery.providerEventId },
+          });
+        },
+        parseWebhookEvent: async (verified) => {
+          const delivery = deliveries.shift();
+          if (!delivery) throw new Error("Unexpected webhook parse call.");
+
+          return createSubscriptionWebhookEvent(verified, {
+            providerEventId: delivery.providerEventId,
+            providerSubscriptionId: "provider_subscription_1",
+            providerCustomerId: "provider_customer_1",
+            providerPriceId: "price_sub",
+            status: delivery.status,
+            currentPeriodStart: delivery.currentPeriodStart,
+            currentPeriodEnd: delivery.currentPeriodEnd,
+            cancelAtPeriodEnd: delivery.cancelAtPeriodEnd,
+          });
+        },
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({
+        contentRef: createTestContentRef(),
+        sellables: [subscriptionSellable],
+      }),
+    );
+    await repositories.account.put(createCustomerDocument());
+    await repositories.account.put(createProviderAccountDocument({ provider: stripe }));
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(receiveWebhook(api, "subscription-active", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "received" },
+    });
+    await expect(receiveWebhook(api, "subscription-updated", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_2", status: "received" },
+    });
+    await expect(receiveWebhook(api, "subscription-duplicate", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_2", status: "duplicate" },
+    });
+
+    await expect(accountCollection.count({ type: "subscription" })).resolves.toBe(1);
+    await expect(accountCollection.count({ type: "entitlement" })).resolves.toBe(1);
+    await expect(accountCollection.get("subscription_1")).resolves.toMatchObject({
+      type: "subscription",
+      customerId: "customer_1",
+      provider: "stripe",
+      providerCustomerId: "provider_customer_1",
+      providerSubscriptionId: "provider_subscription_1",
+      status: "cancel_at_period_end",
+      currentPeriodEnd: "2026-03-01T00:00:00.000Z",
+      aggregate: {
+        status: "cancel_at_period_end",
+        cancelAtPeriodEnd: true,
+        currentPeriodStart: "2026-02-01T00:00:00.000Z",
+        currentPeriodEnd: "2026-03-01T00:00:00.000Z",
+        entitlementId: "entitlement_subscription_1_subscription",
+        providerRef: {
+          provider: "stripe",
+          subscriptionId: "provider_subscription_1",
+          customerId: "provider_customer_1",
+          priceId: "price_sub",
+        },
+      },
+    });
+    await expect(
+      accountCollection.get("entitlement_subscription_1_subscription"),
+    ).resolves.toMatchObject({
+      type: "entitlement",
+      customerId: "customer_1",
+      entitlementKey: "course:subscription-product",
+      status: "active",
+      subscriptionId: "subscription_1",
+      record: {
+        subscriptionId: "subscription_1",
+        sourceStatus: "cancel_at_period_end",
+        currentPeriodEnd: "2026-03-01T00:00:00.000Z",
+      },
+    });
+    await expect(opsCollection.get("webhook_2")).resolves.toMatchObject({
+      status: "processed",
+      record: {
+        status: "processed",
+        relatedCustomerId: "customer_1",
+        relatedSubscriptionId: "subscription_1",
+      },
+    });
+    await expect(opsCollection.count({ type: "webhook" })).resolves.toBe(2);
+  });
+
+  it("fails subscription webhook processing with a stable error for unknown targets", async () => {
+    const stripe = createProviderName("stripe");
+    const accountCollection = createStorageCollection("account");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      ops: new OpsRepository(opsCollection),
+    };
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "subscription_unknown_hash",
+            parsed: { delivery: "event_subscription_unknown" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createSubscriptionWebhookEvent(verified, {
+            providerEventId: "event_subscription_unknown",
+            providerSubscriptionId: "provider_subscription_unknown",
+            providerCustomerId: "provider_customer_unknown",
+            providerPriceId: "price_unknown",
+            status: "active",
+          }),
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(receiveWebhook(api, "subscription-unknown", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "failed", replayable: true },
+    });
+
+    await expect(accountCollection.count({ type: "subscription" })).resolves.toBe(0);
+    await expect(accountCollection.count({ type: "entitlement" })).resolves.toBe(0);
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
+      status: "failed",
+      record: {
+        status: "failed",
+        lastError: "Subscription event could not be linked to a subscription.",
+      },
     });
   });
 
@@ -4749,6 +4961,57 @@ function isCartRouteResult(
   );
 }
 
+function createCustomerDocument(overrides: Partial<CustomerDocument> = {}): CustomerDocument {
+  return {
+    id: createTestMikaId("customer_document", 1),
+    type: "customer",
+    schemaVersion: 1,
+    customerId: createTestMikaId("customer", 1),
+    userId: "user_1",
+    emailHash: createTestHash("email:subscriber@example.test"),
+    aggregate: {
+      schemaVersion: 1,
+      email: "Subscriber@Example.test",
+      emailHash: createTestHash("email:subscriber@example.test"),
+      name: "Subscriber One",
+    },
+    createdAt: TEST_NOW,
+    updatedAt: TEST_NOW,
+    ...overrides,
+  };
+}
+
+function createProviderAccountDocument(
+  overrides: Partial<ProviderAccountDocument> = {},
+): ProviderAccountDocument {
+  const provider = overrides.provider ?? TEST_PROVIDER;
+  const providerCustomerId = overrides.providerCustomerId ?? "provider_customer_1";
+  const customerId = overrides.customerId ?? createTestMikaId("customer", 1);
+  const record = {
+    id: overrides.id ?? createTestMikaId("provider_account", 1),
+    customerId,
+    provider,
+    providerCustomerId,
+    emailSnapshot: "Subscriber@Example.test",
+    createdAt: TEST_NOW,
+    updatedAt: TEST_NOW,
+    ...overrides.record,
+  };
+
+  return {
+    id: record.id,
+    type: "providerAccount",
+    schemaVersion: 1,
+    customerId: record.customerId,
+    provider: record.provider,
+    providerCustomerId: record.providerCustomerId,
+    record,
+    createdAt: TEST_NOW,
+    updatedAt: TEST_NOW,
+    ...overrides,
+  };
+}
+
 function createCatalogItemDocument(input: {
   readonly contentRef: ReturnType<typeof createTestContentRef>;
   readonly sellables: readonly SellableDefinition[];
@@ -4961,6 +5224,44 @@ function createPaymentWebhookEvent(
     customer: overrides.customer,
     lines: [],
     invoiceUrl: overrides.invoiceUrl,
+  };
+}
+
+function createSubscriptionWebhookEvent(
+  verified: MikaVerifiedWebhookPayload,
+  overrides: {
+    readonly providerEventId?: string;
+    readonly type?: string;
+    readonly providerSubscriptionId?: string;
+    readonly providerCustomerId?: string;
+    readonly providerPriceId?: string;
+    readonly status?: Extract<
+      MikaProviderWebhookEvent,
+      { readonly kind: "subscription" }
+    >["status"];
+    readonly currentPeriodStart?: Extract<
+      MikaProviderWebhookEvent,
+      { readonly kind: "subscription" }
+    >["currentPeriodStart"];
+    readonly currentPeriodEnd?: Extract<
+      MikaProviderWebhookEvent,
+      { readonly kind: "subscription" }
+    >["currentPeriodEnd"];
+    readonly cancelAtPeriodEnd?: boolean;
+  } = {},
+): MikaProviderWebhookEvent {
+  return {
+    kind: "subscription",
+    provider: verified.provider,
+    providerEventId: overrides.providerEventId,
+    type: overrides.type ?? "customer.subscription.updated",
+    providerSubscriptionId: overrides.providerSubscriptionId,
+    providerCustomerId: overrides.providerCustomerId,
+    providerPriceId: overrides.providerPriceId,
+    status: overrides.status ?? "active",
+    currentPeriodStart: overrides.currentPeriodStart,
+    currentPeriodEnd: overrides.currentPeriodEnd,
+    cancelAtPeriodEnd: overrides.cancelAtPeriodEnd,
   };
 }
 

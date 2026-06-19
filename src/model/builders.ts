@@ -22,6 +22,7 @@ import type {
 import type {
   ContentRef,
   CurrencyCode,
+  ISODateTime,
   JsonObject,
   MikaId,
   Money,
@@ -272,6 +273,10 @@ export function createSubscriptionAggregate(input: {
   readonly provider: ProviderName;
   readonly providerSubscriptionId?: string;
   readonly providerCustomerId?: string;
+  readonly providerPriceId?: string;
+  readonly status?: SubscriptionAggregate["status"];
+  readonly currentPeriodStart?: ISODateTime;
+  readonly currentPeriodEnd?: ISODateTime;
   readonly cancelAtPeriodEnd?: boolean;
   readonly metadata?: JsonObject;
 }): SubscriptionAggregate {
@@ -283,9 +288,12 @@ export function createSubscriptionAggregate(input: {
       provider: input.provider,
       subscriptionId: input.providerSubscriptionId,
       customerId: input.providerCustomerId,
+      priceId: input.providerPriceId,
     },
-    status: "incomplete",
+    status: input.status ?? "incomplete",
     cancelAtPeriodEnd: input.cancelAtPeriodEnd ?? false,
+    currentPeriodStart: input.currentPeriodStart,
+    currentPeriodEnd: input.currentPeriodEnd,
     metadata: input.metadata,
   };
 }

@@ -2,6 +2,7 @@ import type {
   MikaProviderLineItem,
   MikaProviderPaymentEvent,
   MikaProviderRegistry,
+  MikaProviderSubscriptionEvent,
   MikaProviderWebhookEvent,
   MikaVerifiedWebhookPayload,
 } from "../provider";
@@ -22,6 +23,7 @@ import {
   createCartAggregate,
   createCheckoutAggregate,
   createOrderAggregate,
+  createSubscriptionAggregate,
   createWishlistAggregate,
   orderLineFromCheckoutLine,
   snapshotPrice,
@@ -47,6 +49,7 @@ import type {
   LicenseDocument,
   OrderDocument,
   SessionDocument,
+  SubscriptionDocument,
   WebhookDocument,
   WishlistDocument,
 } from "../types/documents";
@@ -59,6 +62,7 @@ import type {
   MikaId,
   ProviderName,
   PurchaseMode,
+  SubscriptionStatus,
 } from "../types/primitives";
 import type { StockItemRecord } from "../types/operational";
 import type { MikaRequestContext } from "./context";
@@ -869,12 +873,31 @@ async function processStoredWebhook(
   webhook: WebhookDocument,
   event: MikaProviderWebhookEvent,
 ): Promise<WebhookDocument> {
-  if (event.kind !== "payment") return webhook;
-
-  try {
-    return await processPaymentWebhook(input, ctx, webhook, event);
-  } catch {
-    return markWebhookFailed(input, webhook, ctx.now, "Payment webhook could not be processed.");
+  switch (event.kind) {
+    case "payment":
+      try {
+        return await processPaymentWebhook(input, ctx, webhook, event);
+      } catch {
+        return markWebhookFailed(
+          input,
+          webhook,
+          ctx.now,
+          "Payment webhook could not be processed.",
+        );
+      }
+    case "subscription":
+      try {
+        return await processSubscriptionWebhook(input, ctx, webhook, event);
+      } catch {
+        return markWebhookFailed(
+          input,
+          webhook,
+          ctx.now,
+          "Subscription webhook could not be processed.",
+        );
+      }
+    case "unknown":
+      return webhook;
   }
 }
 
@@ -890,7 +913,7 @@ async function processPaymentWebhook(
     await completeCheckoutForPaymentOrder(input, ctx, order, event);
     const fulfilledOrder = await fulfillPaidOrder(input, ctx, order);
 
-    return markWebhookProcessed(input, webhook, ctx.now, fulfilledOrder);
+    return markWebhookProcessedForOrder(input, webhook, ctx.now, fulfilledOrder);
   }
 
   const checkout = await findPaymentEventCheckout(input, event);
@@ -909,7 +932,7 @@ async function processPaymentWebhook(
     await completeCheckoutForPaymentOrder(input, ctx, order, event, checkout);
     const fulfilledOrder = await fulfillPaidOrder(input, ctx, order);
 
-    return markWebhookProcessed(input, webhook, ctx.now, fulfilledOrder);
+    return markWebhookProcessedForOrder(input, webhook, ctx.now, fulfilledOrder);
   }
 
   const order = await persistNewPaymentOrder(
@@ -922,7 +945,240 @@ async function processPaymentWebhook(
   await completeCheckoutForPaymentOrder(input, ctx, order, event, checkout);
   const fulfilledOrder = await fulfillPaidOrder(input, ctx, order);
 
-  return markWebhookProcessed(input, webhook, ctx.now, fulfilledOrder);
+  return markWebhookProcessedForOrder(input, webhook, ctx.now, fulfilledOrder);
+}
+
+async function processSubscriptionWebhook(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  webhook: WebhookDocument,
+  event: MikaProviderSubscriptionEvent,
+): Promise<WebhookDocument> {
+  const subscription = await findOrCreateSubscriptionFromEvent(input, ctx, event);
+  if (!subscription) {
+    return markWebhookFailed(
+      input,
+      webhook,
+      ctx.now,
+      "Subscription event could not be linked to a subscription.",
+    );
+  }
+
+  const updated = await updateSubscriptionFromEvent(input, ctx, subscription, event);
+  const fulfilled = await updateSubscriptionEntitlement(input, ctx, updated);
+
+  return markWebhookProcessedForSubscription(input, webhook, ctx.now, fulfilled);
+}
+
+async function findOrCreateSubscriptionFromEvent(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  event: MikaProviderSubscriptionEvent,
+): Promise<SubscriptionDocument | null> {
+  if (event.providerSubscriptionId) {
+    const existing = await input.repositories.account.findSubscriptionByProvider(
+      event.provider,
+      event.providerSubscriptionId,
+    );
+    if (existing) return existing;
+  }
+
+  if (!event.providerSubscriptionId || !event.providerCustomerId || !event.providerPriceId) {
+    return null;
+  }
+
+  const providerAccount = await input.repositories.account.findProviderAccount(
+    event.provider,
+    event.providerCustomerId,
+  );
+  if (!providerAccount) return null;
+
+  const priceMatch = await input.repositories.catalog.findItemByProviderPrice(
+    event.provider,
+    event.providerPriceId,
+  );
+  if (!priceMatch) return null;
+
+  const customer = await input.repositories.account.findCustomerById(providerAccount.customerId);
+  const customerSnapshot: CustomerSnapshot = {
+    customerId: providerAccount.customerId,
+    userId: customer?.userId,
+    email: customer?.aggregate.email ?? providerAccount.record.emailSnapshot,
+    emailHash: customer?.emailHash ?? customer?.aggregate.emailHash,
+    name: customer?.aggregate.name,
+    company: customer?.aggregate.company,
+    vatId: customer?.aggregate.vatId,
+  };
+  const subscriptionId = input.createId("subscription");
+  const aggregate = createSubscriptionAggregate({
+    customer: customerSnapshot,
+    sellable: snapshotPrice({
+      content: priceMatch.catalog.aggregate.content,
+      sellable: priceMatch.sellable,
+      price: priceMatch.price,
+      fallbackTitle: priceMatch.catalog.titleSnapshot ?? priceMatch.sellable.id,
+    }),
+    provider: event.provider,
+    providerSubscriptionId: event.providerSubscriptionId,
+    providerCustomerId: event.providerCustomerId,
+    providerPriceId: event.providerPriceId,
+    status: event.status,
+    currentPeriodStart: event.currentPeriodStart,
+    currentPeriodEnd: event.currentPeriodEnd,
+    cancelAtPeriodEnd: event.cancelAtPeriodEnd,
+    metadata: subscriptionEventMetadata(event),
+  });
+
+  return {
+    id: subscriptionId,
+    type: "subscription",
+    schemaVersion: 1,
+    customerId: providerAccount.customerId,
+    provider: event.provider,
+    providerCustomerId: event.providerCustomerId,
+    providerSubscriptionId: event.providerSubscriptionId,
+    status: event.status,
+    currentPeriodEnd: event.currentPeriodEnd,
+    aggregate,
+    createdAt: ctx.now,
+    updatedAt: ctx.now,
+  };
+}
+
+async function updateSubscriptionFromEvent(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  subscription: SubscriptionDocument,
+  event: MikaProviderSubscriptionEvent,
+): Promise<SubscriptionDocument> {
+  const updated: SubscriptionDocument = {
+    ...subscription,
+    providerCustomerId: event.providerCustomerId ?? subscription.providerCustomerId,
+    providerSubscriptionId: event.providerSubscriptionId ?? subscription.providerSubscriptionId,
+    status: event.status,
+    currentPeriodEnd: event.currentPeriodEnd ?? subscription.currentPeriodEnd,
+    updatedAt: ctx.now,
+    aggregate: {
+      ...subscription.aggregate,
+      providerRef: {
+        ...subscription.aggregate.providerRef,
+        provider: event.provider,
+        subscriptionId:
+          event.providerSubscriptionId ?? subscription.aggregate.providerRef.subscriptionId,
+        customerId: event.providerCustomerId ?? subscription.aggregate.providerRef.customerId,
+        priceId: event.providerPriceId ?? subscription.aggregate.providerRef.priceId,
+      },
+      status: event.status,
+      cancelAtPeriodEnd:
+        event.cancelAtPeriodEnd ?? subscription.aggregate.cancelAtPeriodEnd ?? false,
+      currentPeriodStart: event.currentPeriodStart ?? subscription.aggregate.currentPeriodStart,
+      currentPeriodEnd: event.currentPeriodEnd ?? subscription.aggregate.currentPeriodEnd,
+      metadata: {
+        ...subscription.aggregate.metadata,
+        ...subscriptionEventMetadata(event),
+      },
+    },
+  };
+
+  await input.repositories.account.put(updated);
+
+  return updated;
+}
+
+async function updateSubscriptionEntitlement(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  subscription: SubscriptionDocument,
+): Promise<SubscriptionDocument> {
+  if (subscription.aggregate.sellable.fulfillmentKind !== "entitlement") return subscription;
+
+  const entitlementId =
+    subscription.aggregate.entitlementId ??
+    fulfillmentDocumentId("entitlement", subscription.id, "subscription");
+  const existing = await input.repositories.account.findEntitlementById(entitlementId);
+  const status = entitlementStatusForSubscription(subscription.status);
+  const record = {
+    id: entitlementId,
+    customerId: subscription.customerId ?? subscription.aggregate.customer.customerId,
+    userId: subscription.aggregate.customer.userId,
+    emailHash: subscription.aggregate.customer.emailHash,
+    entitlementKey:
+      subscription.aggregate.sellable.entitlementKey ??
+      subscriptionSellableContentKey(subscription),
+    contentCollection: subscription.aggregate.sellable.content.collection,
+    contentId: subscription.aggregate.sellable.content.id,
+    sellableId: subscription.aggregate.sellable.sellableId,
+    subscriptionId: subscription.id,
+    status,
+    sourceStatus: subscription.status,
+    currentPeriodEnd: subscription.aggregate.currentPeriodEnd,
+    grantedAt: existing?.record.grantedAt ?? ctx.now,
+    metadata: {
+      fulfillmentKind: subscription.aggregate.sellable.fulfillmentKind,
+      ...(subscription.providerSubscriptionId
+        ? { providerSubscriptionId: subscription.providerSubscriptionId }
+        : {}),
+    },
+  };
+  const entitlement: EntitlementDocument = {
+    id: entitlementId,
+    type: "entitlement",
+    schemaVersion: 1,
+    customerId: record.customerId,
+    userId: record.userId,
+    emailHash: record.emailHash,
+    entitlementKey: record.entitlementKey,
+    status: record.status,
+    subscriptionId: record.subscriptionId,
+    record,
+    createdAt: existing?.createdAt ?? ctx.now,
+    updatedAt: ctx.now,
+  };
+
+  await input.repositories.account.put(entitlement);
+
+  if (subscription.aggregate.entitlementId === entitlementId) return subscription;
+
+  const updated: SubscriptionDocument = {
+    ...subscription,
+    updatedAt: ctx.now,
+    aggregate: {
+      ...subscription.aggregate,
+      entitlementId,
+    },
+  };
+  await input.repositories.account.put(updated);
+
+  return updated;
+}
+
+function subscriptionEventMetadata(event: MikaProviderSubscriptionEvent): JsonObject {
+  return {
+    source: "webhook.subscription",
+    ...(event.providerEventId ? { providerEventId: event.providerEventId } : {}),
+    ...(event.providerSubscriptionId
+      ? { providerSubscriptionId: event.providerSubscriptionId }
+      : {}),
+    ...(event.providerCustomerId ? { providerCustomerId: event.providerCustomerId } : {}),
+    ...(event.providerPriceId ? { providerPriceId: event.providerPriceId } : {}),
+  };
+}
+
+function entitlementStatusForSubscription(
+  status: SubscriptionStatus,
+): EntitlementDocument["status"] {
+  switch (status) {
+    case "active":
+    case "trialing":
+    case "cancel_at_period_end":
+      return "active";
+    case "cancelled":
+    case "expired":
+      return "expired";
+    case "incomplete":
+    case "past_due":
+      return "inactive";
+  }
 }
 
 async function findExistingPaymentOrder(
@@ -1458,6 +1714,11 @@ function orderLineContentKey(line: OrderLine): string {
   return `${line.item.content.collection}:${line.item.content.id}`;
 }
 
+function subscriptionSellableContentKey(subscription: SubscriptionDocument): string {
+  const content = subscription.aggregate.sellable.content;
+  return `${content.collection}:${content.id}`;
+}
+
 function fulfillmentDocumentId(namespace: string, ...parts: readonly string[]): MikaId {
   return createMikaId([namespace, ...parts].map(fulfillmentIdPart).join("_"));
 }
@@ -1467,11 +1728,38 @@ function fulfillmentIdPart(value: string): string {
   return sanitized || "value";
 }
 
-async function markWebhookProcessed(
+async function markWebhookProcessedForOrder(
   input: CreateMikaBackendApiInput,
   webhook: WebhookDocument,
   now: ISODateTime,
   order: OrderDocument,
+): Promise<WebhookDocument> {
+  return markWebhookProcessed(input, webhook, now, {
+    relatedCustomerId: order.customerId,
+    relatedOrderId: order.id,
+  });
+}
+
+async function markWebhookProcessedForSubscription(
+  input: CreateMikaBackendApiInput,
+  webhook: WebhookDocument,
+  now: ISODateTime,
+  subscription: SubscriptionDocument,
+): Promise<WebhookDocument> {
+  return markWebhookProcessed(input, webhook, now, {
+    relatedCustomerId: subscription.customerId,
+    relatedSubscriptionId: subscription.id,
+  });
+}
+
+async function markWebhookProcessed(
+  input: CreateMikaBackendApiInput,
+  webhook: WebhookDocument,
+  now: ISODateTime,
+  related: Pick<
+    WebhookDocument["record"],
+    "relatedCustomerId" | "relatedOrderId" | "relatedSubscriptionId"
+  >,
 ): Promise<WebhookDocument> {
   const processed: WebhookDocument = {
     ...webhook,
@@ -1481,8 +1769,7 @@ async function markWebhookProcessed(
       status: "processed",
       attemptCount: webhook.record.attemptCount + 1,
       processedAt: now,
-      relatedCustomerId: order.customerId,
-      relatedOrderId: order.id,
+      ...related,
     },
     updatedAt: now,
   };

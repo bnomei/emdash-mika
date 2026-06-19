@@ -23,6 +23,7 @@ import type {
   WebhookDocument,
   WishlistDocument,
 } from "../types/documents";
+import type { PriceDefinition, SellableDefinition } from "../types/aggregates";
 import type { EphemeralRecord, StockEventRecord, StockItemRecord } from "../types/operational";
 import {
   createISODateTime,
@@ -51,6 +52,12 @@ import {
 export type MikaDb = Kysely<MikaDatabase>;
 export type MikaTransaction = Transaction<MikaDatabase>;
 export type MikaDbExecutor = MikaDb | MikaTransaction;
+
+export interface CatalogProviderPriceMatch {
+  readonly catalog: CatalogItemDocument;
+  readonly sellable: SellableDefinition;
+  readonly price: PriceDefinition;
+}
 
 export interface ReserveStockRepositoryInput {
   readonly reservationEventId: MikaId;
@@ -261,6 +268,28 @@ export class CatalogRepository {
     );
   }
 
+  async findItemByProviderPrice(
+    provider: string,
+    providerPriceId: string,
+  ): Promise<CatalogProviderPriceMatch | null> {
+    const result = await listByType(this.collection, "catalogItem");
+
+    for (const item of result.items) {
+      for (const sellable of item.data.aggregate.sellables) {
+        const price = sellable.prices.find((candidate) =>
+          candidate.providerRefs.some(
+            (ref) => ref.provider === provider && ref.priceId === providerPriceId,
+          ),
+        );
+        if (price) {
+          return { catalog: item.data, sellable, price };
+        }
+      }
+    }
+
+    return null;
+  }
+
   async put(document: CatalogDocument): Promise<void> {
     await putByDocumentId(this.collection, document);
   }
@@ -372,6 +401,16 @@ export class AccountRepository {
     return findOneByType(this.collection, "providerAccount", {
       provider,
       providerCustomerId,
+    });
+  }
+
+  async findSubscriptionByProvider(
+    provider: string,
+    providerSubscriptionId: string,
+  ): Promise<SubscriptionDocument | null> {
+    return findOneByType(this.collection, "subscription", {
+      provider,
+      providerSubscriptionId,
     });
   }
 
