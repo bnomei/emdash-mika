@@ -1911,6 +1911,247 @@ describe("backend API composition", () => {
     });
   });
 
+  it("returns provider unsupported for subscription actions without mutating the subscription", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({ optionalMethods: "none" });
+    const subscription = createSubscriptionDocument();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.account.put(createCustomerDocument());
+    await repositories.account.put(subscription);
+
+    await expect(
+      api.subscription.cancel(createTestRequestContext(), { subscriptionId: subscription.id }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "PROVIDER_UNSUPPORTED" },
+    });
+
+    expect(fake.getCalls().cancelSubscription).toEqual([]);
+    await expect(repositories.account.findSubscriptionById(subscription.id)).resolves.toEqual(
+      subscription,
+    );
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
+    ).resolves.toBeNull();
+  });
+
+  it("normalizes subscription provider failures and records failed audit state", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["cancelSubscription"],
+      overrides: {
+        cancelSubscription: async () => {
+          throw new Error("Provider cancel failed.");
+        },
+      },
+    });
+    const subscription = createSubscriptionDocument();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.account.put(createCustomerDocument());
+    await repositories.account.put(subscription);
+
+    await expect(
+      api.subscription.cancel(createTestRequestContext(), { subscriptionId: subscription.id }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 502,
+      error: {
+        code: "PROVIDER_FAILED",
+        message: "Provider cancel failed.",
+      },
+    });
+
+    expect(fake.getCalls().cancelSubscription).toEqual([
+      {
+        subscriptionId: subscription.id,
+        providerSubscriptionId: "provider_subscription_1",
+      },
+    ]);
+    await expect(repositories.account.findSubscriptionById(subscription.id)).resolves.toEqual(
+      subscription,
+    );
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
+    ).resolves.toMatchObject({
+      status: "failed",
+      record: {
+        action: "subscription.cancel",
+        targetType: "subscription",
+        targetId: subscription.id,
+        status: "failed",
+        metadata: {
+          provider: TEST_PROVIDER,
+          subscriptionId: subscription.id,
+          providerSubscriptionId: "provider_subscription_1",
+          error: "Provider cancel failed.",
+        },
+      },
+    });
+  });
+
+  it("runs subscription provider actions and updates stored subscription state", async () => {
+    const contentRef = createTestContentRef();
+    const replacementPrice = createPriceDefinition({
+      id: createTestMikaId("price", 2),
+      titleSnapshot: "Pro subscription",
+      providerRefs: [{ provider: TEST_PROVIDER, productId: "prod_sub", priceId: "price_pro" }],
+      mode: "subscription",
+      fulfillmentKind: "entitlement",
+    });
+    const sellable = createSellableDefinition({
+      prices: [
+        createPriceDefinition({
+          providerRefs: [
+            { provider: TEST_PROVIDER, productId: "prod_sub", priceId: "price_basic" },
+          ],
+          mode: "subscription",
+          fulfillmentKind: "entitlement",
+        }),
+        replacementPrice,
+      ],
+    });
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["cancelSubscription", "changeSubscription", "renewSubscription"],
+    });
+    const baseSubscription = createSubscriptionDocument();
+    const subscription: SubscriptionDocument = {
+      ...baseSubscription,
+      aggregate: {
+        ...baseSubscription.aggregate,
+        providerRef: {
+          ...baseSubscription.aggregate.providerRef,
+          priceId: "price_basic",
+        },
+      },
+    };
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    await repositories.account.put(createCustomerDocument());
+    await repositories.account.put(subscription);
+
+    await expect(
+      api.subscription.cancel(createTestRequestContext(), { subscriptionId: subscription.id }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        subscriptions: [
+          {
+            id: subscription.id,
+            status: "cancel_at_period_end",
+            cancelAtPeriodEnd: true,
+          },
+        ],
+      },
+    });
+    expect(fake.getCalls().cancelSubscription).toEqual([
+      {
+        subscriptionId: subscription.id,
+        providerSubscriptionId: "provider_subscription_1",
+        providerPriceId: "price_basic",
+      },
+    ]);
+
+    await expect(
+      api.subscription.renew(createTestRequestContext(), { subscriptionId: subscription.id }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        subscriptions: [
+          {
+            id: subscription.id,
+            status: "active",
+            cancelAtPeriodEnd: false,
+          },
+        ],
+      },
+    });
+    expect(fake.getCalls().renewSubscription).toEqual([
+      {
+        subscriptionId: subscription.id,
+        providerSubscriptionId: "provider_subscription_1",
+        providerPriceId: "price_basic",
+      },
+    ]);
+
+    await expect(
+      api.subscription.change(createTestRequestContext(), {
+        subscriptionId: subscription.id,
+        priceId: replacementPrice.id,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        subscriptions: [
+          {
+            id: subscription.id,
+            title: "Pro subscription",
+            status: "active",
+          },
+        ],
+      },
+    });
+    expect(fake.getCalls().changeSubscription).toEqual([
+      {
+        subscriptionId: subscription.id,
+        providerSubscriptionId: "provider_subscription_1",
+        priceId: replacementPrice.id,
+        providerPriceId: "price_pro",
+      },
+    ]);
+    await expect(repositories.account.findSubscriptionById(subscription.id)).resolves.toMatchObject(
+      {
+        status: "active",
+        aggregate: {
+          sellable: {
+            priceId: replacementPrice.id,
+            titleSnapshot: "Pro subscription",
+          },
+          providerRef: {
+            priceId: "price_pro",
+          },
+        },
+      },
+    );
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 3)),
+    ).resolves.toMatchObject({
+      status: "completed",
+      record: {
+        action: "subscription.change",
+        status: "completed",
+        metadata: {
+          provider: TEST_PROVIDER,
+          subscriptionId: subscription.id,
+          priceId: replacementPrice.id,
+          providerPriceId: "price_pro",
+        },
+      },
+    });
+  });
+
   it("checks provider health with adapter health and capability fallback", async () => {
     const stripe = createTestProviderName("stripe");
     const healthProvider = createFakeMikaProvider({

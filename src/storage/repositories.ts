@@ -290,6 +290,21 @@ export class CatalogRepository {
     return null;
   }
 
+  async findPriceById(priceId: MikaId): Promise<CatalogProviderPriceMatch | null> {
+    const result = await listByType(this.collection, "catalogItem");
+
+    for (const item of result.items) {
+      for (const sellable of item.data.aggregate.sellables) {
+        const price = sellable.prices.find((candidate) => candidate.id === priceId);
+        if (price) {
+          return { catalog: item.data, sellable, price };
+        }
+      }
+    }
+
+    return null;
+  }
+
   async put(document: CatalogDocument): Promise<void> {
     await putByDocumentId(this.collection, document);
   }
@@ -412,6 +427,11 @@ export class AccountRepository {
       provider,
       providerSubscriptionId,
     });
+  }
+
+  async findSubscriptionById(subscriptionId: MikaId): Promise<SubscriptionDocument | null> {
+    const document = await this.collection.get(subscriptionId);
+    return documentOfType(document, "subscription");
   }
 
   async listProviderAccountsByCustomer(

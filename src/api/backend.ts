@@ -2,6 +2,7 @@ import type {
   MikaProviderLineItem,
   MikaProviderPaymentEvent,
   MikaProviderRegistry,
+  MikaProviderSubscriptionActionInput,
   MikaProviderSubscriptionEvent,
   MikaProviderWebhookEvent,
   MikaVerifiedWebhookPayload,
@@ -766,6 +767,12 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
       portal: async (ctx, portalInput) => createAccountPortalSession(input, ctx, portalInput),
       ...input.overrides?.account,
     },
+    subscription: {
+      cancel: async (ctx, actionInput) => runSubscriptionAction(input, ctx, actionInput, "cancel"),
+      change: async (ctx, actionInput) => runSubscriptionAction(input, ctx, actionInput, "change"),
+      renew: async (ctx, actionInput) => runSubscriptionAction(input, ctx, actionInput, "renew"),
+      ...input.overrides?.subscription,
+    },
     download: {
       resolve: async (downloadInput) => resolveDownload(input, downloadInput),
       ...input.overrides?.download,
@@ -1100,6 +1107,189 @@ async function createAccountPortalSession(
       error instanceof Error ? error.message : "Provider portal session failed.",
     );
   }
+}
+
+type SubscriptionActionKind = "cancel" | "change" | "renew";
+
+const subscriptionActionMethods = {
+  cancel: "cancelSubscription",
+  change: "changeSubscription",
+  renew: "renewSubscription",
+} as const;
+
+async function runSubscriptionAction(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  actionInput: { readonly subscriptionId: MikaId; readonly priceId?: MikaId },
+  action: SubscriptionActionKind,
+): Promise<MikaApiResult<AccountDTO>> {
+  const identity = await resolveAccountIdentity(input, ctx);
+  if (!identity?.customer) {
+    return authRequired("Subscription changes require an authenticated customer identity.");
+  }
+
+  const subscription = await input.repositories.account.findSubscriptionById(
+    actionInput.subscriptionId,
+  );
+  if (!subscription || subscription.customerId !== identity.customer.customerId) {
+    return {
+      ok: false,
+      status: 404,
+      error: {
+        code: "VALIDATION_FAILED",
+        message: `Subscription '${actionInput.subscriptionId}' was not found.`,
+        fieldErrors: { subscriptionId: "Subscription was not found." },
+      },
+    };
+  }
+
+  const provider = input.providers.get(subscription.provider);
+  const methodName = subscriptionActionMethods[action];
+  const method = provider?.[methodName];
+  if (!provider || !method) {
+    return providerUnsupportedForAction(
+      provider
+        ? `Provider '${subscription.provider}' does not support subscription ${action}.`
+        : `Provider '${subscription.provider}' is not configured.`,
+    );
+  }
+
+  const priceMatch =
+    action === "change" && actionInput.priceId
+      ? await input.repositories.catalog.findPriceById(actionInput.priceId)
+      : null;
+  if (action === "change" && actionInput.priceId && !priceMatch) {
+    return validationFailed("priceId", `Price '${actionInput.priceId}' was not found.`);
+  }
+
+  const providerPriceId =
+    priceMatch?.price.providerRefs.find((ref) => ref.provider === subscription.provider)?.priceId ??
+    (action === "change" ? undefined : subscription.aggregate.providerRef.priceId);
+  if (action === "change" && actionInput.priceId && !providerPriceId) {
+    return providerUnsupportedForAction(
+      `Price '${actionInput.priceId}' is not mapped for provider '${subscription.provider}'.`,
+    );
+  }
+
+  const now = currentBackendISODateTime(input);
+  const providerSubscriptionId =
+    subscription.providerSubscriptionId ?? subscription.aggregate.providerRef.subscriptionId;
+  const audit = createAdminAuditDocument(input, {
+    action: `subscription.${action}`,
+    targetType: "subscription",
+    targetId: subscription.id,
+    status: "started",
+    createdAt: now,
+    metadata: {
+      provider: subscription.provider,
+      subscriptionId: subscription.id,
+      ...(providerSubscriptionId ? { providerSubscriptionId } : {}),
+      ...(actionInput.priceId ? { priceId: actionInput.priceId } : {}),
+      ...(providerPriceId ? { providerPriceId } : {}),
+    },
+  });
+  await input.repositories.ops.writeAudit(audit);
+
+  const providerInput: MikaProviderSubscriptionActionInput = {
+    subscriptionId: subscription.id,
+    ...(providerSubscriptionId ? { providerSubscriptionId } : {}),
+    ...(actionInput.priceId ? { priceId: actionInput.priceId } : {}),
+    ...(providerPriceId ? { providerPriceId } : {}),
+  };
+
+  try {
+    await method.call(provider, providerInput);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : `Provider subscription ${action} failed.`;
+    await input.repositories.ops.writeAudit({
+      ...audit,
+      status: "failed",
+      updatedAt: currentBackendISODateTime(input),
+      record: {
+        ...audit.record,
+        status: "failed",
+        metadata: {
+          ...audit.record.metadata,
+          error: message,
+        },
+      },
+    });
+
+    return providerFailed(message);
+  }
+
+  await updateSubscriptionAfterAction(input, ctx, subscription, action, priceMatch);
+  await input.repositories.ops.writeAudit({
+    ...audit,
+    status: "completed",
+    updatedAt: currentBackendISODateTime(input),
+    record: {
+      ...audit.record,
+      status: "completed",
+    },
+  });
+
+  return {
+    ok: true,
+    status: 200,
+    data: await accountDTOForCustomer(input, identity.customer),
+  };
+}
+
+async function updateSubscriptionAfterAction(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  subscription: SubscriptionDocument,
+  action: SubscriptionActionKind,
+  priceMatch: Awaited<ReturnType<MikaBackendRepositories["catalog"]["findPriceById"]>>,
+): Promise<SubscriptionDocument> {
+  const providerPriceId = priceMatch?.price.providerRefs.find(
+    (ref) => ref.provider === subscription.provider,
+  )?.priceId;
+  const changedSellable = priceMatch
+    ? snapshotPrice({
+        content: priceMatch.catalog.aggregate.content,
+        sellable: priceMatch.sellable,
+        price: priceMatch.price,
+        fallbackTitle: priceMatch.catalog.titleSnapshot ?? priceMatch.sellable.id,
+      })
+    : subscription.aggregate.sellable;
+  const status: SubscriptionStatus =
+    action === "cancel"
+      ? "cancel_at_period_end"
+      : action === "renew"
+        ? "active"
+        : subscription.status;
+  const cancelAtPeriodEnd =
+    action === "cancel"
+      ? true
+      : action === "renew"
+        ? false
+        : subscription.aggregate.cancelAtPeriodEnd;
+  const updated: SubscriptionDocument = {
+    ...subscription,
+    status,
+    currentPeriodEnd: subscription.currentPeriodEnd,
+    updatedAt: ctx.now,
+    aggregate: {
+      ...subscription.aggregate,
+      sellable: changedSellable,
+      providerRef: {
+        ...subscription.aggregate.providerRef,
+        ...(providerPriceId ? { priceId: providerPriceId } : {}),
+      },
+      status,
+      cancelAtPeriodEnd,
+      metadata: {
+        ...subscription.aggregate.metadata,
+        lastAdminAction: `subscription.${action}`,
+      },
+    },
+  };
+
+  await input.repositories.account.put(updated);
+  return updateSubscriptionEntitlement(input, ctx, updated);
 }
 
 async function providerHealth(
