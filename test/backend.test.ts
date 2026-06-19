@@ -9,7 +9,7 @@ import {
 import { createMikaPluginRoutes } from "../src/api/route-handlers";
 import { mikaPluginRoutes } from "../src/api/routes";
 import type { StorageCollection } from "../src/storage/collections";
-import type { MikaProviderCapability } from "../src/api/types";
+import { MIKA_ERROR_CODES, type MikaProviderCapability } from "../src/api/types";
 import { createMikaApi, mikaApiMethodNames, type MikaApi } from "../src/api/server";
 import type {
   MikaProviderAdapter,
@@ -253,6 +253,12 @@ describe("backend test provider helpers", () => {
 });
 
 describe("backend API composition", () => {
+  it("declares catalog and stock service error codes in the public contract", () => {
+    expect(MIKA_ERROR_CODES).toEqual(
+      expect.arrayContaining(["SELLABLE_NOT_FOUND", "VALIDATION_FAILED"]),
+    );
+  });
+
   it("keeps createMikaApi missing methods on the default NOT_IMPLEMENTED shell", async () => {
     const api = createMikaApi({
       catalog: {
@@ -413,6 +419,59 @@ describe("backend API composition", () => {
         sellableId: sellable.id,
         status: "available",
         availableQuantity: 5,
+      },
+    });
+  });
+
+  it("keeps catalog and stock validation failures in the route layer", async () => {
+    const api = createMikaApi({
+      catalog: {
+        sellables: async () => {
+          throw new Error("catalog.sellables should not run for invalid route input.");
+        },
+      },
+      stock: {
+        availability: async () => {
+          throw new Error("stock.availability should not run for invalid route input.");
+        },
+      },
+    });
+    const routes = createMikaPluginRoutes(api);
+
+    await expect(
+      routes[mikaPluginRoutes.catalogSellables].handler({
+        input: {},
+        request: new Request(
+          "https://shop.example.test/_emdash/api/plugins/mika/catalog/sellables?collection=products",
+        ),
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 422,
+      error: {
+        code: "VALIDATION_FAILED",
+        message: "Mika input validation failed.",
+        fieldErrors: {
+          id: expect.any(String),
+        },
+      },
+    });
+    await expect(
+      routes[mikaPluginRoutes.sellableAvailability].handler({
+        input: {},
+        request: new Request(
+          "https://shop.example.test/_emdash/api/plugins/mika/sellables/availability",
+        ),
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 422,
+      error: {
+        code: "VALIDATION_FAILED",
+        message: "Mika input validation failed.",
+        fieldErrors: {
+          sellableId: expect.any(String),
+        },
       },
     });
   });
