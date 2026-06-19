@@ -745,11 +745,112 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
       verify: async (ctx, verifyInput) => verifyMagicLink(input, ctx, verifyInput),
       ...input.overrides?.magicLink,
     },
+    account: {
+      get: async (ctx) => getAccount(input, ctx),
+      ...input.overrides?.account,
+    },
     webhook: {
       receive: async (ctx, webhookInput) => receiveWebhook(input, ctx, webhookInput),
       ...input.overrides?.webhook,
     },
   });
+}
+
+async function getAccount(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+): Promise<MikaApiResult<AccountDTO>> {
+  const identity = await resolveAccountIdentity(input, ctx);
+  if (!identity) {
+    return authRequired("Account access requires an authenticated customer identity.");
+  }
+
+  if (identity.customer) {
+    return { ok: true, status: 200, data: await accountDTOForCustomer(input, identity.customer) };
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      orders: [],
+      subscriptions: [],
+      entitlements: identity.entitlements.map((item) => entitlementDTO(item.data)),
+      downloads: [],
+    },
+  };
+}
+
+async function resolveAccountIdentity(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+): Promise<
+  | {
+      readonly customer: CustomerDocument;
+      readonly entitlements: Awaited<
+        ReturnType<MikaBackendRepositories["account"]["listEntitlementsByCustomer"]>
+      >["items"];
+    }
+  | {
+      readonly customer: null;
+      readonly entitlements: Awaited<
+        ReturnType<MikaBackendRepositories["account"]["listEntitlementsByUser"]>
+      >["items"];
+    }
+  | null
+> {
+  const sessionCustomerId = await ctx.session?.get<MikaId>("mika.customerId");
+  const sessionUserId = await ctx.session?.get<string>("mika.userId");
+  const sessionEmailHash = await ctx.session?.get<string>("mika.emailHash");
+  const customerId = ctx.customerId ?? sessionCustomerId;
+  const userId = ctx.userId ?? sessionUserId;
+
+  if (customerId) {
+    const customer = await input.repositories.account.findCustomerById(customerId);
+    if (!customer || (userId && customer.userId && customer.userId !== userId)) return null;
+
+    return {
+      customer,
+      entitlements: (await input.repositories.account.listEntitlementsByCustomer(customerId)).items,
+    };
+  }
+
+  if (userId) {
+    const customer = await input.repositories.account.findCustomerByUserId(userId);
+    if (customer) {
+      return {
+        customer,
+        entitlements: (
+          await input.repositories.account.listEntitlementsByCustomer(customer.customerId)
+        ).items,
+      };
+    }
+
+    const entitlements = await input.repositories.account.listEntitlementsByUser(userId);
+    if (entitlements.items.length > 0) {
+      return { customer: null, entitlements: entitlements.items };
+    }
+  }
+
+  if (sessionEmailHash) {
+    const customer = await input.repositories.account.findCustomerByEmailHash(sessionEmailHash);
+    if (customer) {
+      return {
+        customer,
+        entitlements: (
+          await input.repositories.account.listEntitlementsByCustomer(customer.customerId)
+        ).items,
+      };
+    }
+
+    const entitlements =
+      await input.repositories.account.listEntitlementsByEmailHash(sessionEmailHash);
+    if (entitlements.items.length > 0) {
+      return { customer: null, entitlements: entitlements.items };
+    }
+  }
+
+  return null;
 }
 
 async function requestMagicLink(
@@ -888,6 +989,10 @@ async function accountDTOForCustomer(
     input.repositories.account.listSubscriptionsByCustomer(customer.customerId),
     input.repositories.account.listEntitlementsByCustomer(customer.customerId),
   ]);
+  await Promise.all([
+    input.repositories.account.listProviderAccountsByCustomer(customer.customerId),
+    input.repositories.account.listLicensesByCustomer(customer.customerId),
+  ]);
 
   const orderSummaries = orders.items.map((item) => orderSummaryDTO(item.data));
 
@@ -982,6 +1087,14 @@ function tokenResult(code: MikaError["code"], message: string): MikaApiFailure {
     ok: false,
     status: code === "TOKEN_INVALID" ? 400 : 410,
     error: { code, message },
+  };
+}
+
+function authRequired(message: string): MikaApiFailure {
+  return {
+    ok: false,
+    status: 401,
+    error: { code: "AUTH_REQUIRED", message },
   };
 }
 

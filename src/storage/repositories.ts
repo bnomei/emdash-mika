@@ -447,6 +447,28 @@ export class AccountRepository {
     });
   }
 
+  async listEntitlementsByUser(
+    userId: string,
+    limit = 100,
+  ): Promise<DocumentList<EntitlementDocument>> {
+    return listByType(this.collection, "entitlement", {
+      where: { userId },
+      orderBy: { updatedAt: "desc" },
+      limit,
+    });
+  }
+
+  async listEntitlementsByEmailHash(
+    emailHash: string,
+    limit = 100,
+  ): Promise<DocumentList<EntitlementDocument>> {
+    return listByType(this.collection, "entitlement", {
+      where: { emailHash },
+      orderBy: { updatedAt: "desc" },
+      limit,
+    });
+  }
+
   async listLicensesByCustomer(
     customerId: MikaId,
     limit = 100,

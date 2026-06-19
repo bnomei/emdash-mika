@@ -34,8 +34,11 @@ import type {
   CheckoutDocument,
   CustomerDocument,
   ProviderAccountDocument,
+  EntitlementDocument,
+  LicenseDocument,
   MikaStorageDocuments,
   OrderDocument,
+  SubscriptionDocument,
 } from "../src/types/documents";
 import type { StockEventRecord, StockItemRecord } from "../src/types/operational";
 import {
@@ -1324,6 +1327,125 @@ describe("backend API composition", () => {
     } finally {
       await harness.destroy();
     }
+  });
+
+  it("returns account overview sections for an authenticated customer", async () => {
+    const accountCollection = createStorageCollection("account");
+    const ledgerCollection = createStorageCollection("ledger");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+    } satisfies MikaBackendRepositories;
+    const customer = createCustomerDocument();
+
+    await repositories.account.put(customer);
+    await repositories.account.put(createProviderAccountDocument());
+    await repositories.account.put(createSubscriptionDocument());
+    await repositories.account.put(createEntitlementDocument());
+    await repositories.account.put(createLicenseDocument());
+    await repositories.ledger.put(createOrderDocument());
+
+    const api = createMikaBackendApi(createTestBackendDependencies({ repositories }));
+
+    await expect(
+      api.account.get(createTestRequestContext({ customerId: customer.customerId })),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        customer: {
+          id: "customer_1",
+          userId: "user_1",
+          email: "Subscriber@Example.test",
+          name: "Subscriber One",
+        },
+        orders: [
+          {
+            id: "order_1",
+            orderNumber: "M-1001",
+            status: "paid",
+            paymentStatus: "paid",
+            total: { amount: 1200, currency: TEST_CURRENCY },
+            invoiceUrl: "https://invoice.example.test/order_1",
+          },
+        ],
+        subscriptions: [
+          {
+            id: "subscription_1",
+            title: "Test subscription",
+            status: "active",
+            currentPeriodEnd: "2026-02-01T00:00:00.000Z",
+            cancelAtPeriodEnd: false,
+          },
+        ],
+        entitlements: [
+          {
+            key: "downloads.pro",
+            status: "active",
+            source: "order",
+            expiresAt: "2026-02-01T00:00:00.000Z",
+          },
+        ],
+        downloads: [
+          {
+            id: "download:order_1:order_line_1",
+            title: "Test download",
+            href: "download:order_1:order_line_1",
+          },
+        ],
+      },
+    });
+  });
+
+  it("does not return account data for conflicting customer and user identity", async () => {
+    const accountCollection = createStorageCollection("account");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+    } satisfies MikaBackendRepositories;
+    const api = createMikaBackendApi(createTestBackendDependencies({ repositories }));
+
+    await repositories.account.put(createCustomerDocument());
+    await repositories.account.put(
+      createCustomerDocument({
+        id: createTestMikaId("customer_document", 2),
+        customerId: createTestMikaId("customer", 2),
+        userId: "user_2",
+        emailHash: createTestHash("email:other@example.test"),
+        aggregate: {
+          schemaVersion: 1,
+          email: "other@example.test",
+          emailHash: createTestHash("email:other@example.test"),
+          name: "Other Customer",
+        },
+      }),
+    );
+
+    await expect(
+      api.account.get(
+        createTestRequestContext({
+          customerId: createTestMikaId("customer", 1),
+          userId: "user_2",
+        }),
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 401,
+      error: { code: "AUTH_REQUIRED" },
+    });
+  });
+
+  it("requires identity for account overview", async () => {
+    const api = createMikaBackendApi(createTestBackendDependencies());
+
+    await expect(
+      api.account.get(createTestRequestContext({ customerId: false, userId: false })),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 401,
+      error: { code: "AUTH_REQUIRED" },
+    });
   });
 
   it("returns stable magic link token errors for invalid and expired tokens", async () => {
@@ -5326,6 +5448,187 @@ function createProviderAccountDocument(
     record,
     createdAt: TEST_NOW,
     updatedAt: TEST_NOW,
+    ...overrides,
+  };
+}
+
+function createOrderDocument(overrides: Partial<OrderDocument> = {}): OrderDocument {
+  const orderId = overrides.id ?? createTestMikaId("order", 1);
+
+  return {
+    id: orderId,
+    type: "order",
+    schemaVersion: 1,
+    orderNumber: "M-1001",
+    customerId: createTestMikaId("customer", 1),
+    provider: TEST_PROVIDER,
+    providerPaymentId: "payment_1",
+    providerOrderId: "provider_order_1",
+    status: "paid",
+    paymentStatus: "paid",
+    currency: TEST_CURRENCY,
+    totalAmount: 1200,
+    paidAt: TEST_NOW,
+    aggregate: {
+      schemaVersion: 1,
+      customer: {
+        customerId: createTestMikaId("customer", 1),
+        userId: "user_1",
+        email: "Subscriber@Example.test",
+        emailHash: createTestHash("email:subscriber@example.test"),
+        name: "Subscriber One",
+      },
+      lines: [
+        {
+          id: createTestMikaId("order_line", 1),
+          item: createPurchasableSnapshot({ titleSnapshot: "Test download" }),
+          quantity: 1,
+          subtotalAmount: 1200,
+          totalAmount: 1200,
+          downloadRefs: ["download:order_1:order_line_1"],
+        },
+      ],
+      totals: {
+        subtotal: { amount: 1200, currency: TEST_CURRENCY },
+        total: { amount: 1200, currency: TEST_CURRENCY },
+      },
+      providerRefs: [
+        {
+          provider: TEST_PROVIDER,
+          paymentId: "payment_1",
+          orderId: "provider_order_1",
+        },
+      ],
+      invoiceUrl: "https://invoice.example.test/order_1",
+    },
+    createdAt: TEST_NOW,
+    updatedAt: TEST_NOW,
+    ...overrides,
+  };
+}
+
+function createSubscriptionDocument(
+  overrides: Partial<SubscriptionDocument> = {},
+): SubscriptionDocument {
+  const currentPeriodEnd = createTestClock().isoAt(31 * 24 * 60 * 60_000);
+
+  return {
+    id: createTestMikaId("subscription", 1),
+    type: "subscription",
+    schemaVersion: 1,
+    customerId: createTestMikaId("customer", 1),
+    provider: TEST_PROVIDER,
+    providerCustomerId: "provider_customer_1",
+    providerSubscriptionId: "provider_subscription_1",
+    status: "active",
+    currentPeriodEnd,
+    aggregate: {
+      schemaVersion: 1,
+      customer: {
+        customerId: createTestMikaId("customer", 1),
+        userId: "user_1",
+        email: "Subscriber@Example.test",
+        emailHash: createTestHash("email:subscriber@example.test"),
+        name: "Subscriber One",
+      },
+      sellable: createPurchasableSnapshot({
+        titleSnapshot: "Test subscription",
+        mode: "subscription",
+        fulfillmentKind: "entitlement",
+      }),
+      providerRef: {
+        provider: TEST_PROVIDER,
+        customerId: "provider_customer_1",
+        subscriptionId: "provider_subscription_1",
+      },
+      status: "active",
+      cancelAtPeriodEnd: false,
+      currentPeriodEnd,
+    },
+    createdAt: TEST_NOW,
+    updatedAt: TEST_NOW,
+    ...overrides,
+  };
+}
+
+function createEntitlementDocument(
+  overrides: Partial<EntitlementDocument> = {},
+): EntitlementDocument {
+  const currentPeriodEnd = createTestClock().isoAt(31 * 24 * 60 * 60_000);
+  const record = {
+    id: overrides.id ?? createTestMikaId("entitlement", 1),
+    customerId: createTestMikaId("customer", 1),
+    userId: "user_1",
+    emailHash: createTestHash("email:subscriber@example.test"),
+    entitlementKey: "downloads.pro",
+    orderId: createTestMikaId("order", 1),
+    status: "active" as const,
+    currentPeriodEnd,
+    grantedAt: TEST_NOW,
+    ...overrides.record,
+  };
+
+  return {
+    id: record.id,
+    type: "entitlement",
+    schemaVersion: 1,
+    customerId: record.customerId,
+    userId: record.userId,
+    emailHash: record.emailHash,
+    entitlementKey: record.entitlementKey,
+    status: record.status,
+    orderId: record.orderId,
+    subscriptionId: record.subscriptionId,
+    record,
+    createdAt: TEST_NOW,
+    updatedAt: TEST_NOW,
+    ...overrides,
+  };
+}
+
+function createLicenseDocument(overrides: Partial<LicenseDocument> = {}): LicenseDocument {
+  const record = {
+    id: overrides.id ?? createTestMikaId("license", 1),
+    orderId: createTestMikaId("order", 1),
+    orderLineId: createTestMikaId("order_line", 1),
+    entitlementId: createTestMikaId("entitlement", 1),
+    licenseKeyHash: createTestHash("license-key:one"),
+    displayKeySuffix: "1234",
+    status: "active" as const,
+    createdAt: TEST_NOW,
+    ...overrides.record,
+  };
+
+  return {
+    id: record.id,
+    type: "license",
+    schemaVersion: 1,
+    orderId: record.orderId,
+    orderLineId: record.orderLineId,
+    entitlementId: record.entitlementId,
+    status: record.status,
+    customerId: createTestMikaId("customer", 1),
+    record,
+    createdAt: TEST_NOW,
+    updatedAt: TEST_NOW,
+    ...overrides,
+  };
+}
+
+function createPurchasableSnapshot(
+  overrides: Partial<OrderDocument["aggregate"]["lines"][number]["item"]> = {},
+): OrderDocument["aggregate"]["lines"][number]["item"] {
+  return {
+    content: createTestContentRef(),
+    sellableId: createTestMikaId("sellable", 1),
+    priceId: createTestMikaId("price", 1),
+    sku: "TEST-SKU-1",
+    titleSnapshot: "Test sellable",
+    variantOptions: [],
+    unitAmount: 1200,
+    currency: TEST_CURRENCY,
+    mode: "payment",
+    fulfillmentKind: "download",
     ...overrides,
   };
 }
