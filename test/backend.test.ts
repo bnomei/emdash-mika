@@ -1205,6 +1205,150 @@ describe("backend API composition", () => {
     ).resolves.toBeNull();
   });
 
+  it("moves wishlist items to the cart and merges duplicate cart lines", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition({ maxPerOrder: 5 });
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const cart = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    const wishlist = await api.wishlist.add(ctx, { sellableId: sellable.id });
+    if (!cart.ok || !wishlist.ok) {
+      throw new Error("Expected cart.add and wishlist.add to succeed.");
+    }
+
+    await expect(
+      api.wishlist.moveToCart(ctx, { itemId: wishlist.data.items[0]!.id, quantity: 2 }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        items: [{ sellableId: sellable.id, quantity: 3, total: { amount: 3600 } }],
+        subtotal: { amount: 3600 },
+        total: { amount: 3600 },
+      },
+    });
+
+    const updatedCart = await api.cart.get(ctx);
+    const updatedWishlist = await api.wishlist.get(ctx);
+    expect(updatedCart).toMatchObject({
+      ok: true,
+      data: { items: [{ sellableId: sellable.id, quantity: 3 }] },
+    });
+    expect(updatedWishlist).toMatchObject({ ok: true, data: { items: [] } });
+    if (!updatedCart.ok) {
+      throw new Error("Expected cart.get to succeed.");
+    }
+    expect(updatedCart.data.items).toHaveLength(1);
+  });
+
+  it("saves cart lines for later and removes them from the cart", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const cart = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!cart.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+
+    await expect(
+      api.wishlist.saveForLater(ctx, { lineId: cart.data.items[0]!.id }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        items: [{ sellableId: sellable.id, priceId: "price_1", title: "Test sellable" }],
+      },
+    });
+
+    await expect(api.cart.get(ctx)).resolves.toMatchObject({
+      ok: true,
+      data: { items: [], total: { amount: 0 } },
+    });
+    await expect(api.wishlist.get(ctx)).resolves.toMatchObject({
+      ok: true,
+      data: { items: [{ sellableId: sellable.id }] },
+    });
+  });
+
+  it("merges wishlists with deterministic duplicate handling", async () => {
+    const contentRef = createTestContentRef();
+    const duplicateSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 1),
+    });
+    const sourceOnlySellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 2),
+      sku: "TEST-SKU-2",
+      titleSnapshot: "Source only sellable",
+      prices: [createPriceDefinition({ id: createTestMikaId("price", 2) })],
+    });
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({
+        contentRef,
+        sellables: [duplicateSellable, sourceOnlySellable],
+      }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const sourceCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_wishlist_source",
+    });
+    const targetCtx = createTestRequestContext({
+      customerId: "customer_1",
+      userId: "user_1",
+      sessionId: "session_wishlist_target",
+    });
+
+    await api.wishlist.add(sourceCtx, { sellableId: duplicateSellable.id });
+    await api.wishlist.add(sourceCtx, { sellableId: sourceOnlySellable.id });
+    await api.wishlist.add(targetCtx, { sellableId: duplicateSellable.id });
+    const sourceBeforeMerge = await api.wishlist.get(sourceCtx);
+    if (!sourceBeforeMerge.ok) {
+      throw new Error("Expected source wishlist.get to succeed.");
+    }
+
+    await expect(
+      api.wishlist.merge(targetCtx, { sourceSessionId: "session_wishlist_source" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        items: [{ sellableId: duplicateSellable.id }, { sellableId: sourceOnlySellable.id }],
+      },
+    });
+
+    const merged = await api.wishlist.get(targetCtx);
+    expect(merged).toMatchObject({
+      ok: true,
+      data: {
+        items: [{ sellableId: duplicateSellable.id }, { sellableId: sourceOnlySellable.id }],
+      },
+    });
+    if (!merged.ok) {
+      throw new Error("Expected target wishlist.get to succeed.");
+    }
+    expect(merged.data.items).toHaveLength(2);
+    await expect(
+      repositories.session.findWishlistBySession("session_wishlist_source"),
+    ).resolves.toBeNull();
+    await expect(repositories.session.findById(sourceBeforeMerge.data.id)).resolves.toMatchObject({
+      type: "wishlist",
+      status: "merged",
+    });
+  });
+
   it("returns stable errors for missing wishlist items on remove", async () => {
     const api = createMikaBackendApi(createIncrementingBackendDependencies());
     const ctx = createTestRequestContext({ customerId: false, userId: false });

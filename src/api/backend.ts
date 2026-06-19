@@ -401,6 +401,119 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
 
         return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, updated) };
       },
+      moveToCart: async (ctx, itemInput) => {
+        const quantity = itemInput.quantity ?? 1;
+        if (!Number.isInteger(quantity) || quantity < 1) {
+          return validationFailed("quantity", "Quantity must be a positive whole number.");
+        }
+
+        const wishlist = await findOrCreateActiveWishlist(input, ctx);
+        const item = wishlist.aggregate.items.find(
+          (candidate) => candidate.id === itemInput.itemId,
+        );
+        if (!item) {
+          return wishlistItemNotFound(itemInput.itemId);
+        }
+
+        const currency = input.defaults?.currency ?? createCurrencyCode("EUR");
+        const existingCart = await findOpenCart(input, ctx, currency);
+        const cart = existingCart ?? createCartDocument(input, ctx, currency);
+        if (item.item.currency !== cart.aggregate.currency) {
+          return validationFailed(
+            "itemId",
+            `Wishlist item '${item.id}' uses currency '${item.item.currency}'.`,
+          );
+        }
+
+        const line: CartLine = {
+          id: input.createId("cart_line"),
+          item: item.item,
+          quantity,
+          addedAt: ctx.now,
+          metadata: item.metadata,
+        };
+        const itemsResult = await mergeCartLine(input, cart.aggregate.items, line);
+        if (!itemsResult.ok) return itemsResult;
+
+        const updatedCart = updateCartDocument(cart, itemsResult.items, ctx.now);
+        const updatedWishlist = updateWishlistDocument(
+          wishlist,
+          wishlist.aggregate.items.filter((candidate) => candidate.id !== item.id),
+          ctx.now,
+        );
+
+        await input.repositories.session.put(updatedCart);
+        await input.repositories.session.put(updatedWishlist);
+
+        return { ok: true, status: 200, data: await cartDocumentToDTO(input, updatedCart) };
+      },
+      saveForLater: async (ctx, itemInput) => {
+        const cart = await findOrCreateOpenCart(input, ctx);
+        const line = cart.aggregate.items.find((candidate) => candidate.id === itemInput.lineId);
+        if (!line) {
+          return cartLineNotFound(itemInput.lineId);
+        }
+
+        const wishlist = await findOrCreateActiveWishlist(input, ctx);
+        const item: WishlistItem = {
+          id: input.createId("wishlist_item"),
+          item: line.item,
+          addedAt: ctx.now,
+          metadata: line.metadata,
+        };
+        const wishlistItems = mergeWishlistItems(wishlist.aggregate.items, [item]);
+        const updatedWishlist = updateWishlistDocument(wishlist, wishlistItems, ctx.now);
+        const updatedCart = updateCartDocument(
+          cart,
+          cart.aggregate.items.filter((candidate) => candidate.id !== line.id),
+          ctx.now,
+        );
+
+        await input.repositories.session.put(updatedWishlist);
+        await input.repositories.session.put(updatedCart);
+
+        return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, updatedWishlist) };
+      },
+      merge: async (ctx, mergeInput) => {
+        const targetResult = mergeInput.targetWishlistId
+          ? await findOwnedActiveWishlistById(input, ctx, mergeInput.targetWishlistId)
+          : { ok: true as const, wishlist: await findOrCreateActiveWishlist(input, ctx) };
+        if (!targetResult.ok) return targetResult;
+
+        const sourceSessionId = mergeInput.sourceSessionId;
+        if (!sourceSessionId) {
+          return {
+            ok: true,
+            status: 200,
+            data: await wishlistDocumentToDTO(input, targetResult.wishlist),
+          };
+        }
+
+        const source = await input.repositories.session.findWishlistBySession(sourceSessionId);
+        if (!source || source.id === targetResult.wishlist.id) {
+          return {
+            ok: true,
+            status: 200,
+            data: await wishlistDocumentToDTO(input, targetResult.wishlist),
+          };
+        }
+
+        const updated = updateWishlistDocument(
+          targetResult.wishlist,
+          mergeWishlistItems(targetResult.wishlist.aggregate.items, source.aggregate.items),
+          ctx.now,
+        );
+        const mergedSource: WishlistDocument = {
+          ...source,
+          status: "merged",
+          updatedAt: ctx.now,
+        };
+
+        await input.repositories.session.put(updated);
+        await input.repositories.session.put(mergedSource);
+
+        return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, updated) };
+      },
       ...input.overrides?.wishlist,
     },
   });
@@ -428,6 +541,27 @@ async function findActiveWishlist(
   }
 
   return ctx.sessionId ? input.repositories.session.findWishlistBySession(ctx.sessionId) : null;
+}
+
+async function findOwnedActiveWishlistById(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  wishlistId: MikaId,
+): Promise<{ readonly ok: true; readonly wishlist: WishlistDocument } | MikaApiFailure> {
+  const document = await input.repositories.session.findById(wishlistId);
+  if (!document || document.type !== "wishlist" || document.status !== "active") {
+    return invalidWishlist("targetWishlistId", wishlistId);
+  }
+
+  if (ctx.customerId) {
+    if (document.customerId !== ctx.customerId) {
+      return invalidWishlist("targetWishlistId", wishlistId);
+    }
+  } else if (ctx.sessionId && document.sessionId !== ctx.sessionId) {
+    return invalidWishlist("targetWishlistId", wishlistId);
+  }
+
+  return { ok: true, wishlist: document };
 }
 
 function createWishlistDocument(
@@ -617,6 +751,44 @@ async function mergeCartLines(
   }
 
   return { ok: true, items };
+}
+
+async function mergeCartLine(
+  input: CreateMikaBackendApiInput,
+  currentItems: readonly CartLine[],
+  nextLine: CartLine,
+): Promise<{ readonly ok: true; readonly items: readonly CartLine[] } | MikaApiFailure> {
+  const items = [...currentItems];
+  const existingLine = items.find((line) => isEquivalentCartLine(line, nextLine));
+  const nextQuantity = (existingLine?.quantity ?? 0) + nextLine.quantity;
+  const quantityError = await validateExistingLineQuantity(input, nextLine, nextQuantity);
+  if (quantityError) return quantityError;
+
+  if (!existingLine) {
+    return { ok: true, items: [...items, nextLine] };
+  }
+
+  return {
+    ok: true,
+    items: items.map((line) =>
+      line.id === existingLine.id ? { ...line, quantity: nextQuantity } : line,
+    ),
+  };
+}
+
+function mergeWishlistItems(
+  targetItems: readonly WishlistItem[],
+  sourceItems: readonly WishlistItem[],
+): readonly WishlistItem[] {
+  const items = [...targetItems];
+
+  for (const sourceItem of sourceItems) {
+    if (!items.some((item) => isEquivalentWishlistItem(item, sourceItem))) {
+      items.push(sourceItem);
+    }
+  }
+
+  return items;
 }
 
 async function validateExistingLineQuantity(
@@ -1025,6 +1197,18 @@ function invalidCart(field: string, cartId: MikaId): MikaApiFailure {
       code: "VALIDATION_FAILED",
       message: `Cart '${cartId}' was not found.`,
       fieldErrors: { [field]: "Open cart was not found." },
+    },
+  };
+}
+
+function invalidWishlist(field: string, wishlistId: MikaId): MikaApiFailure {
+  return {
+    ok: false,
+    status: 404,
+    error: {
+      code: "VALIDATION_FAILED",
+      message: `Wishlist '${wishlistId}' was not found.`,
+      fieldErrors: { [field]: "Active wishlist was not found." },
     },
   };
 }
