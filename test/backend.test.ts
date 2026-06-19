@@ -8,7 +8,7 @@ import {
 } from "../src/api/backend";
 import type { StorageCollection } from "../src/storage/collections";
 import type { MikaProviderCapability } from "../src/api/types";
-import type { MikaApi } from "../src/api/server";
+import { mikaApiMethodNames, type MikaApi } from "../src/api/server";
 import type {
   MikaProviderAdapter,
   MikaProviderCheckoutInput,
@@ -283,6 +283,13 @@ describe("backend API composition", () => {
     const api = createMikaBackendApi(dependencies);
 
     expectTypeOf(api).toEqualTypeOf<MikaApi>();
+    for (const [namespace, methods] of Object.entries(mikaApiMethodNames)) {
+      const apiNamespace = api[namespace as keyof MikaApi] as Record<string, unknown>;
+
+      for (const method of methods) {
+        expect(apiNamespace[String(method)]).toEqual(expect.any(Function));
+      }
+    }
     await expect(api.catalog.sellables({ contentRef })).resolves.toMatchObject({
       ok: true,
       status: 200,
