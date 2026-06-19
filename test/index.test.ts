@@ -959,6 +959,134 @@ describe("Mika client", () => {
     );
   });
 
+  it("keeps cart and wishlist JSON route expectations private and request-bound", () => {
+    const trustedRoutes = Object.values(mikaOperationDefinitions)
+      .filter((operation) => operation.namespace === "cart" || operation.namespace === "wishlist")
+      .map((operation) => ({
+        name: operation.name,
+        routeKey: operation.routeKey,
+        routePath: operation.routePath,
+        httpMethod: operation.httpMethod,
+        public: operation.public,
+        requiresRequestContext: operation.requiresRequestContext,
+      }));
+
+    expect(trustedRoutes).toEqual([
+      {
+        name: "cart.get",
+        routeKey: "cart",
+        routePath: "cart",
+        httpMethod: "GET",
+        public: false,
+        requiresRequestContext: true,
+      },
+      {
+        name: "cart.quote",
+        routeKey: "cartQuote",
+        routePath: "cart/quote",
+        httpMethod: "POST",
+        public: false,
+        requiresRequestContext: true,
+      },
+      {
+        name: "cart.add",
+        routeKey: "cartItems",
+        routePath: "cart/items",
+        httpMethod: "POST",
+        public: false,
+        requiresRequestContext: true,
+      },
+      {
+        name: "cart.update",
+        routeKey: "cartItem",
+        routePath: "cart/item",
+        httpMethod: "PATCH",
+        public: false,
+        requiresRequestContext: true,
+      },
+      {
+        name: "cart.remove",
+        routeKey: "cartItem",
+        routePath: "cart/item",
+        httpMethod: "DELETE",
+        public: false,
+        requiresRequestContext: true,
+      },
+      {
+        name: "cart.merge",
+        routeKey: "cartMerge",
+        routePath: "cart/merge",
+        httpMethod: "POST",
+        public: false,
+        requiresRequestContext: true,
+      },
+      {
+        name: "cart.applyCoupon",
+        routeKey: "cartCoupon",
+        routePath: "cart/coupon",
+        httpMethod: "POST",
+        public: false,
+        requiresRequestContext: true,
+      },
+      {
+        name: "cart.removeCoupon",
+        routeKey: "cartCoupon",
+        routePath: "cart/coupon",
+        httpMethod: "DELETE",
+        public: false,
+        requiresRequestContext: true,
+      },
+      {
+        name: "wishlist.get",
+        routeKey: "wishlist",
+        routePath: "wishlist",
+        httpMethod: "GET",
+        public: false,
+        requiresRequestContext: true,
+      },
+      {
+        name: "wishlist.add",
+        routeKey: "wishlistItems",
+        routePath: "wishlist/items",
+        httpMethod: "POST",
+        public: false,
+        requiresRequestContext: true,
+      },
+      {
+        name: "wishlist.remove",
+        routeKey: "wishlistItem",
+        routePath: "wishlist/item",
+        httpMethod: "DELETE",
+        public: false,
+        requiresRequestContext: true,
+      },
+      {
+        name: "wishlist.moveToCart",
+        routeKey: "wishlistMoveToCart",
+        routePath: "wishlist/move-to-cart",
+        httpMethod: "POST",
+        public: false,
+        requiresRequestContext: true,
+      },
+      {
+        name: "wishlist.saveForLater",
+        routeKey: "wishlistSaveForLater",
+        routePath: "wishlist/save-for-later",
+        httpMethod: "POST",
+        public: false,
+        requiresRequestContext: true,
+      },
+      {
+        name: "wishlist.merge",
+        routeKey: "wishlistMerge",
+        routePath: "wishlist/merge",
+        httpMethod: "POST",
+        public: false,
+        requiresRequestContext: true,
+      },
+    ]);
+  });
+
   it("rejects invalid JSON route bodies with validation failures", async () => {
     const routes = createMikaPluginRoutes();
     const request = new Request("https://shop.test/_emdash/api/plugins/mika/cart/items", {

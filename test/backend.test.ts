@@ -6,10 +6,11 @@ import {
   type MikaBackendDependencies,
   type MikaBackendRepositories,
 } from "../src/api/backend";
+import { callMikaOperation, mikaActionDefinitions } from "../src/api/operations";
 import { createMikaPluginRoutes } from "../src/api/route-handlers";
 import { mikaPluginRoutes } from "../src/api/routes";
 import type { StorageCollection } from "../src/storage/collections";
-import { MIKA_ERROR_CODES, type MikaProviderCapability } from "../src/api/types";
+import { MIKA_ERROR_CODES, type CartDTO, type MikaProviderCapability } from "../src/api/types";
 import { createMikaApi, mikaApiMethodNames, type MikaApi } from "../src/api/server";
 import type {
   MikaProviderAdapter,
@@ -473,6 +474,131 @@ describe("backend API composition", () => {
           sellableId: expect.any(String),
         },
       },
+    });
+  });
+
+  it("runs action-bound cart and wishlist operations against the request-bound backend API", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition({ maxPerOrder: 5 });
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({
+      method: "POST",
+      sessionId: "session_action_backend",
+      customerId: false,
+      userId: false,
+    });
+
+    const added = await callMikaOperation<CartDTO>(
+      mikaActionDefinitions.cartAdd.operation,
+      api,
+      ctx,
+      {
+        sellableId: sellable.id,
+        priceId: createTestMikaId("price", 1),
+        quantity: 2,
+      },
+    );
+    expect(added).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "cart_1",
+        items: [{ sellableId: sellable.id, priceId: "price_1", quantity: 2 }],
+        total: { amount: 2400 },
+      },
+    });
+    if (!added.ok) {
+      throw new Error("Expected action-bound cart operation to return a cart DTO.");
+    }
+
+    const saved = await callMikaOperation(
+      mikaActionDefinitions.wishlistSaveForLater.operation,
+      api,
+      ctx,
+      {
+        lineId: added.data.items[0]!.id,
+      },
+    );
+    expect(saved).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "wishlist_1",
+        items: [{ sellableId: sellable.id, priceId: "price_1" }],
+      },
+    });
+    await expect(
+      api.cart.get(
+        createTestRequestContext({
+          sessionId: "session_action_backend",
+          customerId: false,
+          userId: false,
+        }),
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: { id: "cart_1", items: [], total: { amount: 0 } },
+    });
+    expect(mikaActionDefinitions.cartAdd.name).toBe("cart.add");
+    expect(mikaActionDefinitions.wishlistSaveForLater.name).toBe("wishlist.saveForLater");
+  });
+
+  it("runs trusted cart and wishlist JSON routes against the request-bound backend API", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition({ maxPerOrder: 5 });
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const routes = createMikaPluginRoutes(api);
+    const sessionId = "session_route_backend";
+
+    const added = await routes[mikaPluginRoutes.cartItems].handler({
+      input: { sellableId: sellable.id, priceId: "price_1", quantity: 2 },
+      request: new Request("https://shop.example.test/_emdash/api/plugins/mika/cart/items", {
+        method: "POST",
+      }),
+      sessionId,
+    });
+    expect(added).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "cart_1",
+        items: [{ sellableId: sellable.id, priceId: "price_1", quantity: 2 }],
+      },
+    });
+    if (!isCartRouteResult(added)) {
+      throw new Error("Expected cart route to return a cart DTO.");
+    }
+
+    await expect(
+      routes[mikaPluginRoutes.wishlistSaveForLater].handler({
+        input: { lineId: added.data.items[0]!.id },
+        request: new Request(
+          "https://shop.example.test/_emdash/api/plugins/mika/wishlist/save-for-later",
+          { method: "POST" },
+        ),
+        sessionId,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "wishlist_1",
+        items: [{ sellableId: sellable.id, priceId: "price_1" }],
+      },
+    });
+    await expect(
+      api.cart.get(createTestRequestContext({ sessionId, customerId: false, userId: false })),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: { id: "cart_1", items: [], total: { amount: 0 } },
     });
   });
 
@@ -1579,6 +1705,18 @@ function createStorageCollection<TName extends keyof MikaStorageDocuments>(
 
 function createUnusedDbExecutor(): MikaDbExecutor {
   return {} as MikaDbExecutor;
+}
+
+function isCartRouteResult(
+  result: unknown,
+): result is { readonly ok: true; readonly data: CartDTO } {
+  return (
+    typeof result === "object" &&
+    result !== null &&
+    "ok" in result &&
+    result.ok === true &&
+    "data" in result
+  );
 }
 
 function createCatalogItemDocument(input: {
