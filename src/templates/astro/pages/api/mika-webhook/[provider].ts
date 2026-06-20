@@ -1,20 +1,17 @@
+import { createMika } from "@bnomei/emdash-mika/astro";
+import { createProviderName } from "@bnomei/emdash-mika/types";
 import type { APIRoute } from "astro";
 
 export const prerender = false;
 
-export const POST: APIRoute = async ({ params }) => {
+export const POST: APIRoute = async ({ params, request, url }) => {
   const provider = params["provider"];
   if (!provider) return new Response("Missing provider.", { status: 400 });
 
-  return Response.json(
-    {
-      ok: false,
-      status: 501,
-      error: {
-        code: "NOT_IMPLEMENTED",
-        message: `Wire ${provider} webhook verification to a server-side Mika provider adapter.`,
-      },
-    },
-    { status: 501 },
-  );
+  const Mika = createMika({ request, url }, { includeWebhook: true });
+  const result = await Mika.webhook.receive({
+    provider: createProviderName(provider),
+  });
+
+  return Response.json(result, { status: result.status });
 };

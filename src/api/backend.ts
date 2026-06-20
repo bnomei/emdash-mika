@@ -1,5 +1,6 @@
 import type {
   MikaProviderAdapter,
+  MikaProviderInvoiceInput,
   MikaProviderLineItem,
   MikaProviderPaymentEvent,
   MikaProviderOrderCancelInput,
@@ -130,6 +131,8 @@ import type {
   EmailResendInput,
   LicenseRevokeInput,
   OrderCancelInput,
+  OrderInvoiceDTO,
+  OrderInvoiceInput,
   OrderRefundInput,
   OrderSummaryDTO,
   ProviderHealthDTO,
@@ -741,6 +744,10 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
     download: {
       resolve: async (downloadInput) => resolveDownload(input, downloadInput),
       ...input.overrides?.download,
+    },
+    order: {
+      invoice: async (invoiceInput) => getOrderInvoice(input, invoiceInput),
+      ...input.overrides?.order,
     },
     webhook: {
       receive: async (ctx, webhookInput) => receiveWebhook(input, ctx, webhookInput),
@@ -1736,6 +1743,55 @@ async function cancelOrder(
     },
     "Provider order cancellation failed.",
   );
+}
+
+async function getOrderInvoice(
+  input: CreateMikaBackendApiInput,
+  invoiceInput: OrderInvoiceInput,
+): Promise<MikaApiResult<OrderInvoiceDTO>> {
+  const order = await input.repositories.ledger.findOrderById(invoiceInput.orderId);
+  if (!order) return orderNotFound(invoiceInput.orderId);
+
+  if (order.aggregate.invoiceUrl) {
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        orderId: order.id,
+        href: order.aggregate.invoiceUrl,
+      },
+    };
+  }
+
+  const providerFeature = await requireProviderFeature(input, {
+    providerName: order.provider,
+    method: "getInvoiceUrl",
+    capability: "invoice_url",
+    unsupportedMessage: (providerName) =>
+      `Provider '${providerName}' does not support invoice URLs.`,
+  });
+  if (!providerFeature.ok) return providerFeature;
+
+  const providerInput: MikaProviderInvoiceInput = {
+    orderId: order.id,
+    ...(order.providerPaymentId ? { providerPaymentId: order.providerPaymentId } : {}),
+    ...(order.providerOrderId ? { providerOrderId: order.providerOrderId } : {}),
+  };
+
+  try {
+    const invoice = await providerFeature.method.call(providerFeature.provider, providerInput);
+
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        ...invoice,
+        orderId: order.id,
+      },
+    };
+  } catch {
+    return providerFailed("Provider invoice lookup failed.");
+  }
 }
 
 async function grantEntitlement(

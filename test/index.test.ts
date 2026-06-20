@@ -524,14 +524,15 @@ describe("Mika Astro helpers", () => {
       },
       {
         api,
-        operationPolicy: () => ({
-          ok: false,
-          status: 403,
-          error: {
-            code: "FORBIDDEN",
-            message: "Direct helper rejected.",
-          },
-        }),
+        operationPolicy: () =>
+          ({
+            ok: false,
+            status: 403,
+            error: {
+              code: "FORBIDDEN",
+              message: "Direct helper rejected.",
+            },
+          }) as const,
       },
     );
 
@@ -3493,7 +3494,7 @@ describe("Mika Astro template contracts", () => {
     expect(source).toContain("`ProductPurchase`, `AddToCartForm`, `BuyNowForm`, `WishlistForm`");
     expect(source).toContain("Contract examples stay in place");
     expect(source).toContain("`CouponForm`, `CheckoutForm`, account export/delete pages");
-    expect(source).toContain("the webhook endpoint stub");
+    expect(source).toContain("the provider webhook endpoint");
     expect(source).toContain("owns cross-form grouped variant synchronization");
     expect(source).toContain("`VariantOptionGroups` is render-focused");
     expect(source).toContain("Agent-readable examples are optional copyable references");
@@ -3502,12 +3503,12 @@ describe("Mika Astro template contracts", () => {
     expect(source).toContain('createMikaAgentManifest({ include: ["public"] })');
     expect(source).toContain("manifest schema, version, and EmDash Mika plugin route base path");
     expect(source).toContain("not an auth, payment, or tool contract");
-    expect(source).toContain("OAuth, policy, confirmation, replay storage, and provider");
+    expect(source).toContain("OAuth, policy, confirmation, and replay");
     expect(source).toContain("It emits `Product` for simple products and `ProductGroup`");
     expect(source).toContain("Product groups include `productGroupID`");
     expect(source).toContain("schema.org variant properties");
     expect(source).toContain("seller, shipping details, return policy, and");
-    expect(source).toContain("non-verifying");
+    expect(source).toContain("Mika.webhook.receive");
   });
 
   it("ships copyable agent-readable storefront examples", () => {

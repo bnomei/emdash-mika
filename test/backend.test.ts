@@ -2200,7 +2200,7 @@ describe("backend API composition", () => {
     expect(dependencies.hash("checkout:1")).toBe(createTestHash("checkout:1"));
   });
 
-  it("creates a complete Mika API with focused overrides and stub defaults", async () => {
+  it("creates a complete Mika API with focused overrides and override-shell defaults", async () => {
     const contentRef = createTestContentRef();
     const sellable = createTestSellableDTO({ contentRef });
     const dependencies = createTestBackendDependencies({
@@ -2229,6 +2229,7 @@ describe("backend API composition", () => {
           "account",
           "subscription",
           "download",
+          "order",
           "webhook",
           "admin",
         ],
@@ -3898,9 +3899,119 @@ describe("backend API composition", () => {
     });
   });
 
+  it("resolves order invoices from stored ledger URLs without provider calls", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      capabilities: ["hosted_checkout", "invoice_url"],
+      optionalMethods: ["getInvoiceUrl"],
+    });
+    const order = createOrderDocument();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.ledger.put(order);
+
+    await expect(api.order.invoice({ orderId: order.id })).resolves.toEqual({
+      ok: true,
+      status: 200,
+      data: {
+        orderId: order.id,
+        href: "https://invoice.example.test/order_1",
+      },
+    });
+
+    expect(fake.getCalls().getInvoiceUrl).toEqual([]);
+  });
+
+  it("resolves order invoices through provider adapters when no ledger URL exists", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      capabilities: ["hosted_checkout", "invoice_url"],
+      optionalMethods: ["getInvoiceUrl"],
+    });
+    const { invoiceUrl: _invoiceUrl, ...aggregateWithoutInvoiceUrl } =
+      createOrderDocument().aggregate;
+    const order = createOrderDocument({ aggregate: aggregateWithoutInvoiceUrl });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.ledger.put(order);
+
+    await expect(
+      api.order.invoice({ orderId: order.id, returnTo: "/account/orders" }),
+    ).resolves.toEqual({
+      ok: true,
+      status: 200,
+      data: {
+        orderId: order.id,
+        href: "https://invoice.example.test/order/invoice_fake",
+        expiresAt: createISODateTime("2026-01-01T01:00:00.000Z"),
+      },
+    });
+
+    expect(fake.getCalls().getInvoiceUrl).toEqual([
+      {
+        orderId: order.id,
+        providerPaymentId: "payment_1",
+        providerOrderId: "provider_order_1",
+      },
+    ]);
+  });
+
+  it("normalizes order invoice provider failures", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      capabilities: ["hosted_checkout", "invoice_url"],
+      optionalMethods: ["getInvoiceUrl"],
+      overrides: {
+        getInvoiceUrl: async () => {
+          throw new Error("Provider invoice failed.");
+        },
+      },
+    });
+    const { invoiceUrl: _invoiceUrl, ...aggregateWithoutInvoiceUrl } =
+      createOrderDocument().aggregate;
+    const order = createOrderDocument({ aggregate: aggregateWithoutInvoiceUrl });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.ledger.put(order);
+
+    await expect(api.order.invoice({ orderId: order.id })).resolves.toMatchObject({
+      ok: false,
+      status: 502,
+      error: {
+        code: "PROVIDER_FAILED",
+        message: "Provider invoice lookup failed.",
+      },
+    });
+
+    expect(fake.getCalls().getInvoiceUrl).toEqual([
+      {
+        orderId: order.id,
+        providerPaymentId: "payment_1",
+        providerOrderId: "provider_order_1",
+      },
+    ]);
+  });
+
   it("returns stable errors for missing orders without provider calls", async () => {
     const repositories = createTestBackendRepositories();
-    const fake = createFakeMikaProvider({ optionalMethods: ["refundPayment", "cancelOrder"] });
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["getInvoiceUrl", "refundPayment", "cancelOrder"],
+    });
     const api = createMikaBackendApi(
       createIncrementingBackendDependencies({
         repositories,
@@ -3928,7 +4039,18 @@ describe("backend API composition", () => {
         fieldErrors: { orderId: "Order was not found." },
       },
     });
+    await expect(
+      api.order.invoice({ orderId: createTestMikaId("order", 404) }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 404,
+      error: {
+        code: "VALIDATION_FAILED",
+        fieldErrors: { orderId: "Order was not found." },
+      },
+    });
 
+    expect(fake.getCalls().getInvoiceUrl).toEqual([]);
     expect(fake.getCalls().refundPayment).toEqual([]);
     expect(fake.getCalls().cancelOrder).toEqual([]);
     await expect(

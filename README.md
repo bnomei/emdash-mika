@@ -97,10 +97,12 @@ The actions are regular Astro Actions. Browser forms submit to
 `actions.mika.wishlist.add`, and related action names. Host projects can pass a
 `guard` option to apply rate limits, auth checks, bot checks, or feature locks
 before a Mika action reaches the request-bound Mika API.
-When real services are wired through `mikaPlugin({ api })` or
+When the backend API is wired through `mikaPlugin({ api })` or
 `createPlugin({ api })`, `createMikaActions()` and `createMika(Astro)` use that
 same API by default. Pass `{ api }` directly only when a page or action module
-needs different wiring.
+needs different wiring. `createMikaApi()` remains available as a partial
+override shell for tests and host-owned composition; use `assertMikaApiWired()`
+when a deployment must reject unwired methods.
 
 ## Product Page
 
@@ -212,11 +214,12 @@ the backend service layer is stable enough to support as public API.
 
 ## Status
 
-Mika currently ships the typed shell and consumer-facing surfaces: plugin
+Mika currently ships the typed shell, backend API composer, plugin
 registration, route contracts, client methods, Astro Actions, copyable
 templates, provider interfaces, stock tables, document shapes, admin action
-descriptors, and email renderers. The actual commerce services behind those
-contracts still need to be wired for a production storefront.
+descriptors, and email renderers. Production storefronts still need host
+provider adapters, auth/session policy, rate limits, and deployment-specific
+guards.
 
 ## License
 

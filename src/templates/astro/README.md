@@ -44,8 +44,8 @@ sync and emits selection events for the product-level owner.
 Contract examples stay in place as copyable references for fuller projects:
 `CouponForm`, `CheckoutForm`, account export/delete pages, wishlist move and
 save-for-later forms, grouped variant selection, checkout customer fields, and
-the webhook endpoint stub. Keep or delete them based on the services wired in
-the host project.
+the provider webhook endpoint. Keep or delete them based on the storefront and
+provider adapters wired in the host project.
 
 Agent-readable examples are optional copyable references: `ProductStructuredData`
 for JSON-LD `Product`/`Offer` metadata, `llms.txt.ts` for a root `llms.txt`, and
@@ -56,8 +56,8 @@ with the manifest schema, version, and EmDash Mika plugin route base path. The
 `llms.txt` example is only a concise discovery index for agents and LLMs; it is
 not an auth, payment, or tool contract. Mika also exposes trusted quote and
 checkout preview contracts for host-owned agent projections, but protected
-cart, checkout, account, subscription, payment, and agent-tool flows still need
-host OAuth, policy, confirmation, replay storage, and provider wiring.
+agent-tool flows still need host OAuth, policy, confirmation, and replay
+storage.
 
 `ProductStructuredData` accepts either small legacy props (`name`, `brand`,
 `images`) or a `product` object with identifiers, brand, category, item
@@ -145,8 +145,9 @@ The storefront path is intentionally Astro-native:
 - Form primitives are named as forms (`BuyNowForm`, `WishlistForm`).
 - `CouponForm`, the copied wishlist page, wishlist move/save-for-later forms,
   checkout customer fields, grouped variant selection, account export/delete
-  forms, and the webhook endpoint stub are contract examples. They still need
-  real backend services and provider adapters behind them.
+  forms, and the provider webhook endpoint are contract examples. They depend
+  on the same request-bound Mika API and provider adapters as the rest of the
+  copied kit.
 - Common form labels and empty states are props or named slots, so copied
   components can be localized or restyled without editing Mika logic first.
   Full status-label localization is intentionally left to copied project code.
@@ -160,7 +161,7 @@ agent endpoints. It does not publish protected mutation routes, validate OAuth
 tokens, verify AP2 mandates, run MCP servers, store idempotency records, or
 process MPP/x402 payments.
 
-When real services are wired through `mikaPlugin({ api })`, copied pages that
+When a backend API is wired through `mikaPlugin({ api })`, copied pages that
 call `createMika(Astro)` and action modules that call `createMikaActions()` use
 that same API by default. Pass `{ api }` directly only when a page or action
 module needs different wiring. Actions call the request-bound Mika API directly;
@@ -227,8 +228,9 @@ browser-safe JSON client.
 
 Provider webhooks and raw-body signature verification should be host Astro
 endpoints or explicitly supported EmDash raw-body public routes, not generic
-plugin JSON routes by default. The copied webhook endpoint is a non-verifying
-501 contract stub until the host project wires a real provider adapter.
+plugin JSON routes by default. The copied webhook endpoint is a host Astro
+endpoint that forwards the raw request to `Mika.webhook.receive`; it requires a
+provider adapter with `verifyWebhook()` and `parseWebhookEvent()`.
 
 ## Security Boundary
 

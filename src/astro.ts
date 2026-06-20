@@ -5,7 +5,11 @@ import { type MikaClientRoute } from "./api/client";
 import { resolveMikaApiOverrides, resolveMikaOperationPolicy } from "./api/runtime-api";
 import { runMikaOperation } from "./api/operation-runner";
 import { mikaOperationDefinitions, type MikaApiOperationData } from "./api/operations";
-import { createMikaOperationFacade, type MikaOperationFacade } from "./api/operation-facade";
+import {
+  createMikaOperationFacade,
+  type MikaOperationFacade,
+  type MikaOperationWebhookFacade,
+} from "./api/operation-facade";
 import { serializeMikaPurchaseField } from "./api/form-contracts";
 import type { MikaOperationPolicy } from "./api/operation-policy";
 import { createMikaPluginRouteBuilder } from "./api/routes";
@@ -26,11 +30,14 @@ export type MikaAstroContext = Pick<APIContext, "request" | "url"> &
 export interface MikaAstroClientOptions {
   readonly api?: MikaApiOverrides;
   readonly operationPolicy?: MikaOperationPolicy;
+  readonly includeWebhook?: boolean;
 }
 
-export interface MikaAstroClient extends MikaOperationFacade {
-  readonly routes: MikaClientRoute;
-}
+export type MikaAstroClient<TOptions extends MikaAstroClientOptions | undefined = undefined> =
+  MikaOperationFacade &
+    (TOptions extends { readonly includeWebhook: true } ? MikaOperationWebhookFacade : {}) & {
+      readonly routes: MikaClientRoute;
+    };
 
 export interface MikaFormatOptions {
   readonly locales?: Intl.LocalesArgument;
@@ -79,11 +86,11 @@ export interface MikaPurchaseModel {
   readonly variantOptionMap: readonly MikaPurchaseVariantMapItem[];
 }
 
-export function createMikaAstroClient(
-  ctx: MikaAstroContext,
-  options: MikaAstroClientOptions = {},
-): MikaAstroClient {
-  const api = createMikaApi(resolveMikaApiOverrides(options.api));
+export function createMikaAstroClient<
+  const TOptions extends MikaAstroClientOptions | undefined = undefined,
+>(ctx: MikaAstroContext, options?: TOptions): MikaAstroClient<TOptions> {
+  const resolvedOptions: MikaAstroClientOptions = options ?? {};
+  const api = createMikaApi(resolveMikaApiOverrides(resolvedOptions.api));
   const requestContext = createMikaRequestContext({
     request: ctx.request,
     url: ctx.url,
@@ -102,11 +109,12 @@ export function createMikaAstroClient(
       api,
       ctx: requestContext,
       input,
-      operationPolicy: resolveMikaOperationPolicy(options.operationPolicy),
+      operationPolicy: resolveMikaOperationPolicy(resolvedOptions.operationPolicy),
     });
   };
   const facade = createMikaOperationFacade(requestOperation, {
     locale: requestContext.locale,
+    includeWebhook: resolvedOptions.includeWebhook,
   });
 
   return {
@@ -114,7 +122,7 @@ export function createMikaAstroClient(
       origin: ctx.url,
     }),
     ...facade,
-  };
+  } as unknown as MikaAstroClient<TOptions>;
 }
 
 export const createMika = createMikaAstroClient;
