@@ -1,4 +1,4 @@
-import { mikaPluginRoutes, MIKA_PLUGIN_ID } from "./api/routes";
+import { MIKA_PLUGIN_ID } from "./api/routes";
 
 export const MIKA_ACTIONS_MANIFEST_ROUTE = ".well-known/actions";
 export const MIKA_ACTIONS_RUNNER_ROUTE = ".well-known/actions/run";
@@ -12,8 +12,6 @@ export interface MikaAdminActionTargetMetadata {
   readonly surfaces?: readonly MikaAdminActionTarget[];
   readonly kind?: string;
   readonly required?: boolean;
-  readonly idKeys?: readonly string[];
-  readonly idFrom?: string;
 }
 export type MikaAdminActionTargetRequirement =
   | MikaAdminActionTarget
@@ -63,11 +61,6 @@ export interface MikaAdminActionDefinition {
   readonly id: string;
   readonly label: string;
   readonly mode?: MikaAdminActionMode;
-  /** Backing Mika route used by direct manifests and internal runner dispatch. */
-  readonly route: string;
-  readonly method?: MikaAdminActionMethod;
-  readonly runner?: MikaAdminActionRunnerMetadata;
-  readonly pluginId?: string;
   readonly description?: string;
   readonly icon?: string;
   readonly tone?: MikaAdminActionTone;
@@ -87,26 +80,16 @@ export interface MikaAdminActionDefinition {
   readonly pollTimeoutMs?: number;
 }
 
-type MikaAdminActionDescriptorBase = Omit<
-  MikaAdminActionDefinition,
-  "id" | "input" | "method" | "pluginId" | "route" | "runner" | "target"
-> & {
+type MikaAdminActionDescriptorBase = Omit<MikaAdminActionDefinition, "id" | "input" | "target"> & {
   readonly id: MikaAdminActionId | (string & {});
   readonly target?: MikaAdminActionTargetMetadata;
   readonly form?: MikaAdminActionFormMetadata;
 };
 
-export type MikaAdminActionDescriptor =
-  | (MikaAdminActionDescriptorBase & {
-      readonly mode?: "direct";
-      readonly route: string;
-      readonly method?: MikaAdminActionMethod;
-      readonly pluginId?: string;
-    })
-  | (MikaAdminActionDescriptorBase & {
-      readonly mode: "runner";
-      readonly runner: MikaAdminActionRunnerMetadata;
-    });
+export type MikaAdminActionDescriptor = MikaAdminActionDescriptorBase & {
+  readonly mode: "runner";
+  readonly runner: MikaAdminActionRunnerMetadata;
+};
 
 export interface MikaAdminActionsManifest {
   readonly actions: readonly MikaAdminActionDescriptor[];
@@ -167,7 +150,6 @@ const MIKA_DASHBOARD_ACTION_TARGET = {
 const MIKA_ENTRY_FIELD_ACTION_TARGET = {
   surfaces: ["entry", "field"],
   required: true,
-  idFrom: "entryId",
 } as const satisfies MikaAdminActionTargetMetadata;
 
 const MIKA_FIELD_ROW_ACTION_TARGET = {
@@ -208,8 +190,6 @@ export const mikaAdminActionDefinitions = defineMikaAdminActionDefinitions({
     id: "mika.provider.health",
     label: "Check provider",
     mode: "runner",
-    route: mikaPluginRoutes.adminProviderHealth,
-    method: "POST",
     placement: "dashboard",
     target: MIKA_DASHBOARD_ACTION_TARGET,
     description: "Checks Mika provider configuration and capabilities.",
@@ -225,8 +205,6 @@ export const mikaAdminActionDefinitions = defineMikaAdminActionDefinitions({
     id: "mika.provider.sync",
     label: "Sync provider",
     mode: "runner",
-    route: mikaPluginRoutes.adminProviderSync,
-    method: "POST",
     placement: "dashboard",
     target: MIKA_DASHBOARD_ACTION_TARGET,
     description: "Runs a provider product/customer/subscription sync.",
@@ -246,8 +224,6 @@ export const mikaAdminActionDefinitions = defineMikaAdminActionDefinitions({
     id: "mika.stock.releaseExpiredReservations",
     label: "Release expired stock",
     mode: "runner",
-    route: mikaPluginRoutes.adminStockReleaseExpiredReservations,
-    method: "POST",
     placement: "dashboard",
     target: MIKA_DASHBOARD_ACTION_TARGET,
     description: "Releases expired checkout stock reservations.",
@@ -264,8 +240,6 @@ export const mikaAdminActionDefinitions = defineMikaAdminActionDefinitions({
     id: "mika.catalog.syncEntry",
     label: "Sync commerce",
     mode: "runner",
-    route: mikaPluginRoutes.adminProviderSync,
-    method: "POST",
     placement: "field",
     target: MIKA_ENTRY_FIELD_ACTION_TARGET,
     description: "Syncs Mika sellables, prices, variants, and stock for this entry.",
@@ -283,8 +257,6 @@ export const mikaAdminActionDefinitions = defineMikaAdminActionDefinitions({
     id: "mika.stock.adjust",
     label: "Adjust stock",
     mode: "runner",
-    route: mikaPluginRoutes.adminStockAdjust,
-    method: "POST",
     placement: "field",
     target: MIKA_STOCK_ITEM_ACTION_TARGET,
     form: {
@@ -309,8 +281,6 @@ export const mikaAdminActionDefinitions = defineMikaAdminActionDefinitions({
     id: "mika.webhook.replay",
     label: "Replay webhook",
     mode: "runner",
-    route: mikaPluginRoutes.adminWebhookReplay,
-    method: "POST",
     placement: "field",
     target: MIKA_WEBHOOK_ACTION_TARGET,
     description: "Replays a failed webhook event.",
@@ -328,8 +298,6 @@ export const mikaAdminActionDefinitions = defineMikaAdminActionDefinitions({
     id: "mika.order.refund",
     label: "Refund order",
     mode: "runner",
-    route: mikaPluginRoutes.adminOrderRefund,
-    method: "POST",
     placement: "field",
     target: MIKA_ORDER_ACTION_TARGET,
     form: {
@@ -354,8 +322,6 @@ export const mikaAdminActionDefinitions = defineMikaAdminActionDefinitions({
     id: "mika.order.cancel",
     label: "Cancel order",
     mode: "runner",
-    route: mikaPluginRoutes.adminOrderCancel,
-    method: "POST",
     placement: "field",
     target: MIKA_ORDER_ACTION_TARGET,
     form: {
@@ -377,8 +343,6 @@ export const mikaAdminActionDefinitions = defineMikaAdminActionDefinitions({
     id: "mika.entitlement.grant",
     label: "Grant entitlement",
     mode: "runner",
-    route: mikaPluginRoutes.adminEntitlementGrant,
-    method: "POST",
     placement: "field",
     target: MIKA_FIELD_ROW_ACTION_TARGET,
     form: {
@@ -406,8 +370,6 @@ export const mikaAdminActionDefinitions = defineMikaAdminActionDefinitions({
     id: "mika.entitlement.revoke",
     label: "Revoke entitlement",
     mode: "runner",
-    route: mikaPluginRoutes.adminEntitlementRevoke,
-    method: "POST",
     placement: "field",
     target: MIKA_ENTITLEMENT_ACTION_TARGET,
     form: {
@@ -429,8 +391,6 @@ export const mikaAdminActionDefinitions = defineMikaAdminActionDefinitions({
     id: "mika.email.resend",
     label: "Resend email",
     mode: "runner",
-    route: mikaPluginRoutes.adminEmailResend,
-    method: "POST",
     placement: "field",
     target: MIKA_EMAIL_ACTION_TARGET,
     description: "Queues an email for resend.",
@@ -448,8 +408,6 @@ export const mikaAdminActionDefinitions = defineMikaAdminActionDefinitions({
     id: "mika.license.revoke",
     label: "Revoke license",
     mode: "runner",
-    route: mikaPluginRoutes.adminLicenseRevoke,
-    method: "POST",
     placement: "field",
     target: MIKA_LICENSE_ACTION_TARGET,
     form: {
@@ -471,8 +429,6 @@ export const mikaAdminActionDefinitions = defineMikaAdminActionDefinitions({
     id: "mika.download.issue",
     label: "Issue download",
     mode: "runner",
-    route: mikaPluginRoutes.adminDownloadIssue,
-    method: "POST",
     placement: "field",
     target: MIKA_DOWNLOAD_ACTION_TARGET,
     form: {
@@ -562,8 +518,8 @@ export function createMikaActionButtonOptions(
     actionPluginLabel: options.actionPluginLabel ?? providerLabel,
     manifestRoute: options.manifestRoute ?? MIKA_ACTIONS_MANIFEST_ROUTE,
     action: options.action ?? actionId,
-    route: options.route ?? (action.mode === "runner" ? undefined : action.route),
-    method: options.method ?? (action.mode === "runner" ? undefined : action.method),
+    route: options.route,
+    method: options.method,
     label: options.label ?? action.label,
     description: options.description ?? action.description,
     icon: options.icon ?? action.icon,
@@ -601,35 +557,18 @@ function adminActionDescriptor(
   const action = mikaAdminActionDefinitions[actionId];
   const base = disabled ? { ...action, disabled: true } : action;
   const descriptorBase = adminActionDescriptorBase(base);
-  if (base.mode !== "runner") {
-    return {
-      ...descriptorBase,
-      route: base.route,
-      method: base.method,
-      pluginId: base.pluginId,
-      mode: base.mode === "direct" ? "direct" : undefined,
-    };
-  }
 
   return {
     ...descriptorBase,
     mode: "runner",
-    runner: base.runner ?? true,
+    runner: true,
   };
 }
 
 function adminActionDescriptorBase(
   action: MikaAdminActionDefinition,
 ): MikaAdminActionDescriptorBase {
-  const {
-    input: deprecatedInput,
-    method: _method,
-    pluginId: _pluginId,
-    route: _route,
-    runner: _runner,
-    target,
-    ...descriptor
-  } = action;
+  const { input: deprecatedInput, target, ...descriptor } = action;
   const form = descriptor.form ?? deprecatedInput;
   return {
     ...descriptor,
@@ -648,7 +587,12 @@ function normalizeMikaAdminActionTarget(
     return { surfaces: [...new Set(target)] };
   }
 
-  return target;
+  const { surfaces, kind, required } = target;
+  return {
+    ...(surfaces ? { surfaces } : {}),
+    ...(kind ? { kind } : {}),
+    ...(required !== undefined ? { required } : {}),
+  };
 }
 
 function isMikaAdminActionTargetList(

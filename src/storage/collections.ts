@@ -60,7 +60,11 @@ export const mikaStorageConfig = {
       ["type", "orderId"],
       ["status", "expiresAt"],
     ],
-    uniqueIndexes: [["provider", "providerCheckoutId"]],
+    uniqueIndexes: [
+      ["provider", "providerCheckoutId"],
+      ["type", "provider", "providerCheckoutId"],
+      ["type", "checkoutIdempotencyKey"],
+    ],
   },
   account: {
     indexes: [
@@ -76,14 +80,18 @@ export const mikaStorageConfig = {
       "currentPeriodEnd",
       ["type", "customerId"],
       ["type", "userId"],
-      ["provider", "providerCustomerId"],
-      ["provider", "providerSubscriptionId"],
+      ["type", "customerId", "updatedAt"],
+      ["type", "userId", "updatedAt"],
+      ["type", "emailHash", "updatedAt"],
+      ["type", "customerId", "currentPeriodEnd"],
+      ["type", "provider", "providerCustomerId"],
+      ["type", "provider", "providerSubscriptionId"],
       ["emailHash", "entitlementKey", "status"],
       ["customerId", "entitlementKey", "status"],
     ],
     uniqueIndexes: [
-      ["provider", "providerCustomerId"],
-      ["provider", "providerSubscriptionId"],
+      ["type", "provider", "providerCustomerId"],
+      ["type", "provider", "providerSubscriptionId"],
     ],
   },
   ledger: {
@@ -104,6 +112,7 @@ export const mikaStorageConfig = {
       "createdAt",
       ["customerId", "createdAt"],
       ["status", "createdAt"],
+      ["type", "customerId", "createdAt"],
       ["provider", "providerPaymentId"],
       ["provider", "providerOrderId"],
     ],
@@ -121,6 +130,7 @@ export const mikaStorageConfig = {
       "provider",
       "providerEventId",
       "eventType",
+      "kind",
       "payloadHash",
       "nextAttemptAt",
       "receivedAt",
@@ -130,8 +140,17 @@ export const mikaStorageConfig = {
       "actorId",
       "targetType",
       "targetId",
+      "subjectType",
+      "subjectId",
+      "idempotencyKey",
+      "leaseExpiresAt",
       "createdAt",
       ["type", "status"],
+      ["kind", "status"],
+      ["type", "kind", "status", "nextAttemptAt"],
+      ["type", "kind", "subjectType", "subjectId"],
+      ["type", "kind", "idempotencyKey"],
+      ["status", "leaseExpiresAt"],
       ["type", "customerId"],
       ["type", "userId"],
       ["type", "expiresAt"],
@@ -139,10 +158,13 @@ export const mikaStorageConfig = {
       ["provider", "providerEventId"],
       ["provider", "payloadHash"],
       ["targetType", "targetId"],
+      ["subjectType", "subjectId"],
     ],
     uniqueIndexes: [
       ["provider", "providerEventId"],
       ["provider", "payloadHash"],
+      ["type", "kind", "idempotencyKey"],
+      ["type", "kind", "subjectType", "subjectId"],
     ],
   },
 } satisfies MikaStorageConfig;
@@ -158,6 +180,10 @@ export type MikaStorageCollections = {
 export interface StorageCollection<TDocument> {
   get(id: string): Promise<TDocument | null>;
   put(id: string, data: TDocument): Promise<void>;
+  update(
+    id: string,
+    updater: (current: TDocument | null) => TDocument | null,
+  ): Promise<TDocument | null>;
   delete(id: string): Promise<boolean>;
   exists(id: string): Promise<boolean>;
   getMany(ids: string[]): Promise<Map<string, TDocument>>;

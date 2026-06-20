@@ -71,6 +71,7 @@ export interface MikaResolvedAdminActionInvocation {
   readonly operation: MikaApiOperation;
   readonly input: unknown;
   readonly target?: MikaActionTarget;
+  readonly resultAdapter: MikaAdminActionResultAdapter;
 }
 
 export type MikaAdminActionRunResult = {
@@ -90,61 +91,194 @@ export type MikaAdminActionRunResult = {
 
 type MikaApiFailure = Extract<MikaApiResult<unknown>, { readonly ok: false }>;
 
+type MikaAdminActionResultAdapter = (result: MikaApiResult<unknown>) => MikaAdminActionRunResult;
+
+interface MikaAdminActionTargetIdentityRequirement {
+  readonly idKeys: readonly string[];
+  readonly idFrom?: "value";
+}
+
+interface MikaAdminActionRuntimeDefinition {
+  readonly operationKey: keyof typeof mikaOperationDefinitions;
+  readonly inputResolver: (invocation: MikaActionInvocation) => Record<string, unknown>;
+  readonly targetIdentity?: MikaAdminActionTargetIdentityRequirement;
+  readonly resultAdapter: MikaAdminActionResultAdapter;
+}
+
 type MutableActionResultEffects = {
   reload?: boolean | { readonly delayMs?: number };
   open?: string | { readonly url: string; readonly target?: "self" | "blank" };
 };
 
-type MikaAdminActionOperationKey =
-  | "adminProviderHealth"
-  | "adminProviderSync"
-  | "adminStockAdjust"
-  | "adminStockReleaseExpiredReservations"
-  | "adminWebhookReplay"
-  | "adminOrderRefund"
-  | "adminOrderCancel"
-  | "adminEntitlementGrant"
-  | "adminEntitlementRevoke"
-  | "adminEmailResend"
-  | "adminLicenseRevoke"
-  | "adminDownloadIssue";
-
-const adminActionOperationKeys = {
-  "mika.provider.health": "adminProviderHealth",
-  "mika.provider.sync": "adminProviderSync",
-  "mika.stock.releaseExpiredReservations": "adminStockReleaseExpiredReservations",
-  "mika.catalog.syncEntry": "adminProviderSync",
-  "mika.stock.adjust": "adminStockAdjust",
-  "mika.webhook.replay": "adminWebhookReplay",
-  "mika.order.refund": "adminOrderRefund",
-  "mika.order.cancel": "adminOrderCancel",
-  "mika.entitlement.grant": "adminEntitlementGrant",
-  "mika.entitlement.revoke": "adminEntitlementRevoke",
-  "mika.email.resend": "adminEmailResend",
-  "mika.license.revoke": "adminLicenseRevoke",
-  "mika.download.issue": "adminDownloadIssue",
-} as const satisfies Record<MikaAdminActionId, MikaAdminActionOperationKey>;
-
-const adminActionIdentityKeys: Partial<Record<MikaAdminActionId, readonly string[]>> = {
-  "mika.stock.adjust": ["stockItemId"],
-  "mika.webhook.replay": ["webhookId"],
-  "mika.order.refund": ["orderId"],
-  "mika.order.cancel": ["orderId"],
-  "mika.entitlement.revoke": ["entitlementId", "entitlementKey"],
-  "mika.email.resend": ["emailId"],
-  "mika.license.revoke": ["licenseId"],
-  "mika.download.issue": ["orderId", "entitlementId", "orderLineId"],
-} as const;
-
-const adminActionsAcceptingPrimitiveIdentity = new Set<MikaAdminActionId>([
-  "mika.stock.adjust",
-  "mika.webhook.replay",
-  "mika.order.refund",
-  "mika.order.cancel",
-  "mika.entitlement.revoke",
-  "mika.email.resend",
-  "mika.license.revoke",
-]);
+export const mikaAdminActionRuntimeDefinitions: Readonly<
+  Record<MikaAdminActionId, MikaAdminActionRuntimeDefinition>
+> = {
+  "mika.provider.health": {
+    operationKey: "adminProviderHealth",
+    inputResolver: (invocation) => {
+      const payload = actionPayload(invocation);
+      const sources = invocationInputSources(invocation);
+      return fillMissing(payload, { provider: findValue(["provider"], sources) });
+    },
+    resultAdapter: providerHealthResultAdapter,
+  },
+  "mika.provider.sync": {
+    operationKey: "adminProviderSync",
+    inputResolver: (invocation) => {
+      const payload = actionPayload(invocation);
+      const sources = invocationInputSources(invocation);
+      return fillMissing(payload, {
+        provider: findValue(["provider"], sources),
+        mode: findValue(["mode"], sources),
+      });
+    },
+    resultAdapter: adminActionDtoResultAdapter,
+  },
+  "mika.stock.releaseExpiredReservations": {
+    operationKey: "adminStockReleaseExpiredReservations",
+    inputResolver: (invocation) => {
+      const payload = actionPayload(invocation);
+      const sources = invocationInputSources(invocation);
+      return fillMissing(payload, { now: findValue(["now"], sources) });
+    },
+    resultAdapter: adminActionDtoResultAdapter,
+  },
+  "mika.catalog.syncEntry": {
+    operationKey: "adminProviderSync",
+    inputResolver: (invocation) => {
+      const payload = actionPayload(invocation);
+      const sources = invocationInputSources(invocation);
+      return fillMissing(payload, {
+        provider: findValue(["provider"], sources),
+        mode: findValue(["mode"], sources),
+        scope: findValue(["scope"], sources) ?? "entry",
+        contentRef: readTargetContentRef(invocation.context, invocation.target),
+      });
+    },
+    resultAdapter: adminActionDtoResultAdapter,
+  },
+  "mika.stock.adjust": {
+    operationKey: "adminStockAdjust",
+    inputResolver: (invocation) => {
+      const payload = actionPayload(invocation);
+      const sources = invocationInputSources(invocation);
+      return fillMissing(payload, {
+        stockItemId: findId(["stockItemId"], sources, invocation),
+        quantityDelta: findValue(["quantityDelta"], sources),
+        reason: findValue(["reason"], sources),
+      });
+    },
+    targetIdentity: { idKeys: ["stockItemId"], idFrom: "value" },
+    resultAdapter: adminActionDtoResultAdapter,
+  },
+  "mika.webhook.replay": {
+    operationKey: "adminWebhookReplay",
+    inputResolver: (invocation) => {
+      const payload = actionPayload(invocation);
+      return fillMissing(payload, {
+        webhookId: findId(["webhookId"], invocationInputSources(invocation), invocation),
+      });
+    },
+    targetIdentity: { idKeys: ["webhookId"], idFrom: "value" },
+    resultAdapter: adminActionDtoResultAdapter,
+  },
+  "mika.order.refund": {
+    operationKey: "adminOrderRefund",
+    inputResolver: (invocation) => {
+      const payload = actionPayload(invocation);
+      const sources = invocationInputSources(invocation);
+      return fillMissing(payload, {
+        orderId: findId(["orderId"], sources, invocation),
+        amount: findValue(["amount"], sources),
+        reason: findValue(["reason"], sources),
+      });
+    },
+    targetIdentity: { idKeys: ["orderId"], idFrom: "value" },
+    resultAdapter: adminActionDtoResultAdapter,
+  },
+  "mika.order.cancel": {
+    operationKey: "adminOrderCancel",
+    inputResolver: (invocation) => {
+      const payload = actionPayload(invocation);
+      const sources = invocationInputSources(invocation);
+      return fillMissing(payload, {
+        orderId: findId(["orderId"], sources, invocation),
+        reason: findValue(["reason"], sources),
+      });
+    },
+    targetIdentity: { idKeys: ["orderId"], idFrom: "value" },
+    resultAdapter: adminActionDtoResultAdapter,
+  },
+  "mika.entitlement.grant": {
+    operationKey: "adminEntitlementGrant",
+    inputResolver: (invocation) => {
+      const payload = actionPayload(invocation);
+      const sources = invocationInputSources(invocation);
+      return fillMissing(payload, {
+        entitlementKey: findValue(["entitlementKey"], sources),
+        customerId: findValue(["customerId"], sources),
+        userId: findValue(["userId"], sources),
+        email: findValue(["email"], sources),
+        expiresAt: findValue(["expiresAt"], sources),
+      });
+    },
+    resultAdapter: adminActionDtoResultAdapter,
+  },
+  "mika.entitlement.revoke": {
+    operationKey: "adminEntitlementRevoke",
+    inputResolver: (invocation) => {
+      const payload = actionPayload(invocation);
+      const sources = invocationInputSources(invocation);
+      return fillMissing(payload, {
+        entitlementId: findId(["entitlementId"], sources, invocation),
+        entitlementKey: findValue(["entitlementKey"], sources),
+        customerId: findValue(["customerId"], sources),
+        reason: findValue(["reason"], sources),
+      });
+    },
+    targetIdentity: { idKeys: ["entitlementId", "entitlementKey"], idFrom: "value" },
+    resultAdapter: adminActionDtoResultAdapter,
+  },
+  "mika.email.resend": {
+    operationKey: "adminEmailResend",
+    inputResolver: (invocation) => {
+      const payload = actionPayload(invocation);
+      return fillMissing(payload, {
+        emailId: findId(["emailId"], invocationInputSources(invocation), invocation),
+      });
+    },
+    targetIdentity: { idKeys: ["emailId"], idFrom: "value" },
+    resultAdapter: adminActionDtoResultAdapter,
+  },
+  "mika.license.revoke": {
+    operationKey: "adminLicenseRevoke",
+    inputResolver: (invocation) => {
+      const payload = actionPayload(invocation);
+      const sources = invocationInputSources(invocation);
+      return fillMissing(payload, {
+        licenseId: findId(["licenseId"], sources, invocation),
+        reason: findValue(["reason"], sources),
+      });
+    },
+    targetIdentity: { idKeys: ["licenseId"], idFrom: "value" },
+    resultAdapter: adminActionDtoResultAdapter,
+  },
+  "mika.download.issue": {
+    operationKey: "adminDownloadIssue",
+    inputResolver: (invocation) => {
+      const payload = actionPayload(invocation);
+      const sources = invocationInputSources(invocation);
+      return fillMissing(payload, {
+        entitlementId: findValue(["entitlementId"], sources),
+        orderId: findValue(["orderId"], sources),
+        orderLineId: findValue(["orderLineId"], sources),
+        expiresAt: findValue(["expiresAt"], sources),
+      });
+    },
+    targetIdentity: { idKeys: ["orderId", "entitlementId", "orderLineId"] },
+    resultAdapter: adminActionDtoResultAdapter,
+  },
+};
 
 export function resolveMikaAdminActionInvocation(
   input: unknown,
@@ -153,8 +287,9 @@ export function resolveMikaAdminActionInvocation(
   if (!invocation.ok) return invocation;
 
   const actionId = invocation.data.actionId as MikaAdminActionId;
-  const operation = mikaOperationDefinitions[adminActionOperationKeys[actionId]];
-  const resolvedInput = actionInputForInvocation(invocation.data);
+  const runtime = mikaAdminActionRuntimeDefinitions[actionId];
+  const operation = adminActionOperation(actionId);
+  const resolvedInput = runtime.inputResolver(invocation.data);
   if (actionId === "mika.catalog.syncEntry" && !asRecord(resolvedInput["contentRef"])) {
     return runnerFailure(
       "VALIDATION_FAILED",
@@ -174,13 +309,23 @@ export function resolveMikaAdminActionInvocation(
       operation,
       input: parsed.data,
       ...(invocation.data.target ? { target: invocation.data.target } : {}),
+      resultAdapter: runtime.resultAdapter,
     },
   };
 }
 
+export function adminActionOperation(actionId: MikaAdminActionId): MikaApiOperation {
+  return mikaOperationDefinitions[mikaAdminActionRuntimeDefinitions[actionId].operationKey];
+}
+
 export function toMikaAdminActionRunResult(
   result: MikaApiResult<unknown>,
+  adapter: MikaAdminActionResultAdapter = adminActionDtoResultAdapter,
 ): MikaAdminActionRunResult {
+  return adapter(result);
+}
+
+function adminActionDtoResultAdapter(result: MikaApiResult<unknown>): MikaAdminActionRunResult {
   if (!result.ok) return actionFailureResult(result);
 
   const data = asRecord(result.data) ?? {};
@@ -206,6 +351,24 @@ export function toMikaAdminActionRunResult(
   }
 
   return Object.keys(effects).length > 0 ? { ...actionResult, effects } : actionResult;
+}
+
+function providerHealthResultAdapter(result: MikaApiResult<unknown>): MikaAdminActionRunResult {
+  if (!result.ok) return actionFailureResult(result);
+
+  const data = asRecord(result.data) ?? {};
+  const provider = stringValue(data["provider"]) ?? "provider";
+  const healthy = data["ok"] === true;
+
+  return {
+    ok: healthy,
+    status: 200,
+    severity: healthy ? "success" : "warning",
+    message: healthy
+      ? `Provider '${provider}' is healthy.`
+      : `Provider '${provider}' reported health warnings.`,
+    data: result.data,
+  };
 }
 
 function readAdminActionStatus(value: unknown): AdminActionResultDTO["status"] {
@@ -263,84 +426,16 @@ function parseActionInvocation(input: unknown): MikaApiResult<MikaActionInvocati
   };
 }
 
-function actionInputForInvocation(invocation: MikaActionInvocation): Record<string, unknown> {
-  const payload = asRecord(invocation.payload) ?? {};
-  const context = asContext(invocation.context);
-  const target = invocation.target;
-  const sources = actionInputSources(payload, context, target);
+function actionPayload(invocation: MikaActionInvocation): Record<string, unknown> {
+  return asRecord(invocation.payload) ?? {};
+}
 
-  switch (invocation.actionId) {
-    case "mika.provider.health":
-      return fillMissing(payload, { provider: findValue(["provider"], sources) });
-    case "mika.provider.sync":
-      return fillMissing(payload, {
-        provider: findValue(["provider"], sources),
-        mode: findValue(["mode"], sources),
-      });
-    case "mika.catalog.syncEntry":
-      return fillMissing(payload, {
-        provider: findValue(["provider"], sources),
-        mode: findValue(["mode"], sources),
-        scope: findValue(["scope"], sources) ?? "entry",
-        contentRef: readTargetContentRef(context, target),
-      });
-    case "mika.stock.releaseExpiredReservations":
-      return fillMissing(payload, { now: findValue(["now"], sources) });
-    case "mika.stock.adjust":
-      return fillMissing(payload, {
-        stockItemId: findId(["stockItemId"], sources, invocation),
-        quantityDelta: findValue(["quantityDelta"], sources),
-        reason: findValue(["reason"], sources),
-      });
-    case "mika.webhook.replay":
-      return fillMissing(payload, {
-        webhookId: findId(["webhookId"], sources, invocation),
-      });
-    case "mika.order.refund":
-      return fillMissing(payload, {
-        orderId: findId(["orderId"], sources, invocation),
-        amount: findValue(["amount"], sources),
-        reason: findValue(["reason"], sources),
-      });
-    case "mika.order.cancel":
-      return fillMissing(payload, {
-        orderId: findId(["orderId"], sources, invocation),
-        reason: findValue(["reason"], sources),
-      });
-    case "mika.entitlement.grant":
-      return fillMissing(payload, {
-        entitlementKey: findValue(["entitlementKey"], sources),
-        customerId: findValue(["customerId"], sources),
-        userId: findValue(["userId"], sources),
-        email: findValue(["email"], sources),
-        expiresAt: findValue(["expiresAt"], sources),
-      });
-    case "mika.entitlement.revoke":
-      return fillMissing(payload, {
-        entitlementId: findId(["entitlementId"], sources, invocation),
-        entitlementKey: findValue(["entitlementKey"], sources),
-        customerId: findValue(["customerId"], sources),
-        reason: findValue(["reason"], sources),
-      });
-    case "mika.email.resend":
-      return fillMissing(payload, {
-        emailId: findId(["emailId"], sources, invocation),
-      });
-    case "mika.license.revoke":
-      return fillMissing(payload, {
-        licenseId: findId(["licenseId"], sources, invocation),
-        reason: findValue(["reason"], sources),
-      });
-    case "mika.download.issue":
-      return fillMissing(payload, {
-        entitlementId: findValue(["entitlementId"], sources),
-        orderId: findValue(["orderId"], sources),
-        orderLineId: findValue(["orderLineId"], sources),
-        expiresAt: findValue(["expiresAt"], sources),
-      });
-  }
-
-  return payload;
+function invocationInputSources(invocation: MikaActionInvocation): readonly unknown[] {
+  return actionInputSources(
+    actionPayload(invocation),
+    asContext(invocation.context),
+    invocation.target,
+  );
 }
 
 function actionInputSources(
@@ -513,8 +608,9 @@ function targetMatchesRequirement(
 
 function targetIdentityMatchesRequirement(invocation: MikaActionInvocation): boolean {
   if (!isMikaAdminActionId(invocation.actionId)) return true;
-  const keys = adminActionIdentityKeys[invocation.actionId];
-  if (!keys) return true;
+  const metadata = mikaAdminActionRuntimeDefinitions[invocation.actionId].targetIdentity;
+  const keys = metadata?.idKeys;
+  if (!keys || keys.length === 0) return true;
   const sources = actionInputSources(
     asRecord(invocation.payload) ?? {},
     invocation.context,
@@ -523,7 +619,7 @@ function targetIdentityMatchesRequirement(invocation: MikaActionInvocation): boo
 
   return (
     findValue(keys, sources) !== undefined ||
-    (adminActionsAcceptingPrimitiveIdentity.has(invocation.actionId) &&
+    (metadata?.idFrom === "value" &&
       findPrimitiveId(actionIdentitySources(invocation)) !== undefined)
   );
 }

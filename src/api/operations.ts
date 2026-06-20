@@ -56,6 +56,27 @@ export type MikaOperationHttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
 export type MikaOperationTransport = "body" | "search" | "none";
 export type MikaActionAccept = "form" | "json";
 
+export interface MikaOperationDescriptor {
+  readonly name: string;
+  readonly namespace: string;
+  readonly method: string;
+  readonly public: boolean;
+  readonly requiresRequestContext: boolean;
+  readonly agent: MikaAgentOperationMetadata;
+  readonly action?: {
+    readonly key: string;
+    readonly name: string;
+    readonly accept: MikaActionAccept;
+  };
+  readonly route: {
+    readonly key: string;
+    readonly path: string;
+    readonly httpMethod: MikaOperationHttpMethod;
+    readonly transport: MikaOperationTransport;
+    readonly searchKeys?: readonly string[];
+  };
+}
+
 type MikaApiOperationCall<TInput, TData> = {
   call(api: MikaApi, ctx: MikaRequestContext, input: TInput): Promise<MikaApiResult<TData>>;
 }["call"];
@@ -1033,6 +1054,61 @@ export type MikaActionName = MikaActionDefinitions[keyof MikaActionDefinitions][
 export type MikaActionDefinition = MikaActionDefinitions[keyof MikaActionDefinitions];
 
 export const mikaActionDefinitions = collectMikaActionDefinitions() as MikaActionDefinitions;
+
+export const mikaOperationDescriptors = Object.freeze(
+  Object.fromEntries(
+    Object.entries(mikaOperationDefinitions).map(([key, operation]) => [
+      key,
+      mikaOperationDescriptor(operation),
+    ]),
+  ),
+) as {
+  readonly [TOperation in keyof typeof mikaOperationDefinitions]: MikaOperationDescriptor;
+};
+
+export function mikaOperationDescriptor(operation: MikaApiOperation): MikaOperationDescriptor {
+  const descriptor: MikaOperationDescriptor = {
+    name: operation.name,
+    namespace: operation.namespace,
+    method: operation.method,
+    public: operation.public,
+    requiresRequestContext: operation.requiresRequestContext,
+    agent: cloneMikaAgentOperationMetadata(operation.agent),
+    ...("action" in operation
+      ? {
+          action: Object.freeze({
+            key: operation.action.key,
+            name: operation.action.name,
+            accept: operation.action.accept,
+          }),
+        }
+      : {}),
+    route: Object.freeze({
+      key: operation.routeKey,
+      path: operation.routePath,
+      httpMethod: operation.httpMethod,
+      transport: operation.transport,
+      ...("searchKeys" in operation
+        ? { searchKeys: Object.freeze([...operation.searchKeys]) }
+        : {}),
+    }),
+  };
+
+  return Object.freeze(descriptor);
+}
+
+function cloneMikaAgentOperationMetadata(
+  agent: MikaAgentOperationMetadata,
+): MikaAgentOperationMetadata {
+  return Object.freeze({
+    ...agent,
+    scopes: Object.freeze([...agent.scopes]),
+    ...(agent.idempotencyKey ? { idempotencyKey: Object.freeze({ ...agent.idempotencyKey }) } : {}),
+    resources: Object.freeze([...agent.resources]),
+    ...(agent.acceptsProofs ? { acceptsProofs: Object.freeze([...agent.acceptsProofs]) } : {}),
+    requiredProofs: Object.freeze([...agent.requiredProofs]),
+  });
+}
 
 export function callMikaOperation<TOperation extends MikaApiOperation>(
   operation: TOperation,

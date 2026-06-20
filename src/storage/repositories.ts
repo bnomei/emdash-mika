@@ -21,6 +21,7 @@ import type {
   SessionDocument,
   SubscriptionDocument,
   WebhookDocument,
+  WorkflowDocument,
   WishlistDocument,
 } from "../types/documents";
 import type { PriceDefinition, SellableDefinition } from "../types/aggregates";
@@ -143,6 +144,31 @@ export type AdjustStockRepositoryResult =
   | {
       readonly status: "not_found";
     };
+
+export interface WorkflowLeaseRepositoryInput {
+  readonly workflowId: MikaId;
+  readonly leaseKey: string;
+  readonly now: ISODateTime;
+  readonly leaseExpiresAt: ISODateTime;
+  readonly force?: boolean;
+}
+
+export interface WorkflowStepRepositoryInput {
+  readonly workflowId: MikaId;
+  readonly leaseKey: string;
+  readonly stepName: string;
+  readonly now: ISODateTime;
+  readonly state?: JsonObject;
+}
+
+export interface WorkflowFailureRepositoryInput {
+  readonly workflowId: MikaId;
+  readonly leaseKey: string;
+  readonly now: ISODateTime;
+  readonly lastError: string;
+  readonly nextAttemptAt: ISODateTime;
+  readonly stepName?: string;
+}
 
 type ReservationEventMutationRepositoryResult<TStatus extends "released" | "consumed"> =
   | {
@@ -273,6 +299,8 @@ function typedCollection<TDocument extends TypedDocument & { readonly id: string
   return {
     get: (id: string) => collection.get(id),
     put: (document: TDocument) => putByDocumentId(collection, document),
+    update: (id: string, updater: (current: TDocument | null) => TDocument | null) =>
+      collection.update(id, updater),
     findOneByType: <TType extends DocumentType<TDocument>>(
       type: TType,
       where?: TypeScopedWhere<DocumentOfType<TDocument, TType>>,
@@ -312,48 +340,63 @@ export class CatalogRepository {
   }
 
   async findItemBySellableId(sellableId: MikaId): Promise<CatalogItemDocument | null> {
-    const result = await this.documents.listByType("catalogItem");
+    let cursor: string | undefined;
 
-    return (
-      result.items.find((item) =>
+    do {
+      const result = await this.documents.listByType("catalogItem", { cursor, limit: 100 });
+      const match = result.items.find((item) =>
         item.data.aggregate.sellables.some((sellable) => sellable.id === sellableId),
-      )?.data ?? null
-    );
+      );
+      if (match) return match.data;
+      cursor = result.cursor;
+    } while (cursor);
+
+    return null;
   }
 
   async findItemByProviderPrice(
     provider: string,
     providerPriceId: string,
   ): Promise<CatalogProviderPriceMatch | null> {
-    const result = await this.documents.listByType("catalogItem");
+    let cursor: string | undefined;
 
-    for (const item of result.items) {
-      for (const sellable of item.data.aggregate.sellables) {
-        const price = sellable.prices.find((candidate) =>
-          candidate.providerRefs.some(
-            (ref) => ref.provider === provider && ref.priceId === providerPriceId,
-          ),
-        );
-        if (price) {
-          return { catalog: item.data, sellable, price };
+    do {
+      const result = await this.documents.listByType("catalogItem", { cursor, limit: 100 });
+
+      for (const item of result.items) {
+        for (const sellable of item.data.aggregate.sellables) {
+          const price = sellable.prices.find((candidate) =>
+            candidate.providerRefs.some(
+              (ref) => ref.provider === provider && ref.priceId === providerPriceId,
+            ),
+          );
+          if (price) {
+            return { catalog: item.data, sellable, price };
+          }
         }
       }
-    }
+      cursor = result.cursor;
+    } while (cursor);
 
     return null;
   }
 
   async findPriceById(priceId: MikaId): Promise<CatalogProviderPriceMatch | null> {
-    const result = await this.documents.listByType("catalogItem");
+    let cursor: string | undefined;
 
-    for (const item of result.items) {
-      for (const sellable of item.data.aggregate.sellables) {
-        const price = sellable.prices.find((candidate) => candidate.id === priceId);
-        if (price) {
-          return { catalog: item.data, sellable, price };
+    do {
+      const result = await this.documents.listByType("catalogItem", { cursor, limit: 100 });
+
+      for (const item of result.items) {
+        for (const sellable of item.data.aggregate.sellables) {
+          const price = sellable.prices.find((candidate) => candidate.id === priceId);
+          if (price) {
+            return { catalog: item.data, sellable, price };
+          }
         }
       }
-    }
+      cursor = result.cursor;
+    } while (cursor);
 
     return null;
   }
@@ -433,13 +476,18 @@ export class SessionRepository {
     });
     if (indexed) return indexed;
 
-    const result = await this.documents.listByType("checkout");
+    let cursor: string | undefined;
 
-    return (
-      result.items.find(
+    do {
+      const result = await this.documents.listByType("checkout", { cursor, limit: 100 });
+      const match = result.items.find(
         (item) => item.data.aggregate.metadata?.["checkoutIdempotencyKey"] === idempotencyKey,
-      )?.data ?? null
-    );
+      );
+      if (match) return match.data;
+      cursor = result.cursor;
+    } while (cursor);
+
+    return null;
   }
 
   async put(document: SessionDocument): Promise<void> {
@@ -619,13 +667,18 @@ export class LedgerRepository {
   }
 
   async findOrderByDownloadRef(downloadRef: string): Promise<OrderDocument | null> {
-    const result = await this.documents.listByType("order");
+    let cursor: string | undefined;
 
-    return (
-      result.items.find((item) =>
+    do {
+      const result = await this.documents.listByType("order", { cursor, limit: 100 });
+      const match = result.items.find((item) =>
         item.data.aggregate.lines.some((line) => line.downloadRefs?.includes(downloadRef)),
-      )?.data ?? null
-    );
+      );
+      if (match) return match.data;
+      cursor = result.cursor;
+    } while (cursor);
+
+    return null;
   }
 
   async listOrdersByCustomer(customerId: MikaId, limit = 50): Promise<DocumentList<OrderDocument>> {
@@ -708,6 +761,241 @@ export class OpsRepository {
     return this.documents.findByIdOfType(runId, "providerSyncRun");
   }
 
+  async findWorkflow(workflowId: MikaId): Promise<WorkflowDocument | null> {
+    return this.documents.findByIdOfType(workflowId, "workflow");
+  }
+
+  async createWorkflow(document: WorkflowDocument): Promise<WorkflowDocument | null> {
+    const created = await this.documents.update(document.id, (current) =>
+      current === null ? document : null,
+    );
+
+    return documentOfType(created, "workflow");
+  }
+
+  async listDueWorkflows(
+    now: ISODateTime,
+    limit = 50,
+    kind?: WorkflowDocument["kind"],
+  ): Promise<DocumentList<WorkflowDocument>> {
+    const ready = await this.documents.listByType("workflow", {
+      where: {
+        ...(kind ? { kind } : {}),
+        status: { in: ["queued", "failed"] },
+        nextAttemptAt: { lte: now },
+      },
+      orderBy: { nextAttemptAt: "asc" },
+      limit,
+    });
+    const expiredRunning = await this.documents.listByType("workflow", {
+      where: {
+        ...(kind ? { kind } : {}),
+        status: "running",
+        leaseExpiresAt: { lte: now },
+      },
+      orderBy: { leaseExpiresAt: "asc" },
+      limit,
+    });
+    const workflows = Array.from(
+      new Map(
+        [...ready.items, ...expiredRunning.items]
+          .filter((item) => workflowIsDueForLease(item.data, now))
+          .map((item) => [item.id, item] as const),
+      ).values(),
+    ).sort((left, right) =>
+      workflowDueSortKey(left.data).localeCompare(workflowDueSortKey(right.data)),
+    );
+    const items = workflows.slice(0, limit);
+
+    return {
+      items,
+      cursor: items.length < workflows.length ? String(items.length) : undefined,
+      hasMore: ready.hasMore || expiredRunning.hasMore || workflows.length > limit,
+    };
+  }
+
+  async tryLeaseWorkflow(input: WorkflowLeaseRepositoryInput): Promise<WorkflowDocument | null> {
+    const updated = await this.documents.update(input.workflowId, (current) => {
+      const workflow = documentOfType(current, "workflow");
+      if (!workflow) return null;
+      if (workflow.status === "completed") return null;
+      if (!workflowIsDueForLease(workflow, input.now, input.force)) return null;
+
+      return workflowDocumentWithRecord(workflow, input.now, {
+        status: "running",
+        attemptCount: workflow.record.attemptCount + 1,
+        nextAttemptAt: undefined,
+        leaseKey: input.leaseKey,
+        leasedAt: input.now,
+        leaseExpiresAt: input.leaseExpiresAt,
+        lastError: undefined,
+      });
+    });
+
+    return documentOfType(updated, "workflow");
+  }
+
+  async startWorkflowStep(input: WorkflowStepRepositoryInput): Promise<WorkflowDocument | null> {
+    const updated = await this.documents.update(input.workflowId, (current) => {
+      const workflow = documentOfType(current, "workflow");
+      if (!workflow) return null;
+      if (!workflowHasActiveLease(workflow, input)) return null;
+
+      const steps = workflow.record.steps.map((step) => {
+        if (step.name !== input.stepName || step.status === "completed") return step;
+
+        return {
+          ...step,
+          status: "running" as const,
+          startedAt: input.now,
+          failedAt: undefined,
+          completedAt: undefined,
+          attemptCount: step.attemptCount + 1,
+          nextAttemptAt: undefined,
+          lastError: undefined,
+        };
+      });
+
+      return workflowDocumentWithRecord(workflow, input.now, {
+        status: "running",
+        steps,
+        nextAttemptAt: undefined,
+        lastError: undefined,
+      });
+    });
+
+    return documentOfType(updated, "workflow");
+  }
+
+  async completeWorkflowStep(input: WorkflowStepRepositoryInput): Promise<WorkflowDocument | null> {
+    const updated = await this.documents.update(input.workflowId, (current) => {
+      const workflow = documentOfType(current, "workflow");
+      if (!workflow) return null;
+      if (!workflowHasActiveLease(workflow, input)) return null;
+
+      const steps = workflow.record.steps.map((step) => {
+        if (step.name !== input.stepName || step.status === "completed") return step;
+
+        return {
+          ...step,
+          status: "completed" as const,
+          startedAt: step.startedAt ?? input.now,
+          completedAt: input.now,
+          failedAt: undefined,
+          nextAttemptAt: undefined,
+          lastError: undefined,
+          ...(input.state ? { state: { ...step.state, ...input.state } } : {}),
+        };
+      });
+
+      return workflowDocumentWithRecord(workflow, input.now, {
+        status: "running",
+        steps,
+        nextAttemptAt: undefined,
+        lastError: undefined,
+      });
+    });
+
+    return documentOfType(updated, "workflow");
+  }
+
+  async failWorkflowStep(
+    input: WorkflowFailureRepositoryInput & { readonly stepName: string },
+  ): Promise<WorkflowDocument | null> {
+    const updated = await this.documents.update(input.workflowId, (current) => {
+      const workflow = documentOfType(current, "workflow");
+      if (!workflow) return null;
+      if (!workflowHasActiveLease(workflow, input)) return null;
+
+      const steps = workflow.record.steps.map((step) =>
+        step.name === input.stepName && step.status !== "completed"
+          ? {
+              ...step,
+              status: "failed" as const,
+              failedAt: input.now,
+              nextAttemptAt: input.nextAttemptAt,
+              lastError: input.lastError,
+            }
+          : step,
+      );
+
+      return workflowDocumentWithRecord(workflow, input.now, {
+        status: "failed",
+        steps,
+        nextAttemptAt: input.nextAttemptAt,
+        lastError: input.lastError,
+        leaseKey: undefined,
+        leasedAt: undefined,
+        leaseExpiresAt: undefined,
+      });
+    });
+
+    return documentOfType(updated, "workflow");
+  }
+
+  async completeWorkflow(input: {
+    readonly workflowId: MikaId;
+    readonly leaseKey: string;
+    readonly now: ISODateTime;
+    readonly state?: JsonObject;
+  }): Promise<WorkflowDocument | null> {
+    const updated = await this.documents.update(input.workflowId, (current) => {
+      const workflow = documentOfType(current, "workflow");
+      if (!workflow) return null;
+      if (!workflowHasActiveLease(workflow, input)) return null;
+
+      return workflowDocumentWithRecord(workflow, input.now, {
+        status: "completed",
+        completedAt: input.now,
+        nextAttemptAt: undefined,
+        leaseKey: undefined,
+        leasedAt: undefined,
+        leaseExpiresAt: undefined,
+        resumeState: { ...workflow.record.resumeState, ...input.state },
+        steps: workflow.record.steps.map((step) =>
+          step.status === "queued"
+            ? {
+                ...step,
+                status: "skipped" as const,
+              }
+            : step,
+        ),
+      });
+    });
+
+    return documentOfType(updated, "workflow");
+  }
+
+  async failWorkflow(input: WorkflowFailureRepositoryInput): Promise<WorkflowDocument | null> {
+    const updated = await this.documents.update(input.workflowId, (current) => {
+      const workflow = documentOfType(current, "workflow");
+      if (!workflow) return null;
+      if (!workflowHasActiveLease(workflow, input)) return null;
+
+      return workflowDocumentWithRecord(workflow, input.now, {
+        status: "failed",
+        nextAttemptAt: input.nextAttemptAt,
+        lastError: input.lastError,
+        leaseKey: undefined,
+        leasedAt: undefined,
+        leaseExpiresAt: undefined,
+        steps: workflow.record.steps.map((step) =>
+          step.status === "running"
+            ? {
+                ...step,
+                status: "failed",
+                failedAt: input.now,
+                nextAttemptAt: input.nextAttemptAt,
+                lastError: input.lastError,
+              }
+            : step,
+        ),
+      });
+    });
+
+    return documentOfType(updated, "workflow");
+  }
+
   async findAdminAudit(auditId: MikaId): Promise<AdminAuditDocument | null> {
     return this.documents.findByIdOfType(auditId, "adminAudit");
   }
@@ -753,6 +1041,64 @@ export class OpsRepository {
   async put(document: OpsDocument): Promise<void> {
     await this.documents.put(document);
   }
+}
+
+function workflowIsDueForLease(
+  workflow: WorkflowDocument,
+  now: ISODateTime,
+  force = false,
+): boolean {
+  if (workflow.record.leaseExpiresAt && workflow.record.leaseExpiresAt > now) return false;
+  if (workflow.status === "running" && !workflow.record.leaseExpiresAt) return false;
+  if (force) return workflow.status !== "completed";
+  if (workflow.record.attemptCount >= workflow.record.maxAttempts) return false;
+
+  return !workflow.nextAttemptAt || workflow.nextAttemptAt <= now;
+}
+
+function workflowDueSortKey(workflow: WorkflowDocument): ISODateTime {
+  return (
+    workflow.nextAttemptAt ??
+    workflow.record.leaseExpiresAt ??
+    workflow.leaseExpiresAt ??
+    workflow.updatedAt
+  );
+}
+
+function workflowHasActiveLease(
+  workflow: WorkflowDocument,
+  input: { readonly leaseKey: string; readonly now: ISODateTime },
+): boolean {
+  if (workflow.status !== "running") return false;
+  if (workflow.record.leaseKey !== input.leaseKey) return false;
+  if (!workflow.record.leaseExpiresAt || workflow.record.leaseExpiresAt <= input.now) return false;
+
+  return true;
+}
+
+function workflowDocumentWithRecord(
+  workflow: WorkflowDocument,
+  now: ISODateTime,
+  patch: Partial<WorkflowDocument["record"]>,
+): WorkflowDocument {
+  const record = {
+    ...workflow.record,
+    ...patch,
+    updatedAt: now,
+  };
+
+  return {
+    ...workflow,
+    kind: record.kind,
+    status: record.status,
+    subjectType: record.subjectType,
+    subjectId: record.subjectId,
+    idempotencyKey: record.idempotencyKey,
+    nextAttemptAt: record.nextAttemptAt,
+    leaseExpiresAt: record.leaseExpiresAt,
+    record,
+    updatedAt: now,
+  };
 }
 
 export class StockRepository {
@@ -808,6 +1154,38 @@ export class StockRepository {
           policy: row.policy,
           quantity_on_hand: row.quantity_on_hand,
           quantity_reserved: row.quantity_reserved,
+          low_stock_threshold: row.low_stock_threshold,
+          allow_backorder: row.allow_backorder,
+          available_override: row.available_override,
+          metadata_json: row.metadata_json,
+          updated_at: row.updated_at,
+        }),
+      )
+      .execute();
+  }
+
+  async putItemDefinition(record: StockItemRecord): Promise<void> {
+    const row: MikaInsertable<"mika_stock_items"> = {
+      id: record.id,
+      sellable_id: record.sellableId,
+      policy: record.policy,
+      quantity_on_hand: record.quantityOnHand,
+      quantity_reserved: record.quantityReserved,
+      low_stock_threshold: record.lowStockThreshold ?? null,
+      allow_backorder: record.allowBackorder ? 1 : 0,
+      available_override:
+        record.availableOverride === undefined ? null : record.availableOverride ? 1 : 0,
+      metadata_json: record.metadata ? encodeJson(record.metadata) : null,
+      created_at: record.createdAt,
+      updated_at: record.updatedAt,
+    };
+
+    await this.db
+      .insertInto("mika_stock_items")
+      .values(row)
+      .onConflict((oc) =>
+        oc.column("sellable_id").doUpdateSet({
+          policy: row.policy,
           low_stock_threshold: row.low_stock_threshold,
           allow_backorder: row.allow_backorder,
           available_override: row.available_override,

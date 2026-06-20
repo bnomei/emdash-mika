@@ -79,6 +79,16 @@ async function handleActionRunner(
   if (!resolved.ok) return toMikaAdminActionRunResult(resolved);
 
   const mikaContext = requestContext(ctx, resolved.data.invocationId);
+  if (resolved.data.operation.agent.idempotency === "required" && !mikaContext.idempotencyKey) {
+    return toMikaAdminActionRunResult({
+      ok: false,
+      status: 409,
+      error: {
+        code: "CONFLICT",
+        message: `Mika operation '${resolved.data.operation.name}' requires an idempotency key.`,
+      },
+    });
+  }
   const result = await runMikaOperation({
     operation: resolved.data.operation,
     api,
@@ -87,7 +97,7 @@ async function handleActionRunner(
     operationPolicy: options.operationPolicy,
   });
 
-  return toMikaAdminActionRunResult(result);
+  return toMikaAdminActionRunResult(result, resolved.data.resultAdapter);
 }
 
 async function handleRouteOperation(

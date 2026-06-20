@@ -1,4 +1,5 @@
 import type {
+  MikaIndex,
   PaginatedStorageResult,
   StorageCollection,
   StorageQueryOptions,
@@ -12,6 +13,14 @@ type StorageItem<TDocument> = {
 };
 
 export function createMemoryStorageCollection<TDocument>(): StorageCollection<TDocument> {
+  return createMemoryStorageCollectionWithConfig<TDocument>();
+}
+
+export function createMemoryStorageCollectionWithConfig<TDocument>(
+  config: {
+    readonly uniqueIndexes?: readonly MikaIndex<TDocument>[];
+  } = {},
+): StorageCollection<TDocument> {
   const records = new Map<string, TDocument>();
 
   return {
@@ -19,7 +28,17 @@ export function createMemoryStorageCollection<TDocument>(): StorageCollection<TD
       return records.get(id) ?? null;
     },
     async put(id, data) {
+      assertUniqueIndexes(records, id, data, config.uniqueIndexes ?? []);
       records.set(id, data);
+    },
+    async update(id, updater) {
+      const updated = updater(records.get(id) ?? null);
+      if (!updated) return null;
+
+      assertUniqueIndexes(records, id, updated, config.uniqueIndexes ?? []);
+      records.set(id, updated);
+
+      return updated;
     },
     async delete(id) {
       return records.delete(id);
@@ -41,6 +60,7 @@ export function createMemoryStorageCollection<TDocument>(): StorageCollection<TD
     },
     async putMany(items) {
       for (const item of items) {
+        assertUniqueIndexes(records, item.id, item.data, config.uniqueIndexes ?? []);
         records.set(item.id, item.data);
       }
     },
@@ -62,6 +82,33 @@ export function createMemoryStorageCollection<TDocument>(): StorageCollection<TD
       return Array.from(records.values()).filter((data) => matchesWhere(data, where)).length;
     },
   };
+}
+
+function assertUniqueIndexes<TDocument>(
+  records: Map<string, TDocument>,
+  id: string,
+  data: TDocument,
+  uniqueIndexes: readonly MikaIndex<TDocument>[],
+): void {
+  for (const index of uniqueIndexes) {
+    const fields = indexFields(index);
+    const values = fields.map((field) => getDocumentField(data, field));
+    if (values.some((value) => value === undefined || value === null)) continue;
+
+    for (const [existingId, existing] of records) {
+      if (existingId === id) continue;
+      const matches = fields.every(
+        (field, fieldIndex) => getDocumentField(existing, field) === values[fieldIndex],
+      );
+      if (matches) {
+        throw new Error(`Unique storage index violation for ${fields.join(", ")}.`);
+      }
+    }
+  }
+}
+
+function indexFields<TDocument>(index: MikaIndex<TDocument>): readonly string[] {
+  return typeof index === "string" ? [index] : [...index];
 }
 
 function queryRecords<TDocument>(

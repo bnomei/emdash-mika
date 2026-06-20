@@ -250,6 +250,43 @@ export interface ProviderSyncRunRecord {
   readonly lastError?: string;
 }
 
+export type WorkflowStatus = "queued" | "running" | "completed" | "failed";
+export type WorkflowStepStatus = "queued" | "running" | "completed" | "failed" | "skipped";
+
+export interface WorkflowStepRecord {
+  readonly name: string;
+  readonly status: WorkflowStepStatus;
+  readonly startedAt?: ISODateTime;
+  readonly completedAt?: ISODateTime;
+  readonly failedAt?: ISODateTime;
+  readonly attemptCount: number;
+  readonly nextAttemptAt?: ISODateTime;
+  readonly lastError?: string;
+  readonly state?: JsonObject;
+}
+
+export interface WorkflowRecord {
+  readonly id: MikaId;
+  readonly kind: "payment_webhook_fulfillment" | (string & {});
+  readonly status: WorkflowStatus;
+  readonly subjectType?: string;
+  readonly subjectId?: MikaId;
+  readonly idempotencyKey?: string;
+  readonly attemptCount: number;
+  readonly maxAttempts: number;
+  readonly nextAttemptAt?: ISODateTime;
+  readonly leaseKey?: string;
+  readonly leasedAt?: ISODateTime;
+  readonly leaseExpiresAt?: ISODateTime;
+  readonly steps: readonly WorkflowStepRecord[];
+  readonly resumeState?: JsonObject;
+  readonly lastError?: string;
+  readonly createdAt: ISODateTime;
+  readonly updatedAt: ISODateTime;
+  readonly completedAt?: ISODateTime;
+  readonly metadata?: JsonObject;
+}
+
 export interface AdminAuditEventRecord {
   readonly id: MikaId;
   readonly actorId?: string;

@@ -17,6 +17,7 @@ import type {
   EntitlementRecord,
   LicenseKeyRecord,
   ProviderSyncRunRecord,
+  WorkflowRecord,
   WebhookEventRecord,
 } from "./operational";
 import type {
@@ -227,6 +228,18 @@ export type ProviderSyncRunDocument = RecordBackedDocument<
   "provider" | "status" | "startedAt"
 >;
 
+export type WorkflowDocument = RecordBackedDocument<
+  "workflow",
+  WorkflowRecord,
+  | "kind"
+  | "status"
+  | "subjectType"
+  | "subjectId"
+  | "idempotencyKey"
+  | "nextAttemptAt"
+  | "leaseExpiresAt"
+>;
+
 export type AdminAuditDocument = RecordBackedDocument<
   "adminAudit",
   AdminAuditEventRecord,
@@ -249,6 +262,7 @@ export interface MikaStorageDocuments {
     | AccountExportDocument
     | AccountDeleteRequestDocument
     | ProviderSyncRunDocument
+    | WorkflowDocument
     | AdminAuditDocument;
 }
 

@@ -1,9 +1,9 @@
 import type { MikaRequestContext } from "./context";
-import type { MikaApiOperation } from "./operations";
+import type { MikaOperationDescriptor } from "./operations";
 import type { MikaApiResult } from "./types";
 
 export interface MikaOperationPolicyInput {
-  readonly operation: MikaApiOperation;
+  readonly descriptor: MikaOperationDescriptor;
   readonly ctx: MikaRequestContext;
   readonly input: unknown;
 }
@@ -22,7 +22,7 @@ export async function runMikaOperationPolicy(
 
   const decision = await policy(input);
   if (decision === undefined || decision === true) return undefined;
-  if (decision === false) return operationForbidden(input.operation.name);
+  if (decision === false) return operationForbidden(input.descriptor.name);
   if (decision.ok) return undefined;
   return decision;
 }

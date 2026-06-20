@@ -10,6 +10,7 @@ import {
 } from "../src/index";
 import type {
   mikaPlugin as PackageMikaPlugin,
+  MikaOperationDescriptor as PackageRootMikaOperationDescriptor,
   MikaOperationPolicy as PackageRootMikaOperationPolicy,
 } from "@bnomei/emdash-mika";
 import type {
@@ -33,6 +34,7 @@ import type {
   createMikaServerClient as PackageCreateMikaServerClient,
   mikaApiMethodNames as PackageMikaApiMethodNames,
   MikaBackendDependencies as PackageMikaBackendDependencies,
+  MikaOperationDescriptor as PackageServerMikaOperationDescriptor,
   MikaOperationPolicy as PackageServerMikaOperationPolicy,
 } from "@bnomei/emdash-mika/server";
 import type {
@@ -85,6 +87,7 @@ import {
   type MikaBackendDependencies,
   type MikaApi,
   type MikaApiOverrides,
+  type MikaOperationDescriptor,
   type MikaOperationPolicy,
   type MikaServerClient,
 } from "../src/server";
@@ -116,10 +119,15 @@ import {
 } from "../src/api/routes";
 import {
   mikaActionDefinitions,
+  mikaOperationDescriptors,
   mikaOperationDefinitions,
   mikaRoutedOperationDefinitions,
   mikaRouteOnlyDefinitions,
 } from "../src/api/operations";
+import {
+  adminActionOperation,
+  mikaAdminActionRuntimeDefinitions,
+} from "../src/api/admin-action-runner";
 import { mikaActionTreeDefinitionKeys, validateMikaActionTreeSpec } from "../src/api/action-tree";
 import { resolveMikaOperationPolicy, setDefaultMikaOperationPolicy } from "../src/api/runtime-api";
 import {
@@ -408,9 +416,9 @@ describe("Mika Astro helpers", () => {
         }),
       },
     } satisfies MikaApiOverrides;
-    const policy: MikaOperationPolicy = ({ operation, ctx, input }) => {
+    const policy: MikaOperationPolicy = ({ descriptor, ctx, input }) => {
       observed.push({
-        operation: operation.name,
+        operation: descriptor.name,
         sessionId: ctx.sessionId,
         locale: ctx.locale,
         input,
@@ -1100,6 +1108,90 @@ describe("Mika client", () => {
         });
       }
     }
+  });
+
+  it("exposes stable operation descriptors without internal schema or call hooks", () => {
+    const checkout = mikaOperationDescriptors.checkoutStart;
+
+    expect(checkout).toMatchObject({
+      name: "checkout.start",
+      namespace: "checkout",
+      method: "start",
+      public: false,
+      requiresRequestContext: true,
+      action: {
+        key: "checkoutStart",
+        name: "checkout.start",
+        accept: "form",
+      },
+      route: {
+        key: "checkout",
+        path: "checkout",
+        httpMethod: "POST",
+        transport: "body",
+      },
+      agent: {
+        capability: "checkout:start",
+        idempotency: "required",
+      },
+    });
+    expect("schema" in checkout).toBe(false);
+    expect("call" in checkout).toBe(false);
+    expect(Object.isFrozen(checkout)).toBe(true);
+    expect(Object.isFrozen(checkout.agent.resources)).toBe(true);
+    expect(mikaOperationDescriptors.checkoutStatus.route.searchKeys).toEqual(["checkoutId"]);
+    expect(Object.isFrozen(mikaOperationDescriptors.checkoutStatus.route.searchKeys)).toBe(true);
+    expect(Object.keys(mikaOperationDescriptors).sort()).toEqual(
+      Object.keys(mikaOperationDefinitions).sort(),
+    );
+  });
+
+  it("passes stable operation descriptors to operation policy hooks", async () => {
+    const observed: unknown[] = [];
+    const policy: MikaOperationPolicy = ({ descriptor }) => {
+      observed.push({
+        descriptor,
+        operationName: descriptor.name,
+        descriptorHasCall: "call" in descriptor,
+        descriptorHasSchema: "schema" in descriptor,
+      });
+    };
+    const routes = createMikaPluginRoutes(
+      createMikaApi({
+        cart: {
+          add: async () => ({
+            ok: true,
+            status: 200,
+            data: { id: id("cart_1") } as CartDTO,
+          }),
+        },
+      } satisfies MikaApiOverrides),
+      { operationPolicy: policy },
+    );
+
+    await routes[mikaPluginRoutes.cartItems].handler({
+      input: { sellableId: "sellable_1", quantity: 1 },
+      request: new Request("https://shop.test/_emdash/api/plugins/mika/cart/items", {
+        method: "POST",
+      }),
+    });
+
+    expect(observed).toEqual([
+      {
+        descriptor: expect.objectContaining({
+          name: "cart.add",
+          route: {
+            key: "cartItems",
+            path: "cart/items",
+            httpMethod: "POST",
+            transport: "body",
+          },
+        }),
+        operationName: "cart.add",
+        descriptorHasCall: false,
+        descriptorHasSchema: false,
+      },
+    ]);
   });
 
   it("pins action descriptors to their operation metadata", () => {
@@ -1806,8 +1898,8 @@ describe("Mika client", () => {
       readonly sessionId?: string;
       readonly input: unknown;
     }> = [];
-    const policy: MikaOperationPolicy = ({ operation, ctx, input }) => {
-      observed.push({ operation: operation.name, sessionId: ctx.sessionId, input });
+    const policy: MikaOperationPolicy = ({ descriptor, ctx, input }) => {
+      observed.push({ operation: descriptor.name, sessionId: ctx.sessionId, input });
     };
     const routes = createMikaPluginRoutes(
       createMikaApi({
@@ -1870,8 +1962,8 @@ describe("Mika client", () => {
         },
       } satisfies MikaApiOverrides),
       {
-        operationPolicy: ({ operation, ctx, input }) => {
-          policyCalls.push({ operation: operation.name, sessionId: ctx.sessionId, input });
+        operationPolicy: ({ descriptor, ctx, input }) => {
+          policyCalls.push({ operation: descriptor.name, sessionId: ctx.sessionId, input });
         },
       },
     );
@@ -1879,6 +1971,7 @@ describe("Mika client", () => {
     const result = await routes[mikaPluginRoutes.actionsRunner].handler({
       input: {
         actionId: "mika.stock.adjust",
+        invocationId: "stock_adjust_invocation_1",
         payload: { quantityDelta: 4 },
         context: {
           surface: "row",
@@ -1922,6 +2015,118 @@ describe("Mika client", () => {
         status: "completed",
       },
     });
+  });
+
+  it("resolves admin action operations from internal runtime metadata", () => {
+    expect(
+      Object.entries(mikaAdminActionRuntimeDefinitions).map(([actionId, runtime]) => [
+        actionId,
+        runtime.operationKey,
+        adminActionOperation(actionId as keyof typeof mikaAdminActionDefinitions).name,
+      ]),
+    ).toEqual([
+      ["mika.provider.health", "adminProviderHealth", "admin.providerHealth"],
+      ["mika.provider.sync", "adminProviderSync", "admin.providerSync"],
+      [
+        "mika.stock.releaseExpiredReservations",
+        "adminStockReleaseExpiredReservations",
+        "admin.releaseExpiredReservations",
+      ],
+      ["mika.catalog.syncEntry", "adminProviderSync", "admin.providerSync"],
+      ["mika.stock.adjust", "adminStockAdjust", "admin.stockAdjust"],
+      ["mika.webhook.replay", "adminWebhookReplay", "admin.webhookReplay"],
+      ["mika.order.refund", "adminOrderRefund", "admin.orderRefund"],
+      ["mika.order.cancel", "adminOrderCancel", "admin.orderCancel"],
+      ["mika.entitlement.grant", "adminEntitlementGrant", "admin.entitlementGrant"],
+      ["mika.entitlement.revoke", "adminEntitlementRevoke", "admin.entitlementRevoke"],
+      ["mika.email.resend", "adminEmailResend", "admin.emailResend"],
+      ["mika.license.revoke", "adminLicenseRevoke", "admin.licenseRevoke"],
+      ["mika.download.issue", "adminDownloadIssue", "admin.downloadIssue"],
+    ]);
+  });
+
+  it("requires idempotency for admin runner operations before policy or API dispatch", async () => {
+    let policyCalled = false;
+    let apiCalled = false;
+    const routes = createMikaPluginRoutes(
+      createMikaApi({
+        admin: {
+          stockAdjust: async () => {
+            apiCalled = true;
+            return { ok: true, status: 200, data: { status: "completed" } };
+          },
+        },
+      } satisfies MikaApiOverrides),
+      {
+        operationPolicy: () => {
+          policyCalled = true;
+        },
+      },
+    );
+
+    await expect(
+      routes[mikaPluginRoutes.actionsRunner].handler({
+        input: {
+          actionId: "mika.stock.adjust",
+          payload: { quantityDelta: 1 },
+          target: {
+            type: "row",
+            value: { stockItemId: "stock_1" },
+          },
+        },
+        request: new Request("https://shop.test/_emdash/api/plugins/mika/.well-known/actions/run", {
+          method: "POST",
+        }),
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      severity: "error",
+      message: "Mika operation 'admin.stockAdjust' requires an idempotency key.",
+    });
+    expect(policyCalled).toBe(false);
+    expect(apiCalled).toBe(false);
+  });
+
+  it("accepts admin runner idempotency from request headers", async () => {
+    const policyCalls: Array<{ readonly idempotencyKey?: string }> = [];
+    const routes = createMikaPluginRoutes(
+      createMikaApi({
+        admin: {
+          stockAdjust: async () => ({
+            ok: true,
+            status: 200,
+            data: { status: "completed" },
+          }),
+        },
+      } satisfies MikaApiOverrides),
+      {
+        operationPolicy: ({ ctx }) => {
+          policyCalls.push({ idempotencyKey: ctx.idempotencyKey });
+        },
+      },
+    );
+
+    await expect(
+      routes[mikaPluginRoutes.actionsRunner].handler({
+        input: {
+          actionId: "mika.stock.adjust",
+          payload: { quantityDelta: 1 },
+          target: {
+            type: "row",
+            value: { stockItemId: "stock_1" },
+          },
+        },
+        request: new Request("https://shop.test/_emdash/api/plugins/mika/.well-known/actions/run", {
+          method: "POST",
+          headers: { [MIKA_AGENT_IDEMPOTENCY_KEY_HEADER]: "admin_action_header_1" },
+        }),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+    });
+    expect(policyCalls).toEqual([{ idempotencyKey: "admin_action_header_1" }]);
   });
 
   it("validates action runner target and input before policy or API dispatch", async () => {
@@ -2027,6 +2232,7 @@ describe("Mika client", () => {
       routes[mikaPluginRoutes.actionsRunner].handler({
         input: {
           actionId: "mika.stock.adjust",
+          invocationId: "stock_adjust_invocation_primitive",
           payload: { quantityDelta: 2 },
           target: {
             type: "row",
@@ -2074,8 +2280,8 @@ describe("Mika client", () => {
         },
       } satisfies MikaApiOverrides),
       {
-        operationPolicy: ({ operation, input }) => {
-          policyCalls.push({ operation: operation.name, input });
+        operationPolicy: ({ descriptor, input }) => {
+          policyCalls.push({ operation: descriptor.name, input });
         },
       },
     );
@@ -2083,6 +2289,7 @@ describe("Mika client", () => {
     const result = await routes[mikaPluginRoutes.actionsRunner].handler({
       input: {
         actionId: "mika.catalog.syncEntry",
+        invocationId: "catalog_sync_invocation_1",
         payload: { mode: "apply" },
         target: {
           type: "field",
@@ -2141,6 +2348,7 @@ describe("Mika client", () => {
       routes[mikaPluginRoutes.actionsRunner].handler({
         input: {
           actionId: "mika.download.issue",
+          invocationId: "download_issue_invocation_1",
           target: {
             type: "row",
             surface: "row",
@@ -2678,15 +2886,18 @@ describe("Mika admin and email shell", () => {
       id: "mika.catalog.syncEntry",
       mode: "runner",
       runner: true,
-      target: { surfaces: ["entry", "field"], required: true, idFrom: "entryId" },
+      target: { surfaces: ["entry", "field"], required: true },
       placement: "field",
     });
     expect(providerHealth && "route" in providerHealth).toBe(false);
     expect(providerHealth && "method" in providerHealth).toBe(false);
     expect(providerHealth && "pluginId" in providerHealth).toBe(false);
+    expect(providerHealth && "operationKey" in providerHealth).toBe(false);
+    expect(providerHealth && "resultAdapter" in providerHealth).toBe(false);
     expect(catalogSync && "route" in catalogSync).toBe(false);
     expect(catalogSync && "method" in catalogSync).toBe(false);
     expect(catalogSync && "pluginId" in catalogSync).toBe(false);
+    expect(catalogSync && "inputResolver" in catalogSync).toBe(false);
     const stockAdjust = manifest.actions.find((action) => action.id === "mika.stock.adjust");
     expect(stockAdjust).toMatchObject({
       target: { surfaces: ["field", "row"], required: true },
@@ -2699,6 +2910,7 @@ describe("Mika admin and email shell", () => {
       },
     });
     expect(stockAdjust && "input" in stockAdjust).toBe(false);
+    expect(stockAdjust && "targetIdentity" in stockAdjust).toBe(false);
     expect(stockAdjust?.target && "idKeys" in stockAdjust.target).toBe(false);
     expect(stockAdjust?.target && "idFrom" in stockAdjust.target).toBe(false);
   });
@@ -3006,7 +3218,7 @@ describe("public types", () => {
         "./provider",
         "./react",
         "./server",
-        "./templates/*",
+        "./templates/astro/*",
         "./types",
       ].sort(),
     );
@@ -3015,7 +3227,7 @@ describe("public types", () => {
     expect(exportsMap).not.toHaveProperty("./storage");
 
     for (const [subpath, entry] of Object.entries(exportsMap)) {
-      if (subpath === "./templates/*") continue;
+      if (subpath === "./templates/astro/*") continue;
       const conditions = entry as Record<string, unknown>;
       expect(Object.keys(conditions)).toEqual(["types", "import"]);
       expect(conditions["types"]).toEqual(expect.stringMatching(/^\.\/dist\/.+\.d\.mts$/));
@@ -3170,6 +3382,8 @@ describe("public types", () => {
     expectTypeOf<PackageMikaBackendDependencies>().toEqualTypeOf<MikaBackendDependencies>();
     expectTypeOf<typeof PackageMikaApiMethodNames>().toEqualTypeOf<typeof mikaApiMethodNames>();
     expectTypeOf<PackageMikaAstroClientOptions>().toEqualTypeOf<MikaAstroClientOptions>();
+    expectTypeOf<PackageRootMikaOperationDescriptor>().toEqualTypeOf<MikaOperationDescriptor>();
+    expectTypeOf<PackageServerMikaOperationDescriptor>().toEqualTypeOf<MikaOperationDescriptor>();
     expectTypeOf<PackageRootMikaOperationPolicy>().toEqualTypeOf<MikaOperationPolicy>();
     expectTypeOf<PackageServerMikaOperationPolicy>().toEqualTypeOf<MikaOperationPolicy>();
     expectTypeOf<typeof PACKAGE_MIKA_ERROR_CODES>().toEqualTypeOf<typeof MIKA_ERROR_CODES>();
@@ -3282,7 +3496,7 @@ describe("Mika Astro template contracts", () => {
     };
     const publicImports = new Set(
       Object.keys(packageJson.exports)
-        .filter((subpath) => subpath !== "./templates/*")
+        .filter((subpath) => subpath !== "./templates/astro/*")
         .map((subpath) =>
           subpath === "." ? packageJson.name : `${packageJson.name}/${subpath.slice(2)}`,
         ),

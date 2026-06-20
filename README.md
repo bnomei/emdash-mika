@@ -28,8 +28,8 @@ and the final backend service behavior.
   `createMika()` and `createMikaPurchaseModel()`.
 - Astro Actions under `@bnomei/emdash-mika/astro-actions` for form-first cart,
   wishlist, checkout, account, magic-link, and subscription flows.
-- Copyable Astro pages, endpoints, actions, and unstyled components under
-  `@bnomei/emdash-mika/templates/astro`.
+- Copyable Astro pages, endpoints, actions, and unstyled components under the
+  `@bnomei/emdash-mika/templates/astro/*` export subtree.
 - DTOs and provider contracts for one-time purchases, subscriptions, stock,
   entitlements, downloads, webhooks, and lightweight admin actions.
 - Minimal email renderers for magic links and order confirmations.
@@ -162,8 +162,12 @@ proof refs, resources, and public route hints. Manifest `route.path` values are
 relative to the EmDash Mika plugin base path
 `/_emdash/api/plugins/mika/`; the copyable `.well-known` example exposes that
 base path beside the manifest. Trusted host/server operations include quote and
-checkout preview primitives for agent projections, while the storefront browser
-client stays limited to catalog and stock reads. Mika does not export its
+checkout preview primitives for agent projections. The storefront browser
+client stays limited to catalog and stock reads, and storefront forms do not
+generate required idempotency keys in this pass. Required idempotency is
+enforced on admin and agent runner paths; checkout replay remains backed by
+Mika's internal checkout idempotency storage when a host request context
+supplies a key. Mika does not export its
 internal operation registry or Zod schemas, and it does not make private cart,
 checkout, account, webhook, or admin routes public. Host projects still own
 OAuth, MCP servers, UCP/ACP endpoints, AP2 mandate verification, MPP/x402
@@ -200,7 +204,7 @@ security expectations.
 - React headless helpers: `@bnomei/emdash-mika/react`.
 - Server contracts and trusted JSON client: `@bnomei/emdash-mika/server`.
 - DTO and input/result types: `@bnomei/emdash-mika/types`.
-- Copyable files: `@bnomei/emdash-mika/templates/*`.
+- Copyable files: `@bnomei/emdash-mika/templates/astro/*`.
 
 The package intentionally does not expose a public `storage` subpath. Storage
 repositories, migrations, and SQL statements are implementation details until

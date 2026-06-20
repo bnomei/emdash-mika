@@ -237,6 +237,10 @@ The public storefront examples call Astro Actions first. Keep Astro's default
 action `guard` option or host middleware for rate limiting and authorization.
 
 Real Mika route handlers must still enforce Mika-level stock idempotency, token
-expiry, provider signature checks, and direct-route protection. Webhooks that
-need raw-body signature verification should be host Astro endpoints that call
-Mika services, not generic plugin JSON routes.
+expiry, provider signature checks, and direct-route protection. Required Mika
+idempotency keys are enforced on admin and agent runner paths; storefront
+checkout and subscription forms stay browser-friendly here, while checkout
+replay is handled by Mika's internal checkout idempotency storage when the host
+request context provides a key. Webhooks that need raw-body signature
+verification should be host Astro endpoints that call Mika services, not generic
+plugin JSON routes.

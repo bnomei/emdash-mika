@@ -12,13 +12,22 @@ import type {
 } from "../provider";
 import type {
   AdjustStockRepositoryResult,
+  AdjustStockRepositoryInput,
+  CatalogProviderPriceMatch,
+  ConsumeReservedStockRepositoryInput,
   ConsumeReservedStockRepositoryResult,
-  MikaRepositories,
+  ReleaseExpiredReservationsRepositoryInput,
   ReleaseExpiredReservationsRepositoryResult,
+  ReleaseReservedStockRepositoryInput,
   ReleaseReservedStockRepositoryResult,
+  ReserveStockRepositoryInput,
   ReserveStockRepositoryResult,
+  WorkflowFailureRepositoryInput,
+  WorkflowLeaseRepositoryInput,
+  WorkflowStepRepositoryInput,
 } from "../storage/repositories";
 import { findSessionRepositoryOpenCartBySessionAnyCurrency } from "../storage/repositories";
+import type { PaginatedStorageResult } from "../storage/collections";
 import {
   cartToDTO,
   cartWithItems,
@@ -38,6 +47,13 @@ import {
 import { renderMikaEmail } from "../email";
 import { mikaPluginRoute } from "./routes";
 import { createMikaAdminBackend } from "./backend-admin";
+import {
+  applyOrderCancel,
+  applyOrderRefund,
+  applyPaymentEventToOrder,
+  subscriptionCancelAtPeriodEndAfterAction,
+  subscriptionStatusAfterAction,
+} from "./lifecycle";
 import type {
   CartLine,
   CheckoutLine,
@@ -54,18 +70,28 @@ import type {
   AccountDeleteRequestDocument,
   AccountExportDocument,
   AdminAuditDocument,
+  AccountDocument,
+  CatalogItemDocument,
   CustomerDocument,
   EmailDocument,
   EntitlementDocument,
   LicenseDocument,
+  CatalogDocument,
+  LedgerDocument,
   OrderDocument,
+  OpsDocument,
+  ProviderAccountDocument,
+  ProviderSyncRunDocument,
+  SessionDocument,
   SubscriptionDocument,
   WebhookDocument,
+  WorkflowDocument,
   WishlistDocument,
 } from "../types/documents";
 import { createCurrencyCode, createISODateTime, createMikaId } from "../types/primitives";
 import type {
   CheckoutStatus,
+  ContentRef,
   CurrencyCode,
   ISODateTime,
   JsonObject,
@@ -75,7 +101,7 @@ import type {
   PurchaseMode,
   SubscriptionStatus,
 } from "../types/primitives";
-import type { StockItemRecord } from "../types/operational";
+import type { EphemeralRecord, StockEventRecord, StockItemRecord } from "../types/operational";
 import type { MikaRequestContext } from "./context";
 import { createMikaApi, type MikaApi, type MikaApiOverrides } from "./server";
 import type {
@@ -149,7 +175,12 @@ interface MikaProviderFeatureOptions<TMethod extends MikaProviderMethodName> {
   readonly unsupportedMessage: (providerName: ProviderName) => string;
 }
 
-type MikaAdminAuditStartRecord = Omit<AdminAuditDocument["record"], "id" | "status" | "createdAt">;
+type MikaAdminAuditStartRecord = Omit<
+  AdminAuditDocument["record"],
+  "id" | "status" | "createdAt"
+> & {
+  readonly createdAt?: ISODateTime;
+};
 
 const DEFAULT_BACKEND_CURRENCY = createCurrencyCode("EUR");
 const CHECKOUT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY = "checkoutIdempotencyInputHash";
@@ -166,11 +197,205 @@ function defaultBackendCurrency(input: { readonly defaults?: MikaBackendDefaults
   return input.defaults?.currency ?? DEFAULT_BACKEND_CURRENCY;
 }
 
-type PublicContract<TValue> = Pick<TValue, keyof TValue>;
+type MikaDocumentList<TDocument> = PaginatedStorageResult<{
+  readonly id: string;
+  readonly data: TDocument;
+}>;
 
-export type MikaBackendRepositories = {
-  readonly [K in keyof MikaRepositories]: PublicContract<MikaRepositories[K]>;
-};
+export interface MikaCatalogRepositoryPort {
+  findItemByContent(content: ContentRef): Promise<CatalogItemDocument | null>;
+  findItemBySellableId(sellableId: MikaId): Promise<CatalogItemDocument | null>;
+  findItemByProviderPrice(
+    provider: string,
+    providerPriceId: string,
+  ): Promise<CatalogProviderPriceMatch | null>;
+  findPriceById(priceId: MikaId): Promise<CatalogProviderPriceMatch | null>;
+  put(document: CatalogDocument): Promise<void>;
+}
+
+export interface MikaSessionRepositoryPort {
+  findById(id: MikaId): Promise<SessionDocument | null>;
+  findCheckoutById(id: MikaId): Promise<CheckoutDocument | null>;
+  findOpenCartBySession(sessionId: string, currency: string): Promise<CartDocument | null>;
+  findOpenCartByCustomer(customerId: MikaId, currency: string): Promise<CartDocument | null>;
+  findWishlistBySession(sessionId: string): Promise<WishlistDocument | null>;
+  findWishlistByCustomer(customerId: MikaId): Promise<WishlistDocument | null>;
+  findCheckoutByProvider(
+    provider: string,
+    providerCheckoutId: string,
+  ): Promise<CheckoutDocument | null>;
+  findCheckoutByIdempotencyKey(idempotencyKey: string): Promise<CheckoutDocument | null>;
+  put(document: SessionDocument): Promise<void>;
+}
+
+export interface MikaAccountRepositoryPort {
+  findCustomerById(customerId: MikaId): Promise<CustomerDocument | null>;
+  findCustomerByUserId(userId: string): Promise<CustomerDocument | null>;
+  findCustomerByEmailHash(emailHash: string): Promise<CustomerDocument | null>;
+  findEntitlementById(entitlementId: MikaId): Promise<EntitlementDocument | null>;
+  findLicenseById(licenseId: MikaId): Promise<LicenseDocument | null>;
+  findProviderAccount(
+    provider: string,
+    providerCustomerId: string,
+  ): Promise<ProviderAccountDocument | null>;
+  findSubscriptionByProvider(
+    provider: string,
+    providerSubscriptionId: string,
+  ): Promise<SubscriptionDocument | null>;
+  findSubscriptionById(subscriptionId: MikaId): Promise<SubscriptionDocument | null>;
+  listProviderAccountsByCustomer(
+    customerId: MikaId,
+    limit?: number,
+  ): Promise<MikaDocumentList<ProviderAccountDocument>>;
+  listSubscriptionsByCustomer(
+    customerId: MikaId,
+    limit?: number,
+  ): Promise<MikaDocumentList<SubscriptionDocument>>;
+  listEntitlementsByCustomer(
+    customerId: MikaId,
+    limit?: number,
+  ): Promise<MikaDocumentList<EntitlementDocument>>;
+  listEntitlementsByUser(
+    userId: string,
+    limit?: number,
+  ): Promise<MikaDocumentList<EntitlementDocument>>;
+  listEntitlementsByEmailHash(
+    emailHash: string,
+    limit?: number,
+  ): Promise<MikaDocumentList<EntitlementDocument>>;
+  listLicensesByCustomer(
+    customerId: MikaId,
+    limit?: number,
+  ): Promise<MikaDocumentList<LicenseDocument>>;
+  put(document: AccountDocument): Promise<void>;
+}
+
+export interface MikaLedgerRepositoryPort {
+  findOrderById(orderId: MikaId): Promise<OrderDocument | null>;
+  findOrderByNumber(orderNumber: string): Promise<OrderDocument | null>;
+  findOrderByProviderPayment(
+    provider: string,
+    providerPaymentId: string,
+  ): Promise<OrderDocument | null>;
+  findOrderByProviderCheckout(
+    provider: string,
+    providerCheckoutId: string,
+  ): Promise<OrderDocument | null>;
+  findOrderByProviderOrder(
+    provider: string,
+    providerOrderId: string,
+  ): Promise<OrderDocument | null>;
+  findOrderByCheckoutSession(checkoutSessionId: MikaId): Promise<OrderDocument | null>;
+  findOrderByDownloadRef(downloadRef: string): Promise<OrderDocument | null>;
+  listOrdersByCustomer(
+    customerId: MikaId,
+    limit?: number,
+  ): Promise<MikaDocumentList<OrderDocument>>;
+  put(document: LedgerDocument): Promise<void>;
+}
+
+export interface MikaOpsRepositoryPort {
+  findWebhookDuplicate(input: {
+    readonly provider: string;
+    readonly providerEventId?: string;
+    readonly eventType: string;
+    readonly payloadHash: string;
+  }): Promise<WebhookDocument | null>;
+  findWebhookById(webhookId: MikaId): Promise<WebhookDocument | null>;
+  findAccountExport(exportId: MikaId): Promise<AccountExportDocument | null>;
+  findAccountDeleteRequest(requestId: MikaId): Promise<AccountDeleteRequestDocument | null>;
+  listAccountExportsByCustomer(
+    customerId: MikaId,
+    limit?: number,
+  ): Promise<MikaDocumentList<AccountExportDocument>>;
+  listAccountDeleteRequestsByCustomer(
+    customerId: MikaId,
+    limit?: number,
+  ): Promise<MikaDocumentList<AccountDeleteRequestDocument>>;
+  findProviderSyncRun(runId: MikaId): Promise<ProviderSyncRunDocument | null>;
+  findWorkflow(workflowId: MikaId): Promise<WorkflowDocument | null>;
+  createWorkflow(document: WorkflowDocument): Promise<WorkflowDocument | null>;
+  listDueWorkflows(
+    now: ISODateTime,
+    limit?: number,
+    kind?: WorkflowDocument["kind"],
+  ): Promise<MikaDocumentList<WorkflowDocument>>;
+  tryLeaseWorkflow(input: WorkflowLeaseRepositoryInput): Promise<WorkflowDocument | null>;
+  startWorkflowStep(input: WorkflowStepRepositoryInput): Promise<WorkflowDocument | null>;
+  completeWorkflowStep(input: WorkflowStepRepositoryInput): Promise<WorkflowDocument | null>;
+  failWorkflowStep(
+    input: WorkflowFailureRepositoryInput & { readonly stepName: string },
+  ): Promise<WorkflowDocument | null>;
+  completeWorkflow(input: {
+    readonly workflowId: MikaId;
+    readonly leaseKey: string;
+    readonly now: ISODateTime;
+    readonly state?: JsonObject;
+  }): Promise<WorkflowDocument | null>;
+  failWorkflow(input: WorkflowFailureRepositoryInput): Promise<WorkflowDocument | null>;
+  findAdminAudit(auditId: MikaId): Promise<AdminAuditDocument | null>;
+  findEmail(emailId: MikaId): Promise<EmailDocument | null>;
+  listWebhookFailures(now: string, limit?: number): Promise<MikaDocumentList<WebhookDocument>>;
+  writeAudit(document: AdminAuditDocument): Promise<void>;
+  listDue(
+    type: WebhookDocument["type"],
+    now: string,
+    limit?: number,
+  ): Promise<MikaDocumentList<WebhookDocument>>;
+  listDue(
+    type: EmailDocument["type"],
+    now: string,
+    limit?: number,
+  ): Promise<MikaDocumentList<EmailDocument>>;
+  put(document: OpsDocument): Promise<void>;
+}
+
+export interface MikaStockRepositoryPort {
+  findItemById(stockItemId: MikaId): Promise<StockItemRecord | null>;
+  findBySellableId(sellableId: MikaId): Promise<StockItemRecord | null>;
+  findEventByIdempotencyKey(idempotencyKey: string): Promise<StockEventRecord | null>;
+  findEventById(eventId: MikaId): Promise<StockEventRecord | null>;
+  putItem(record: StockItemRecord): Promise<void>;
+  putItemDefinition(record: StockItemRecord): Promise<void>;
+  insertEvent(record: StockEventRecord): Promise<void>;
+  reserve(input: ReserveStockRepositoryInput): Promise<ReserveStockRepositoryResult>;
+  release(
+    input: ReleaseReservedStockRepositoryInput,
+  ): Promise<ReleaseReservedStockRepositoryResult>;
+  consume(
+    input: ConsumeReservedStockRepositoryInput,
+  ): Promise<ConsumeReservedStockRepositoryResult>;
+  releaseExpiredReservations(
+    input: ReleaseExpiredReservationsRepositoryInput,
+  ): Promise<ReleaseExpiredReservationsRepositoryResult>;
+  adjustStock(input: AdjustStockRepositoryInput): Promise<AdjustStockRepositoryResult>;
+}
+
+export interface MikaEphemeralRepositoryPort {
+  get(key: string): Promise<EphemeralRecord | null>;
+  put(record: EphemeralRecord): Promise<void>;
+  incrementCounter(input: {
+    readonly key: string;
+    readonly kind: EphemeralRecord["kind"];
+    readonly subjectHash?: string;
+    readonly status?: string;
+    readonly expiresAt: ISODateTime;
+    readonly now: ISODateTime;
+    readonly data?: JsonObject;
+  }): Promise<EphemeralRecord>;
+  consumeToken(key: string, now: ISODateTime): Promise<boolean>;
+  purgeExpired(now: ISODateTime): Promise<number>;
+}
+
+export interface MikaBackendRepositories {
+  readonly catalog: MikaCatalogRepositoryPort;
+  readonly session: MikaSessionRepositoryPort;
+  readonly account: MikaAccountRepositoryPort;
+  readonly ledger: MikaLedgerRepositoryPort;
+  readonly ops: MikaOpsRepositoryPort;
+  readonly stock: MikaStockRepositoryPort;
+  readonly ephemeral: MikaEphemeralRepositoryPort;
+}
 
 export type MikaBackendNow = () => Date;
 export type MikaBackendISODateTime = () => ISODateTime;
@@ -1251,25 +1476,8 @@ async function runSubscriptionAction(
     );
   }
 
-  const now = currentBackendISODateTime(input);
   const providerSubscriptionId =
     subscription.providerSubscriptionId ?? subscription.aggregate.providerRef.subscriptionId;
-  const audit = createAdminAuditDocument(input, {
-    action: `subscription.${action}`,
-    targetType: "subscription",
-    targetId: subscription.id,
-    status: "started",
-    createdAt: now,
-    metadata: {
-      provider: subscription.provider,
-      subscriptionId: subscription.id,
-      ...(providerSubscriptionId ? { providerSubscriptionId } : {}),
-      ...(actionInput.priceId ? { priceId: actionInput.priceId } : {}),
-      ...(providerPriceId ? { providerPriceId } : {}),
-    },
-  });
-  await input.repositories.ops.writeAudit(audit);
-
   const providerInput: MikaProviderSubscriptionActionInput = {
     subscriptionId: subscription.id,
     ...(providerSubscriptionId ? { providerSubscriptionId } : {}),
@@ -1277,24 +1485,28 @@ async function runSubscriptionAction(
     ...(providerPriceId ? { providerPriceId } : {}),
   };
 
-  try {
-    await providerFeature.method.call(providerFeature.provider, providerInput);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : `Provider subscription ${action} failed.`;
-    await failAdminAudit(input, audit, message);
+  return runAdminProviderAction(
+    input,
+    {
+      action: `subscription.${action}`,
+      targetType: "subscription",
+      targetId: subscription.id,
+      metadata: {
+        provider: subscription.provider,
+        subscriptionId: subscription.id,
+        ...(providerSubscriptionId ? { providerSubscriptionId } : {}),
+        ...(actionInput.priceId ? { priceId: actionInput.priceId } : {}),
+        ...(providerPriceId ? { providerPriceId } : {}),
+      },
+    },
+    async () => {
+      await providerFeature.method.call(providerFeature.provider, providerInput);
+      await updateSubscriptionAfterAction(input, ctx, subscription, action, priceMatch);
 
-    return providerFailed(message);
-  }
-
-  await updateSubscriptionAfterAction(input, ctx, subscription, action, priceMatch);
-  await completeAdminAudit(input, audit);
-
-  return {
-    ok: true,
-    status: 200,
-    data: await accountDTOForCustomer(input, identity.customer),
-  };
+      return accountDTOForCustomer(input, identity.customer);
+    },
+    `Provider subscription ${action} failed.`,
+  );
 }
 
 async function updateSubscriptionAfterAction(
@@ -1315,18 +1527,11 @@ async function updateSubscriptionAfterAction(
         fallbackTitle: priceMatch.catalog.titleSnapshot ?? priceMatch.sellable.id,
       })
     : subscription.aggregate.sellable;
-  const status: SubscriptionStatus =
-    action === "cancel"
-      ? "cancel_at_period_end"
-      : action === "renew"
-        ? "active"
-        : subscription.status;
-  const cancelAtPeriodEnd =
-    action === "cancel"
-      ? true
-      : action === "renew"
-        ? false
-        : subscription.aggregate.cancelAtPeriodEnd;
+  const status = subscriptionStatusAfterAction(subscription.status, action);
+  const cancelAtPeriodEnd = subscriptionCancelAtPeriodEndAfterAction(
+    subscription.aggregate.cancelAtPeriodEnd,
+    action,
+  );
   const updated: SubscriptionDocument = {
     ...subscription,
     status,
@@ -1776,72 +1981,64 @@ async function issueDownload(
     issueInput.expiresAt ?? addMilliseconds(now, input.config?.download?.tokenTtlMs ?? 15 * 60_000);
   const downloadToken = input.createId("download_token");
   const downloadTokenHash = await hashDownloadToken(input, downloadToken);
-  const audit = createAdminAuditDocument(input, {
-    action: "download.issue",
-    targetType: "download",
-    targetId: createMikaId(target.downloadRef),
-    status: "started",
-    createdAt: now,
-    metadata: {
-      orderId: target.order.id,
-      orderLineId: target.line.id,
-      downloadRef: target.downloadRef,
-      ...(issueInput.entitlementId ? { entitlementId: issueInput.entitlementId } : {}),
-      ...(target.license?.id ? { licenseId: target.license.id } : {}),
-      expiresAt,
-    },
-  });
-  await input.repositories.ops.writeAudit(audit);
-
-  try {
-    if (!target.line.downloadRefs?.includes(target.downloadRef)) {
-      await input.repositories.ledger.put(
-        addDownloadRefToOrder(target.order, target.line.id, target.downloadRef, now),
-      );
-    }
-
-    await input.repositories.ephemeral.put({
-      key: downloadTokenHash,
-      kind: "token",
-      ...(target.order.customerId ? { subjectHash: target.order.customerId } : {}),
-      status: "pending",
-      count: 0,
-      expiresAt,
-      version: 1,
+  return runAdminRepositoryAction(
+    input,
+    {
+      action: "download.issue",
+      targetType: "download",
+      targetId: createMikaId(target.downloadRef),
       createdAt: now,
-      updatedAt: now,
-      data: {
-        purpose: "download",
-        tokenId: downloadToken,
-        downloadRef: target.downloadRef,
+      metadata: {
         orderId: target.order.id,
         orderLineId: target.line.id,
+        downloadRef: target.downloadRef,
         ...(issueInput.entitlementId ? { entitlementId: issueInput.entitlementId } : {}),
         ...(target.license?.id ? { licenseId: target.license.id } : {}),
-        title: target.line.item.titleSnapshot,
-        redirectUrl: target.downloadRef,
-        adminAuditId: audit.id,
+        expiresAt,
       },
-    });
-    await completeAdminAudit(input, audit);
+    },
+    async (audit) => {
+      if (!target.line.downloadRefs?.includes(target.downloadRef)) {
+        await input.repositories.ledger.put(
+          addDownloadRefToOrder(target.order, target.line.id, target.downloadRef, now),
+        );
+      }
 
-    return {
-      ok: true,
-      status: 200,
-      data: {
+      await input.repositories.ephemeral.put({
+        key: downloadTokenHash,
+        kind: "token",
+        ...(target.order.customerId ? { subjectHash: target.order.customerId } : {}),
+        status: "pending",
+        count: 0,
+        expiresAt,
+        version: 1,
+        createdAt: now,
+        updatedAt: now,
+        data: {
+          purpose: "download",
+          tokenId: downloadToken,
+          downloadRef: target.downloadRef,
+          orderId: target.order.id,
+          orderLineId: target.line.id,
+          ...(issueInput.entitlementId ? { entitlementId: issueInput.entitlementId } : {}),
+          ...(target.license?.id ? { licenseId: target.license.id } : {}),
+          title: target.line.item.titleSnapshot,
+          redirectUrl: target.downloadRef,
+          adminAuditId: audit.id,
+        },
+      });
+
+      return {
         id: createMikaId(target.downloadRef),
         status: "completed",
         affected: {
           downloads: 1,
           tokens: 1,
         },
-      },
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Download issue failed.";
-    await failAdminAudit(input, audit, message);
-    return adminActionFailed(message);
-  }
+      };
+    },
+    "Download issue failed.",
+  );
 }
 
 function createManualEntitlementDocument(
@@ -2084,7 +2281,7 @@ async function runAdminAction<TData>(
   const audit = createAdminAuditDocument(input, {
     ...record,
     status: "started",
-    createdAt: currentBackendISODateTime(input),
+    createdAt: record.createdAt ?? currentBackendISODateTime(input),
   });
   await input.repositories.ops.writeAudit(audit);
 
@@ -2777,6 +2974,22 @@ async function replayWebhook(
     webhook,
     event,
   );
+  if (event.kind === "payment" && processed === webhook) {
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        id: webhook.id,
+        status: "running",
+        message: `Webhook '${webhook.id}' workflow is already running or not due for replay.`,
+        affected: {
+          processed: 0,
+          failed: 0,
+        },
+      },
+    };
+  }
+
   const processedCount = processed.status === "failed" ? 0 : 1;
   const failedCount = processed.status === "failed" ? 1 : 0;
 
@@ -3208,12 +3421,15 @@ async function processStoredWebhook(
     case "payment":
       try {
         return await processPaymentWebhook(input, ctx, webhook, event);
-      } catch {
+      } catch (error) {
+        if (error instanceof PaymentWebhookWorkflowLeaseLostError) return webhook;
+
         return markWebhookFailed(
           input,
           webhook,
           ctx.now,
           "Payment webhook could not be processed.",
+          { strict: true },
         );
       }
     case "subscription":
@@ -3238,45 +3454,351 @@ async function processPaymentWebhook(
   webhook: WebhookDocument,
   event: MikaProviderPaymentEvent,
 ): Promise<WebhookDocument> {
-  let existingOrder = await findExistingPaymentOrder(input, event);
-  if (existingOrder) {
-    const order = await updatePaymentOrderFromEvent(input, ctx, existingOrder, event);
-    await completeCheckoutForPaymentOrder(input, ctx, order, event);
-    const fulfilledOrder = await fulfillPaidOrder(input, ctx, order);
+  return runPaymentWebhookWorkflow(input, ctx, webhook, event, async (runWorkflowStep) => {
+    let existingOrder = await findExistingPaymentOrder(input, event);
+    if (existingOrder) {
+      const orderSource = existingOrder;
+      const order = await runWorkflowStep("persist_order", () =>
+        updatePaymentOrderFromEvent(input, ctx, orderSource, event),
+      );
+      await runWorkflowStep("complete_checkout", () =>
+        completeCheckoutForPaymentOrder(input, ctx, order, event),
+      );
+      const fulfilledOrder = await runWorkflowStep("fulfill_order", () =>
+        fulfillPaidOrder(input, ctx, order),
+      );
 
-    return markWebhookProcessedForOrder(input, webhook, ctx.now, fulfilledOrder);
-  }
+      return runWorkflowStep("mark_webhook", () =>
+        markWebhookProcessedForOrder(input, webhook, ctx.now, fulfilledOrder),
+      );
+    }
 
-  const checkout = await findPaymentEventCheckout(input, event);
-  if (!checkout) {
-    return markWebhookFailed(
-      input,
-      webhook,
-      ctx.now,
-      "Payment event could not be linked to a checkout.",
+    const checkout = await runWorkflowStep("link_checkout", () =>
+      findPaymentEventCheckout(input, event),
     );
+    if (!checkout) {
+      return runWorkflowStep("mark_webhook", () =>
+        markWebhookFailed(
+          input,
+          webhook,
+          ctx.now,
+          "Payment event could not be linked to a checkout.",
+          {
+            strict: true,
+          },
+        ),
+      );
+    }
+
+    existingOrder = await findExistingPaymentOrder(input, event, checkout.id);
+    if (existingOrder) {
+      const orderSource = existingOrder;
+      const order = await runWorkflowStep("persist_order", () =>
+        updatePaymentOrderFromEvent(input, ctx, orderSource, event),
+      );
+      await runWorkflowStep("complete_checkout", () =>
+        completeCheckoutForPaymentOrder(input, ctx, order, event, checkout),
+      );
+      const fulfilledOrder = await runWorkflowStep("fulfill_order", () =>
+        fulfillPaidOrder(input, ctx, order),
+      );
+
+      return runWorkflowStep("mark_webhook", () =>
+        markWebhookProcessedForOrder(input, webhook, ctx.now, fulfilledOrder),
+      );
+    }
+
+    const order = await runWorkflowStep("persist_order", async () =>
+      persistNewPaymentOrder(
+        input,
+        ctx,
+        await createPaymentOrderDocument(input, ctx, checkout, event),
+        event,
+        checkout,
+      ),
+    );
+    await runWorkflowStep("complete_checkout", () =>
+      completeCheckoutForPaymentOrder(input, ctx, order, event, checkout),
+    );
+    const fulfilledOrder = await runWorkflowStep("fulfill_order", () =>
+      fulfillPaidOrder(input, ctx, order),
+    );
+
+    return runWorkflowStep("mark_webhook", () =>
+      markWebhookProcessedForOrder(input, webhook, ctx.now, fulfilledOrder),
+    );
+  });
+}
+
+async function runPaymentWebhookWorkflow(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  webhook: WebhookDocument,
+  event: MikaProviderPaymentEvent,
+  run: (step: RunPaymentWebhookWorkflowStep) => Promise<WebhookDocument>,
+): Promise<WebhookDocument> {
+  const leasedWorkflow = await startPaymentWebhookWorkflow(input, ctx, webhook, event);
+  if (!leasedWorkflow) return webhook;
+
+  let workflow = leasedWorkflow;
+  const leaseKey = leasedWorkflow.record.leaseKey;
+  if (!leaseKey) throw new PaymentWebhookWorkflowLeaseLostError();
+
+  let workflowFailurePersisted = false;
+  const runWorkflowStep: RunPaymentWebhookWorkflowStep = async (name, fn) => {
+    workflow = requirePaymentWebhookWorkflowLease(
+      await input.repositories.ops.startWorkflowStep({
+        workflowId: workflow.id,
+        leaseKey,
+        stepName: name,
+        now: currentBackendISODateTime(input),
+      }),
+    );
+
+    try {
+      const result = await fn();
+      workflow = requirePaymentWebhookWorkflowLease(
+        await input.repositories.ops.completeWorkflowStep({
+          workflowId: workflow.id,
+          leaseKey,
+          stepName: name,
+          now: currentBackendISODateTime(input),
+        }),
+      );
+
+      return result;
+    } catch (error) {
+      const lastError = error instanceof Error ? error.message : "Payment webhook workflow failed.";
+      const now = currentBackendISODateTime(input);
+      workflow = requirePaymentWebhookWorkflowLease(
+        await input.repositories.ops.failWorkflowStep({
+          workflowId: workflow.id,
+          leaseKey,
+          stepName: name,
+          now,
+          lastError,
+          nextAttemptAt: nextWorkflowAttemptAt(now, workflow),
+        }),
+      );
+      workflowFailurePersisted = true;
+      throw error;
+    }
+  };
+
+  try {
+    const result = await run(runWorkflowStep);
+    if (result.status === "failed") {
+      await failPaymentWebhookWorkflow(
+        input,
+        workflow,
+        leaseKey,
+        currentBackendISODateTime(input),
+        result.record.lastError ?? "Payment webhook could not be processed.",
+      );
+
+      return result;
+    }
+
+    await completePaymentWebhookWorkflow(
+      input,
+      workflow,
+      leaseKey,
+      currentBackendISODateTime(input),
+      {
+        webhookStatus: result.status,
+        ...(result.record.relatedOrderId ? { relatedOrderId: result.record.relatedOrderId } : {}),
+      },
+    );
+
+    return result;
+  } catch (error) {
+    if (error instanceof PaymentWebhookWorkflowLeaseLostError) throw error;
+
+    if (!workflowFailurePersisted) {
+      await failPaymentWebhookWorkflow(
+        input,
+        workflow,
+        leaseKey,
+        currentBackendISODateTime(input),
+        error instanceof Error ? error.message : "Payment webhook workflow failed.",
+      );
+    }
+    throw error;
+  }
+}
+
+class PaymentWebhookWorkflowLeaseLostError extends Error {
+  constructor() {
+    super("Payment webhook workflow lease is no longer active.");
+  }
+}
+
+function requirePaymentWebhookWorkflowLease(workflow: WorkflowDocument | null): WorkflowDocument {
+  if (!workflow) throw new PaymentWebhookWorkflowLeaseLostError();
+
+  return workflow;
+}
+
+type RunPaymentWebhookWorkflowStep = <TResult>(
+  name: PaymentWebhookWorkflowStep,
+  fn: () => Promise<TResult>,
+) => Promise<TResult>;
+
+type PaymentWebhookWorkflowStep =
+  | "link_checkout"
+  | "persist_order"
+  | "complete_checkout"
+  | "fulfill_order"
+  | "mark_webhook";
+
+const PAYMENT_WEBHOOK_WORKFLOW_STEPS = [
+  "link_checkout",
+  "persist_order",
+  "complete_checkout",
+  "fulfill_order",
+  "mark_webhook",
+] as const satisfies readonly PaymentWebhookWorkflowStep[];
+
+async function startPaymentWebhookWorkflow(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  webhook: WebhookDocument,
+  event: MikaProviderPaymentEvent,
+): Promise<WorkflowDocument | null> {
+  const id = fulfillmentDocumentId("workflow", webhook.id, "payment");
+  const existing = await input.repositories.ops.findWorkflow(id);
+  if (existing) {
+    return leasePaymentWebhookWorkflow(input, ctx, id, webhook, webhook.status === "failed");
   }
 
-  existingOrder = await findExistingPaymentOrder(input, event, checkout.id);
-  if (existingOrder) {
-    const order = await updatePaymentOrderFromEvent(input, ctx, existingOrder, event);
-    await completeCheckoutForPaymentOrder(input, ctx, order, event, checkout);
-    const fulfilledOrder = await fulfillPaidOrder(input, ctx, order);
+  const workflow: WorkflowDocument = {
+    id,
+    type: "workflow",
+    schemaVersion: 1,
+    kind: "payment_webhook_fulfillment",
+    status: "queued",
+    subjectType: "webhook",
+    subjectId: webhook.id,
+    idempotencyKey: event.providerEventId ?? webhook.payloadHash,
+    nextAttemptAt: ctx.now,
+    record: {
+      id,
+      kind: "payment_webhook_fulfillment",
+      status: "queued",
+      subjectType: "webhook",
+      subjectId: webhook.id,
+      idempotencyKey: event.providerEventId ?? webhook.payloadHash,
+      attemptCount: 0,
+      maxAttempts: 5,
+      nextAttemptAt: ctx.now,
+      steps: paymentWorkflowSteps(null),
+      resumeState: {
+        provider: event.provider,
+        webhookId: webhook.id,
+        ...(event.providerCheckoutId ? { providerCheckoutId: event.providerCheckoutId } : {}),
+        ...(event.providerPaymentId ? { providerPaymentId: event.providerPaymentId } : {}),
+        ...(event.providerOrderId ? { providerOrderId: event.providerOrderId } : {}),
+      },
+      createdAt: ctx.now,
+      updatedAt: ctx.now,
+      metadata: {
+        source: "webhook.payment",
+      },
+    },
+    createdAt: ctx.now,
+    updatedAt: ctx.now,
+  };
 
-    return markWebhookProcessedForOrder(input, webhook, ctx.now, fulfilledOrder);
+  const created = await input.repositories.ops.createWorkflow(workflow);
+  if (!created) {
+    return leasePaymentWebhookWorkflow(input, ctx, id, webhook, webhook.status === "failed");
   }
 
-  const order = await persistNewPaymentOrder(
-    input,
-    ctx,
-    await createPaymentOrderDocument(input, ctx, checkout, event),
-    event,
-    checkout,
+  return leasePaymentWebhookWorkflow(input, ctx, id, webhook);
+}
+
+function leasePaymentWebhookWorkflow(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  workflowId: MikaId,
+  webhook: WebhookDocument,
+  force = false,
+): Promise<WorkflowDocument | null> {
+  return input.repositories.ops.tryLeaseWorkflow({
+    workflowId,
+    leaseKey: `payment:${webhook.id}:${ctx.now}`,
+    now: ctx.now,
+    leaseExpiresAt: addMilliseconds(ctx.now, 300_000),
+    force,
+  });
+}
+
+function paymentWorkflowSteps(
+  existing: WorkflowDocument | null,
+): WorkflowDocument["record"]["steps"] {
+  const existingSteps = new Map(existing?.record.steps.map((step) => [step.name, step]) ?? []);
+
+  return PAYMENT_WEBHOOK_WORKFLOW_STEPS.map((name) => {
+    const prior = existingSteps.get(name);
+    return {
+      name,
+      status:
+        prior?.status === "completed"
+          ? "completed"
+          : prior?.status === "failed"
+            ? "failed"
+            : "queued",
+      startedAt: prior?.startedAt,
+      completedAt: prior?.completedAt,
+      failedAt: prior?.status === "failed" ? prior.failedAt : undefined,
+      attemptCount: prior?.attemptCount ?? 0,
+      nextAttemptAt: prior?.status === "failed" ? prior.nextAttemptAt : undefined,
+      lastError: prior?.status === "failed" ? prior.lastError : undefined,
+      state: prior?.state,
+    };
+  });
+}
+
+async function completePaymentWebhookWorkflow(
+  input: CreateMikaBackendApiInput,
+  workflow: WorkflowDocument,
+  leaseKey: string,
+  now: ISODateTime,
+  state: JsonObject,
+): Promise<void> {
+  requirePaymentWebhookWorkflowLease(
+    await input.repositories.ops.completeWorkflow({
+      workflowId: workflow.id,
+      leaseKey,
+      now,
+      state,
+    }),
   );
-  await completeCheckoutForPaymentOrder(input, ctx, order, event, checkout);
-  const fulfilledOrder = await fulfillPaidOrder(input, ctx, order);
+}
 
-  return markWebhookProcessedForOrder(input, webhook, ctx.now, fulfilledOrder);
+async function failPaymentWebhookWorkflow(
+  input: CreateMikaBackendApiInput,
+  workflow: WorkflowDocument,
+  leaseKey: string,
+  now: ISODateTime,
+  lastError: string,
+): Promise<void> {
+  requirePaymentWebhookWorkflowLease(
+    await input.repositories.ops.failWorkflow({
+      workflowId: workflow.id,
+      leaseKey,
+      now,
+      lastError,
+      nextAttemptAt: nextWorkflowAttemptAt(now, workflow),
+    }),
+  );
+}
+
+function nextWorkflowAttemptAt(now: ISODateTime, workflow: WorkflowDocument): ISODateTime {
+  const attempt = Math.max(1, workflow.record.attemptCount);
+  const delay = Math.min(60_000 * 2 ** (attempt - 1), 15 * 60_000);
+
+  return addMilliseconds(now, delay);
 }
 
 async function processSubscriptionWebhook(
@@ -3635,24 +4157,14 @@ async function updatePaymentOrderFromEvent(
   order: OrderDocument,
   event: MikaProviderPaymentEvent,
 ): Promise<OrderDocument> {
-  const updated: OrderDocument = {
-    ...order,
-    providerPaymentId: order.providerPaymentId ?? event.providerPaymentId,
-    providerOrderId: order.providerOrderId ?? event.providerOrderId,
-    status: "paid",
-    paymentStatus: "paid",
-    paidAt: order.paidAt ?? ctx.now,
-    updatedAt: ctx.now,
-    aggregate: {
-      ...order.aggregate,
-      invoiceUrl: event.invoiceUrl ?? order.aggregate.invoiceUrl,
-      providerRefs: mergePaymentProviderRefs(order.aggregate.providerRefs, order, event),
-      metadata: {
-        ...order.aggregate.metadata,
-        ...paymentOrderMetadata(event, order.checkoutSessionId),
-      },
+  const updated = applyPaymentEventToOrder(order, event, ctx.now, {
+    invoiceUrl: event.invoiceUrl,
+    providerRefs: mergePaymentProviderRefs(order.aggregate.providerRefs, order, event),
+    metadata: {
+      ...order.aggregate.metadata,
+      ...paymentOrderMetadata(event, order.checkoutSessionId),
     },
-  };
+  });
 
   await input.repositories.ledger.put(updated);
 
@@ -4067,10 +4579,16 @@ async function markWebhookProcessedForOrder(
   now: ISODateTime,
   order: OrderDocument,
 ): Promise<WebhookDocument> {
-  return markWebhookProcessed(input, webhook, now, {
-    relatedCustomerId: order.customerId,
-    relatedOrderId: order.id,
-  });
+  return markWebhookProcessed(
+    input,
+    webhook,
+    now,
+    {
+      relatedCustomerId: order.customerId,
+      relatedOrderId: order.id,
+    },
+    { strict: true },
+  );
 }
 
 async function markWebhookProcessedForSubscription(
@@ -4093,6 +4611,7 @@ async function markWebhookProcessed(
     WebhookDocument["record"],
     "relatedCustomerId" | "relatedOrderId" | "relatedSubscriptionId"
   >,
+  options: { readonly strict?: boolean } = { strict: true },
 ): Promise<WebhookDocument> {
   const processed: WebhookDocument = {
     ...webhook,
@@ -4107,7 +4626,7 @@ async function markWebhookProcessed(
     updatedAt: now,
   };
 
-  return putWebhookBestEffort(input, processed);
+  return putWebhook(input, processed, options);
 }
 
 async function markWebhookFailed(
@@ -4115,6 +4634,7 @@ async function markWebhookFailed(
   webhook: WebhookDocument,
   now: ISODateTime,
   lastError: string,
+  options: { readonly strict?: boolean } = { strict: true },
 ): Promise<WebhookDocument> {
   const failed: WebhookDocument = {
     ...webhook,
@@ -4128,16 +4648,18 @@ async function markWebhookFailed(
     updatedAt: now,
   };
 
-  return putWebhookBestEffort(input, failed);
+  return putWebhook(input, failed, options);
 }
 
-async function putWebhookBestEffort(
+async function putWebhook(
   input: CreateMikaBackendApiInput,
   webhook: WebhookDocument,
+  options: { readonly strict?: boolean },
 ): Promise<WebhookDocument> {
   try {
     await input.repositories.ops.put(webhook);
   } catch {
+    if (options.strict) throw new Error(`Webhook '${webhook.id}' status could not be persisted.`);
     // The webhook has already been accepted; callers still receive the in-memory state.
   }
 
@@ -5937,24 +6459,7 @@ function updateOrderAfterRefund(
   refundInput: OrderRefundInput,
   now: ISODateTime,
 ): OrderDocument {
-  const fullRefund = refundInput.amount === undefined || refundInput.amount >= order.totalAmount;
-  const status = fullRefund ? "refunded" : "partially_refunded";
-
-  return {
-    ...order,
-    status,
-    paymentStatus: status,
-    updatedAt: now,
-    aggregate: {
-      ...order.aggregate,
-      metadata: {
-        ...order.aggregate.metadata,
-        lastAdminAction: "order.refund",
-        ...(refundInput.amount !== undefined ? { refundAmount: refundInput.amount } : {}),
-        ...(refundInput.reason ? { refundReason: refundInput.reason } : {}),
-      },
-    },
-  };
+  return applyOrderRefund(order, refundInput, now);
 }
 
 function updateOrderAfterCancel(
@@ -5962,19 +6467,7 @@ function updateOrderAfterCancel(
   cancelInput: OrderCancelInput,
   now: ISODateTime,
 ): OrderDocument {
-  return {
-    ...order,
-    status: "cancelled",
-    updatedAt: now,
-    aggregate: {
-      ...order.aggregate,
-      metadata: {
-        ...order.aggregate.metadata,
-        lastAdminAction: "order.cancel",
-        ...(cancelInput.reason ? { cancelReason: cancelInput.reason } : {}),
-      },
-    },
-  };
+  return applyOrderCancel(order, cancelInput, now);
 }
 
 function currentBackendISODateTime(

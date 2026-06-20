@@ -51,6 +51,7 @@ import type {
   MikaStorageDocuments,
   OrderDocument,
   SubscriptionDocument,
+  WorkflowDocument,
 } from "../src/types/documents";
 import type { StockEventRecord, StockItemRecord } from "../src/types/operational";
 import {
@@ -71,6 +72,7 @@ import {
   createISODateTime,
   createMikaId,
   createProviderName,
+  type ISODateTime,
   type JsonObject,
   type MikaId,
 } from "../src/types/primitives";
@@ -89,7 +91,10 @@ import {
   createTestSellableDTO,
 } from "./helpers/backend";
 import { createFakeMikaProvider } from "./helpers/provider";
-import { createMemoryStorageCollection } from "./helpers/storage";
+import {
+  createMemoryStorageCollection,
+  createMemoryStorageCollectionWithConfig,
+} from "./helpers/storage";
 
 type MemoryRecord = {
   readonly type: "account" | "order";
@@ -125,6 +130,325 @@ describe("backend test storage helpers", () => {
     expect(opsConfig.uniqueIndexes).not.toEqual(
       expect.arrayContaining([["provider", "eventType", "payloadHash"]]),
     );
+  });
+
+  it("declares checkout, workflow, and account list index coverage", () => {
+    const config = createMikaStorageConfig();
+
+    expect(config.session.indexes).toEqual(
+      expect.arrayContaining([["type", "checkoutIdempotencyKey"]]),
+    );
+    expect(config.session.uniqueIndexes).toEqual(
+      expect.arrayContaining([["type", "checkoutIdempotencyKey"]]),
+    );
+    expect(config.ops.indexes).toEqual(
+      expect.arrayContaining([
+        ["type", "kind", "status", "nextAttemptAt"],
+        ["type", "kind", "subjectType", "subjectId"],
+        ["type", "kind", "idempotencyKey"],
+      ]),
+    );
+    expect(config.ops.uniqueIndexes).toEqual(
+      expect.arrayContaining([
+        ["type", "kind", "idempotencyKey"],
+        ["type", "kind", "subjectType", "subjectId"],
+      ]),
+    );
+    expect(config.account.indexes).toEqual(
+      expect.arrayContaining([
+        ["type", "customerId", "updatedAt"],
+        ["type", "userId", "updatedAt"],
+        ["type", "emailHash", "updatedAt"],
+        ["type", "customerId", "currentPeriodEnd"],
+      ]),
+    );
+  });
+
+  it("enforces configured unique indexes in memory storage", async () => {
+    const collection = createMemoryStorageCollectionWithConfig<MemoryRecord>({
+      uniqueIndexes: [["type", "name"]],
+    });
+    await collection.put("record_1", createRecord({ type: "order", name: "Alpha" }));
+
+    await expect(
+      collection.put("record_2", createRecord({ type: "order", name: "Alpha" })),
+    ).rejects.toThrow("Unique storage index violation");
+  });
+
+  it("lists due workflows and leases one worker at a time", async () => {
+    const clock = createTestClock();
+    const ops = new OpsRepository(createStorageCollection("ops"));
+    const dueWorkflow = createWorkflowDocument({
+      id: createTestMikaId("workflow", 1),
+      nextAttemptAt: clock.isoAt(-1_000),
+    });
+    const futureWorkflow = createWorkflowDocument({
+      id: createTestMikaId("workflow", 2),
+      subjectId: createTestMikaId("webhook", 2),
+      idempotencyKey: "event_2",
+      nextAttemptAt: clock.isoAt(60_000),
+    });
+    await ops.put(dueWorkflow);
+    await ops.put(futureWorkflow);
+
+    await expect(ops.listDueWorkflows(TEST_NOW)).resolves.toMatchObject({
+      items: [{ id: "workflow_1" }],
+    });
+    await expect(
+      ops.tryLeaseWorkflow({
+        workflowId: futureWorkflow.id,
+        leaseKey: "worker_future",
+        now: TEST_NOW,
+        leaseExpiresAt: clock.isoAt(300_000),
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      ops.tryLeaseWorkflow({
+        workflowId: dueWorkflow.id,
+        leaseKey: "worker_1",
+        now: TEST_NOW,
+        leaseExpiresAt: clock.isoAt(300_000),
+      }),
+    ).resolves.toMatchObject({
+      status: "running",
+      leaseExpiresAt: clock.isoAt(300_000),
+      record: { attemptCount: 1, leaseKey: "worker_1" },
+    });
+    await expect(
+      ops.tryLeaseWorkflow({
+        workflowId: dueWorkflow.id,
+        leaseKey: "worker_2",
+        now: TEST_NOW,
+        leaseExpiresAt: clock.isoAt(300_000),
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("allows expired workflow leases to be reclaimed", async () => {
+    const clock = createTestClock();
+    const ops = new OpsRepository(createStorageCollection("ops"));
+    const workflow = createWorkflowDocument({
+      status: "running",
+      nextAttemptAt: undefined,
+      leaseKey: "worker_1",
+      leasedAt: clock.isoAt(-600_000),
+      leaseExpiresAt: clock.isoAt(-60_000),
+      attemptCount: 1,
+    });
+    await ops.put(workflow);
+
+    await expect(ops.listDueWorkflows(TEST_NOW)).resolves.toMatchObject({
+      items: [{ id: workflow.id }],
+    });
+    await expect(
+      ops.tryLeaseWorkflow({
+        workflowId: workflow.id,
+        leaseKey: "worker_2",
+        now: TEST_NOW,
+        leaseExpiresAt: clock.isoAt(300_000),
+      }),
+    ).resolves.toMatchObject({
+      status: "running",
+      leaseExpiresAt: clock.isoAt(300_000),
+      record: { attemptCount: 2, leaseKey: "worker_2" },
+    });
+  });
+
+  it("allows forced workflow leases after max attempts but not active leases", async () => {
+    const clock = createTestClock();
+    const ops = new OpsRepository(createStorageCollection("ops"));
+    const workflow = createWorkflowDocument({
+      status: "failed",
+      nextAttemptAt: clock.isoAt(60_000),
+      attemptCount: 5,
+      maxAttempts: 5,
+    });
+    await ops.put(workflow);
+
+    await expect(
+      ops.tryLeaseWorkflow({
+        workflowId: workflow.id,
+        leaseKey: "worker_1",
+        now: TEST_NOW,
+        leaseExpiresAt: clock.isoAt(300_000),
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      ops.tryLeaseWorkflow({
+        workflowId: workflow.id,
+        leaseKey: "worker_forced",
+        now: TEST_NOW,
+        leaseExpiresAt: clock.isoAt(300_000),
+        force: true,
+      }),
+    ).resolves.toMatchObject({
+      status: "running",
+      record: {
+        attemptCount: 6,
+        leaseKey: "worker_forced",
+      },
+    });
+  });
+
+  it("does not overwrite an existing workflow when creating one atomically", async () => {
+    const clock = createTestClock();
+    const ops = new OpsRepository(createStorageCollection("ops"));
+    const existing = createWorkflowDocument({
+      status: "running",
+      nextAttemptAt: undefined,
+      leaseKey: "worker_1",
+      leasedAt: TEST_NOW,
+      leaseExpiresAt: clock.isoAt(300_000),
+      attemptCount: 1,
+    });
+    await ops.put(existing);
+
+    await expect(
+      ops.createWorkflow(
+        createWorkflowDocument({
+          id: existing.id,
+          status: "queued",
+          nextAttemptAt: TEST_NOW,
+        }),
+      ),
+    ).resolves.toBeNull();
+    await expect(ops.findWorkflow(existing.id)).resolves.toMatchObject({
+      status: "running",
+      nextAttemptAt: undefined,
+      record: {
+        leaseKey: "worker_1",
+        attemptCount: 1,
+      },
+    });
+  });
+
+  it("does not complete a workflow step when the side effect fails", async () => {
+    const clock = createTestClock();
+    const ops = new OpsRepository(createStorageCollection("ops"));
+    const workflow = createWorkflowDocument();
+    await ops.put(workflow);
+    const leased = await ops.tryLeaseWorkflow({
+      workflowId: workflow.id,
+      leaseKey: "worker_1",
+      now: TEST_NOW,
+      leaseExpiresAt: clock.isoAt(300_000),
+    });
+    if (!leased?.record.leaseKey) throw new Error("Expected workflow lease.");
+
+    await ops.startWorkflowStep({
+      workflowId: workflow.id,
+      leaseKey: leased.record.leaseKey,
+      stepName: "persist_order",
+      now: TEST_NOW,
+    });
+    await ops.failWorkflowStep({
+      workflowId: workflow.id,
+      leaseKey: leased.record.leaseKey,
+      stepName: "persist_order",
+      now: TEST_NOW,
+      lastError: "side effect failed",
+      nextAttemptAt: clock.isoAt(60_000),
+    });
+
+    await expect(ops.findWorkflow(workflow.id)).resolves.toMatchObject({
+      status: "failed",
+      nextAttemptAt: clock.isoAt(60_000),
+      record: {
+        status: "failed",
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            name: "persist_order",
+            status: "failed",
+            lastError: "side effect failed",
+          }),
+        ]),
+      },
+    });
+    await expect(ops.listDueWorkflows(clock.isoAt(60_001))).resolves.toMatchObject({
+      items: [{ id: workflow.id }],
+    });
+  });
+
+  it("requires an active workflow lease for step and terminal mutations", async () => {
+    const clock = createTestClock();
+    const ops = new OpsRepository(createStorageCollection("ops"));
+    const workflow = createWorkflowDocument({
+      status: "running",
+      nextAttemptAt: undefined,
+      leaseKey: "worker_1",
+      leasedAt: clock.isoAt(-600_000),
+      leaseExpiresAt: clock.isoAt(-60_000),
+      attemptCount: 1,
+    });
+    await ops.put(workflow);
+
+    await expect(
+      ops.startWorkflowStep({
+        workflowId: workflow.id,
+        leaseKey: "worker_1",
+        stepName: "persist_order",
+        now: TEST_NOW,
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      ops.completeWorkflow({
+        workflowId: workflow.id,
+        leaseKey: "worker_1",
+        now: TEST_NOW,
+      }),
+    ).resolves.toBeNull();
+    await expect(ops.findWorkflow(workflow.id)).resolves.toMatchObject({
+      status: "running",
+      record: {
+        leaseKey: "worker_1",
+        steps: expect.arrayContaining([
+          expect.objectContaining({ name: "persist_order", status: "queued" }),
+        ]),
+      },
+    });
+  });
+
+  it("does not mark unrun workflow steps completed when completing a workflow", async () => {
+    const clock = createTestClock();
+    const ops = new OpsRepository(createStorageCollection("ops"));
+    const workflow = createWorkflowDocument();
+    await ops.put(workflow);
+    const leased = await ops.tryLeaseWorkflow({
+      workflowId: workflow.id,
+      leaseKey: "worker_1",
+      now: TEST_NOW,
+      leaseExpiresAt: clock.isoAt(300_000),
+    });
+    if (!leased?.record.leaseKey) throw new Error("Expected workflow lease.");
+
+    await ops.startWorkflowStep({
+      workflowId: workflow.id,
+      leaseKey: leased.record.leaseKey,
+      stepName: "link_checkout",
+      now: TEST_NOW,
+    });
+    await ops.completeWorkflowStep({
+      workflowId: workflow.id,
+      leaseKey: leased.record.leaseKey,
+      stepName: "link_checkout",
+      now: TEST_NOW,
+    });
+    await ops.completeWorkflow({
+      workflowId: workflow.id,
+      leaseKey: leased.record.leaseKey,
+      now: TEST_NOW,
+    });
+
+    await expect(ops.findWorkflow(workflow.id)).resolves.toMatchObject({
+      status: "completed",
+      record: {
+        steps: expect.arrayContaining([
+          expect.objectContaining({ name: "link_checkout", status: "completed" }),
+          expect.objectContaining({ name: "persist_order", status: "skipped" }),
+          expect.objectContaining({ name: "fulfill_order", status: "skipped" }),
+        ]),
+      },
+    });
   });
 
   it("supports single-record storage methods", async () => {
@@ -236,7 +560,7 @@ describe("backend repository characterization", () => {
     });
     const duplicateContentCatalog: CatalogItemDocument = {
       ...createCatalogItemDocument({
-        contentRef,
+        contentRef: createTestContentRef({ id: "other-product" }),
         sellables: [
           createSellableDefinition({
             id: createTestMikaId("sellable", 3),
@@ -267,9 +591,11 @@ describe("backend repository characterization", () => {
     const repository = new SessionRepository(collection);
     const noMetadataCheckout = createCheckoutDocument({
       id: createTestMikaId("checkout", 1),
+      providerCheckoutId: "provider_checkout_1",
     });
     const metadataIdempotentCheckout = createCheckoutDocument({
       id: createTestMikaId("checkout", 2),
+      providerCheckoutId: "provider_checkout_2",
       metadata: {
         checkoutIdempotencyKey: "checkout_metadata_replay_key",
         checkoutIdempotencyInputHash: "hash_1",
@@ -277,11 +603,13 @@ describe("backend repository characterization", () => {
     });
     const indexedIdempotentCheckout = createCheckoutDocument({
       id: createTestMikaId("checkout", 4),
+      providerCheckoutId: "provider_checkout_4",
       checkoutIdempotencyKey: "checkout_replay_key",
       checkoutIdempotencyInputHash: "hash_2",
     });
     const sanitizedCheckout = createCheckoutDocument({
       id: createTestMikaId("checkout", 3),
+      providerCheckoutId: "provider_checkout_3",
       metadata: {
         checkoutProviderStatus: "created",
       },
@@ -307,6 +635,82 @@ describe("backend repository characterization", () => {
     await expect(repository.findCheckoutByIdempotencyKey("")).resolves.toBeNull();
   });
 
+  it("finds checkout metadata idempotency keys across cursor-paginated fallbacks", async () => {
+    const collection = createStorageCollection("session");
+    const repository = new SessionRepository(collection);
+    const target = createCheckoutDocument({
+      id: createTestMikaId("checkout", 101),
+      metadata: { checkoutIdempotencyKey: "checkout_metadata_cursor_key" },
+    });
+
+    for (let index = 1; index <= 100; index += 1) {
+      await repository.put(
+        createCheckoutDocument({
+          id: createTestMikaId("checkout", index),
+          providerCheckoutId: `provider_checkout_${index}`,
+        }),
+      );
+    }
+    await repository.put(target);
+
+    await expect(
+      repository.findCheckoutByIdempotencyKey("checkout_metadata_cursor_key"),
+    ).resolves.toEqual(target);
+  });
+
+  it("finds catalog aggregate refs across cursor-paginated fallbacks", async () => {
+    const collection = createStorageCollection("catalog");
+    const repository = new CatalogRepository(collection);
+    const provider = createTestProviderName("stripe");
+    const targetPrice = createPriceDefinition({
+      id: createTestMikaId("price", 101),
+      providerRefs: [{ provider, priceId: "price_cursor_101" }],
+    });
+    const targetSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 101),
+      prices: [targetPrice],
+    });
+    const targetCatalog = {
+      ...createCatalogItemDocument({
+        contentRef: createTestContentRef({ id: "cursor-product-101" }),
+        sellables: [targetSellable],
+      }),
+      id: createTestMikaId("catalog", 101),
+    };
+
+    for (let index = 1; index <= 100; index += 1) {
+      await repository.put({
+        ...createCatalogItemDocument({
+          contentRef: createTestContentRef({ id: `cursor-product-${index}` }),
+          sellables: [
+            createSellableDefinition({
+              id: createTestMikaId("sellable", index),
+              prices: [createPriceDefinition({ id: createTestMikaId("price", index) })],
+            }),
+          ],
+        }),
+        id: createTestMikaId("catalog", index),
+      });
+    }
+    await repository.put(targetCatalog);
+
+    await expect(repository.findItemBySellableId(targetSellable.id)).resolves.toEqual(
+      targetCatalog,
+    );
+    await expect(repository.findPriceById(targetPrice.id)).resolves.toMatchObject({
+      catalog: { id: targetCatalog.id },
+      sellable: { id: targetSellable.id },
+      price: { id: targetPrice.id },
+    });
+    await expect(
+      repository.findItemByProviderPrice(provider, "price_cursor_101"),
+    ).resolves.toMatchObject({
+      catalog: { id: targetCatalog.id },
+      sellable: { id: targetSellable.id },
+      price: { id: targetPrice.id },
+    });
+  });
+
   it("finds orders by nested download refs across lines", async () => {
     const collection = createStorageCollection("ledger");
     const repository = new LedgerRepository(collection);
@@ -330,6 +734,8 @@ describe("backend repository characterization", () => {
     const secondOrder = createOrderDocument({
       id: createTestMikaId("order", 2),
       orderNumber: "M-1002",
+      providerPaymentId: "payment_2",
+      providerOrderId: "provider_order_2",
       aggregate: {
         ...createOrderDocument().aggregate,
         lines: [
@@ -350,6 +756,40 @@ describe("backend repository characterization", () => {
     );
     await expect(repository.findOrderByDownloadRef("download:shared")).resolves.toEqual(firstOrder);
     await expect(repository.findOrderByDownloadRef("download:missing")).resolves.toBeNull();
+  });
+
+  it("finds nested download refs across cursor-paginated fallbacks", async () => {
+    const collection = createStorageCollection("ledger");
+    const repository = new LedgerRepository(collection);
+    const target = createOrderDocument({
+      id: createTestMikaId("order", 101),
+      orderNumber: "M-1101",
+      providerPaymentId: "payment_101",
+      providerOrderId: "provider_order_101",
+      aggregate: {
+        ...createOrderDocument().aggregate,
+        lines: [
+          {
+            ...createOrderDocument().aggregate.lines[0]!,
+            downloadRefs: ["download:cursor:101"],
+          },
+        ],
+      },
+    });
+
+    for (let index = 1; index <= 100; index += 1) {
+      await repository.put(
+        createOrderDocument({
+          id: createTestMikaId("order", index),
+          orderNumber: `M-${1000 + index}`,
+          providerPaymentId: `payment_${index}`,
+          providerOrderId: `provider_order_${index}`,
+        }),
+      );
+    }
+    await repository.put(target);
+
+    await expect(repository.findOrderByDownloadRef("download:cursor:101")).resolves.toEqual(target);
   });
 });
 
@@ -400,6 +840,46 @@ describe("backend test Kysely stock database harness", () => {
       await expect(
         repository.findBySellableId(createTestMikaId("sellable", 2)),
       ).resolves.toBeNull();
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await db.destroy();
+    }
+  });
+
+  it("upserts stock definitions without overwriting live quantities", async () => {
+    const db = createTestMikaDb();
+    const repository = new StockRepository(db);
+    const stockItem = createStockRecord({
+      quantityOnHand: 10,
+      quantityReserved: 4,
+      lowStockThreshold: 3,
+      allowBackorder: false,
+      metadata: { source: "initial" },
+    });
+
+    try {
+      await mikaInitialMigration.up(db);
+      await repository.putItem(stockItem);
+      await repository.putItemDefinition({
+        ...stockItem,
+        policy: "backorder",
+        quantityOnHand: 99,
+        quantityReserved: 88,
+        lowStockThreshold: 7,
+        allowBackorder: true,
+        updatedAt: createTestClock().isoAt(60_000),
+        metadata: { source: "definition-sync" },
+      });
+
+      await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+        policy: "backorder",
+        quantityOnHand: 10,
+        quantityReserved: 4,
+        lowStockThreshold: 7,
+        allowBackorder: true,
+        updatedAt: "2026-01-01T00:01:00.000Z",
+        metadata: { source: "definition-sync" },
+      });
     } finally {
       await rollbackMikaInitialMigration(db);
       await db.destroy();
@@ -3475,6 +3955,8 @@ describe("backend API composition", () => {
     const cancelTarget = createOrderDocument({
       id: createTestMikaId("order", 2),
       orderNumber: "M-1002",
+      providerPaymentId: "payment_cancel",
+      providerOrderId: "provider_order_cancel",
     });
     const api = createMikaBackendApi(
       createIncrementingBackendDependencies({
@@ -3516,7 +3998,7 @@ describe("backend API composition", () => {
     expect(fake.getCalls().cancelOrder).toEqual([
       {
         orderId: cancelTarget.id,
-        providerOrderId: "provider_order_1",
+        providerOrderId: "provider_order_cancel",
         reason: "customer_request",
       },
     ]);
@@ -3567,7 +4049,7 @@ describe("backend API composition", () => {
         metadata: {
           provider: TEST_PROVIDER,
           orderId: cancelTarget.id,
-          providerOrderId: "provider_order_1",
+          providerOrderId: "provider_order_cancel",
           reason: "customer_request",
         },
       },
@@ -4286,6 +4768,386 @@ describe("backend API composition", () => {
       status: "processed",
       record: { status: "processed", relatedOrderId: "order_1" },
     });
+    await expect(opsCollection.get("workflow_webhook_1_payment")).resolves.toMatchObject({
+      type: "workflow",
+      kind: "payment_webhook_fulfillment",
+      status: "completed",
+      subjectType: "webhook",
+      subjectId: "webhook_1",
+      record: {
+        status: "completed",
+        steps: [
+          { name: "link_checkout", status: "completed" },
+          { name: "persist_order", status: "completed" },
+          { name: "complete_checkout", status: "completed" },
+          { name: "fulfill_order", status: "completed" },
+          { name: "mark_webhook", status: "completed" },
+        ],
+      },
+    });
+  });
+
+  it("does not run payment webhook side effects without the workflow lease", async () => {
+    const stripe = createProviderName("stripe");
+    const clock = createTestClock();
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+    };
+    const activeLeaseExpiresAt = clock.isoAt(300_000);
+    await repositories.ops.put(
+      createWorkflowDocument({
+        id: createMikaId("workflow_webhook_1_payment"),
+        status: "running",
+        nextAttemptAt: undefined,
+        subjectId: createTestMikaId("webhook", 1),
+        idempotencyKey: "event_payment_lease",
+        leaseKey: "worker_active",
+        leasedAt: TEST_NOW,
+        leaseExpiresAt: activeLeaseExpiresAt,
+      }),
+    );
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "payment_lease_hash",
+            parsed: { delivery: "event_payment_lease" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createPaymentWebhookEvent(verified, {
+            providerEventId: "event_payment_lease",
+            providerPaymentId: "payment_lease",
+          }),
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(receiveWebhook(api, "payment-active-lease", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "webhook_1",
+        status: "received",
+        replayable: true,
+      },
+    });
+
+    await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(0);
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
+      status: "received",
+      record: { status: "received" },
+    });
+    await expect(opsCollection.get("workflow_webhook_1_payment")).resolves.toMatchObject({
+      status: "running",
+      leaseExpiresAt: activeLeaseExpiresAt,
+      record: {
+        status: "running",
+        leaseKey: "worker_active",
+        leaseExpiresAt: activeLeaseExpiresAt,
+        steps: expect.arrayContaining([
+          expect.objectContaining({ name: "link_checkout", status: "queued" }),
+        ]),
+      },
+    });
+    await expect(
+      api.admin.webhookReplay({ webhookId: createTestMikaId("webhook", 1) }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "webhook_1",
+        status: "running",
+        affected: {
+          processed: 0,
+          failed: 0,
+        },
+      },
+    });
+    await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(0);
+  });
+
+  it("does not swallow payment webhook terminal persistence failures", async () => {
+    const stripe = createProviderName("stripe");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      ops: new FailingTerminalWebhookOpsRepository(opsCollection),
+    };
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "payment_terminal_hash",
+            parsed: { delivery: "event_payment_terminal" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createPaymentWebhookEvent(verified, {
+            providerEventId: "event_payment_terminal",
+            providerPaymentId: "payment_terminal",
+          }),
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(receiveWebhook(api, "payment-terminal-failure", stripe)).rejects.toThrow(
+      "Webhook 'webhook_1' status could not be persisted.",
+    );
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
+      status: "received",
+      record: { status: "received" },
+    });
+    await expect(opsCollection.get("workflow_webhook_1_payment")).resolves.toMatchObject({
+      status: "failed",
+      record: {
+        status: "failed",
+        steps: expect.arrayContaining([
+          expect.objectContaining({ name: "link_checkout", status: "completed" }),
+          expect.objectContaining({ name: "mark_webhook", status: "failed" }),
+          expect.objectContaining({ name: "persist_order", status: "queued" }),
+        ]),
+      },
+    });
+  });
+
+  it("does not swallow subscription webhook terminal persistence failures", async () => {
+    const stripe = createProviderName("stripe");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      ops: new FailingTerminalWebhookOpsRepository(opsCollection),
+    };
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "subscription_terminal_hash",
+            parsed: { delivery: "event_subscription_terminal" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createSubscriptionWebhookEvent(verified, {
+            providerEventId: "event_subscription_terminal",
+            providerSubscriptionId: "provider_subscription_terminal",
+            providerCustomerId: "provider_customer_terminal",
+            providerPriceId: "price_terminal",
+            status: "active",
+          }),
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(receiveWebhook(api, "subscription-terminal-failure", stripe)).rejects.toThrow(
+      "Webhook 'webhook_1' status could not be persisted.",
+    );
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
+      status: "received",
+      record: { status: "received" },
+    });
+  });
+
+  it("replays failed payment webhooks after missing checkout state is restored", async () => {
+    const stripe = TEST_PROVIDER;
+    const sessionCollection = createStorageCollection("session");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      session: new SessionRepository(sessionCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+    };
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "payment_replay_hash",
+            parsed: { delivery: "event_payment_replay" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createPaymentWebhookEvent(verified, {
+            providerEventId: "event_payment_replay",
+            providerCheckoutId: "provider_checkout_replay",
+            providerPaymentId: "payment_replay",
+            providerOrderId: "provider_order_replay",
+          }),
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(receiveWebhook(api, "payment-replay-failed", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "failed", replayable: true },
+    });
+    await expect(opsCollection.get("workflow_webhook_1_payment")).resolves.toMatchObject({
+      status: "failed",
+      record: {
+        status: "failed",
+        nextAttemptAt: createTestClock().isoAt(60_000),
+        steps: expect.arrayContaining([
+          expect.objectContaining({ name: "link_checkout", status: "completed" }),
+          expect.objectContaining({ name: "mark_webhook", status: "completed" }),
+          expect.objectContaining({ name: "persist_order", status: "queued" }),
+        ]),
+      },
+    });
+
+    await repositories.session.put(
+      createCheckoutDocument({
+        providerCheckoutId: "provider_checkout_replay",
+      }),
+    );
+
+    await expect(
+      api.admin.webhookReplay({ webhookId: createTestMikaId("webhook", 1) }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "webhook_1",
+        status: "completed",
+        affected: {
+          processed: 1,
+          failed: 0,
+        },
+      },
+    });
+    await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(1);
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
+      status: "processed",
+      record: { status: "processed", relatedOrderId: "order_1" },
+    });
+    await expect(opsCollection.get("workflow_webhook_1_payment")).resolves.toMatchObject({
+      status: "completed",
+      record: {
+        status: "completed",
+        steps: expect.arrayContaining([
+          expect.objectContaining({ name: "persist_order", status: "completed" }),
+          expect.objectContaining({ name: "complete_checkout", status: "completed" }),
+          expect.objectContaining({ name: "fulfill_order", status: "completed" }),
+        ]),
+      },
+    });
+  });
+
+  it("does not regress refunded or cancelled orders to paid from late payment webhooks", async () => {
+    const stripe = createProviderName("stripe");
+    const cases = [
+      {
+        name: "refunded",
+        order: createOrderDocument({
+          status: "refunded",
+          paymentStatus: "refunded",
+          provider: stripe,
+          providerPaymentId: "payment_refunded",
+          providerOrderId: "provider_order_refunded",
+        }),
+      },
+      {
+        name: "cancelled",
+        order: createOrderDocument({
+          id: createTestMikaId("order", 2),
+          orderNumber: "M-1002",
+          status: "cancelled",
+          paymentStatus: "paid",
+          provider: stripe,
+          providerPaymentId: "payment_cancelled",
+          providerOrderId: "provider_order_cancelled",
+        }),
+      },
+    ];
+
+    for (const testCase of cases) {
+      const ledgerCollection = createStorageCollection("ledger");
+      const opsCollection = createStorageCollection("ops");
+      const repositories = {
+        ...createTestBackendRepositories(),
+        ledger: new LedgerRepository(ledgerCollection),
+        ops: new OpsRepository(opsCollection),
+      };
+      const fake = createFakeMikaProvider({
+        id: stripe,
+        overrides: {
+          parseWebhookEvent: async (verified) =>
+            createPaymentWebhookEvent(verified, {
+              providerEventId: `event_late_${testCase.name}`,
+              providerPaymentId: testCase.order.providerPaymentId,
+              providerOrderId: testCase.order.providerOrderId,
+              invoiceUrl: `https://invoice.example.test/late-${testCase.name}`,
+            }),
+        },
+      });
+      const api = createMikaBackendApi(
+        createIncrementingBackendDependencies({
+          repositories,
+          providers: createMikaProviderRegistry([fake.provider]),
+        }),
+      );
+      await repositories.ledger.put(testCase.order);
+
+      await expect(receiveWebhook(api, `late-${testCase.name}`, stripe)).resolves.toMatchObject({
+        ok: true,
+        status: 200,
+        data: {
+          id: "webhook_1",
+          status: "received",
+          replayable: true,
+        },
+      });
+
+      await expect(repositories.ledger.findOrderById(testCase.order.id)).resolves.toMatchObject({
+        status: testCase.order.status,
+        paymentStatus: testCase.order.paymentStatus,
+        paidAt: TEST_NOW,
+        aggregate: {
+          invoiceUrl: `https://invoice.example.test/late-${testCase.name}`,
+          providerRefs: expect.arrayContaining([
+            expect.objectContaining({
+              provider: stripe,
+              paymentId: testCase.order.providerPaymentId,
+              orderId: testCase.order.providerOrderId,
+            }),
+          ]),
+        },
+      });
+      await expect(opsCollection.get("workflow_webhook_1_payment")).resolves.toMatchObject({
+        status: "completed",
+        record: {
+          status: "completed",
+          resumeState: {
+            webhookStatus: "processed",
+            relatedOrderId: testCase.order.id,
+          },
+        },
+      });
+    }
   });
 
   it("creates fulfillment side effects once from replayed payment webhook events", async () => {
@@ -6763,7 +7625,23 @@ describe("backend API composition", () => {
         ],
       ]),
     });
-    const fake = createFakeMikaProvider();
+    let checkoutAttempt = 0;
+    const fake = createFakeMikaProvider({
+      overrides: {
+        createCheckoutSession: async (input) => {
+          checkoutAttempt += 1;
+          return {
+            id: createTestMikaId("checkout_fake", checkoutAttempt),
+            status: "created",
+            mode: input.mode ?? "payment",
+            provider: input.provider,
+            redirectUrl: `https://checkout.example.test/session/checkout_fake_${checkoutAttempt}`,
+            expiresAt: createTestClock().isoAt(60 * 60_000),
+            providerCheckoutId: `provider_checkout_fake_${checkoutAttempt}`,
+          };
+        },
+      },
+    });
     await repositories.catalog.put(
       createCatalogItemDocument({ contentRef, sellables: [sellable] }),
     );
@@ -6814,7 +7692,23 @@ describe("backend API composition", () => {
         ],
       ]),
     });
-    const fake = createFakeMikaProvider();
+    let checkoutAttempt = 0;
+    const fake = createFakeMikaProvider({
+      overrides: {
+        createCheckoutSession: async (input) => {
+          checkoutAttempt += 1;
+          return {
+            id: createTestMikaId("checkout_fake", checkoutAttempt),
+            status: "created",
+            mode: input.mode ?? "payment",
+            provider: input.provider,
+            redirectUrl: `https://checkout.example.test/session/checkout_fake_${checkoutAttempt}`,
+            expiresAt: createTestClock().isoAt(60 * 60_000),
+            providerCheckoutId: `provider_checkout_fake_${checkoutAttempt}`,
+          };
+        },
+      },
+    });
     await repositories.catalog.put(
       createCatalogItemDocument({ contentRef, sellables: [sellable] }),
     );
@@ -6850,7 +7744,7 @@ describe("backend API composition", () => {
       data: {
         id: "checkout_1",
         status: "created",
-        redirectUrl: "https://checkout.example.test/session/checkout_fake",
+        redirectUrl: "https://checkout.example.test/session/checkout_fake_1",
       },
     });
 
@@ -6858,7 +7752,7 @@ describe("backend API composition", () => {
     expect(stored?.aggregate.metadata).toMatchObject({
       publicNote: "keep",
       checkoutProviderStatus: "created",
-      checkoutRedirectUrl: "https://checkout.example.test/session/checkout_fake",
+      checkoutRedirectUrl: "https://checkout.example.test/session/checkout_fake_1",
     });
     expect(stored?.aggregate.metadata?.["checkoutIdempotencyKey"]).toBeUndefined();
     expect(stored?.aggregate.metadata?.["checkoutIdempotencyInputHash"]).toBeUndefined();
@@ -6992,6 +7886,7 @@ describe("backend API composition", () => {
     await repositories.session.put(
       createCheckoutDocument({
         id: createTestMikaId("checkout", 1),
+        providerCheckoutId: "provider_checkout_1",
         status: "completed",
         providerStatus: "completed",
         orderId: createTestMikaId("order", 1),
@@ -7007,6 +7902,7 @@ describe("backend API composition", () => {
     await repositories.session.put(
       createCheckoutDocument({
         id: createTestMikaId("checkout", 2),
+        providerCheckoutId: "provider_checkout_2",
         status: "failed",
         expiresAt: createTestClock().isoAt(-1),
         metadata: { checkoutProviderStatus: "failed" },
@@ -7015,6 +7911,7 @@ describe("backend API composition", () => {
     await repositories.session.put(
       createCheckoutDocument({
         id: createTestMikaId("checkout", 3),
+        providerCheckoutId: "provider_checkout_3",
         status: "cancelled",
         expiresAt: createTestClock().isoAt(-1),
         metadata: { checkoutProviderStatus: "cancelled" },
@@ -7943,6 +8840,69 @@ function createRecord(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
   };
 }
 
+function createWorkflowDocument(
+  overrides: Partial<WorkflowDocument> & {
+    readonly attemptCount?: number;
+    readonly maxAttempts?: number;
+    readonly leaseKey?: string;
+    readonly leasedAt?: ISODateTime;
+  } = {},
+): WorkflowDocument {
+  const id = overrides.id ?? createTestMikaId("workflow", 1);
+  const status = overrides.status ?? "queued";
+  const subjectId = overrides.subjectId ?? createTestMikaId("webhook", 1);
+  const idempotencyKey = overrides.idempotencyKey ?? "event_1";
+  const nextAttemptAt = Object.hasOwn(overrides, "nextAttemptAt")
+    ? overrides.nextAttemptAt
+    : TEST_NOW;
+  const leaseExpiresAt = Object.hasOwn(overrides, "leaseExpiresAt")
+    ? overrides.leaseExpiresAt
+    : undefined;
+  const record = {
+    id,
+    kind: "payment_webhook_fulfillment" as const,
+    status,
+    subjectType: "webhook",
+    subjectId,
+    idempotencyKey,
+    attemptCount: overrides.record?.attemptCount ?? overrides.attemptCount ?? 0,
+    maxAttempts: overrides.record?.maxAttempts ?? overrides.maxAttempts ?? 5,
+    nextAttemptAt,
+    leaseKey: overrides.record?.leaseKey ?? overrides.leaseKey,
+    leasedAt: overrides.record?.leasedAt ?? overrides.leasedAt,
+    leaseExpiresAt,
+    steps: overrides.record?.steps ?? [
+      { name: "link_checkout", status: "queued" as const, attemptCount: 0 },
+      { name: "persist_order", status: "queued" as const, attemptCount: 0 },
+      { name: "complete_checkout", status: "queued" as const, attemptCount: 0 },
+      { name: "fulfill_order", status: "queued" as const, attemptCount: 0 },
+      { name: "mark_webhook", status: "queued" as const, attemptCount: 0 },
+    ],
+    resumeState: overrides.record?.resumeState,
+    lastError: overrides.record?.lastError,
+    createdAt: overrides.record?.createdAt ?? TEST_NOW,
+    updatedAt: overrides.record?.updatedAt ?? TEST_NOW,
+    metadata: overrides.record?.metadata,
+  };
+
+  return {
+    id,
+    type: "workflow",
+    schemaVersion: 1,
+    kind: record.kind,
+    status,
+    subjectType: record.subjectType,
+    subjectId,
+    idempotencyKey,
+    nextAttemptAt,
+    leaseExpiresAt,
+    record,
+    createdAt: TEST_NOW,
+    updatedAt: TEST_NOW,
+    ...overrides,
+  };
+}
+
 function createFullyWiredTestApi(): MikaApi {
   return createMikaApi(
     Object.fromEntries(
@@ -8023,6 +8983,16 @@ function createTestBackendRepositories(
     stock: createTestStockRepository(options.stockBySellableId),
     ephemeral: new EphemeralRepository(db),
   } satisfies MikaBackendRepositories;
+}
+
+class FailingTerminalWebhookOpsRepository extends OpsRepository {
+  override async put(document: MikaStorageDocuments["ops"]): Promise<void> {
+    if (document.type === "webhook" && document.status !== "received") {
+      throw new Error("ops persistence unavailable");
+    }
+
+    await super.put(document);
+  }
 }
 
 async function createMagicLinkHarness(options: { readonly ttlMs?: number } = {}): Promise<{
@@ -8179,6 +9149,14 @@ function createTestStockRepository(
     },
     async putItem(stock) {
       stockItems.set(stock.sellableId, stock);
+    },
+    async putItemDefinition(stock) {
+      const existing = stockItems.get(stock.sellableId);
+      stockItems.set(stock.sellableId, {
+        ...stock,
+        quantityOnHand: existing?.quantityOnHand ?? stock.quantityOnHand,
+        quantityReserved: existing?.quantityReserved ?? stock.quantityReserved,
+      });
     },
     async insertEvent(event) {
       eventsById.set(event.id, event);
@@ -8365,9 +9343,11 @@ function createTestStockRepository(
 }
 
 function createStorageCollection<TName extends keyof MikaStorageDocuments>(
-  _name: TName,
+  name: TName,
 ): StorageCollection<MikaStorageDocuments[TName]> {
-  return createMemoryStorageCollection<MikaStorageDocuments[TName]>();
+  return createMemoryStorageCollectionWithConfig<MikaStorageDocuments[TName]>(
+    createMikaStorageConfig()[name],
+  );
 }
 
 function createUnusedDbExecutor(): MikaDbExecutor {

@@ -3,18 +3,12 @@ import type { APIContext } from "astro";
 import { createMikaRequestContext } from "./api/context";
 import { type MikaClientRoute } from "./api/client";
 import { resolveMikaApiOverrides, resolveMikaOperationPolicy } from "./api/runtime-api";
-import {
-  normalizeAccountExportDownloadInput,
-  normalizeAccountExportInput,
-  normalizeMagicLinkVerifyInput,
-  normalizeOrderInvoiceInput,
-} from "./api/input-normalizers";
 import { runMikaOperation } from "./api/operation-runner";
 import { mikaOperationDefinitions, type MikaApiOperationData } from "./api/operations";
+import { createMikaOperationFacade, type MikaOperationFacade } from "./api/operation-facade";
 import type { MikaOperationPolicy } from "./api/operation-policy";
 import { createMikaPluginRouteBuilder } from "./api/routes";
 import { createMikaApi, type MikaApiOverrides } from "./api/server";
-import type { MikaServerClient } from "./api/server-client";
 import type {
   AvailabilityDTO,
   MoneyDTO,
@@ -33,9 +27,9 @@ export interface MikaAstroClientOptions {
   readonly operationPolicy?: MikaOperationPolicy;
 }
 
-export type MikaAstroClient = Omit<MikaServerClient, "admin" | "webhook" | "routes"> & {
+export interface MikaAstroClient extends MikaOperationFacade {
   readonly routes: MikaClientRoute;
-};
+}
 
 export interface MikaFormatOptions {
   readonly locales?: Intl.LocalesArgument;
@@ -110,71 +104,15 @@ export function createMikaAstroClient(
       operationPolicy: resolveMikaOperationPolicy(options.operationPolicy),
     });
   };
+  const facade = createMikaOperationFacade(requestOperation, {
+    locale: requestContext.locale,
+  });
 
   return {
     routes: createMikaPluginRouteBuilder({
       origin: ctx.url,
     }),
-    catalog: {
-      sellables: (collection, id, catalogOptions = {}) =>
-        requestOperation("catalogSellables", {
-          collection,
-          id,
-          locale: catalogOptions.locale ?? requestContext.locale,
-        }),
-    },
-    stock: {
-      availability: (sellableId) => requestOperation("stockAvailability", { sellableId }),
-    },
-    cart: {
-      get: () => requestOperation("cartGet"),
-      quote: (input = {}) => requestOperation("cartQuote", input),
-      add: (input) => requestOperation("cartAdd", input),
-      update: (input) => requestOperation("cartUpdate", input),
-      remove: (input) => requestOperation("cartRemove", input),
-      merge: (input = {}) => requestOperation("cartMerge", input),
-      applyCoupon: (input) => requestOperation("cartApplyCoupon", input),
-      removeCoupon: (input = {}) => requestOperation("cartRemoveCoupon", input),
-    },
-    wishlist: {
-      get: () => requestOperation("wishlistGet"),
-      add: (input) => requestOperation("wishlistAdd", input),
-      remove: (input) => requestOperation("wishlistRemove", input),
-      moveToCart: (input) => requestOperation("wishlistMoveToCart", input),
-      saveForLater: (input) => requestOperation("wishlistSaveForLater", input),
-      merge: (input = {}) => requestOperation("wishlistMerge", input),
-    },
-    checkout: {
-      start: (input = {}) => requestOperation("checkoutStart", input),
-      preview: (input = {}) => requestOperation("checkoutPreview", input),
-      status: (checkoutId) => requestOperation("checkoutStatus", { checkoutId }),
-    },
-    magicLink: {
-      request: (input) => requestOperation("magicLinkRequest", input),
-      verify: (input) => requestOperation("magicLinkVerify", normalizeMagicLinkVerifyInput(input)),
-    },
-    account: {
-      get: () => requestOperation("accountGet"),
-      export: (input = {}) => requestOperation("accountExport", input),
-      exportStatus: (input) =>
-        requestOperation("accountExportStatus", normalizeAccountExportInput(input)),
-      exportDownload: (input) =>
-        requestOperation("accountExportDownload", normalizeAccountExportDownloadInput(input)),
-      delete: (input = {}) => requestOperation("accountDelete", input),
-      portal: (input = {}) =>
-        requestOperation("accountPortal", typeof input === "string" ? { returnTo: input } : input),
-    },
-    subscription: {
-      cancel: (input) => requestOperation("subscriptionCancel", input),
-      change: (input) => requestOperation("subscriptionChange", input),
-      renew: (input) => requestOperation("subscriptionRenew", input),
-    },
-    download: {
-      resolve: (token) => requestOperation("downloadResolve", { token }),
-    },
-    order: {
-      invoice: (input) => requestOperation("orderInvoice", normalizeOrderInvoiceInput(input)),
-    },
+    ...facade,
   };
 }
 

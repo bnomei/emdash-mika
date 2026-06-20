@@ -1,5 +1,10 @@
 import type { MikaRequestContext } from "./context";
-import { callMikaOperation, type MikaApiOperation, type MikaApiOperationData } from "./operations";
+import {
+  callMikaOperation,
+  mikaOperationDescriptor,
+  type MikaApiOperation,
+  type MikaApiOperationData,
+} from "./operations";
 import { runMikaOperationPolicy, type MikaOperationPolicy } from "./operation-policy";
 import type { MikaApi } from "./server";
 import type { MikaApiResult } from "./types";
@@ -20,7 +25,7 @@ export async function runMikaOperation<TOperation extends MikaApiOperation>({
   operationPolicy,
 }: RunMikaOperationInput<TOperation>): Promise<MikaApiResult<MikaApiOperationData<TOperation>>> {
   const policyRejection = await runMikaOperationPolicy(operationPolicy, {
-    operation,
+    descriptor: mikaOperationDescriptor(operation),
     ctx,
     input,
   });
