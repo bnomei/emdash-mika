@@ -50,8 +50,11 @@ import {
   webhookReceiveInputSchema,
   webhookReplayInputSchema,
   wishlistItemInputSchema,
+  parseMikaInput,
+  searchParamsObject,
   type z,
 } from "./validation";
+import type { MikaRequestInit } from "./request";
 
 export type MikaOperationHttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
 export type MikaOperationTransport = "body" | "search" | "none";
@@ -71,6 +74,14 @@ interface MikaOperationActionDefinition<TActionInput = unknown> {
   readonly normalize?: MikaOperationActionNormalizer;
 }
 
+type MikaOperationActionInputDefinition<TActionSchema extends z.ZodType | undefined = z.ZodType> = {
+  readonly key?: string;
+  readonly name?: string;
+  readonly accept: MikaActionAccept;
+  readonly schema?: TActionSchema;
+  readonly normalize?: MikaOperationActionNormalizer;
+};
+
 interface MikaApiOperationBaseDefinition {
   readonly name: string;
   readonly namespace: string;
@@ -85,36 +96,164 @@ interface MikaApiOperationBaseDefinition {
   readonly searchKeys?: readonly string[];
 }
 
+type MikaApiOperationBaseInputDefinition = Omit<MikaApiOperationBaseDefinition, "name"> & {
+  readonly name?: string;
+};
+
 type MikaApiOperationDefinition = MikaApiOperationBaseDefinition & {
   readonly schema?: z.ZodType;
   readonly action?: MikaOperationActionDefinition;
   readonly call: MikaApiOperationCall<unknown, unknown>;
 };
 
+type MikaOperationName<TDefinition> = TDefinition extends {
+  readonly namespace: infer TNamespace extends string;
+  readonly method: infer TMethod extends string;
+}
+  ? `${TNamespace}.${TMethod}`
+  : string;
+
+type MikaDefinedOperationName<TDefinition> = TDefinition extends {
+  readonly name: infer TName extends string;
+}
+  ? TName
+  : MikaOperationName<TDefinition>;
+
+type MikaDefinedActionSchema<TDefinition, TAction> = TAction extends {
+  readonly schema: infer TActionSchema extends z.ZodType;
+}
+  ? TActionSchema
+  : TDefinition extends { readonly schema: infer TSchema extends z.ZodType }
+    ? TSchema
+    : z.ZodType;
+
+type MikaDefinedOperationAction<
+  TKey extends string,
+  TDefinition,
+  TAction extends MikaOperationActionInputDefinition,
+> = Omit<TAction, "key" | "name" | "schema"> & {
+  readonly key: TAction extends { readonly key: infer TActionKey extends string }
+    ? TActionKey
+    : TKey;
+  readonly name: TAction extends { readonly name: infer TActionName extends string }
+    ? TActionName
+    : MikaDefinedOperationName<TDefinition>;
+  readonly schema: MikaDefinedActionSchema<TDefinition, TAction>;
+};
+
+type MikaDefinedOperation<TKey extends string, TDefinition> = Omit<
+  TDefinition,
+  "name" | "action"
+> & {
+  readonly name: MikaDefinedOperationName<TDefinition>;
+} & (TDefinition extends {
+    readonly action: infer TAction extends MikaOperationActionInputDefinition;
+  }
+    ? { readonly action: MikaDefinedOperationAction<TKey, TDefinition, TAction> }
+    : {});
+
 function defineMikaOperation<
   const TSchema extends z.ZodType,
   TData,
-  const TDefinition extends MikaApiOperationBaseDefinition,
+  const TDefinition extends MikaApiOperationBaseInputDefinition,
 >(
   definition: TDefinition & {
     readonly schema: TSchema;
+    readonly action?: MikaOperationActionInputDefinition | undefined;
     readonly call: MikaApiOperationCall<z.infer<TSchema>, TData>;
   },
-): TDefinition & {
+): Omit<TDefinition, "name"> & {
+  readonly name: MikaDefinedOperationName<TDefinition>;
   readonly schema: TSchema;
+  readonly action?: TDefinition extends {
+    readonly action: infer TAction extends MikaOperationActionInputDefinition;
+  }
+    ? Omit<TAction, "name" | "schema"> & {
+        readonly name: MikaDefinedOperationName<TDefinition>;
+        readonly schema: MikaDefinedActionSchema<TDefinition, TAction>;
+      }
+    : never;
   readonly call: MikaApiOperationCall<z.infer<TSchema>, TData>;
 };
-function defineMikaOperation<TData, const TDefinition extends MikaApiOperationBaseDefinition>(
+function defineMikaOperation<TData, const TDefinition extends MikaApiOperationBaseInputDefinition>(
   definition: TDefinition & {
     readonly schema?: undefined;
+    readonly action?: undefined;
     readonly call: MikaApiOperationCall<undefined, TData>;
   },
-): TDefinition & {
+): Omit<TDefinition, "name"> & {
+  readonly name: MikaDefinedOperationName<TDefinition>;
   readonly schema?: undefined;
   readonly call: MikaApiOperationCall<undefined, TData>;
 };
-function defineMikaOperation(definition: MikaApiOperationDefinition): MikaApiOperationDefinition {
-  return definition;
+function defineMikaOperation(definition: any): any {
+  return normalizeMikaOperationDefinition(definition);
+}
+
+function normalizeMikaOperationDefinition(
+  definition: MikaApiOperationBaseInputDefinition & {
+    readonly schema?: z.ZodType;
+    readonly action?: MikaOperationActionInputDefinition;
+    readonly call: MikaApiOperationCall<unknown, unknown>;
+  },
+): MikaApiOperationDefinition {
+  const name = definition.name ?? `${definition.namespace}.${definition.method}`;
+  const { action: actionInput, ...operation } = definition;
+  const action =
+    actionInput === undefined
+      ? undefined
+      : {
+          ...actionInput,
+          name: actionInput.name ?? name,
+          schema: actionInput.schema ?? definition.schema,
+        };
+
+  if (action && !action.schema) {
+    throw new Error(`Mika action '${name}' is missing an input schema.`);
+  }
+
+  return {
+    ...operation,
+    name,
+    ...(action ? { action: action as MikaOperationActionDefinition } : {}),
+  };
+}
+
+function defineMikaOperations<
+  const TDefinitions extends Record<string, ReturnType<typeof defineMikaOperation>>,
+>(
+  definitions: TDefinitions,
+): {
+  readonly [TKey in keyof TDefinitions]: MikaDefinedOperation<TKey & string, TDefinitions[TKey]>;
+} {
+  return Object.fromEntries(
+    Object.entries(definitions).map(([key, operation]) => [
+      key,
+      "action" in operation
+        ? {
+            ...operation,
+            action: {
+              ...operation.action,
+              key: operation.action.key ?? key,
+            },
+          }
+        : operation,
+    ]),
+  ) as {
+    readonly [TKey in keyof TDefinitions]: MikaDefinedOperation<TKey & string, TDefinitions[TKey]>;
+  };
+}
+
+function formAction<const TOptions extends Omit<MikaOperationActionInputDefinition, "accept">>(
+  options?: TOptions,
+): TOptions & { readonly accept: "form" } {
+  return { accept: "form", ...options } as TOptions & { readonly accept: "form" };
+}
+
+function jsonAction<const TOptions extends Omit<MikaOperationActionInputDefinition, "accept">>(
+  options?: TOptions,
+): TOptions & { readonly accept: "json" } {
+  return { accept: "json", ...options } as TOptions & { readonly accept: "json" };
 }
 
 export type MikaApiOperationData<TOperation extends { readonly call: (...args: any) => any }> =
@@ -127,6 +266,49 @@ export type MikaApiOperationInput<TOperation> = TOperation extends {
 }
   ? TInput
   : undefined;
+
+export function mikaOperationRequestInit(
+  operation: Pick<MikaRouteOperation, "httpMethod" | "transport">,
+  input: unknown,
+): MikaRequestInit {
+  if (operation.transport === "none") {
+    return { method: operation.httpMethod };
+  }
+
+  if (operation.transport === "search") {
+    return {
+      method: operation.httpMethod,
+      search: input as MikaRequestInit["search"],
+    };
+  }
+
+  return {
+    method: operation.httpMethod,
+    body: input,
+  };
+}
+
+export function parseMikaOperationInput(
+  operation: MikaRouteOperation,
+  input: unknown,
+  requestUrl: string | URL,
+) {
+  if (operation.transport === "none") {
+    return { ok: true as const, data: undefined };
+  }
+
+  const schema = "schema" in operation ? operation.schema : undefined;
+  if (!schema) {
+    throw new Error(`Mika operation '${operation.name}' is missing an input schema.`);
+  }
+
+  const rawInput =
+    operation.transport === "search"
+      ? searchParamsObject(new URL(requestUrl), operation.searchKeys ?? [])
+      : (input ?? {});
+
+  return parseMikaInput(schema as z.ZodType<unknown>, rawInput);
+}
 
 export class MikaActionInputError extends Error {
   readonly code: "BAD_REQUEST";
@@ -443,9 +625,8 @@ function parsePurchaseMikaId(value: string | null | undefined, field: string) {
   }
 }
 
-export const mikaOperationDefinitions = {
+export const mikaOperationDefinitions = defineMikaOperations({
   catalogSellables: defineMikaOperation({
-    name: "catalog.sellables",
     namespace: "catalog",
     method: "sellables",
     routeKey: "catalogSellables",
@@ -457,16 +638,10 @@ export const mikaOperationDefinitions = {
     agent: agentOperationMetadata.catalogRead,
     schema: contentRefInputSchema,
     searchKeys: ["collection", "id", "locale"],
-    action: {
-      key: "catalogSellables",
-      name: "catalog.sellables",
-      accept: "json",
-      schema: contentRefInputSchema,
-    },
+    action: jsonAction(),
     call: (api, _ctx, input) => api.catalog.sellables({ contentRef: input }),
   }),
   stockAvailability: defineMikaOperation({
-    name: "stock.availability",
     namespace: "stock",
     method: "availability",
     routeKey: "sellableAvailability",
@@ -478,16 +653,10 @@ export const mikaOperationDefinitions = {
     agent: agentOperationMetadata.stockRead,
     schema: stockAvailabilityInputSchema,
     searchKeys: ["sellableId"],
-    action: {
-      key: "stockAvailability",
-      name: "stock.availability",
-      accept: "json",
-      schema: stockAvailabilityInputSchema,
-    },
+    action: jsonAction(),
     call: (api, _ctx, input) => api.stock.availability(input),
   }),
   cartGet: defineMikaOperation({
-    name: "cart.get",
     namespace: "cart",
     method: "get",
     routeKey: "cart",
@@ -500,7 +669,6 @@ export const mikaOperationDefinitions = {
     call: (api, ctx) => api.cart.get(ctx),
   }),
   cartQuote: defineMikaOperation({
-    name: "cart.quote",
     namespace: "cart",
     method: "quote",
     routeKey: "cartQuote",
@@ -514,7 +682,6 @@ export const mikaOperationDefinitions = {
     call: (api, ctx, input) => api.cart.quote(ctx, input),
   }),
   cartAdd: defineMikaOperation({
-    name: "cart.add",
     namespace: "cart",
     method: "add",
     routeKey: "cartItems",
@@ -525,17 +692,13 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.cartWrite,
     schema: addCartItemInputSchema,
-    action: {
-      key: "cartAdd",
-      name: "cart.add",
-      accept: "form",
+    action: formAction({
       schema: cartAddFormInputSchema,
       normalize: normalizeCartAddActionInput,
-    },
+    }),
     call: (api, ctx, input) => api.cart.add(ctx, input),
   }),
   cartUpdate: defineMikaOperation({
-    name: "cart.update",
     namespace: "cart",
     method: "update",
     routeKey: "cartItem",
@@ -546,16 +709,10 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.cartWrite,
     schema: updateCartItemInputSchema,
-    action: {
-      key: "cartUpdate",
-      name: "cart.update",
-      accept: "form",
-      schema: updateCartItemInputSchema,
-    },
+    action: formAction(),
     call: (api, ctx, input) => api.cart.update(ctx, input),
   }),
   cartRemove: defineMikaOperation({
-    name: "cart.remove",
     namespace: "cart",
     method: "remove",
     routeKey: "cartItem",
@@ -566,16 +723,10 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.cartWrite,
     schema: removeCartItemInputSchema,
-    action: {
-      key: "cartRemove",
-      name: "cart.remove",
-      accept: "form",
-      schema: removeCartItemInputSchema,
-    },
+    action: formAction(),
     call: (api, ctx, input) => api.cart.remove(ctx, input),
   }),
   cartMerge: defineMikaOperation({
-    name: "cart.merge",
     namespace: "cart",
     method: "merge",
     routeKey: "cartMerge",
@@ -586,16 +737,10 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.cartWrite,
     schema: mergeCartInputSchema,
-    action: {
-      key: "cartMerge",
-      name: "cart.merge",
-      accept: "form",
-      schema: mergeCartInputSchema,
-    },
+    action: formAction(),
     call: (api, ctx, input) => api.cart.merge(ctx, input),
   }),
   cartApplyCoupon: defineMikaOperation({
-    name: "cart.applyCoupon",
     namespace: "cart",
     method: "applyCoupon",
     routeKey: "cartCoupon",
@@ -606,16 +751,10 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.cartWrite,
     schema: applyCouponInputSchema,
-    action: {
-      key: "cartApplyCoupon",
-      name: "cart.applyCoupon",
-      accept: "form",
-      schema: applyCouponInputSchema,
-    },
+    action: formAction(),
     call: (api, ctx, input) => api.cart.applyCoupon(ctx, input),
   }),
   cartRemoveCoupon: defineMikaOperation({
-    name: "cart.removeCoupon",
     namespace: "cart",
     method: "removeCoupon",
     routeKey: "cartCoupon",
@@ -626,16 +765,10 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.cartWrite,
     schema: removeCouponInputSchema,
-    action: {
-      key: "cartRemoveCoupon",
-      name: "cart.removeCoupon",
-      accept: "form",
-      schema: removeCouponInputSchema,
-    },
+    action: formAction(),
     call: (api, ctx, input) => api.cart.removeCoupon(ctx, input),
   }),
   wishlistGet: defineMikaOperation({
-    name: "wishlist.get",
     namespace: "wishlist",
     method: "get",
     routeKey: "wishlist",
@@ -648,7 +781,6 @@ export const mikaOperationDefinitions = {
     call: (api, ctx) => api.wishlist.get(ctx),
   }),
   wishlistAdd: defineMikaOperation({
-    name: "wishlist.add",
     namespace: "wishlist",
     method: "add",
     routeKey: "wishlistItems",
@@ -659,16 +791,10 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.wishlistWrite,
     schema: wishlistItemInputSchema,
-    action: {
-      key: "wishlistAdd",
-      name: "wishlist.add",
-      accept: "form",
-      schema: wishlistItemInputSchema,
-    },
+    action: formAction(),
     call: (api, ctx, input) => api.wishlist.add(ctx, input),
   }),
   wishlistRemove: defineMikaOperation({
-    name: "wishlist.remove",
     namespace: "wishlist",
     method: "remove",
     routeKey: "wishlistItem",
@@ -679,16 +805,10 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.wishlistWrite,
     schema: removeWishlistItemInputSchema,
-    action: {
-      key: "wishlistRemove",
-      name: "wishlist.remove",
-      accept: "form",
-      schema: removeWishlistItemInputSchema,
-    },
+    action: formAction(),
     call: (api, ctx, input) => api.wishlist.remove(ctx, input),
   }),
   wishlistMoveToCart: defineMikaOperation({
-    name: "wishlist.moveToCart",
     namespace: "wishlist",
     method: "moveToCart",
     routeKey: "wishlistMoveToCart",
@@ -699,16 +819,10 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.wishlistWrite,
     schema: moveWishlistItemToCartInputSchema,
-    action: {
-      key: "wishlistMoveToCart",
-      name: "wishlist.moveToCart",
-      accept: "form",
-      schema: moveWishlistItemToCartInputSchema,
-    },
+    action: formAction(),
     call: (api, ctx, input) => api.wishlist.moveToCart(ctx, input),
   }),
   wishlistSaveForLater: defineMikaOperation({
-    name: "wishlist.saveForLater",
     namespace: "wishlist",
     method: "saveForLater",
     routeKey: "wishlistSaveForLater",
@@ -719,16 +833,10 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.wishlistWrite,
     schema: saveCartLineForLaterInputSchema,
-    action: {
-      key: "wishlistSaveForLater",
-      name: "wishlist.saveForLater",
-      accept: "form",
-      schema: saveCartLineForLaterInputSchema,
-    },
+    action: formAction(),
     call: (api, ctx, input) => api.wishlist.saveForLater(ctx, input),
   }),
   wishlistMerge: defineMikaOperation({
-    name: "wishlist.merge",
     namespace: "wishlist",
     method: "merge",
     routeKey: "wishlistMerge",
@@ -739,16 +847,10 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.wishlistWrite,
     schema: mergeWishlistInputSchema,
-    action: {
-      key: "wishlistMerge",
-      name: "wishlist.merge",
-      accept: "form",
-      schema: mergeWishlistInputSchema,
-    },
+    action: formAction(),
     call: (api, ctx, input) => api.wishlist.merge(ctx, input),
   }),
   checkoutStart: defineMikaOperation({
-    name: "checkout.start",
     namespace: "checkout",
     method: "start",
     routeKey: "checkout",
@@ -759,17 +861,13 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.checkoutHandoff,
     schema: startCheckoutInputSchema,
-    action: {
-      key: "checkoutStart",
-      name: "checkout.start",
-      accept: "form",
+    action: formAction({
       schema: checkoutStartFormInputSchema,
       normalize: normalizeCheckoutStartActionInput,
-    },
+    }),
     call: (api, ctx, input) => api.checkout.start(ctx, input),
   }),
   checkoutPreview: defineMikaOperation({
-    name: "checkout.preview",
     namespace: "checkout",
     method: "preview",
     routeKey: "checkoutPreview",
@@ -783,7 +881,6 @@ export const mikaOperationDefinitions = {
     call: (api, ctx, input) => api.checkout.preview(ctx, input),
   }),
   checkoutStatus: defineMikaOperation({
-    name: "checkout.status",
     namespace: "checkout",
     method: "status",
     routeKey: "checkoutStatus",
@@ -795,16 +892,10 @@ export const mikaOperationDefinitions = {
     agent: agentOperationMetadata.checkoutRead,
     schema: checkoutStatusInputSchema,
     searchKeys: ["checkoutId"],
-    action: {
-      key: "checkoutStatus",
-      name: "checkout.status",
-      accept: "json",
-      schema: checkoutStatusInputSchema,
-    },
+    action: jsonAction(),
     call: (api, _ctx, input) => api.checkout.status(input),
   }),
   magicLinkRequest: defineMikaOperation({
-    name: "magicLink.request",
     namespace: "magicLink",
     method: "request",
     routeKey: "magicLink",
@@ -815,16 +906,10 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.magicLinkWrite,
     schema: magicLinkRequestInputSchema,
-    action: {
-      key: "magicLinkRequest",
-      name: "magicLink.request",
-      accept: "form",
-      schema: magicLinkRequestInputSchema,
-    },
+    action: formAction(),
     call: (api, ctx, input) => api.magicLink.request(ctx, input),
   }),
   magicLinkVerify: defineMikaOperation({
-    name: "magicLink.verify",
     namespace: "magicLink",
     method: "verify",
     routeKey: "magicLinkVerify",
@@ -835,16 +920,10 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.magicLinkWrite,
     schema: magicLinkVerifyInputSchema,
-    action: {
-      key: "magicLinkVerify",
-      name: "magicLink.verify",
-      accept: "form",
-      schema: magicLinkVerifyInputSchema,
-    },
+    action: formAction(),
     call: (api, ctx, input) => api.magicLink.verify(ctx, input),
   }),
   accountGet: defineMikaOperation({
-    name: "account.get",
     namespace: "account",
     method: "get",
     routeKey: "account",
@@ -857,7 +936,6 @@ export const mikaOperationDefinitions = {
     call: (api, ctx) => api.account.get(ctx),
   }),
   accountExport: defineMikaOperation({
-    name: "account.export",
     namespace: "account",
     method: "export",
     routeKey: "accountExport",
@@ -868,16 +946,10 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.accountWrite,
     schema: returnToInputSchema,
-    action: {
-      key: "accountExport",
-      name: "account.export",
-      accept: "form",
-      schema: returnToInputSchema,
-    },
+    action: formAction(),
     call: (api, ctx, input) => api.account.export(ctx, input),
   }),
   accountExportStatus: defineMikaOperation({
-    name: "account.exportStatus",
     namespace: "account",
     method: "exportStatus",
     routeKey: "accountExportStatus",
@@ -889,16 +961,10 @@ export const mikaOperationDefinitions = {
     agent: agentOperationMetadata.accountRead,
     schema: accountExportStatusInputSchema,
     searchKeys: ["exportId"],
-    action: {
-      key: "accountExportStatus",
-      name: "account.exportStatus",
-      accept: "json",
-      schema: accountExportStatusInputSchema,
-    },
+    action: jsonAction(),
     call: (api, ctx, input) => api.account.exportStatus(ctx, input),
   }),
   accountExportDownload: defineMikaOperation({
-    name: "account.exportDownload",
     namespace: "account",
     method: "exportDownload",
     routeKey: "accountExportDownload",
@@ -913,7 +979,6 @@ export const mikaOperationDefinitions = {
     call: (api, ctx, input) => api.account.exportDownload(ctx, input),
   }),
   accountDelete: defineMikaOperation({
-    name: "account.delete",
     namespace: "account",
     method: "delete",
     routeKey: "accountDelete",
@@ -924,16 +989,10 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.accountWrite,
     schema: returnToInputSchema,
-    action: {
-      key: "accountDelete",
-      name: "account.delete",
-      accept: "form",
-      schema: returnToInputSchema,
-    },
+    action: formAction(),
     call: (api, ctx, input) => api.account.delete(ctx, input),
   }),
   accountPortal: defineMikaOperation({
-    name: "account.portal",
     namespace: "account",
     method: "portal",
     routeKey: "accountPortal",
@@ -944,16 +1003,10 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.accountWrite,
     schema: returnToInputSchema,
-    action: {
-      key: "accountPortal",
-      name: "account.portal",
-      accept: "form",
-      schema: returnToInputSchema,
-    },
+    action: formAction(),
     call: (api, ctx, input) => api.account.portal(ctx, input),
   }),
   subscriptionCancel: defineMikaOperation({
-    name: "subscription.cancel",
     namespace: "subscription",
     method: "cancel",
     routeKey: "subscriptionCancel",
@@ -964,16 +1017,10 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.subscriptionWrite,
     schema: subscriptionCancelInputSchema,
-    action: {
-      key: "subscriptionCancel",
-      name: "subscription.cancel",
-      accept: "form",
-      schema: subscriptionCancelInputSchema,
-    },
+    action: formAction(),
     call: (api, ctx, input) => api.subscription.cancel(ctx, input),
   }),
   subscriptionChange: defineMikaOperation({
-    name: "subscription.change",
     namespace: "subscription",
     method: "change",
     routeKey: "subscriptionChange",
@@ -984,16 +1031,10 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.subscriptionWrite,
     schema: subscriptionChangeInputSchema,
-    action: {
-      key: "subscriptionChange",
-      name: "subscription.change",
-      accept: "form",
-      schema: subscriptionChangeInputSchema,
-    },
+    action: formAction(),
     call: (api, ctx, input) => api.subscription.change(ctx, input),
   }),
   subscriptionRenew: defineMikaOperation({
-    name: "subscription.renew",
     namespace: "subscription",
     method: "renew",
     routeKey: "subscriptionRenew",
@@ -1004,16 +1045,10 @@ export const mikaOperationDefinitions = {
     requiresRequestContext: true,
     agent: agentOperationMetadata.subscriptionWrite,
     schema: subscriptionRenewInputSchema,
-    action: {
-      key: "subscriptionRenew",
-      name: "subscription.renew",
-      accept: "form",
-      schema: subscriptionRenewInputSchema,
-    },
+    action: formAction(),
     call: (api, ctx, input) => api.subscription.renew(ctx, input),
   }),
   downloadResolve: defineMikaOperation({
-    name: "download.resolve",
     namespace: "download",
     method: "resolve",
     routeKey: "download",
@@ -1028,7 +1063,6 @@ export const mikaOperationDefinitions = {
     call: (api, _ctx, input) => api.download.resolve(input),
   }),
   orderInvoice: defineMikaOperation({
-    name: "order.invoice",
     namespace: "order",
     method: "invoice",
     routeKey: "orderInvoice",
@@ -1043,7 +1077,6 @@ export const mikaOperationDefinitions = {
     call: (api, _ctx, input) => api.order.invoice(input),
   }),
   webhookReceive: defineMikaOperation({
-    name: "webhook.receive",
     namespace: "webhook",
     method: "receive",
     routeKey: "webhook",
@@ -1057,7 +1090,6 @@ export const mikaOperationDefinitions = {
     call: (api, ctx, input) => api.webhook.receive(ctx, input),
   }),
   adminProviderHealth: defineMikaOperation({
-    name: "admin.providerHealth",
     namespace: "admin",
     method: "providerHealth",
     routeKey: "adminProviderHealth",
@@ -1071,7 +1103,6 @@ export const mikaOperationDefinitions = {
     call: (api, _ctx, input) => api.admin.providerHealth(input),
   }),
   adminProviderSync: defineMikaOperation({
-    name: "admin.providerSync",
     namespace: "admin",
     method: "providerSync",
     routeKey: "adminProviderSync",
@@ -1085,7 +1116,6 @@ export const mikaOperationDefinitions = {
     call: (api, _ctx, input) => api.admin.providerSync(input),
   }),
   adminStockAdjust: defineMikaOperation({
-    name: "admin.stockAdjust",
     namespace: "admin",
     method: "stockAdjust",
     routeKey: "adminStockAdjust",
@@ -1099,7 +1129,6 @@ export const mikaOperationDefinitions = {
     call: (api, _ctx, input) => api.admin.stockAdjust(input),
   }),
   adminStockReleaseExpiredReservations: defineMikaOperation({
-    name: "admin.releaseExpiredReservations",
     namespace: "admin",
     method: "releaseExpiredReservations",
     routeKey: "adminStockReleaseExpiredReservations",
@@ -1113,7 +1142,6 @@ export const mikaOperationDefinitions = {
     call: (api, _ctx, input) => api.admin.releaseExpiredReservations(input),
   }),
   adminWebhookReplay: defineMikaOperation({
-    name: "admin.webhookReplay",
     namespace: "admin",
     method: "webhookReplay",
     routeKey: "adminWebhookReplay",
@@ -1127,7 +1155,6 @@ export const mikaOperationDefinitions = {
     call: (api, _ctx, input) => api.admin.webhookReplay(input),
   }),
   adminOrderRefund: defineMikaOperation({
-    name: "admin.orderRefund",
     namespace: "admin",
     method: "orderRefund",
     routeKey: "adminOrderRefund",
@@ -1141,7 +1168,6 @@ export const mikaOperationDefinitions = {
     call: (api, _ctx, input) => api.admin.orderRefund(input),
   }),
   adminOrderCancel: defineMikaOperation({
-    name: "admin.orderCancel",
     namespace: "admin",
     method: "orderCancel",
     routeKey: "adminOrderCancel",
@@ -1155,7 +1181,6 @@ export const mikaOperationDefinitions = {
     call: (api, _ctx, input) => api.admin.orderCancel(input),
   }),
   adminEntitlementGrant: defineMikaOperation({
-    name: "admin.entitlementGrant",
     namespace: "admin",
     method: "entitlementGrant",
     routeKey: "adminEntitlementGrant",
@@ -1169,7 +1194,6 @@ export const mikaOperationDefinitions = {
     call: (api, _ctx, input) => api.admin.entitlementGrant(input),
   }),
   adminEntitlementRevoke: defineMikaOperation({
-    name: "admin.entitlementRevoke",
     namespace: "admin",
     method: "entitlementRevoke",
     routeKey: "adminEntitlementRevoke",
@@ -1183,7 +1207,6 @@ export const mikaOperationDefinitions = {
     call: (api, _ctx, input) => api.admin.entitlementRevoke(input),
   }),
   adminEmailResend: defineMikaOperation({
-    name: "admin.emailResend",
     namespace: "admin",
     method: "emailResend",
     routeKey: "adminEmailResend",
@@ -1197,7 +1220,6 @@ export const mikaOperationDefinitions = {
     call: (api, _ctx, input) => api.admin.emailResend(input),
   }),
   adminLicenseRevoke: defineMikaOperation({
-    name: "admin.licenseRevoke",
     namespace: "admin",
     method: "licenseRevoke",
     routeKey: "adminLicenseRevoke",
@@ -1211,7 +1233,6 @@ export const mikaOperationDefinitions = {
     call: (api, _ctx, input) => api.admin.licenseRevoke(input),
   }),
   adminDownloadIssue: defineMikaOperation({
-    name: "admin.downloadIssue",
     namespace: "admin",
     method: "downloadIssue",
     routeKey: "adminDownloadIssue",
@@ -1224,7 +1245,7 @@ export const mikaOperationDefinitions = {
     schema: downloadIssueInputSchema,
     call: (api, _ctx, input) => api.admin.downloadIssue(input),
   }),
-} as const;
+});
 
 export type MikaApiOperation =
   (typeof mikaOperationDefinitions)[keyof typeof mikaOperationDefinitions];

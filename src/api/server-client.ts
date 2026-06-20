@@ -1,5 +1,6 @@
 import { createMikaClient, type MikaClient, type MikaClientOptions } from "./client";
 import {
+  mikaOperationRequestInit,
   mikaOperationDefinitions,
   type MikaApiOperationData,
   type MikaRouteOperation,
@@ -153,7 +154,7 @@ export function createMikaServerClient(options: MikaServerClientOptions = {}): M
   ) =>
     request<MikaApiOperationData<TOperation>>(
       operation.routeKey as MikaPluginRouteName,
-      operationRequestInit(operation, input),
+      mikaOperationRequestInit(operation, input),
     );
   const routes = createMikaPluginRouteBuilder({
     apiBase: options.apiBase,
@@ -255,23 +256,5 @@ export function createMikaServerClient(options: MikaServerClientOptions = {}): M
       downloadIssue: (input) =>
         requestOperation(mikaOperationDefinitions.adminDownloadIssue, input),
     },
-  };
-}
-
-function operationRequestInit(operation: MikaRouteOperation, input: unknown): MikaRequestInit {
-  if (operation.transport === "none") {
-    return { method: operation.httpMethod };
-  }
-
-  if (operation.transport === "search") {
-    return {
-      method: operation.httpMethod,
-      search: input as MikaRequestInit["search"],
-    };
-  }
-
-  return {
-    method: operation.httpMethod,
-    body: input,
   };
 }

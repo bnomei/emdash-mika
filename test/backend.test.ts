@@ -18,7 +18,12 @@ import { callMikaOperation, mikaActionDefinitions } from "../src/api/operations"
 import { createMikaPluginRoutes } from "../src/api/route-handlers";
 import { mikaPluginRoutes } from "../src/api/routes";
 import { createMikaStorageConfig, type StorageCollection } from "../src/storage/collections";
-import { MIKA_ERROR_CODES, type CartDTO, type MikaProviderCapability } from "../src/api/types";
+import {
+  MIKA_ERROR_CODES,
+  type CartDTO,
+  type MikaApiResult,
+  type MikaProviderCapability,
+} from "../src/api/types";
 import { createMikaApi, mikaApiMethodNames, type MikaApi } from "../src/api/server";
 import type {
   MikaProviderAdapter,
@@ -1284,16 +1289,12 @@ describe("backend test Kysely stock database harness", () => {
         now: createTestClock().isoAt(60_000),
       };
 
-      await expect(api.admin.stockAdjust(input)).resolves.toMatchObject({
-        ok: true,
-        status: 200,
-        data: {
-          id: "stock_event_1",
-          status: "completed",
-          affected: {
-            stockItems: 1,
-            movements: 1,
-          },
+      expectMikaOk(await api.admin.stockAdjust(input), {
+        id: "stock_event_1",
+        status: "completed",
+        affected: {
+          stockItems: 1,
+          movements: 1,
         },
       });
       await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
@@ -3130,13 +3131,10 @@ describe("backend API composition", () => {
       }),
     );
 
-    await expect(api.admin.providerSync({ mode: "apply" })).resolves.toMatchObject({
-      ok: false,
+    expectMikaError(await api.admin.providerSync({ mode: "apply" }), {
       status: 502,
-      error: {
-        code: "PROVIDER_FAILED",
-        message: "Provider sync failed.",
-      },
+      code: "PROVIDER_FAILED",
+      message: "Provider sync failed.",
     });
 
     expect(fake.getCalls().syncCatalog).toEqual([{ mode: "apply" }]);
@@ -8727,6 +8725,32 @@ async function expectCheckoutFailureInvariant(input: {
       });
     }
   }
+}
+
+function expectMikaOk<T>(result: MikaApiResult<T>, data?: unknown): void {
+  expect(result).toMatchObject({
+    ok: true,
+    status: 200,
+    ...(data === undefined ? {} : { data }),
+  });
+}
+
+function expectMikaError(
+  result: MikaApiResult<unknown>,
+  error: {
+    readonly status: number;
+    readonly code: string;
+    readonly message?: string;
+  },
+): void {
+  expect(result).toMatchObject({
+    ok: false,
+    status: error.status,
+    error: {
+      code: error.code,
+      ...(error.message === undefined ? {} : { message: error.message }),
+    },
+  });
 }
 
 function receiveWebhook(api: MikaApi, marker: string, provider = TEST_PROVIDER) {

@@ -84,8 +84,6 @@ export type CouponDocument = AggregateDocument<
   CouponAggregate
 >;
 
-export type CatalogDocument = CatalogItemDocument | CouponDocument;
-
 export type CartDocument = AggregateDocument<
   "cart",
   {
@@ -131,8 +129,6 @@ export type CheckoutDocument = AggregateDocument<
   CheckoutAggregate
 >;
 
-export type SessionDocument = CartDocument | WishlistDocument | CheckoutDocument;
-
 export type CustomerDocument = AggregateDocument<
   "customer",
   {
@@ -176,13 +172,6 @@ export type LicenseDocument = RecordBackedDocument<
   readonly customerId?: MikaId;
 };
 
-export type AccountDocument =
-  | CustomerDocument
-  | ProviderAccountDocument
-  | SubscriptionDocument
-  | EntitlementDocument
-  | LicenseDocument;
-
 export type OrderDocument = AggregateDocument<
   "order",
   {
@@ -201,8 +190,6 @@ export type OrderDocument = AggregateDocument<
   },
   OrderAggregate
 >;
-
-export type LedgerDocument = OrderDocument;
 
 export type WebhookDocument = RecordBackedDocument<
   "webhook",
@@ -246,20 +233,28 @@ export type AdminAuditDocument = RecordBackedDocument<
   "actorId" | "targetType" | "targetId" | "status"
 >;
 
-export type OpsDocument =
-  | WebhookDocument
-  | EmailDocument
-  | AccountExportDocument
-  | AccountDeleteRequestDocument
-  | ProviderSyncRunDocument
-  | AdminAuditDocument;
-
 export interface MikaStorageDocuments {
-  readonly catalog: CatalogDocument;
-  readonly session: SessionDocument;
-  readonly account: AccountDocument;
-  readonly ledger: LedgerDocument;
-  readonly ops: OpsDocument;
+  readonly catalog: CatalogItemDocument | CouponDocument;
+  readonly session: CartDocument | WishlistDocument | CheckoutDocument;
+  readonly account:
+    | CustomerDocument
+    | ProviderAccountDocument
+    | SubscriptionDocument
+    | EntitlementDocument
+    | LicenseDocument;
+  readonly ledger: OrderDocument;
+  readonly ops:
+    | WebhookDocument
+    | EmailDocument
+    | AccountExportDocument
+    | AccountDeleteRequestDocument
+    | ProviderSyncRunDocument
+    | AdminAuditDocument;
 }
 
+export type CatalogDocument = MikaStorageDocuments["catalog"];
+export type SessionDocument = MikaStorageDocuments["session"];
+export type AccountDocument = MikaStorageDocuments["account"];
+export type LedgerDocument = MikaStorageDocuments["ledger"];
+export type OpsDocument = MikaStorageDocuments["ops"];
 export type MikaStorageCollectionName = keyof MikaStorageDocuments;

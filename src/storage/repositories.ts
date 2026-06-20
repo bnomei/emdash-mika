@@ -186,6 +186,18 @@ type StorageResultItem<TDocument> = {
 };
 type DocumentList<TDocument> = PaginatedStorageResult<StorageResultItem<TDocument>>;
 type DueOpsDocument = WebhookDocument | EmailDocument;
+type StockMutationResult = {
+  readonly numAffectedRows?: bigint | number;
+  readonly numUpdatedRows?: bigint | number;
+  readonly numChangedRows?: bigint | number;
+};
+type TypedCollectionFacade<TDocument extends TypedDocument & { readonly id: string }> = ReturnType<
+  typeof typedCollection<TDocument>
+>;
+type SessionRepositoryInternals = {
+  readonly findOpenCartBySessionAnyCurrency: (sessionId: string) => Promise<CartDocument | null>;
+};
+const sessionRepositoryInternals = new WeakMap<object, SessionRepositoryInternals>();
 
 async function putByDocumentId<TDocument extends { readonly id: string }>(
   collection: StorageCollection<TDocument>,
@@ -255,22 +267,52 @@ function documentOfType<TDocument extends TypedDocument, TType extends DocumentT
   return document?.type === type ? (document as DocumentOfType<TDocument, TType>) : null;
 }
 
+function typedCollection<TDocument extends TypedDocument & { readonly id: string }>(
+  collection: StorageCollection<TDocument>,
+) {
+  return {
+    get: (id: string) => collection.get(id),
+    put: (document: TDocument) => putByDocumentId(collection, document),
+    findOneByType: <TType extends DocumentType<TDocument>>(
+      type: TType,
+      where?: TypeScopedWhere<DocumentOfType<TDocument, TType>>,
+    ) => findOneByType(collection, type, where),
+    findByIdOfType: <TType extends DocumentType<TDocument>>(id: string, type: TType) =>
+      findByIdOfType(collection, id, type),
+    listByType: <TType extends DocumentType<TDocument>>(
+      type: TType,
+      options?: TypeScopedQueryOptions<DocumentOfType<TDocument, TType>>,
+    ) => listByType(collection, type, options),
+  };
+}
+
+export function findSessionRepositoryOpenCartBySessionAnyCurrency(
+  repository: unknown,
+  sessionId: string,
+): Promise<CartDocument | null> {
+  if (typeof repository !== "object" || repository === null) return Promise.resolve(null);
+  return (
+    sessionRepositoryInternals.get(repository)?.findOpenCartBySessionAnyCurrency(sessionId) ??
+    Promise.resolve(null)
+  );
+}
+
 export class CatalogRepository {
-  private readonly collection: StorageCollection<CatalogDocument>;
+  private readonly documents: TypedCollectionFacade<CatalogDocument>;
 
   constructor(collection: StorageCollection<CatalogDocument>) {
-    this.collection = collection;
+    this.documents = typedCollection(collection);
   }
 
   async findItemByContent(content: ContentRef): Promise<CatalogItemDocument | null> {
-    return findOneByType(this.collection, "catalogItem", {
+    return this.documents.findOneByType("catalogItem", {
       contentCollection: content.collection,
       contentId: content.id,
     });
   }
 
   async findItemBySellableId(sellableId: MikaId): Promise<CatalogItemDocument | null> {
-    const result = await listByType(this.collection, "catalogItem");
+    const result = await this.documents.listByType("catalogItem");
 
     return (
       result.items.find((item) =>
@@ -283,7 +325,7 @@ export class CatalogRepository {
     provider: string,
     providerPriceId: string,
   ): Promise<CatalogProviderPriceMatch | null> {
-    const result = await listByType(this.collection, "catalogItem");
+    const result = await this.documents.listByType("catalogItem");
 
     for (const item of result.items) {
       for (const sellable of item.data.aggregate.sellables) {
@@ -302,7 +344,7 @@ export class CatalogRepository {
   }
 
   async findPriceById(priceId: MikaId): Promise<CatalogProviderPriceMatch | null> {
-    const result = await listByType(this.collection, "catalogItem");
+    const result = await this.documents.listByType("catalogItem");
 
     for (const item of result.items) {
       for (const sellable of item.data.aggregate.sellables) {
@@ -317,27 +359,34 @@ export class CatalogRepository {
   }
 
   async put(document: CatalogDocument): Promise<void> {
-    await putByDocumentId(this.collection, document);
+    await this.documents.put(document);
   }
 }
 
 export class SessionRepository {
-  private readonly collection: StorageCollection<SessionDocument>;
+  private readonly documents: TypedCollectionFacade<SessionDocument>;
 
   constructor(collection: StorageCollection<SessionDocument>) {
-    this.collection = collection;
+    this.documents = typedCollection(collection);
+    sessionRepositoryInternals.set(this, {
+      findOpenCartBySessionAnyCurrency: (sessionId) =>
+        this.documents.findOneByType("cart", {
+          sessionId,
+          status: "open",
+        }),
+    });
   }
 
   async findById(id: MikaId): Promise<SessionDocument | null> {
-    return this.collection.get(id);
+    return this.documents.get(id);
   }
 
   async findCheckoutById(id: MikaId): Promise<CheckoutDocument | null> {
-    return findByIdOfType(this.collection, id, "checkout");
+    return this.documents.findByIdOfType(id, "checkout");
   }
 
   async findOpenCartBySession(sessionId: string, currency: string): Promise<CartDocument | null> {
-    return findOneByType(this.collection, "cart", {
+    return this.documents.findOneByType("cart", {
       sessionId,
       status: "open",
       currency,
@@ -345,7 +394,7 @@ export class SessionRepository {
   }
 
   async findOpenCartByCustomer(customerId: MikaId, currency: string): Promise<CartDocument | null> {
-    return findOneByType(this.collection, "cart", {
+    return this.documents.findOneByType("cart", {
       customerId,
       status: "open",
       currency,
@@ -353,14 +402,14 @@ export class SessionRepository {
   }
 
   async findWishlistBySession(sessionId: string): Promise<WishlistDocument | null> {
-    return findOneByType(this.collection, "wishlist", {
+    return this.documents.findOneByType("wishlist", {
       sessionId,
       status: "active",
     });
   }
 
   async findWishlistByCustomer(customerId: MikaId): Promise<WishlistDocument | null> {
-    return findOneByType(this.collection, "wishlist", {
+    return this.documents.findOneByType("wishlist", {
       customerId,
       status: "active",
     });
@@ -370,7 +419,7 @@ export class SessionRepository {
     provider: string,
     providerCheckoutId: string,
   ): Promise<CheckoutDocument | null> {
-    return findOneByType(this.collection, "checkout", {
+    return this.documents.findOneByType("checkout", {
       provider,
       providerCheckoutId,
     });
@@ -379,12 +428,12 @@ export class SessionRepository {
   async findCheckoutByIdempotencyKey(idempotencyKey: string): Promise<CheckoutDocument | null> {
     if (!idempotencyKey) return null;
 
-    const indexed = await findOneByType(this.collection, "checkout", {
+    const indexed = await this.documents.findOneByType("checkout", {
       checkoutIdempotencyKey: idempotencyKey,
     });
     if (indexed) return indexed;
 
-    const result = await listByType(this.collection, "checkout");
+    const result = await this.documents.listByType("checkout");
 
     return (
       result.items.find(
@@ -394,42 +443,42 @@ export class SessionRepository {
   }
 
   async put(document: SessionDocument): Promise<void> {
-    await putByDocumentId(this.collection, document);
+    await this.documents.put(document);
   }
 }
 
 export class AccountRepository {
-  private readonly collection: StorageCollection<AccountDocument>;
+  private readonly documents: TypedCollectionFacade<AccountDocument>;
 
   constructor(collection: StorageCollection<AccountDocument>) {
-    this.collection = collection;
+    this.documents = typedCollection(collection);
   }
 
   async findCustomerById(customerId: MikaId): Promise<CustomerDocument | null> {
-    return findOneByType(this.collection, "customer", { customerId });
+    return this.documents.findOneByType("customer", { customerId });
   }
 
   async findCustomerByUserId(userId: string): Promise<CustomerDocument | null> {
-    return findOneByType(this.collection, "customer", { userId });
+    return this.documents.findOneByType("customer", { userId });
   }
 
   async findCustomerByEmailHash(emailHash: string): Promise<CustomerDocument | null> {
-    return findOneByType(this.collection, "customer", { emailHash });
+    return this.documents.findOneByType("customer", { emailHash });
   }
 
   async findEntitlementById(entitlementId: MikaId): Promise<EntitlementDocument | null> {
-    return findByIdOfType(this.collection, entitlementId, "entitlement");
+    return this.documents.findByIdOfType(entitlementId, "entitlement");
   }
 
   async findLicenseById(licenseId: MikaId): Promise<LicenseDocument | null> {
-    return findByIdOfType(this.collection, licenseId, "license");
+    return this.documents.findByIdOfType(licenseId, "license");
   }
 
   async findProviderAccount(
     provider: string,
     providerCustomerId: string,
   ): Promise<ProviderAccountDocument | null> {
-    return findOneByType(this.collection, "providerAccount", {
+    return this.documents.findOneByType("providerAccount", {
       provider,
       providerCustomerId,
     });
@@ -439,21 +488,21 @@ export class AccountRepository {
     provider: string,
     providerSubscriptionId: string,
   ): Promise<SubscriptionDocument | null> {
-    return findOneByType(this.collection, "subscription", {
+    return this.documents.findOneByType("subscription", {
       provider,
       providerSubscriptionId,
     });
   }
 
   async findSubscriptionById(subscriptionId: MikaId): Promise<SubscriptionDocument | null> {
-    return findByIdOfType(this.collection, subscriptionId, "subscription");
+    return this.documents.findByIdOfType(subscriptionId, "subscription");
   }
 
   async listProviderAccountsByCustomer(
     customerId: MikaId,
     limit = 50,
   ): Promise<DocumentList<ProviderAccountDocument>> {
-    return listByType(this.collection, "providerAccount", {
+    return this.documents.listByType("providerAccount", {
       where: { customerId },
       orderBy: { updatedAt: "desc" },
       limit,
@@ -464,7 +513,7 @@ export class AccountRepository {
     customerId: MikaId,
     limit = 50,
   ): Promise<DocumentList<SubscriptionDocument>> {
-    return listByType(this.collection, "subscription", {
+    return this.documents.listByType("subscription", {
       where: { customerId },
       orderBy: { currentPeriodEnd: "desc" },
       limit,
@@ -475,7 +524,7 @@ export class AccountRepository {
     customerId: MikaId,
     limit = 100,
   ): Promise<DocumentList<EntitlementDocument>> {
-    return listByType(this.collection, "entitlement", {
+    return this.documents.listByType("entitlement", {
       where: { customerId },
       orderBy: { updatedAt: "desc" },
       limit,
@@ -486,7 +535,7 @@ export class AccountRepository {
     userId: string,
     limit = 100,
   ): Promise<DocumentList<EntitlementDocument>> {
-    return listByType(this.collection, "entitlement", {
+    return this.documents.listByType("entitlement", {
       where: { userId },
       orderBy: { updatedAt: "desc" },
       limit,
@@ -497,7 +546,7 @@ export class AccountRepository {
     emailHash: string,
     limit = 100,
   ): Promise<DocumentList<EntitlementDocument>> {
-    return listByType(this.collection, "entitlement", {
+    return this.documents.listByType("entitlement", {
       where: { emailHash },
       orderBy: { updatedAt: "desc" },
       limit,
@@ -508,7 +557,7 @@ export class AccountRepository {
     customerId: MikaId,
     limit = 100,
   ): Promise<DocumentList<LicenseDocument>> {
-    return listByType(this.collection, "license", {
+    return this.documents.listByType("license", {
       where: { customerId },
       orderBy: { updatedAt: "desc" },
       limit,
@@ -516,30 +565,30 @@ export class AccountRepository {
   }
 
   async put(document: AccountDocument): Promise<void> {
-    await putByDocumentId(this.collection, document);
+    await this.documents.put(document);
   }
 }
 
 export class LedgerRepository {
-  private readonly collection: StorageCollection<LedgerDocument>;
+  private readonly documents: TypedCollectionFacade<LedgerDocument>;
 
   constructor(collection: StorageCollection<LedgerDocument>) {
-    this.collection = collection;
+    this.documents = typedCollection(collection);
   }
 
   async findOrderById(orderId: MikaId): Promise<OrderDocument | null> {
-    return findByIdOfType(this.collection, orderId, "order");
+    return this.documents.findByIdOfType(orderId, "order");
   }
 
   async findOrderByNumber(orderNumber: string): Promise<OrderDocument | null> {
-    return findOneByType(this.collection, "order", { orderNumber });
+    return this.documents.findOneByType("order", { orderNumber });
   }
 
   async findOrderByProviderPayment(
     provider: string,
     providerPaymentId: string,
   ): Promise<OrderDocument | null> {
-    return findOneByType(this.collection, "order", {
+    return this.documents.findOneByType("order", {
       provider,
       providerPaymentId,
     });
@@ -549,7 +598,7 @@ export class LedgerRepository {
     provider: string,
     providerCheckoutId: string,
   ): Promise<OrderDocument | null> {
-    return findOneByType(this.collection, "order", {
+    return this.documents.findOneByType("order", {
       provider,
       providerCheckoutId,
     });
@@ -559,18 +608,18 @@ export class LedgerRepository {
     provider: string,
     providerOrderId: string,
   ): Promise<OrderDocument | null> {
-    return findOneByType(this.collection, "order", {
+    return this.documents.findOneByType("order", {
       provider,
       providerOrderId,
     });
   }
 
   async findOrderByCheckoutSession(checkoutSessionId: MikaId): Promise<OrderDocument | null> {
-    return findOneByType(this.collection, "order", { checkoutSessionId });
+    return this.documents.findOneByType("order", { checkoutSessionId });
   }
 
   async findOrderByDownloadRef(downloadRef: string): Promise<OrderDocument | null> {
-    const result = await listByType(this.collection, "order");
+    const result = await this.documents.listByType("order");
 
     return (
       result.items.find((item) =>
@@ -580,7 +629,7 @@ export class LedgerRepository {
   }
 
   async listOrdersByCustomer(customerId: MikaId, limit = 50): Promise<DocumentList<OrderDocument>> {
-    return listByType(this.collection, "order", {
+    return this.documents.listByType("order", {
       where: { customerId },
       orderBy: { createdAt: "desc" },
       limit,
@@ -588,15 +637,17 @@ export class LedgerRepository {
   }
 
   async put(document: LedgerDocument): Promise<void> {
-    await putByDocumentId(this.collection, document);
+    await this.documents.put(document);
   }
 }
 
 export class OpsRepository {
-  private readonly collection: StorageCollection<OpsDocument>;
+  private readonly documents: TypedCollectionFacade<OpsDocument>;
+  private readonly dueDocuments: TypedCollectionFacade<DueOpsDocument>;
 
   constructor(collection: StorageCollection<OpsDocument>) {
-    this.collection = collection;
+    this.documents = typedCollection(collection);
+    this.dueDocuments = typedCollection(collection as StorageCollection<DueOpsDocument>);
   }
 
   async findWebhookDuplicate(input: {
@@ -606,36 +657,36 @@ export class OpsRepository {
     readonly payloadHash: string;
   }): Promise<WebhookDocument | null> {
     if (input.providerEventId !== undefined) {
-      const duplicate = await findOneByType(this.collection, "webhook", {
+      const duplicate = await this.documents.findOneByType("webhook", {
         provider: input.provider,
         providerEventId: input.providerEventId,
       });
       if (duplicate) return duplicate;
     }
 
-    return findOneByType(this.collection, "webhook", {
+    return this.documents.findOneByType("webhook", {
       provider: input.provider,
       payloadHash: input.payloadHash,
     });
   }
 
   async findWebhookById(webhookId: MikaId): Promise<WebhookDocument | null> {
-    return findByIdOfType(this.collection, webhookId, "webhook");
+    return this.documents.findByIdOfType(webhookId, "webhook");
   }
 
   async findAccountExport(exportId: MikaId): Promise<AccountExportDocument | null> {
-    return findByIdOfType(this.collection, exportId, "accountExport");
+    return this.documents.findByIdOfType(exportId, "accountExport");
   }
 
   async findAccountDeleteRequest(requestId: MikaId): Promise<AccountDeleteRequestDocument | null> {
-    return findByIdOfType(this.collection, requestId, "accountDeleteRequest");
+    return this.documents.findByIdOfType(requestId, "accountDeleteRequest");
   }
 
   async listAccountExportsByCustomer(
     customerId: MikaId,
     limit = 20,
   ): Promise<DocumentList<AccountExportDocument>> {
-    return listByType(this.collection, "accountExport", {
+    return this.documents.listByType("accountExport", {
       where: { customerId },
       orderBy: { createdAt: "desc" },
       limit,
@@ -646,7 +697,7 @@ export class OpsRepository {
     customerId: MikaId,
     limit = 20,
   ): Promise<DocumentList<AccountDeleteRequestDocument>> {
-    return listByType(this.collection, "accountDeleteRequest", {
+    return this.documents.listByType("accountDeleteRequest", {
       where: { customerId },
       orderBy: { createdAt: "desc" },
       limit,
@@ -654,19 +705,19 @@ export class OpsRepository {
   }
 
   async findProviderSyncRun(runId: MikaId): Promise<ProviderSyncRunDocument | null> {
-    return findByIdOfType(this.collection, runId, "providerSyncRun");
+    return this.documents.findByIdOfType(runId, "providerSyncRun");
   }
 
   async findAdminAudit(auditId: MikaId): Promise<AdminAuditDocument | null> {
-    return findByIdOfType(this.collection, auditId, "adminAudit");
+    return this.documents.findByIdOfType(auditId, "adminAudit");
   }
 
   async findEmail(emailId: MikaId): Promise<EmailDocument | null> {
-    return findByIdOfType(this.collection, emailId, "email");
+    return this.documents.findByIdOfType(emailId, "email");
   }
 
   async listWebhookFailures(now: string, limit = 50): Promise<DocumentList<WebhookDocument>> {
-    return listByType(this.collection, "webhook", {
+    return this.documents.listByType("webhook", {
       where: { status: "failed", nextAttemptAt: { lte: now } },
       orderBy: { nextAttemptAt: "asc" },
       limit,
@@ -692,7 +743,7 @@ export class OpsRepository {
     now: string,
     limit = 50,
   ): Promise<DocumentList<DueOpsDocument>> {
-    return listByType(this.collection as StorageCollection<DueOpsDocument>, type, {
+    return this.dueDocuments.listByType(type, {
       where: { status: "queued", nextAttemptAt: { lte: now } },
       orderBy: { nextAttemptAt: "asc" },
       limit,
@@ -700,7 +751,7 @@ export class OpsRepository {
   }
 
   async put(document: OpsDocument): Promise<void> {
-    await putByDocumentId(this.collection, document);
+    await this.documents.put(document);
   }
 }
 
@@ -774,59 +825,38 @@ export class StockRepository {
   async reserve(input: ReserveStockRepositoryInput): Promise<ReserveStockRepositoryResult> {
     assertReservationQuantity(input.quantity);
 
-    return withTransaction(this.db, async (executor) => {
-      const replayed =
-        input.idempotencyKey === undefined
-          ? null
-          : await findStockEventByIdempotencyKey(executor, input.idempotencyKey);
-      if (replayed) {
-        return {
-          status: "replayed",
-          event: replayed,
-          stock: await findStockItemById(executor, replayed.stockItemId),
-        };
-      }
-
-      const current = await findStockItemById(executor, input.stockItemId);
-      if (!current) {
-        return { status: "not_found" };
-      }
-
-      const result = await reserveStockStatement({
+    return withTransaction(this.db, (executor) =>
+      mutateStockWithEvent({
+        executor,
         stockItemId: input.stockItemId,
-        quantity: input.quantity,
-        now: input.now,
-      }).execute(executor);
-      if (!mutationAffected(result)) {
-        return { status: "insufficient_stock", stock: current };
-      }
-
-      const event: StockEventRecord = {
-        id: input.reservationEventId,
-        stockItemId: input.stockItemId,
-        kind: "reservation",
-        status: "active",
-        cartId: input.cartId,
-        checkoutSessionId: input.checkoutSessionId,
-        customerId: input.customerId,
-        sessionId: input.sessionId,
         idempotencyKey: input.idempotencyKey,
-        quantityDelta: input.quantity,
-        expiresAt: input.expiresAt,
-        createdAt: input.now,
-        updatedAt: input.now,
-        metadata: input.metadata,
-      };
-
-      await insertStockEvent(executor, event);
-
-      const stock = await findStockItemById(executor, input.stockItemId);
-      if (!stock) {
-        throw new Error(`Reserved stock item '${input.stockItemId}' could not be reloaded.`);
-      }
-
-      return { status: "reserved", event, stock };
-    });
+        successStatus: "reserved",
+        failureStatus: "insufficient_stock",
+        reloadError: `Reserved stock item '${input.stockItemId}' could not be reloaded.`,
+        applyStockMutation: (executor) =>
+          reserveStockStatement({
+            stockItemId: input.stockItemId,
+            quantity: input.quantity,
+            now: input.now,
+          }).execute(executor),
+        createEvent: () => ({
+          id: input.reservationEventId,
+          stockItemId: input.stockItemId,
+          kind: "reservation",
+          status: "active",
+          cartId: input.cartId,
+          checkoutSessionId: input.checkoutSessionId,
+          customerId: input.customerId,
+          sessionId: input.sessionId,
+          idempotencyKey: input.idempotencyKey,
+          quantityDelta: input.quantity,
+          expiresAt: input.expiresAt,
+          createdAt: input.now,
+          updatedAt: input.now,
+          metadata: input.metadata,
+        }),
+      }),
+    );
   }
 
   async release(
@@ -926,57 +956,100 @@ export class StockRepository {
   async adjustStock(input: AdjustStockRepositoryInput): Promise<AdjustStockRepositoryResult> {
     assertStockAdjustmentQuantity(input.quantityDelta);
 
-    return withTransaction(this.db, async (executor) => {
-      const replayed =
-        input.idempotencyKey === undefined
-          ? null
-          : await findStockEventByIdempotencyKey(executor, input.idempotencyKey);
-      if (replayed) {
-        return {
-          status: "replayed",
-          event: replayed,
-          stock: await findStockItemById(executor, replayed.stockItemId),
-        };
-      }
-
-      const current = await findStockItemById(executor, input.stockItemId);
-      if (!current) {
-        return { status: "not_found" };
-      }
-
-      const stockMutation = await adjustStockStatement({
+    return withTransaction(this.db, (executor) =>
+      mutateStockWithEvent({
+        executor,
         stockItemId: input.stockItemId,
-        quantityDelta: input.quantityDelta,
-        now: input.now,
-      }).execute(executor);
-      if (!mutationAffected(stockMutation)) {
-        return { status: "would_go_negative", stock: current };
-      }
-
-      const event: StockEventRecord = {
-        id: input.movementEventId,
-        stockItemId: input.stockItemId,
-        kind: "movement",
-        status: "recorded",
-        reason: input.reason ?? "manual_adjustment",
-        adminAuditId: input.adminAuditId,
         idempotencyKey: input.idempotencyKey,
-        quantityDelta: input.quantityDelta,
-        createdAt: input.now,
-        updatedAt: input.now,
-        metadata: input.metadata,
-      };
-
-      await insertStockEvent(executor, event);
-
-      const stock = await findStockItemById(executor, input.stockItemId);
-      if (!stock) {
-        throw new Error(`Adjusted stock item '${input.stockItemId}' could not be reloaded.`);
-      }
-
-      return { status: "adjusted", event, stock };
-    });
+        successStatus: "adjusted",
+        failureStatus: "would_go_negative",
+        reloadError: `Adjusted stock item '${input.stockItemId}' could not be reloaded.`,
+        applyStockMutation: (executor) =>
+          adjustStockStatement({
+            stockItemId: input.stockItemId,
+            quantityDelta: input.quantityDelta,
+            now: input.now,
+          }).execute(executor),
+        createEvent: () => ({
+          id: input.movementEventId,
+          stockItemId: input.stockItemId,
+          kind: "movement",
+          status: "recorded",
+          reason: input.reason ?? "manual_adjustment",
+          adminAuditId: input.adminAuditId,
+          idempotencyKey: input.idempotencyKey,
+          quantityDelta: input.quantityDelta,
+          createdAt: input.now,
+          updatedAt: input.now,
+          metadata: input.metadata,
+        }),
+      }),
+    );
   }
+}
+
+async function mutateStockWithEvent<
+  TSuccessStatus extends string,
+  TFailureStatus extends string,
+>(input: {
+  readonly executor: MikaDbExecutor;
+  readonly stockItemId: MikaId;
+  readonly idempotencyKey?: string;
+  readonly successStatus: TSuccessStatus;
+  readonly failureStatus: TFailureStatus;
+  readonly reloadError: string;
+  readonly applyStockMutation: (executor: MikaDbExecutor) => Promise<StockMutationResult>;
+  readonly createEvent: () => StockEventRecord;
+}): Promise<
+  | {
+      readonly status: TSuccessStatus;
+      readonly event: StockEventRecord;
+      readonly stock: StockItemRecord;
+    }
+  | {
+      readonly status: "replayed";
+      readonly event: StockEventRecord;
+      readonly stock: StockItemRecord | null;
+    }
+  | {
+      readonly status: TFailureStatus;
+      readonly stock: StockItemRecord;
+    }
+  | {
+      readonly status: "not_found";
+    }
+> {
+  const replayed =
+    input.idempotencyKey === undefined
+      ? null
+      : await findStockEventByIdempotencyKey(input.executor, input.idempotencyKey);
+  if (replayed) {
+    return {
+      status: "replayed",
+      event: replayed,
+      stock: await findStockItemById(input.executor, replayed.stockItemId),
+    };
+  }
+
+  const current = await findStockItemById(input.executor, input.stockItemId);
+  if (!current) {
+    return { status: "not_found" };
+  }
+
+  const mutation = await input.applyStockMutation(input.executor);
+  if (!mutationAffected(mutation)) {
+    return { status: input.failureStatus, stock: current };
+  }
+
+  const event = input.createEvent();
+  await insertStockEvent(input.executor, event);
+
+  const stock = await findStockItemById(input.executor, input.stockItemId);
+  if (!stock) {
+    throw new Error(input.reloadError);
+  }
+
+  return { status: input.successStatus, event, stock };
 }
 
 async function mutateActiveReservationEvent<TStatus extends "released" | "consumed">(input: {
@@ -1368,11 +1441,7 @@ function hasTransaction(executor: MikaDbExecutor): executor is MikaDb {
   return typeof (executor as { readonly transaction?: unknown }).transaction === "function";
 }
 
-function mutationAffected(result: {
-  readonly numAffectedRows?: bigint | number;
-  readonly numUpdatedRows?: bigint | number;
-  readonly numChangedRows?: bigint | number;
-}): boolean {
+function mutationAffected(result: StockMutationResult): boolean {
   return affected(result.numAffectedRows ?? result.numUpdatedRows ?? result.numChangedRows);
 }
 

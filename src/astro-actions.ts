@@ -16,6 +16,7 @@ import {
   type MikaActionDefinition as MikaOperationActionDefinition,
   type MikaActionName as MikaOperationActionName,
 } from "./api/operations";
+import { mikaActionTreeSpec, type MikaActionTreeSpec } from "./api/action-tree";
 import { runMikaOperationPolicy, type MikaOperationPolicy } from "./api/operation-policy";
 import { resolveMikaApiOverrides, resolveMikaOperationPolicy } from "./api/runtime-api";
 import { createMikaApi, type MikaApi, type MikaApiOverrides } from "./api/server";
@@ -160,225 +161,27 @@ export function createMikaActions(options: MikaActionsOptions = {}): MikaActions
     });
   };
 
-  const defineMikaAction = <
-    TName extends MikaActionName,
-    TAccept extends "form" | "json",
-    TSchema extends z.ZodType,
-    TData = unknown,
-  >(
-    definition: MikaActionDefinition<TName, TAccept, TSchema>,
-    input: TSchema,
-    request: (
-      api: MikaApi,
-      requestContext: MikaRequestContext,
-      input: unknown,
-    ) => Promise<MikaApiResult<TData>>,
-  ): ActionClient<TData, TAccept, TSchema> =>
-    createActionClient(definition, input, (actionInput, ctx) => {
+  const defineMikaAction = (
+    definition: MikaActionDefinition,
+  ): ActionClient<unknown, "form" | "json", z.ZodType> =>
+    createActionClient(definition, definition.schema, (actionInput, ctx) => {
       const requestInput = normalizeMikaActionInput(definition, actionInput);
       return run(ctx, definition, requestInput, (api, requestContext) =>
-        request(api, requestContext, requestInput),
+        callMikaOperation(definition.operation, api, requestContext, requestInput),
       );
     });
 
-  const runOperation = <TData>(
-    definition: MikaActionDefinition,
-    api: MikaApi,
-    requestContext: MikaRequestContext,
-    input: unknown,
-  ): Promise<MikaApiResult<TData>> =>
-    callMikaOperation(definition.operation, api, requestContext, input) as Promise<
-      MikaApiResult<TData>
-    >;
+  const buildMikaActionTree = (spec: MikaActionTreeSpec): unknown =>
+    Object.fromEntries(
+      Object.entries(spec).map(([key, value]) => [
+        key,
+        typeof value === "string"
+          ? defineMikaAction(mikaActionDefinitions[value])
+          : buildMikaActionTree(value),
+      ]),
+    );
 
-  const actions = {
-    catalog: {
-      sellables: defineMikaAction(
-        mikaActionDefinitions.catalogSellables,
-        mikaActionDefinitions.catalogSellables.schema,
-        (api, ctx, input) =>
-          runOperation<readonly SellableDTO[]>(
-            mikaActionDefinitions.catalogSellables,
-            api,
-            ctx,
-            input,
-          ),
-      ),
-    },
-    stock: {
-      availability: defineMikaAction(
-        mikaActionDefinitions.stockAvailability,
-        mikaActionDefinitions.stockAvailability.schema,
-        (api, ctx, input) =>
-          runOperation<AvailabilityDTO>(mikaActionDefinitions.stockAvailability, api, ctx, input),
-      ),
-    },
-    cart: {
-      add: defineMikaAction(
-        mikaActionDefinitions.cartAdd,
-        mikaActionDefinitions.cartAdd.schema,
-        (api, ctx, input) => runOperation<CartDTO>(mikaActionDefinitions.cartAdd, api, ctx, input),
-      ),
-      update: defineMikaAction(
-        mikaActionDefinitions.cartUpdate,
-        mikaActionDefinitions.cartUpdate.schema,
-        (api, ctx, input) =>
-          runOperation<CartDTO>(mikaActionDefinitions.cartUpdate, api, ctx, input),
-      ),
-      remove: defineMikaAction(
-        mikaActionDefinitions.cartRemove,
-        mikaActionDefinitions.cartRemove.schema,
-        (api, ctx, input) =>
-          runOperation<CartDTO>(mikaActionDefinitions.cartRemove, api, ctx, input),
-      ),
-      merge: defineMikaAction(
-        mikaActionDefinitions.cartMerge,
-        mikaActionDefinitions.cartMerge.schema,
-        (api, ctx, input) =>
-          runOperation<CartDTO>(mikaActionDefinitions.cartMerge, api, ctx, input),
-      ),
-      applyCoupon: defineMikaAction(
-        mikaActionDefinitions.cartApplyCoupon,
-        mikaActionDefinitions.cartApplyCoupon.schema,
-        (api, ctx, input) =>
-          runOperation<CartDTO>(mikaActionDefinitions.cartApplyCoupon, api, ctx, input),
-      ),
-      removeCoupon: defineMikaAction(
-        mikaActionDefinitions.cartRemoveCoupon,
-        mikaActionDefinitions.cartRemoveCoupon.schema,
-        (api, ctx, input) =>
-          runOperation<CartDTO>(mikaActionDefinitions.cartRemoveCoupon, api, ctx, input),
-      ),
-    },
-    wishlist: {
-      add: defineMikaAction(
-        mikaActionDefinitions.wishlistAdd,
-        mikaActionDefinitions.wishlistAdd.schema,
-        (api, ctx, input) =>
-          runOperation<WishlistDTO>(mikaActionDefinitions.wishlistAdd, api, ctx, input),
-      ),
-      remove: defineMikaAction(
-        mikaActionDefinitions.wishlistRemove,
-        mikaActionDefinitions.wishlistRemove.schema,
-        (api, ctx, input) =>
-          runOperation<WishlistDTO>(mikaActionDefinitions.wishlistRemove, api, ctx, input),
-      ),
-      moveToCart: defineMikaAction(
-        mikaActionDefinitions.wishlistMoveToCart,
-        mikaActionDefinitions.wishlistMoveToCart.schema,
-        (api, ctx, input) =>
-          runOperation<CartDTO>(mikaActionDefinitions.wishlistMoveToCart, api, ctx, input),
-      ),
-      saveForLater: defineMikaAction(
-        mikaActionDefinitions.wishlistSaveForLater,
-        mikaActionDefinitions.wishlistSaveForLater.schema,
-        (api, ctx, input) =>
-          runOperation<WishlistDTO>(mikaActionDefinitions.wishlistSaveForLater, api, ctx, input),
-      ),
-      merge: defineMikaAction(
-        mikaActionDefinitions.wishlistMerge,
-        mikaActionDefinitions.wishlistMerge.schema,
-        (api, ctx, input) =>
-          runOperation<WishlistDTO>(mikaActionDefinitions.wishlistMerge, api, ctx, input),
-      ),
-    },
-    checkout: {
-      start: defineMikaAction(
-        mikaActionDefinitions.checkoutStart,
-        mikaActionDefinitions.checkoutStart.schema,
-        (api, ctx, input) =>
-          runOperation<CheckoutSessionDTO>(mikaActionDefinitions.checkoutStart, api, ctx, input),
-      ),
-      status: defineMikaAction(
-        mikaActionDefinitions.checkoutStatus,
-        mikaActionDefinitions.checkoutStatus.schema,
-        (api, ctx, input) =>
-          runOperation<CheckoutSessionDTO>(mikaActionDefinitions.checkoutStatus, api, ctx, input),
-      ),
-    },
-    magicLink: {
-      request: defineMikaAction(
-        mikaActionDefinitions.magicLinkRequest,
-        mikaActionDefinitions.magicLinkRequest.schema,
-        (api, ctx, input) =>
-          runOperation<{ readonly sent: boolean }>(
-            mikaActionDefinitions.magicLinkRequest,
-            api,
-            ctx,
-            input,
-          ),
-      ),
-      verify: defineMikaAction(
-        mikaActionDefinitions.magicLinkVerify,
-        mikaActionDefinitions.magicLinkVerify.schema,
-        (api, ctx, input) =>
-          runOperation<AccountDTO>(mikaActionDefinitions.magicLinkVerify, api, ctx, input),
-      ),
-    },
-    account: {
-      export: defineMikaAction(
-        mikaActionDefinitions.accountExport,
-        mikaActionDefinitions.accountExport.schema,
-        (api, ctx, input) =>
-          runOperation<AccountExportDTO>(mikaActionDefinitions.accountExport, api, ctx, input),
-      ),
-      exportStatus: defineMikaAction(
-        mikaActionDefinitions.accountExportStatus,
-        mikaActionDefinitions.accountExportStatus.schema,
-        (api, ctx, input) =>
-          runOperation<AccountExportDTO>(
-            mikaActionDefinitions.accountExportStatus,
-            api,
-            ctx,
-            input,
-          ),
-      ),
-      delete: defineMikaAction(
-        mikaActionDefinitions.accountDelete,
-        mikaActionDefinitions.accountDelete.schema,
-        (api, ctx, input) =>
-          runOperation<{ readonly requested: boolean }>(
-            mikaActionDefinitions.accountDelete,
-            api,
-            ctx,
-            input,
-          ),
-      ),
-      portal: defineMikaAction(
-        mikaActionDefinitions.accountPortal,
-        mikaActionDefinitions.accountPortal.schema,
-        (api, ctx, input) =>
-          runOperation<{ readonly redirectUrl: string }>(
-            mikaActionDefinitions.accountPortal,
-            api,
-            ctx,
-            input,
-          ),
-      ),
-    },
-    subscription: {
-      cancel: defineMikaAction(
-        mikaActionDefinitions.subscriptionCancel,
-        mikaActionDefinitions.subscriptionCancel.schema,
-        (api, ctx, input) =>
-          runOperation<AccountDTO>(mikaActionDefinitions.subscriptionCancel, api, ctx, input),
-      ),
-      change: defineMikaAction(
-        mikaActionDefinitions.subscriptionChange,
-        mikaActionDefinitions.subscriptionChange.schema,
-        (api, ctx, input) =>
-          runOperation<AccountDTO>(mikaActionDefinitions.subscriptionChange, api, ctx, input),
-      ),
-      renew: defineMikaAction(
-        mikaActionDefinitions.subscriptionRenew,
-        mikaActionDefinitions.subscriptionRenew.schema,
-        (api, ctx, input) =>
-          runOperation<AccountDTO>(mikaActionDefinitions.subscriptionRenew, api, ctx, input),
-      ),
-    },
-  } satisfies MikaActions;
-
-  return actions;
+  return buildMikaActionTree(mikaActionTreeSpec) as MikaActions;
 }
 
 export const mika: MikaActions = createMikaActions();

@@ -3,13 +3,13 @@ import { MIKA_AGENT_IDEMPOTENCY_KEY_HEADER } from "./agent-types";
 import { createMikaRequestContext, type MikaSessionAccess } from "./context";
 import {
   callMikaOperation,
+  parseMikaOperationInput,
   mikaRoutedOperationDefinitions,
   type MikaRouteOperation,
 } from "./operations";
 import { runMikaOperationPolicy, type MikaOperationPolicy } from "./operation-policy";
 import { mikaPluginRoutes, type MikaPluginRouteName } from "./routes";
 import { createMikaApi, type MikaApi } from "./server";
-import { parseMikaInput, searchParamsObject, type z } from "./validation";
 
 export interface MikaRouteContext<TInput = unknown> {
   readonly input: TInput;
@@ -74,7 +74,7 @@ async function handleRouteOperation(
   const operation = selectRouteOperation(ctx.request, operations);
   if (!operation) return methodNotAllowed(ctx.request, operations);
 
-  const parsedInput = parseRouteOperationInput(operation, ctx);
+  const parsedInput = parseMikaOperationInput(operation, ctx.input, ctx.request.url);
   if (!parsedInput.ok) return parsedInput.result;
 
   const mikaContext = requestContext(ctx);
@@ -110,24 +110,6 @@ function methodNotAllowed(request: Request, operations: readonly MikaRouteOperat
       },
     },
   } as const;
-}
-
-function parseRouteOperationInput(operation: MikaRouteOperation, ctx: MikaRouteContext) {
-  if (operation.transport === "none") {
-    return { ok: true as const, data: undefined };
-  }
-
-  const schema = "schema" in operation ? operation.schema : undefined;
-  if (!schema) {
-    throw new Error(`Mika operation '${operation.name}' is missing an input schema.`);
-  }
-
-  const input =
-    operation.transport === "search"
-      ? searchParamsObject(new URL(ctx.request.url), operation.searchKeys ?? [])
-      : (ctx.input ?? {});
-
-  return parseMikaInput(schema as z.ZodType<unknown>, input);
 }
 
 function requestContext(ctx: MikaRouteContext) {

@@ -114,6 +114,7 @@ import {
   mikaRoutedOperationDefinitions,
   mikaRouteOnlyDefinitions,
 } from "../src/api/operations";
+import { mikaActionTreeDefinitionKeys } from "../src/api/action-tree";
 import { resolveMikaOperationPolicy, setDefaultMikaOperationPolicy } from "../src/api/runtime-api";
 import {
   mikaEmailTemplates,
@@ -1152,10 +1153,26 @@ describe("Mika client", () => {
       new URL("../src/astro-actions.ts", import.meta.url),
       "utf8",
     );
+    const actionTreeKeys = mikaActionTreeDefinitionKeys();
 
-    for (const key of Object.keys(mikaActionDefinitions)) {
-      expect(astroActionsSource).toContain(`mikaActionDefinitions.${key}`);
-    }
+    expectSourceContract(astroActionsSource, {
+      required: [
+        "mikaActionDefinitions",
+        "mikaActionTreeSpec",
+        "Object.entries(spec)",
+        "defineMikaAction(mikaActionDefinitions[value])",
+        "definition.schema",
+        "definition.accept",
+        "callMikaOperation(definition.operation",
+      ],
+      forbidden: [
+        "mikaActionDefinitions.cartAdd",
+        "mikaActionDefinitions.checkoutStart",
+        "mikaActionDefinitions.subscriptionRenew",
+      ],
+    });
+    expect([...new Set(actionTreeKeys)].sort()).toEqual(Object.keys(mikaActionDefinitions).sort());
+    expect(actionTreeKeys).toHaveLength(Object.keys(mikaActionDefinitions).length);
   });
 
   it("keeps JSON client adapters aligned with operation metadata", () => {
@@ -2823,4 +2840,19 @@ function sourceFiles(root: URL): URL[] {
     const url = new URL(`${entry.name}${entry.isDirectory() ? "/" : ""}`, root);
     return entry.isDirectory() ? sourceFiles(url) : [url];
   });
+}
+
+function expectSourceContract(
+  source: string,
+  contract: {
+    readonly required?: readonly string[];
+    readonly forbidden?: readonly string[];
+  },
+) {
+  for (const required of contract.required ?? []) {
+    expect(source).toContain(required);
+  }
+  for (const forbidden of contract.forbidden ?? []) {
+    expect(source).not.toContain(forbidden);
+  }
 }

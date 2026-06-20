@@ -18,6 +18,7 @@ import type {
   ReleaseReservedStockRepositoryResult,
   ReserveStockRepositoryResult,
 } from "../storage/repositories";
+import { findSessionRepositoryOpenCartBySessionAnyCurrency } from "../storage/repositories";
 import {
   cartToDTO,
   cartWithItems,
@@ -57,7 +58,6 @@ import type {
   EntitlementDocument,
   LicenseDocument,
   OrderDocument,
-  SessionDocument,
   SubscriptionDocument,
   WebhookDocument,
   WishlistDocument,
@@ -119,21 +119,16 @@ import type {
 } from "./types";
 
 type MikaApiFailure = Extract<MikaApiResult<never>, { readonly ok: false }>;
-type MikaProviderMethodName =
-  | "capabilities"
-  | "health"
-  | "createCheckoutSession"
-  | "retrieveCheckoutSession"
-  | "createPortalSession"
-  | "getInvoiceUrl"
-  | "cancelSubscription"
-  | "changeSubscription"
-  | "renewSubscription"
-  | "refundPayment"
-  | "cancelOrder"
-  | "syncCatalog"
-  | "verifyWebhook"
-  | "parseWebhookEvent";
+type MikaProviderMethodName = Extract<
+  {
+    readonly [K in keyof MikaProviderAdapter]: NonNullable<MikaProviderAdapter[K]> extends (
+      ...args: any[]
+    ) => any
+      ? K
+      : never;
+  }[keyof MikaProviderAdapter],
+  keyof MikaProviderAdapter
+>;
 
 type MikaProviderFeature<TMethod extends MikaProviderMethodName> =
   | {
@@ -1518,47 +1513,43 @@ async function grantEntitlement(
   input: CreateMikaBackendApiInput,
   grantInput: EntitlementGrantInput,
 ): Promise<MikaApiResult<AdminActionResultDTO>> {
-  const now = currentBackendISODateTime(input);
   const email = grantInput.email?.trim();
   const emailHash = email ? await input.hash(`email:${email.toLowerCase()}`) : undefined;
   const entitlementId = input.createId("entitlement");
-  const audit = createAdminAuditDocument(input, {
-    action: "entitlement.grant",
-    targetType: "entitlement",
-    targetId: entitlementId,
-    status: "started",
-    createdAt: now,
-    metadata: {
-      entitlementKey: grantInput.entitlementKey,
-      ...(grantInput.customerId ? { customerId: grantInput.customerId } : {}),
-      ...(grantInput.userId ? { userId: grantInput.userId } : {}),
-      ...(emailHash ? { emailHash } : {}),
-      ...(grantInput.expiresAt ? { expiresAt: grantInput.expiresAt } : {}),
+
+  return runAdminRepositoryAction(
+    input,
+    {
+      action: "entitlement.grant",
+      targetType: "entitlement",
+      targetId: entitlementId,
+      metadata: {
+        entitlementKey: grantInput.entitlementKey,
+        ...(grantInput.customerId ? { customerId: grantInput.customerId } : {}),
+        ...(grantInput.userId ? { userId: grantInput.userId } : {}),
+        ...(emailHash ? { emailHash } : {}),
+        ...(grantInput.expiresAt ? { expiresAt: grantInput.expiresAt } : {}),
+      },
     },
-  });
-  await input.repositories.ops.writeAudit(audit);
+    async (audit) => {
+      const entitlement = createManualEntitlementDocument(
+        entitlementId,
+        grantInput,
+        audit.createdAt,
+        emailHash,
+      );
+      await input.repositories.account.put(entitlement);
 
-  try {
-    const entitlement = createManualEntitlementDocument(entitlementId, grantInput, now, emailHash);
-    await input.repositories.account.put(entitlement);
-    await completeAdminAudit(input, audit);
-
-    return {
-      ok: true,
-      status: 200,
-      data: {
+      return {
         id: entitlement.id,
         status: "completed",
         affected: {
           entitlements: 1,
         },
-      },
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Entitlement grant failed.";
-    await failAdminAudit(input, audit, message);
-    return adminActionFailed(message);
-  }
+      };
+    },
+    "Entitlement grant failed.",
+  );
 }
 
 async function revokeEntitlement(
@@ -1580,56 +1571,47 @@ async function revokeEntitlement(
     });
   }
 
-  const now = currentBackendISODateTime(input);
-  const audit = createAdminAuditDocument(input, {
-    action: "entitlement.revoke",
-    targetType: "entitlement",
-    targetId: entitlement.id,
-    status: "started",
-    createdAt: now,
-    metadata: {
-      entitlementId: entitlement.id,
-      entitlementKey: entitlement.entitlementKey,
-      ...(entitlement.customerId ? { customerId: entitlement.customerId } : {}),
-      ...(revokeInput.reason ? { reason: revokeInput.reason } : {}),
-    },
-  });
-  await input.repositories.ops.writeAudit(audit);
-
-  try {
-    const updated: EntitlementDocument = {
-      ...entitlement,
-      status: "revoked",
-      updatedAt: now,
-      record: {
-        ...entitlement.record,
-        status: "revoked",
-        revokedAt: now,
-        metadata: {
-          ...entitlement.record.metadata,
-          ...(revokeInput.reason ? { revokeReason: revokeInput.reason } : {}),
-        },
+  return runAdminRepositoryAction(
+    input,
+    {
+      action: "entitlement.revoke",
+      targetType: "entitlement",
+      targetId: entitlement.id,
+      metadata: {
+        entitlementId: entitlement.id,
+        entitlementKey: entitlement.entitlementKey,
+        ...(entitlement.customerId ? { customerId: entitlement.customerId } : {}),
+        ...(revokeInput.reason ? { reason: revokeInput.reason } : {}),
       },
-    };
-    await input.repositories.account.put(updated);
-    await completeAdminAudit(input, audit);
+    },
+    async (audit) => {
+      const now = audit.createdAt;
+      const updated: EntitlementDocument = {
+        ...entitlement,
+        status: "revoked",
+        updatedAt: now,
+        record: {
+          ...entitlement.record,
+          status: "revoked",
+          revokedAt: now,
+          metadata: {
+            ...entitlement.record.metadata,
+            ...(revokeInput.reason ? { revokeReason: revokeInput.reason } : {}),
+          },
+        },
+      };
+      await input.repositories.account.put(updated);
 
-    return {
-      ok: true,
-      status: 200,
-      data: {
+      return {
         id: updated.id,
         status: "completed",
         affected: {
           entitlements: 1,
         },
-      },
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Entitlement revoke failed.";
-    await failAdminAudit(input, audit, message);
-    return adminActionFailed(message);
-  }
+      };
+    },
+    "Entitlement revoke failed.",
+  );
 }
 
 async function resendEmail(
@@ -1647,56 +1629,47 @@ async function resendEmail(
     });
   }
 
-  const now = currentBackendISODateTime(input);
-  const audit = createAdminAuditDocument(input, {
-    action: "email.resend",
-    targetType: "email",
-    targetId: email.id,
-    status: "started",
-    createdAt: now,
-    metadata: {
-      emailId: email.id,
-      kind: email.kind,
+  return runAdminRepositoryAction(
+    input,
+    {
+      action: "email.resend",
+      targetType: "email",
+      targetId: email.id,
+      metadata: {
+        emailId: email.id,
+        kind: email.kind,
+      },
     },
-  });
-  await input.repositories.ops.writeAudit(audit);
-
-  try {
-    await input.repositories.ops.put({
-      ...email,
-      status: "queued",
-      nextAttemptAt: now,
-      updatedAt: now,
-      record: {
-        ...email.record,
+    async (audit) => {
+      const now = audit.createdAt;
+      await input.repositories.ops.put({
+        ...email,
         status: "queued",
         nextAttemptAt: now,
-        lastError: undefined,
-        metadata: {
-          ...email.record.metadata,
-          resentAt: now,
-          adminAuditId: audit.id,
+        updatedAt: now,
+        record: {
+          ...email.record,
+          status: "queued",
+          nextAttemptAt: now,
+          lastError: undefined,
+          metadata: {
+            ...email.record.metadata,
+            resentAt: now,
+            adminAuditId: audit.id,
+          },
         },
-      },
-    });
-    await completeAdminAudit(input, audit);
+      });
 
-    return {
-      ok: true,
-      status: 200,
-      data: {
+      return {
         id: email.id,
         status: "completed",
         affected: {
           emails: 1,
         },
-      },
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Email resend failed.";
-    await failAdminAudit(input, audit, message);
-    return adminActionFailed(message);
-  }
+      };
+    },
+    "Email resend failed.",
+  );
 }
 
 async function revokeLicense(
@@ -1714,57 +1687,48 @@ async function revokeLicense(
     });
   }
 
-  const now = currentBackendISODateTime(input);
-  const audit = createAdminAuditDocument(input, {
-    action: "license.revoke",
-    targetType: "license",
-    targetId: license.id,
-    status: "started",
-    createdAt: now,
-    metadata: {
-      licenseId: license.id,
-      ...(license.customerId ? { customerId: license.customerId } : {}),
-      ...(license.orderId ? { orderId: license.orderId } : {}),
-      ...(license.orderLineId ? { orderLineId: license.orderLineId } : {}),
-      ...(revokeInput.reason ? { reason: revokeInput.reason } : {}),
-    },
-  });
-  await input.repositories.ops.writeAudit(audit);
-
-  try {
-    const updated: LicenseDocument = {
-      ...license,
-      status: "revoked",
-      updatedAt: now,
-      record: {
-        ...license.record,
-        status: "revoked",
-        revokedAt: now,
-        metadata: {
-          ...license.record.metadata,
-          ...(revokeInput.reason ? { revokeReason: revokeInput.reason } : {}),
-        },
+  return runAdminRepositoryAction(
+    input,
+    {
+      action: "license.revoke",
+      targetType: "license",
+      targetId: license.id,
+      metadata: {
+        licenseId: license.id,
+        ...(license.customerId ? { customerId: license.customerId } : {}),
+        ...(license.orderId ? { orderId: license.orderId } : {}),
+        ...(license.orderLineId ? { orderLineId: license.orderLineId } : {}),
+        ...(revokeInput.reason ? { reason: revokeInput.reason } : {}),
       },
-    };
-    await input.repositories.account.put(updated);
-    await completeAdminAudit(input, audit);
+    },
+    async (audit) => {
+      const now = audit.createdAt;
+      const updated: LicenseDocument = {
+        ...license,
+        status: "revoked",
+        updatedAt: now,
+        record: {
+          ...license.record,
+          status: "revoked",
+          revokedAt: now,
+          metadata: {
+            ...license.record.metadata,
+            ...(revokeInput.reason ? { revokeReason: revokeInput.reason } : {}),
+          },
+        },
+      };
+      await input.repositories.account.put(updated);
 
-    return {
-      ok: true,
-      status: 200,
-      data: {
+      return {
         id: updated.id,
         status: "completed",
         affected: {
           licenses: 1,
         },
-      },
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "License revoke failed.";
-    await failAdminAudit(input, audit, message);
-    return adminActionFailed(message);
-  }
+      };
+    },
+    "License revoke failed.",
+  );
 }
 
 async function issueDownload(
@@ -2077,6 +2041,25 @@ async function runAdminProviderAction<TData>(
   action: (audit: AdminAuditDocument) => Promise<TData>,
   fallbackMessage: string,
 ): Promise<MikaApiResult<TData>> {
+  return runAdminAction(input, record, action, fallbackMessage, providerFailed);
+}
+
+async function runAdminRepositoryAction<TData>(
+  input: CreateMikaBackendApiInput,
+  record: MikaAdminAuditStartRecord,
+  action: (audit: AdminAuditDocument) => Promise<TData>,
+  fallbackMessage: string,
+): Promise<MikaApiResult<TData>> {
+  return runAdminAction(input, record, action, fallbackMessage, adminActionFailed);
+}
+
+async function runAdminAction<TData>(
+  input: CreateMikaBackendApiInput,
+  record: MikaAdminAuditStartRecord,
+  action: (audit: AdminAuditDocument) => Promise<TData>,
+  fallbackMessage: string,
+  failure: (message: string) => MikaApiFailure,
+): Promise<MikaApiResult<TData>> {
   const audit = createAdminAuditDocument(input, {
     ...record,
     status: "started",
@@ -2097,7 +2080,7 @@ async function runAdminProviderAction<TData>(
     const message = error instanceof Error ? error.message : fallbackMessage;
     await failAdminAudit(input, audit, message);
 
-    return providerFailed(message);
+    return failure(message);
   }
 }
 
@@ -5418,30 +5401,7 @@ async function findOpenCartBySessionAnyCurrency(
   input: MikaCartWishlistBackendInput,
   sessionId: string,
 ): Promise<CartDocument | null> {
-  const collection = (
-    input.repositories.session as unknown as {
-      readonly collection?: {
-        query(options: {
-          readonly where: {
-            readonly type: "cart";
-            readonly sessionId: string;
-            readonly status: "open";
-          };
-          readonly limit: number;
-        }): Promise<{ readonly items: readonly { readonly data: SessionDocument }[] }>;
-      };
-    }
-  ).collection;
-
-  if (!collection) return null;
-
-  const result = await collection.query({
-    where: { type: "cart", sessionId, status: "open" },
-    limit: 1,
-  });
-  const document = result.items[0]?.data;
-
-  return document?.type === "cart" ? document : null;
+  return findSessionRepositoryOpenCartBySessionAnyCurrency(input.repositories.session, sessionId);
 }
 
 function createCartDocument(
