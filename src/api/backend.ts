@@ -335,7 +335,21 @@ export interface MikaOpsRepositoryPort {
   failWorkflow(input: WorkflowFailureRepositoryInput): Promise<WorkflowDocument | null>;
   findAdminAudit(auditId: MikaId): Promise<AdminAuditDocument | null>;
   findEmail(emailId: MikaId): Promise<EmailDocument | null>;
+  /** @deprecated Use workflow-specific leasing APIs for webhook fulfillment work. */
+  listWebhookFailures(now: string, limit?: number): Promise<MikaDocumentList<WebhookDocument>>;
   writeAudit(document: AdminAuditDocument): Promise<void>;
+  /** @deprecated Use listDueWorkflows for workflow-backed webhook fulfillment. */
+  listDue(
+    type: WebhookDocument["type"],
+    now: string,
+    limit?: number,
+  ): Promise<MikaDocumentList<WebhookDocument>>;
+  /** @deprecated Use email-specific processing infrastructure when available. */
+  listDue(
+    type: EmailDocument["type"],
+    now: string,
+    limit?: number,
+  ): Promise<MikaDocumentList<EmailDocument>>;
   put(document: OpsDocument): Promise<void>;
 }
 

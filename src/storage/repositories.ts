@@ -211,6 +211,7 @@ type StorageResultItem<TDocument> = {
   data: TDocument;
 };
 type DocumentList<TDocument> = PaginatedStorageResult<StorageResultItem<TDocument>>;
+type DueOpsDocument = WebhookDocument | EmailDocument;
 type StockMutationResult = {
   readonly numAffectedRows?: bigint | number;
   readonly numUpdatedRows?: bigint | number;
@@ -739,9 +740,11 @@ export class LedgerRepository {
 
 export class OpsRepository {
   private readonly documents: TypedCollectionFacade<OpsDocument>;
+  private readonly dueDocuments: TypedCollectionFacade<DueOpsDocument>;
 
   constructor(collection: StorageCollection<OpsDocument>) {
     this.documents = typedCollection(collection);
+    this.dueDocuments = typedCollection(collection as StorageCollection<DueOpsDocument>);
   }
 
   async findWebhookDuplicate(input: {
@@ -1043,8 +1046,41 @@ export class OpsRepository {
     return this.documents.findByIdOfType(emailId, "email");
   }
 
+  /** @deprecated Use workflow-specific leasing APIs for webhook fulfillment work. */
+  async listWebhookFailures(now: string, limit = 50): Promise<DocumentList<WebhookDocument>> {
+    return this.documents.listByType("webhook", {
+      where: { status: "failed", nextAttemptAt: { lte: now } },
+      orderBy: { nextAttemptAt: "asc" },
+      limit,
+    });
+  }
+
   async writeAudit(document: AdminAuditDocument): Promise<void> {
     await this.put(document);
+  }
+
+  /** @deprecated Use listDueWorkflows for workflow-backed webhook fulfillment. */
+  async listDue(
+    type: WebhookDocument["type"],
+    now: string,
+    limit?: number,
+  ): Promise<DocumentList<WebhookDocument>>;
+  /** @deprecated Use email-specific processing infrastructure when available. */
+  async listDue(
+    type: EmailDocument["type"],
+    now: string,
+    limit?: number,
+  ): Promise<DocumentList<EmailDocument>>;
+  async listDue(
+    type: DueOpsDocument["type"],
+    now: string,
+    limit = 50,
+  ): Promise<DocumentList<DueOpsDocument>> {
+    return this.dueDocuments.listByType(type, {
+      where: { status: "queued", nextAttemptAt: { lte: now } },
+      orderBy: { nextAttemptAt: "asc" },
+      limit,
+    });
   }
 
   async put(document: OpsDocument): Promise<void> {
