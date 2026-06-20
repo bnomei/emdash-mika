@@ -167,6 +167,7 @@ const MIKA_DASHBOARD_ACTION_TARGET = {
 const MIKA_ENTRY_FIELD_ACTION_TARGET = {
   surfaces: ["entry", "field"],
   required: true,
+  idFrom: "entryId",
 } as const satisfies MikaAdminActionTargetMetadata;
 
 const MIKA_FIELD_ROW_ACTION_TARGET = {

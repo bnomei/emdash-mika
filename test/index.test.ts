@@ -2678,7 +2678,7 @@ describe("Mika admin and email shell", () => {
       id: "mika.catalog.syncEntry",
       mode: "runner",
       runner: true,
-      target: { surfaces: ["entry", "field"], required: true },
+      target: { surfaces: ["entry", "field"], required: true, idFrom: "entryId" },
       placement: "field",
     });
     expect(providerHealth && "route" in providerHealth).toBe(false);
