@@ -288,6 +288,11 @@ export const mikaRouteOnlyDefinitions = defineMikaRouteOnlyDefinitions({
     routePath: ".well-known/actions",
     public: false,
   },
+  actionsRunner: {
+    routeKey: "actionsRunner",
+    routePath: ".well-known/actions/run",
+    public: false,
+  },
 });
 
 type CartAddFormInput = z.infer<typeof cartAddFormInputSchema>;

@@ -1383,6 +1383,10 @@ async function providerSync(
   input: CreateMikaBackendApiInput,
   syncInput: ProviderSyncInput,
 ): Promise<MikaApiResult<AdminActionResultDTO>> {
+  if (syncInput.scope === "entry" && !syncInput.contentRef) {
+    return validationFailed("contentRef", "Entry-scoped provider sync requires contentRef.");
+  }
+
   const providerFeature = await requireProviderFeature(input, {
     providerName: syncInput.provider,
     method: "syncCatalog",
@@ -1391,19 +1395,33 @@ async function providerSync(
   });
   if (!providerFeature.ok) return providerFeature;
 
+  const providerInput = {
+    mode: syncInput.mode ?? "dry_run",
+    ...(syncInput.scope ? { scope: syncInput.scope } : {}),
+    ...(syncInput.contentRef ? { contentRef: syncInput.contentRef } : {}),
+  };
+  const syncMetadata: JsonObject = {
+    provider: providerFeature.providerName,
+    mode: providerInput.mode,
+    ...(providerInput.scope ? { scope: providerInput.scope } : {}),
+    ...(providerInput.contentRef
+      ? {
+          contentRef: {
+            collection: providerInput.contentRef.collection,
+            id: providerInput.contentRef.id,
+            ...(providerInput.contentRef.locale ? { locale: providerInput.contentRef.locale } : {}),
+          },
+        }
+      : {}),
+  };
+
   return runAdminProviderAction(
     input,
     {
       action: "provider.syncCatalog",
-      metadata: {
-        provider: providerFeature.providerName,
-        mode: syncInput.mode ?? "dry_run",
-      },
+      metadata: syncMetadata,
     },
-    () =>
-      providerFeature.method.call(providerFeature.provider, {
-        mode: syncInput.mode ?? "dry_run",
-      }),
+    () => providerFeature.method.call(providerFeature.provider, providerInput),
     "Provider catalog sync failed.",
   );
 }

@@ -3072,6 +3072,82 @@ describe("backend API composition", () => {
     });
   });
 
+  it("passes entry-scoped provider sync input to adapters and audit metadata", async () => {
+    const contentRef = createTestContentRef({ id: "ring" });
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["syncCatalog"],
+    });
+    const repositories = createTestBackendRepositories();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(
+      api.admin.providerSync({
+        mode: "apply",
+        scope: "entry",
+        contentRef,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      status: 200,
+      data: {
+        id: "catalog_sync",
+        status: "completed",
+      },
+    });
+
+    expect(fake.getCalls().syncCatalog).toEqual([
+      {
+        mode: "apply",
+        scope: "entry",
+        contentRef,
+      },
+    ]);
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
+    ).resolves.toMatchObject({
+      status: "completed",
+      record: {
+        action: "provider.syncCatalog",
+        status: "completed",
+        metadata: {
+          provider: TEST_PROVIDER,
+          mode: "apply",
+          scope: "entry",
+          contentRef,
+        },
+      },
+    });
+  });
+
+  it("rejects entry-scoped provider sync without contentRef", async () => {
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["syncCatalog"],
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(api.admin.providerSync({ scope: "entry" })).resolves.toEqual({
+      ok: false,
+      status: 422,
+      error: {
+        code: "VALIDATION_FAILED",
+        message: "Mika input validation failed.",
+        fieldErrors: {
+          contentRef: "Entry-scoped provider sync requires contentRef.",
+        },
+      },
+    });
+    expect(fake.getCalls().syncCatalog).toEqual([]);
+  });
+
   it("returns provider unsupported for missing provider health or sync support", async () => {
     const fake = createFakeMikaProvider({ optionalMethods: "none" });
     const api = createMikaBackendApi(

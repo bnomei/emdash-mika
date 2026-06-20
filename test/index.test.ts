@@ -875,6 +875,9 @@ describe("Mika client", () => {
     expect(mikaPluginRoute("adminProviderHealth")).toBe(
       "/_emdash/api/plugins/mika/admin/provider/health",
     );
+    expect(mikaPluginRoute("actionsRunner")).toBe(
+      "/_emdash/api/plugins/mika/.well-known/actions/run",
+    );
     expect("checkoutSuccess" in mikaPluginRoutes).toBe(false);
     expect("checkoutCancel" in mikaPluginRoutes).toBe(false);
   });
@@ -882,6 +885,7 @@ describe("Mika client", () => {
   it("derives route, API method, and action contracts from operation metadata", () => {
     expect(mikaPluginRoutes).toEqual({
       actionsManifest: ".well-known/actions",
+      actionsRunner: ".well-known/actions/run",
       catalogSellables: "catalog/sellables",
       sellableAvailability: "sellables/availability",
       cart: "cart",
@@ -1841,6 +1845,368 @@ describe("Mika client", () => {
     ]);
   });
 
+  it("dispatches action runner invocations through policy and API overrides", async () => {
+    let apiInput: unknown;
+    const policyCalls: Array<{
+      readonly operation: string;
+      readonly sessionId?: string;
+      readonly input: unknown;
+    }> = [];
+    const routes = createMikaPluginRoutes(
+      createMikaApi({
+        admin: {
+          stockAdjust: async (input) => {
+            apiInput = input;
+            return {
+              ok: true,
+              status: 200,
+              data: {
+                id: input.stockItemId,
+                status: "completed",
+                message: "Stock adjusted.",
+              },
+            };
+          },
+        },
+      } satisfies MikaApiOverrides),
+      {
+        operationPolicy: ({ operation, ctx, input }) => {
+          policyCalls.push({ operation: operation.name, sessionId: ctx.sessionId, input });
+        },
+      },
+    );
+
+    const result = await routes[mikaPluginRoutes.actionsRunner].handler({
+      input: {
+        actionId: "mika.stock.adjust",
+        payload: { quantityDelta: 4 },
+        context: {
+          surface: "row",
+          rowId: "stock_1",
+          row: { stockItemId: "stock_1" },
+        },
+        target: {
+          type: "row",
+          surface: "row",
+          rowId: "stock_1",
+          path: "stock.0",
+          value: { stockItemId: "stock_1" },
+        },
+      },
+      request: new Request("https://shop.test/_emdash/api/plugins/mika/.well-known/actions/run", {
+        method: "POST",
+      }),
+      sessionId: "session_runner_1",
+    });
+
+    const expectedInput = {
+      stockItemId: id("stock_1"),
+      quantityDelta: 4,
+    };
+    expect(apiInput).toEqual(expectedInput);
+    expect(policyCalls).toEqual([
+      {
+        operation: "admin.stockAdjust",
+        sessionId: "session_runner_1",
+        input: expectedInput,
+      },
+    ]);
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+      severity: "success",
+      message: "Stock adjusted.",
+      effects: { reload: true },
+      data: {
+        id: "stock_1",
+        status: "completed",
+      },
+    });
+  });
+
+  it("validates action runner target and input before policy or API dispatch", async () => {
+    let policyCalled = false;
+    let apiCalled = false;
+    const routes = createMikaPluginRoutes(
+      createMikaApi({
+        admin: {
+          stockAdjust: async () => {
+            apiCalled = true;
+            return { ok: true, status: 200, data: { status: "completed" } };
+          },
+        },
+      } satisfies MikaApiOverrides),
+      {
+        operationPolicy: () => {
+          policyCalled = true;
+        },
+      },
+    );
+
+    await expect(
+      routes[mikaPluginRoutes.actionsRunner].handler({
+        input: {
+          actionId: "mika.stock.adjust",
+          payload: { quantityDelta: 1 },
+          target: { type: "dashboard" },
+        },
+        request: new Request("https://shop.test/_emdash/api/plugins/mika/.well-known/actions/run", {
+          method: "POST",
+        }),
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 422,
+      severity: "warning",
+      message: "Mika action 'mika.stock.adjust' cannot run for this target.",
+    });
+    expect(policyCalled).toBe(false);
+    expect(apiCalled).toBe(false);
+  });
+
+  it("does not use UI row ids as action operation ids", async () => {
+    let policyCalled = false;
+    let apiCalled = false;
+    const routes = createMikaPluginRoutes(
+      createMikaApi({
+        admin: {
+          stockAdjust: async () => {
+            apiCalled = true;
+            return { ok: true, status: 200, data: { status: "completed" } };
+          },
+        },
+      } satisfies MikaApiOverrides),
+      {
+        operationPolicy: () => {
+          policyCalled = true;
+        },
+      },
+    );
+
+    await expect(
+      routes[mikaPluginRoutes.actionsRunner].handler({
+        input: {
+          actionId: "mika.stock.adjust",
+          payload: { quantityDelta: 1 },
+          target: {
+            type: "row",
+            surface: "row",
+            rowId: "ui_row_1",
+            path: "stock.0",
+            value: {},
+          },
+        },
+        request: new Request("https://shop.test/_emdash/api/plugins/mika/.well-known/actions/run", {
+          method: "POST",
+        }),
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 422,
+      severity: "warning",
+      message: "Mika action 'mika.stock.adjust' requires a target identifier.",
+    });
+    expect(policyCalled).toBe(false);
+    expect(apiCalled).toBe(false);
+  });
+
+  it("accepts primitive canonical row values as action operation ids", async () => {
+    let apiInput: unknown;
+    const routes = createMikaPluginRoutes(
+      createMikaApi({
+        admin: {
+          stockAdjust: async (input) => {
+            apiInput = input;
+            return { ok: true, status: 200, data: { id: input.stockItemId, status: "completed" } };
+          },
+        },
+      } satisfies MikaApiOverrides),
+    );
+
+    await expect(
+      routes[mikaPluginRoutes.actionsRunner].handler({
+        input: {
+          actionId: "mika.stock.adjust",
+          payload: { quantityDelta: 2 },
+          target: {
+            type: "row",
+            surface: "row",
+            rowId: "ui_row_1",
+            path: "stock.0",
+            value: "stock_primitive_1",
+          },
+        },
+        request: new Request("https://shop.test/_emdash/api/plugins/mika/.well-known/actions/run", {
+          method: "POST",
+        }),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      severity: "success",
+    });
+    expect(apiInput).toEqual({
+      stockItemId: id("stock_primitive_1"),
+      quantityDelta: 2,
+    });
+  });
+
+  it("resolves entry-scoped catalog sync action targets", async () => {
+    let apiInput: unknown;
+    const policyCalls: Array<{
+      readonly operation: string;
+      readonly input: unknown;
+    }> = [];
+    const routes = createMikaPluginRoutes(
+      createMikaApi({
+        admin: {
+          providerSync: async (input) => {
+            apiInput = input;
+            return {
+              ok: true,
+              status: 200,
+              data: {
+                id: id("admin_job_1"),
+                status: "completed",
+              },
+            };
+          },
+        },
+      } satisfies MikaApiOverrides),
+      {
+        operationPolicy: ({ operation, input }) => {
+          policyCalls.push({ operation: operation.name, input });
+        },
+      },
+    );
+
+    const result = await routes[mikaPluginRoutes.actionsRunner].handler({
+      input: {
+        actionId: "mika.catalog.syncEntry",
+        payload: { mode: "apply" },
+        target: {
+          type: "field",
+          surface: "field",
+          collection: "products",
+          entryId: "ring",
+          locale: "en",
+          fieldName: "commerce",
+        },
+      },
+      request: new Request("https://shop.test/_emdash/api/plugins/mika/.well-known/actions/run", {
+        method: "POST",
+      }),
+    });
+
+    const expectedInput = {
+      mode: "apply",
+      scope: "entry",
+      contentRef: {
+        collection: "products",
+        id: "ring",
+        locale: "en",
+      },
+    };
+    expect(apiInput).toEqual(expectedInput);
+    expect(policyCalls).toEqual([{ operation: "admin.providerSync", input: expectedInput }]);
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+      severity: "success",
+      effects: { reload: true },
+    });
+  });
+
+  it("preserves download issue order and order-line ids from row values", async () => {
+    let apiInput: unknown;
+    const routes = createMikaPluginRoutes(
+      createMikaApi({
+        admin: {
+          downloadIssue: async (input) => {
+            apiInput = input;
+            return {
+              ok: true,
+              status: 200,
+              data: {
+                id: id("download_job_1"),
+                status: "completed",
+              },
+            };
+          },
+        },
+      } satisfies MikaApiOverrides),
+    );
+
+    await expect(
+      routes[mikaPluginRoutes.actionsRunner].handler({
+        input: {
+          actionId: "mika.download.issue",
+          target: {
+            type: "row",
+            surface: "row",
+            rowId: "ui_row_1",
+            path: "downloads.0",
+            value: {
+              orderId: "order_1",
+              orderLineId: "order_line_1",
+            },
+          },
+        },
+        request: new Request("https://shop.test/_emdash/api/plugins/mika/.well-known/actions/run", {
+          method: "POST",
+        }),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      severity: "success",
+    });
+    expect(apiInput).toEqual({
+      orderId: id("order_1"),
+      orderLineId: id("order_line_1"),
+    });
+  });
+
+  it("rejects entry-scoped provider sync without a content ref before dispatch", async () => {
+    let policyCalled = false;
+    let apiCalled = false;
+    const routes = createMikaPluginRoutes(
+      createMikaApi({
+        admin: {
+          providerSync: async () => {
+            apiCalled = true;
+            return { ok: true, status: 200, data: { status: "completed" } };
+          },
+        },
+      } satisfies MikaApiOverrides),
+      {
+        operationPolicy: () => {
+          policyCalled = true;
+        },
+      },
+    );
+
+    await expect(
+      routes[mikaPluginRoutes.actionsRunner].handler({
+        input: {
+          actionId: "mika.provider.sync",
+          payload: { scope: "entry" },
+          target: { type: "dashboard" },
+        },
+        request: new Request("https://shop.test/_emdash/api/plugins/mika/.well-known/actions/run", {
+          method: "POST",
+        }),
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 422,
+      severity: "warning",
+      message: "Mika input validation failed.",
+    });
+    expect(policyCalled).toBe(false);
+    expect(apiCalled).toBe(false);
+  });
+
   it("returns stable JSON route failures when operation policy rejects", async () => {
     let called = false;
     const policy: MikaOperationPolicy = () => ({
@@ -2296,36 +2662,75 @@ describe("Mika admin and email shell", () => {
       pluginId: "mika",
       label: "Mika",
       manifestRoute: ".well-known/actions",
+      runnerRoute: ".well-known/actions/run",
       allowedTargetPluginIds: [],
     });
-    expect(manifest.actions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "mika.provider.health",
-          route: "admin/provider/health",
-          placement: "dashboard",
-        }),
-        expect.objectContaining({
-          id: "mika.catalog.syncEntry",
-          route: "admin/provider/sync",
-          placement: "field",
-        }),
-      ]),
-    );
+    const providerHealth = manifest.actions.find((action) => action.id === "mika.provider.health");
+    const catalogSync = manifest.actions.find((action) => action.id === "mika.catalog.syncEntry");
+    expect(providerHealth).toMatchObject({
+      id: "mika.provider.health",
+      mode: "runner",
+      runner: true,
+      target: { surfaces: ["dashboard"], required: true },
+      placement: "dashboard",
+    });
+    expect(catalogSync).toMatchObject({
+      id: "mika.catalog.syncEntry",
+      mode: "runner",
+      runner: true,
+      target: { surfaces: ["entry", "field"], required: true },
+      placement: "field",
+    });
+    expect(providerHealth && "route" in providerHealth).toBe(false);
+    expect(providerHealth && "method" in providerHealth).toBe(false);
+    expect(providerHealth && "pluginId" in providerHealth).toBe(false);
+    expect(catalogSync && "route" in catalogSync).toBe(false);
+    expect(catalogSync && "method" in catalogSync).toBe(false);
+    expect(catalogSync && "pluginId" in catalogSync).toBe(false);
+    const stockAdjust = manifest.actions.find((action) => action.id === "mika.stock.adjust");
+    expect(stockAdjust).toMatchObject({
+      target: { surfaces: ["field", "row"], required: true },
+      form: {
+        mode: "inline",
+        fields: [
+          { name: "quantityDelta", label: "Quantity delta", type: "integer", required: true },
+          { name: "reason", label: "Reason", type: "string" },
+        ],
+      },
+    });
+    expect(stockAdjust && "input" in stockAdjust).toBe(false);
+    expect(stockAdjust?.target && "idKeys" in stockAdjust.target).toBe(false);
+    expect(stockAdjust?.target && "idFrom" in stockAdjust.target).toBe(false);
   });
 
   it("creates copyable field action button options", () => {
     expect(createMikaCatalogSyncActionButtonOptions()).toMatchObject({
       mode: "run",
+      provider: "mika",
+      providerLabel: "Mika",
       actionPluginId: "mika",
       manifestRoute: ".well-known/actions",
+      runnerRoute: ".well-known/actions/run",
       action: "mika.catalog.syncEntry",
       contextKey: "context",
     });
     expect(createMikaActionButtonOptions("mika.stock.adjust")).toMatchObject({
       action: "mika.stock.adjust",
-      route: "admin/stock/adjust",
+      provider: "mika",
+      runnerRoute: ".well-known/actions/run",
+      route: undefined,
       confirm: "Adjust stock for this item?",
+    });
+    expect(
+      createMikaActionButtonOptions("mika.stock.adjust", {
+        provider: "custom",
+        providerLabel: "Custom",
+      }),
+    ).toMatchObject({
+      provider: "custom",
+      providerLabel: "Custom",
+      actionPluginId: "custom",
+      actionPluginLabel: "Custom",
     });
   });
 

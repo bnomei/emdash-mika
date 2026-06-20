@@ -1,4 +1,8 @@
 import { createMikaAdminActionsManifest } from "../admin";
+import {
+  resolveMikaAdminActionInvocation,
+  toMikaAdminActionRunResult,
+} from "./admin-action-runner";
 import { MIKA_AGENT_IDEMPOTENCY_KEY_HEADER } from "./agent-types";
 import { createMikaRequestContext, type MikaSessionAccess } from "./context";
 import {
@@ -40,6 +44,10 @@ export function createMikaPluginRoutes(
       public: false,
       handler: async () => createMikaAdminActionsManifest(),
     },
+    [mikaPluginRoutes.actionsRunner]: {
+      public: false,
+      handler: async (ctx: MikaRouteContext) => handleActionRunner(api, ctx, options),
+    },
   };
 
   for (const [path, operations] of mikaRouteOperationsByPath) {
@@ -51,6 +59,35 @@ export function createMikaPluginRoutes(
   }
 
   return routes as MikaPluginRoutes;
+}
+
+async function handleActionRunner(
+  api: MikaApi,
+  ctx: MikaRouteContext,
+  options: MikaPluginRoutesOptions,
+): Promise<unknown> {
+  if (ctx.request.method.toUpperCase() !== "POST") {
+    return {
+      ok: false,
+      status: 405,
+      severity: "error",
+      message: `Mika action runner does not support ${ctx.request.method.toUpperCase()}.`,
+    };
+  }
+
+  const resolved = resolveMikaAdminActionInvocation(ctx.input);
+  if (!resolved.ok) return toMikaAdminActionRunResult(resolved);
+
+  const mikaContext = requestContext(ctx, resolved.data.invocationId);
+  const result = await runMikaOperation({
+    operation: resolved.data.operation,
+    api,
+    ctx: mikaContext,
+    input: resolved.data.input,
+    operationPolicy: options.operationPolicy,
+  });
+
+  return toMikaAdminActionRunResult(result);
 }
 
 async function handleRouteOperation(
@@ -99,11 +136,11 @@ function methodNotAllowed(request: Request, operations: readonly MikaRouteOperat
   } as const;
 }
 
-function requestContext(ctx: MikaRouteContext) {
+function requestContext(ctx: MikaRouteContext, idempotencyKey?: string) {
   return createMikaRequestContext({
     request: ctx.request,
     url: ctx.request.url,
-    idempotencyKey: requestIdempotencyKey(ctx.request),
+    idempotencyKey: requestIdempotencyKey(ctx.request) ?? idempotencyKey,
     sessionId: ctx.sessionId,
     session: ctx.session,
     locale: ctx.currentLocale,

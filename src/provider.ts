@@ -105,6 +105,8 @@ export interface MikaProviderOrderCancelInput {
 
 export interface MikaProviderSyncInput {
   readonly mode?: "dry_run" | "apply";
+  readonly scope?: "all" | "entry";
+  readonly contentRef?: ContentRefDTO;
 }
 
 export interface MikaProviderLineItem {

@@ -357,10 +357,22 @@ export const providerHealthInputSchema = z.object({
   provider: optionalProviderNameSchema,
 }) satisfies z.ZodType<ProviderHealthInput>;
 
-export const providerSyncInputSchema = z.object({
-  provider: optionalProviderNameSchema,
-  mode: z.enum(["dry_run", "apply"]).optional(),
-}) satisfies z.ZodType<ProviderSyncInput>;
+export const providerSyncInputSchema = z
+  .object({
+    provider: optionalProviderNameSchema,
+    mode: z.enum(["dry_run", "apply"]).optional(),
+    scope: z.enum(["all", "entry"]).optional(),
+    contentRef: contentRefInputSchema.optional(),
+  })
+  .superRefine((input, ctx) => {
+    if (input.scope === "entry" && !input.contentRef) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["contentRef"],
+        message: "Entry-scoped provider sync requires contentRef.",
+      });
+    }
+  }) satisfies z.ZodType<ProviderSyncInput>;
 
 export const stockAdjustInputSchema = z.object({
   stockItemId: mikaIdSchema,
