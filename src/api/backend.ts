@@ -3668,7 +3668,13 @@ async function startPaymentWebhookWorkflow(
   const id = fulfillmentDocumentId("workflow", webhook.id, "payment");
   const existing = await input.repositories.ops.findWorkflow(id);
   if (existing) {
-    return leasePaymentWebhookWorkflow(input, ctx, id, webhook, webhook.status === "failed");
+    return leasePaymentWebhookWorkflow(
+      input,
+      ctx,
+      id,
+      webhook,
+      shouldForcePaymentWebhookWorkflowLease(webhook),
+    );
   }
 
   const workflow: WorkflowDocument = {
@@ -3711,10 +3717,20 @@ async function startPaymentWebhookWorkflow(
 
   const created = await input.repositories.ops.createWorkflow(workflow);
   if (!created) {
-    return leasePaymentWebhookWorkflow(input, ctx, id, webhook, webhook.status === "failed");
+    return leasePaymentWebhookWorkflow(
+      input,
+      ctx,
+      id,
+      webhook,
+      shouldForcePaymentWebhookWorkflowLease(webhook),
+    );
   }
 
   return leasePaymentWebhookWorkflow(input, ctx, id, webhook);
+}
+
+function shouldForcePaymentWebhookWorkflowLease(webhook: WebhookDocument): boolean {
+  return isReplayableWebhookStatus(webhook.status);
 }
 
 function leasePaymentWebhookWorkflow(

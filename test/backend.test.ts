@@ -224,6 +224,30 @@ describe("backend test storage helpers", () => {
     ).resolves.toBeNull();
   });
 
+  it("paginates past exhausted workflows when listing due workflows", async () => {
+    const clock = createTestClock();
+    const ops = new OpsRepository(createStorageCollection("ops"));
+    const exhaustedWorkflow = createWorkflowDocument({
+      id: createTestMikaId("workflow", 1),
+      status: "failed",
+      nextAttemptAt: clock.isoAt(-120_000),
+      attemptCount: 5,
+      maxAttempts: 5,
+    });
+    const dueWorkflow = createWorkflowDocument({
+      id: createTestMikaId("workflow", 2),
+      subjectId: createTestMikaId("webhook", 2),
+      idempotencyKey: "event_2",
+      nextAttemptAt: clock.isoAt(-60_000),
+    });
+    await ops.put(exhaustedWorkflow);
+    await ops.put(dueWorkflow);
+
+    await expect(ops.listDueWorkflows(TEST_NOW, 1)).resolves.toMatchObject({
+      items: [{ id: dueWorkflow.id }],
+    });
+  });
+
   it("allows expired workflow leases to be reclaimed", async () => {
     const clock = createTestClock();
     const ops = new OpsRepository(createStorageCollection("ops"));
@@ -4922,6 +4946,34 @@ describe("backend API composition", () => {
           expect.objectContaining({ name: "persist_order", status: "queued" }),
         ]),
       },
+    });
+
+    const replayApi = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories: {
+          ...repositories,
+          ops: new OpsRepository(opsCollection),
+        },
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    await expect(
+      replayApi.admin.webhookReplay({ webhookId: createTestMikaId("webhook", 1) }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "webhook_1",
+        status: "failed",
+        affected: {
+          processed: 0,
+          failed: 1,
+        },
+      },
+    });
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
+      status: "failed",
+      record: { status: "failed" },
     });
   });
 

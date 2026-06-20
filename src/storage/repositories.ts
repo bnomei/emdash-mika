@@ -778,39 +778,37 @@ export class OpsRepository {
     limit = 50,
     kind?: WorkflowDocument["kind"],
   ): Promise<DocumentList<WorkflowDocument>> {
-    const ready = await this.documents.listByType("workflow", {
+    const target = limit + 1;
+    const ready = await listLeaseableWorkflowCandidates(this.documents, now, target, {
       where: {
         ...(kind ? { kind } : {}),
         status: { in: ["queued", "failed"] },
         nextAttemptAt: { lte: now },
       },
       orderBy: { nextAttemptAt: "asc" },
-      limit,
     });
-    const expiredRunning = await this.documents.listByType("workflow", {
+    const expiredRunning = await listLeaseableWorkflowCandidates(this.documents, now, target, {
       where: {
         ...(kind ? { kind } : {}),
         status: "running",
         leaseExpiresAt: { lte: now },
       },
       orderBy: { leaseExpiresAt: "asc" },
-      limit,
     });
     const workflows = Array.from(
       new Map(
-        [...ready.items, ...expiredRunning.items]
-          .filter((item) => workflowIsDueForLease(item.data, now))
-          .map((item) => [item.id, item] as const),
+        [...ready.items, ...expiredRunning.items].map((item) => [item.id, item] as const),
       ).values(),
     ).sort((left, right) =>
       workflowDueSortKey(left.data).localeCompare(workflowDueSortKey(right.data)),
     );
     const items = workflows.slice(0, limit);
+    const hasMore = ready.hasMore || expiredRunning.hasMore || workflows.length > limit;
 
     return {
       items,
-      cursor: items.length < workflows.length ? String(items.length) : undefined,
-      hasMore: ready.hasMore || expiredRunning.hasMore || workflows.length > limit,
+      cursor: hasMore ? String(items.length) : undefined,
+      hasMore,
     };
   }
 
@@ -1041,6 +1039,50 @@ export class OpsRepository {
   async put(document: OpsDocument): Promise<void> {
     await this.documents.put(document);
   }
+}
+
+async function listLeaseableWorkflowCandidates(
+  documents: TypedCollectionFacade<OpsDocument>,
+  now: ISODateTime,
+  target: number,
+  options: TypeScopedQueryOptions<WorkflowDocument>,
+): Promise<DocumentList<WorkflowDocument>> {
+  if (target <= 0) return { items: [], hasMore: false };
+
+  const items: Array<StorageResultItem<WorkflowDocument>> = [];
+  let cursor: string | undefined;
+  let hasMore = false;
+  const pageLimit = Math.max(target, 50);
+
+  do {
+    const page = await documents.listByType("workflow", {
+      ...options,
+      cursor,
+      limit: pageLimit,
+    });
+
+    for (const item of page.items) {
+      if (!workflowIsDueForLease(item.data, now)) continue;
+
+      if (items.length < target) {
+        items.push(item);
+      } else {
+        hasMore = true;
+      }
+    }
+
+    cursor = page.cursor;
+    if (items.length >= target) {
+      hasMore = hasMore || page.hasMore;
+      break;
+    }
+  } while (items.length < target && cursor);
+
+  return {
+    items,
+    cursor: hasMore ? cursor : undefined,
+    hasMore,
+  };
 }
 
 function workflowIsDueForLease(
