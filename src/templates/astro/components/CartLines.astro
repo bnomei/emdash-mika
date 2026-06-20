@@ -7,6 +7,7 @@ import {
   mikaMaxPurchaseQuantity,
   mikaReturnTo
 } from "@bnomei/emdash-mika/astro";
+import { mikaHiddenInput, mikaReturnToInput } from "../lib/form";
 
 interface Props {
   cart?: CartDTO | null;
@@ -47,8 +48,8 @@ const hasEmptySlot = Astro.slots.has("empty");
           </div>
 
           <form action={actions.mika.cart.update} method="post">
-            <input type="hidden" name="lineId" value={line.id} />
-            <input type="hidden" name="returnTo" value={returnTo} />
+            <input type="hidden" {...mikaHiddenInput("lineId", line.id)} />
+            <input type="hidden" {...mikaReturnToInput(returnTo)} />
             <label>
               <span>{quantityLabel}</span>
               <input
@@ -70,8 +71,8 @@ const hasEmptySlot = Astro.slots.has("empty");
           </form>
 
           <form action={actions.mika.cart.remove} method="post">
-            <input type="hidden" name="lineId" value={line.id} />
-            <input type="hidden" name="returnTo" value={returnTo} />
+            <input type="hidden" {...mikaHiddenInput("lineId", line.id)} />
+            <input type="hidden" {...mikaReturnToInput(returnTo)} />
             <button
               type="submit"
               aria-label={`${removeLabel} ${line.title}`}
@@ -81,8 +82,8 @@ const hasEmptySlot = Astro.slots.has("empty");
           </form>
 
           <form action={actions.mika.wishlist.saveForLater} method="post">
-            <input type="hidden" name="lineId" value={line.id} />
-            <input type="hidden" name="returnTo" value={returnTo} />
+            <input type="hidden" {...mikaHiddenInput("lineId", line.id)} />
+            <input type="hidden" {...mikaReturnToInput(returnTo)} />
             <button
               type="submit"
               aria-label={`${saveForLaterLabel} ${line.title}`}

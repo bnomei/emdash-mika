@@ -4,39 +4,39 @@ export type MikaActionDefinitionKey = keyof MikaActionDefinitions;
 export type MikaActionTreeSpec = {
   readonly [key: string]: MikaActionDefinitionKey | MikaActionTreeSpec;
 };
+type MikaActionDefinition = MikaActionDefinitions[MikaActionDefinitionKey];
+type MikaActionOperation = MikaActionDefinition["operation"];
+type MikaActionKeyFor<TNamespace extends string, TMethod extends string> = {
+  readonly [TKey in MikaActionDefinitionKey]: MikaActionDefinitions[TKey]["operation"] extends {
+    readonly namespace: TNamespace;
+    readonly method: TMethod;
+  }
+    ? TKey
+    : never;
+}[MikaActionDefinitionKey];
+type MikaDerivedActionTreeSpec = {
+  readonly [TNamespace in MikaActionOperation["namespace"]]: {
+    readonly [TMethod in Extract<
+      MikaActionOperation,
+      { readonly namespace: TNamespace }
+    >["method"]]: MikaActionKeyFor<TNamespace, TMethod>;
+  };
+};
 
-export const mikaActionTreeSpec = {
-  catalog: { sellables: "catalogSellables" },
-  stock: { availability: "stockAvailability" },
-  cart: {
-    add: "cartAdd",
-    update: "cartUpdate",
-    remove: "cartRemove",
-    merge: "cartMerge",
-    applyCoupon: "cartApplyCoupon",
-    removeCoupon: "cartRemoveCoupon",
-  },
-  wishlist: {
-    add: "wishlistAdd",
-    remove: "wishlistRemove",
-    moveToCart: "wishlistMoveToCart",
-    saveForLater: "wishlistSaveForLater",
-    merge: "wishlistMerge",
-  },
-  checkout: { start: "checkoutStart", status: "checkoutStatus" },
-  magicLink: { request: "magicLinkRequest", verify: "magicLinkVerify" },
-  account: {
-    export: "accountExport",
-    exportStatus: "accountExportStatus",
-    delete: "accountDelete",
-    portal: "accountPortal",
-  },
-  subscription: {
-    cancel: "subscriptionCancel",
-    change: "subscriptionChange",
-    renew: "subscriptionRenew",
-  },
-} as const satisfies MikaActionTreeSpec;
+export const mikaActionTreeSpec = collectMikaActionTreeSpec();
+
+function collectMikaActionTreeSpec(): MikaDerivedActionTreeSpec {
+  const spec: Record<string, Record<string, MikaActionDefinitionKey>> = {};
+
+  for (const [key, definition] of Object.entries(mikaActionDefinitions) as Array<
+    [MikaActionDefinitionKey, MikaActionDefinition]
+  >) {
+    const namespaceSpec = (spec[definition.operation.namespace] ??= {});
+    namespaceSpec[definition.operation.method] = key;
+  }
+
+  return spec as MikaDerivedActionTreeSpec;
+}
 
 export function validateMikaActionTreeSpec(
   spec: unknown = mikaActionTreeSpec,

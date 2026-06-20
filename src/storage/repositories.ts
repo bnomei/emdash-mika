@@ -211,7 +211,6 @@ type StorageResultItem<TDocument> = {
   data: TDocument;
 };
 type DocumentList<TDocument> = PaginatedStorageResult<StorageResultItem<TDocument>>;
-type DueOpsDocument = WebhookDocument | EmailDocument;
 type StockMutationResult = {
   readonly numAffectedRows?: bigint | number;
   readonly numUpdatedRows?: bigint | number;
@@ -279,6 +278,85 @@ async function listByType<TDocument extends TypedDocument, TType extends Documen
   return result as DocumentList<DocumentOfType<TDocument, TType>>;
 }
 
+async function findFirstByTypeCandidate<
+  TDocument extends TypedDocument & { readonly id: string },
+  TType extends DocumentType<TDocument>,
+  TResult,
+>(
+  documents: TypedCollectionFacade<TDocument>,
+  type: TType,
+  match: (item: StorageResultItem<DocumentOfType<TDocument, TType>>) => TResult | null | undefined,
+  options: TypeScopedQueryOptions<DocumentOfType<TDocument, TType>> = {},
+): Promise<TResult | null> {
+  let cursor = options.cursor;
+  const limit = options.limit ?? 100;
+
+  do {
+    const page = await documents.listByType(type, {
+      ...options,
+      cursor,
+      limit,
+    });
+
+    for (const item of page.items) {
+      const candidate = match(item);
+      if (candidate !== null && candidate !== undefined) return candidate;
+    }
+
+    cursor = page.cursor;
+  } while (cursor);
+
+  return null;
+}
+
+async function listByTypeCandidates<
+  TDocument extends TypedDocument & { readonly id: string },
+  TType extends DocumentType<TDocument>,
+>(
+  documents: TypedCollectionFacade<TDocument>,
+  type: TType,
+  target: number,
+  options: TypeScopedQueryOptions<DocumentOfType<TDocument, TType>>,
+  isCandidate: (document: DocumentOfType<TDocument, TType>) => boolean,
+): Promise<DocumentList<DocumentOfType<TDocument, TType>>> {
+  if (target <= 0) return { items: [], hasMore: false };
+
+  const items: Array<StorageResultItem<DocumentOfType<TDocument, TType>>> = [];
+  let cursor = options.cursor;
+  let hasMore = false;
+  const pageLimit = Math.max(target, options.limit ?? 50);
+
+  do {
+    const page = await documents.listByType(type, {
+      ...options,
+      cursor,
+      limit: pageLimit,
+    });
+
+    for (const item of page.items) {
+      if (!isCandidate(item.data)) continue;
+
+      if (items.length < target) {
+        items.push(item);
+      } else {
+        hasMore = true;
+      }
+    }
+
+    cursor = page.cursor;
+    if (items.length >= target) {
+      hasMore = hasMore || page.hasMore;
+      break;
+    }
+  } while (items.length < target && cursor);
+
+  return {
+    items,
+    cursor: hasMore ? cursor : undefined,
+    hasMore,
+  };
+}
+
 function withDocumentType<TDocument extends TypedDocument, TType extends DocumentType<TDocument>>(
   type: TType,
   where: TypeScopedWhere<DocumentOfType<TDocument, TType>>,
@@ -340,65 +418,44 @@ export class CatalogRepository {
   }
 
   async findItemBySellableId(sellableId: MikaId): Promise<CatalogItemDocument | null> {
-    let cursor: string | undefined;
-
-    do {
-      const result = await this.documents.listByType("catalogItem", { cursor, limit: 100 });
-      const match = result.items.find((item) =>
-        item.data.aggregate.sellables.some((sellable) => sellable.id === sellableId),
-      );
-      if (match) return match.data;
-      cursor = result.cursor;
-    } while (cursor);
-
-    return null;
+    return findFirstByTypeCandidate(this.documents, "catalogItem", (item) =>
+      item.data.aggregate.sellables.some((sellable) => sellable.id === sellableId)
+        ? item.data
+        : null,
+    );
   }
 
   async findItemByProviderPrice(
     provider: string,
     providerPriceId: string,
   ): Promise<CatalogProviderPriceMatch | null> {
-    let cursor: string | undefined;
-
-    do {
-      const result = await this.documents.listByType("catalogItem", { cursor, limit: 100 });
-
-      for (const item of result.items) {
-        for (const sellable of item.data.aggregate.sellables) {
-          const price = sellable.prices.find((candidate) =>
-            candidate.providerRefs.some(
-              (ref) => ref.provider === provider && ref.priceId === providerPriceId,
-            ),
-          );
-          if (price) {
-            return { catalog: item.data, sellable, price };
-          }
+    return findFirstByTypeCandidate(this.documents, "catalogItem", (item) => {
+      for (const sellable of item.data.aggregate.sellables) {
+        const price = sellable.prices.find((candidate) =>
+          candidate.providerRefs.some(
+            (ref) => ref.provider === provider && ref.priceId === providerPriceId,
+          ),
+        );
+        if (price) {
+          return { catalog: item.data, sellable, price };
         }
       }
-      cursor = result.cursor;
-    } while (cursor);
 
-    return null;
+      return null;
+    });
   }
 
   async findPriceById(priceId: MikaId): Promise<CatalogProviderPriceMatch | null> {
-    let cursor: string | undefined;
-
-    do {
-      const result = await this.documents.listByType("catalogItem", { cursor, limit: 100 });
-
-      for (const item of result.items) {
-        for (const sellable of item.data.aggregate.sellables) {
-          const price = sellable.prices.find((candidate) => candidate.id === priceId);
-          if (price) {
-            return { catalog: item.data, sellable, price };
-          }
+    return findFirstByTypeCandidate(this.documents, "catalogItem", (item) => {
+      for (const sellable of item.data.aggregate.sellables) {
+        const price = sellable.prices.find((candidate) => candidate.id === priceId);
+        if (price) {
+          return { catalog: item.data, sellable, price };
         }
       }
-      cursor = result.cursor;
-    } while (cursor);
 
-    return null;
+      return null;
+    });
   }
 
   async put(document: CatalogDocument): Promise<void> {
@@ -476,18 +533,11 @@ export class SessionRepository {
     });
     if (indexed) return indexed;
 
-    let cursor: string | undefined;
-
-    do {
-      const result = await this.documents.listByType("checkout", { cursor, limit: 100 });
-      const match = result.items.find(
-        (item) => item.data.aggregate.metadata?.["checkoutIdempotencyKey"] === idempotencyKey,
-      );
-      if (match) return match.data;
-      cursor = result.cursor;
-    } while (cursor);
-
-    return null;
+    return findFirstByTypeCandidate(this.documents, "checkout", (item) =>
+      item.data.aggregate.metadata?.["checkoutIdempotencyKey"] === idempotencyKey
+        ? item.data
+        : null,
+    );
   }
 
   async put(document: SessionDocument): Promise<void> {
@@ -667,18 +717,11 @@ export class LedgerRepository {
   }
 
   async findOrderByDownloadRef(downloadRef: string): Promise<OrderDocument | null> {
-    let cursor: string | undefined;
-
-    do {
-      const result = await this.documents.listByType("order", { cursor, limit: 100 });
-      const match = result.items.find((item) =>
-        item.data.aggregate.lines.some((line) => line.downloadRefs?.includes(downloadRef)),
-      );
-      if (match) return match.data;
-      cursor = result.cursor;
-    } while (cursor);
-
-    return null;
+    return findFirstByTypeCandidate(this.documents, "order", (item) =>
+      item.data.aggregate.lines.some((line) => line.downloadRefs?.includes(downloadRef))
+        ? item.data
+        : null,
+    );
   }
 
   async listOrdersByCustomer(customerId: MikaId, limit = 50): Promise<DocumentList<OrderDocument>> {
@@ -696,11 +739,9 @@ export class LedgerRepository {
 
 export class OpsRepository {
   private readonly documents: TypedCollectionFacade<OpsDocument>;
-  private readonly dueDocuments: TypedCollectionFacade<DueOpsDocument>;
 
   constructor(collection: StorageCollection<OpsDocument>) {
     this.documents = typedCollection(collection);
-    this.dueDocuments = typedCollection(collection as StorageCollection<DueOpsDocument>);
   }
 
   async findWebhookDuplicate(input: {
@@ -1002,38 +1043,8 @@ export class OpsRepository {
     return this.documents.findByIdOfType(emailId, "email");
   }
 
-  async listWebhookFailures(now: string, limit = 50): Promise<DocumentList<WebhookDocument>> {
-    return this.documents.listByType("webhook", {
-      where: { status: "failed", nextAttemptAt: { lte: now } },
-      orderBy: { nextAttemptAt: "asc" },
-      limit,
-    });
-  }
-
   async writeAudit(document: AdminAuditDocument): Promise<void> {
     await this.put(document);
-  }
-
-  async listDue(
-    type: WebhookDocument["type"],
-    now: string,
-    limit?: number,
-  ): Promise<DocumentList<WebhookDocument>>;
-  async listDue(
-    type: EmailDocument["type"],
-    now: string,
-    limit?: number,
-  ): Promise<DocumentList<EmailDocument>>;
-  async listDue(
-    type: DueOpsDocument["type"],
-    now: string,
-    limit = 50,
-  ): Promise<DocumentList<DueOpsDocument>> {
-    return this.dueDocuments.listByType(type, {
-      where: { status: "queued", nextAttemptAt: { lte: now } },
-      orderBy: { nextAttemptAt: "asc" },
-      limit,
-    });
   }
 
   async put(document: OpsDocument): Promise<void> {
@@ -1047,42 +1058,9 @@ async function listLeaseableWorkflowCandidates(
   target: number,
   options: TypeScopedQueryOptions<WorkflowDocument>,
 ): Promise<DocumentList<WorkflowDocument>> {
-  if (target <= 0) return { items: [], hasMore: false };
-
-  const items: Array<StorageResultItem<WorkflowDocument>> = [];
-  let cursor: string | undefined;
-  let hasMore = false;
-  const pageLimit = Math.max(target, 50);
-
-  do {
-    const page = await documents.listByType("workflow", {
-      ...options,
-      cursor,
-      limit: pageLimit,
-    });
-
-    for (const item of page.items) {
-      if (!workflowIsDueForLease(item.data, now)) continue;
-
-      if (items.length < target) {
-        items.push(item);
-      } else {
-        hasMore = true;
-      }
-    }
-
-    cursor = page.cursor;
-    if (items.length >= target) {
-      hasMore = hasMore || page.hasMore;
-      break;
-    }
-  } while (items.length < target && cursor);
-
-  return {
-    items,
-    cursor: hasMore ? cursor : undefined,
-    hasMore,
-  };
+  return listByTypeCandidates(documents, "workflow", target, options, (workflow) =>
+    workflowIsDueForLease(workflow, now),
+  );
 }
 
 function workflowIsDueForLease(

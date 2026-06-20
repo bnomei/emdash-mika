@@ -2,6 +2,7 @@
 import { actions } from "astro:actions";
 import type { CartDTO } from "@bnomei/emdash-mika/types";
 import { mikaReturnTo } from "@bnomei/emdash-mika/astro";
+import { mikaHiddenInput, mikaRedirectInputs } from "../lib/form";
 import { mikaTemplateRoutes } from "../lib/routes";
 
 interface Props {
@@ -44,6 +45,7 @@ const {
   ...attrs
 } = Astro.props;
 const disabled = !cart || cart.items.length === 0;
+const redirectInputs = mikaRedirectInputs({ successPath, cancelPath, returnTo });
 ---
 
 <form
@@ -53,10 +55,10 @@ const disabled = !cart || cart.items.length === 0;
   action={actions.mika.checkout.start}
   method="post"
 >
-  {cart?.id && <input type="hidden" name="cartId" value={cart.id} />}
-  <input type="hidden" name="successPath" value={successPath} />
-  <input type="hidden" name="cancelPath" value={cancelPath} />
-  <input type="hidden" name="returnTo" value={returnTo} />
+  {cart?.id && <input type="hidden" {...mikaHiddenInput("cartId", cart.id)} />}
+  <input type="hidden" {...redirectInputs.successPath} />
+  <input type="hidden" {...redirectInputs.cancelPath} />
+  <input type="hidden" {...redirectInputs.returnTo} />
 
   {showCustomerFields && (
     <fieldset data-mika-checkout-customer>

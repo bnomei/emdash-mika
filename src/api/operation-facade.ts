@@ -46,9 +46,22 @@ import type {
 } from "./types";
 
 type MikaOperationKey = keyof typeof mikaOperationDefinitions;
-type MikaOperationFacadeSpecShape = {
-  readonly [TNamespace: string]: {
-    readonly [TMethod: string]: MikaOperationKey;
+type MikaOperationDefinitionMap = typeof mikaOperationDefinitions;
+type MikaOperationDefinition = MikaOperationDefinitionMap[MikaOperationKey];
+type MikaOperationKeyFor<TNamespace extends string, TMethod extends string> = {
+  readonly [TOperation in MikaOperationKey]: MikaOperationDefinitionMap[TOperation] extends {
+    readonly namespace: TNamespace;
+    readonly method: TMethod;
+  }
+    ? TOperation
+    : never;
+}[MikaOperationKey];
+type MikaOperationFacadeSpec = {
+  readonly [TNamespace in MikaOperationDefinition["namespace"]]: {
+    readonly [TMethod in Extract<
+      MikaOperationDefinition,
+      { readonly namespace: TNamespace }
+    >["method"]]: MikaOperationKeyFor<TNamespace, TMethod>;
   };
 };
 
@@ -59,79 +72,20 @@ type MikaFacadeInvoke = <TOperation extends MikaOperationKey>(
 
 const emptyInput = () => ({});
 
-export const mikaOperationFacadeSpec = {
-  catalog: {
-    sellables: "catalogSellables",
-  },
-  stock: {
-    availability: "stockAvailability",
-  },
-  cart: {
-    get: "cartGet",
-    quote: "cartQuote",
-    add: "cartAdd",
-    update: "cartUpdate",
-    remove: "cartRemove",
-    merge: "cartMerge",
-    applyCoupon: "cartApplyCoupon",
-    removeCoupon: "cartRemoveCoupon",
-  },
-  wishlist: {
-    get: "wishlistGet",
-    add: "wishlistAdd",
-    remove: "wishlistRemove",
-    moveToCart: "wishlistMoveToCart",
-    saveForLater: "wishlistSaveForLater",
-    merge: "wishlistMerge",
-  },
-  checkout: {
-    start: "checkoutStart",
-    preview: "checkoutPreview",
-    status: "checkoutStatus",
-  },
-  magicLink: {
-    request: "magicLinkRequest",
-    verify: "magicLinkVerify",
-  },
-  account: {
-    get: "accountGet",
-    export: "accountExport",
-    exportStatus: "accountExportStatus",
-    exportDownload: "accountExportDownload",
-    delete: "accountDelete",
-    portal: "accountPortal",
-  },
-  subscription: {
-    cancel: "subscriptionCancel",
-    change: "subscriptionChange",
-    renew: "subscriptionRenew",
-  },
-  download: {
-    resolve: "downloadResolve",
-  },
-  order: {
-    invoice: "orderInvoice",
-  },
-  webhook: {
-    receive: "webhookReceive",
-  },
-  admin: {
-    providerHealth: "adminProviderHealth",
-    providerSync: "adminProviderSync",
-    stockAdjust: "adminStockAdjust",
-    releaseExpiredReservations: "adminStockReleaseExpiredReservations",
-    webhookReplay: "adminWebhookReplay",
-    orderRefund: "adminOrderRefund",
-    orderCancel: "adminOrderCancel",
-    entitlementGrant: "adminEntitlementGrant",
-    entitlementRevoke: "adminEntitlementRevoke",
-    emailResend: "adminEmailResend",
-    licenseRevoke: "adminLicenseRevoke",
-    downloadIssue: "adminDownloadIssue",
-  },
-} as const satisfies MikaOperationFacadeSpecShape;
+export const mikaOperationFacadeSpec = collectMikaOperationFacadeSpec();
 
-type MikaOperationFacadeSpec = typeof mikaOperationFacadeSpec;
+function collectMikaOperationFacadeSpec(): MikaOperationFacadeSpec {
+  const spec: Record<string, Record<string, MikaOperationKey>> = {};
+
+  for (const [key, operation] of Object.entries(mikaOperationDefinitions) as Array<
+    [MikaOperationKey, MikaOperationDefinition]
+  >) {
+    const namespaceSpec = (spec[operation.namespace] ??= {});
+    namespaceSpec[operation.method] = key;
+  }
+
+  return spec as MikaOperationFacadeSpec;
+}
 type MikaFacadeOperationKey<
   TNamespace extends keyof MikaOperationFacadeSpec,
   TMethod extends keyof MikaOperationFacadeSpec[TNamespace],

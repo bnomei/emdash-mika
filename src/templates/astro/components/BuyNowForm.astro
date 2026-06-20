@@ -1,6 +1,7 @@
 ---
 import { actions } from "astro:actions";
 import { mikaReturnTo } from "@bnomei/emdash-mika/astro";
+import { mikaHiddenInput, mikaRedirectInputs } from "../lib/form";
 import { mikaTemplateRoutes } from "../lib/routes";
 
 interface Props {
@@ -30,6 +31,7 @@ const {
   class: className,
   ...attrs
 } = Astro.props;
+const redirectInputs = mikaRedirectInputs({ successPath, cancelPath, returnTo });
 ---
 
 <form
@@ -41,20 +43,18 @@ const {
 >
   <input
     type="hidden"
-    name="sellableId"
-    value={sellableId}
+    {...mikaHiddenInput("sellableId", sellableId)}
     data-mika-selected-sellable-id
   />
   <input
     type="hidden"
-    name="priceId"
-    value={priceId ?? ""}
+    {...mikaHiddenInput("priceId", priceId)}
     data-mika-selected-price-id
   />
-  <input type="hidden" name="quantity" value={String(quantity)} />
-  <input type="hidden" name="successPath" value={successPath} />
-  <input type="hidden" name="cancelPath" value={cancelPath} />
-  <input type="hidden" name="returnTo" value={returnTo} />
+  <input type="hidden" {...mikaHiddenInput("quantity", quantity)} />
+  <input type="hidden" {...redirectInputs.successPath} />
+  <input type="hidden" {...redirectInputs.cancelPath} />
+  <input type="hidden" {...redirectInputs.returnTo} />
   <button
     type="submit"
     class={buttonClass}

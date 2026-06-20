@@ -2,6 +2,7 @@
 import { actions } from "astro:actions";
 import type { WishlistDTO } from "@bnomei/emdash-mika/types";
 import { mikaReturnTo } from "@bnomei/emdash-mika/astro";
+import { mikaHiddenInput, mikaReturnToInput } from "../lib/form";
 
 interface Props {
   wishlist?: WishlistDTO | null;
@@ -35,8 +36,8 @@ const hasEmptySlot = Astro.slots.has("empty");
         <li>
           <span>{item.title}</span>
           <form action={actions.mika.wishlist.remove} method="post">
-            <input type="hidden" name="itemId" value={item.id} />
-            <input type="hidden" name="returnTo" value={returnTo} />
+            <input type="hidden" {...mikaHiddenInput("itemId", item.id)} />
+            <input type="hidden" {...mikaReturnToInput(returnTo)} />
             <button
               type="submit"
               aria-label={`${removeLabel} ${item.title}`}
@@ -45,8 +46,8 @@ const hasEmptySlot = Astro.slots.has("empty");
             </button>
           </form>
           <form action={actions.mika.wishlist.moveToCart} method="post">
-            <input type="hidden" name="itemId" value={item.id} />
-            <input type="hidden" name="returnTo" value={returnTo} />
+            <input type="hidden" {...mikaHiddenInput("itemId", item.id)} />
+            <input type="hidden" {...mikaReturnToInput(returnTo)} />
             <button
               type="submit"
               aria-label={`${moveToCartLabel} ${item.title}`}

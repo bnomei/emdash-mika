@@ -6,6 +6,7 @@ import { resolveMikaApiOverrides, resolveMikaOperationPolicy } from "./api/runti
 import { runMikaOperation } from "./api/operation-runner";
 import { mikaOperationDefinitions, type MikaApiOperationData } from "./api/operations";
 import { createMikaOperationFacade, type MikaOperationFacade } from "./api/operation-facade";
+import { serializeMikaPurchaseField } from "./api/form-contracts";
 import type { MikaOperationPolicy } from "./api/operation-policy";
 import { createMikaPluginRouteBuilder } from "./api/routes";
 import { createMikaApi, type MikaApiOverrides } from "./api/server";
@@ -166,10 +167,10 @@ export function createMikaPurchaseOptions(
             ? [formatMikaSellable(sellable), formatMikaPrice(price, options)]
             : [formatMikaPrice(price, options)];
 
-        const value = new URLSearchParams({
+        const value = serializeMikaPurchaseField({
           sellableId: sellable.id,
           priceId: price.id,
-        }).toString();
+        });
 
         return {
           sellable,

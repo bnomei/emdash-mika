@@ -4,6 +4,7 @@ import {
   formatMikaSellable,
   isMikaPurchasable
 } from "@bnomei/emdash-mika/astro";
+import { mikaHiddenInput } from "../lib/form";
 
 interface Props {
   sellables: readonly SellableDTO[];
@@ -52,7 +53,6 @@ const hiddenValue = selected ?? activeSellables[0]?.id ?? "";
     {...attrs}
     class={className}
     type="hidden"
-    name="sellableId"
-    value={hiddenValue}
+    {...mikaHiddenInput("sellableId", hiddenValue)}
   />
 )}

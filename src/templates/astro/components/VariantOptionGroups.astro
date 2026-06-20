@@ -1,6 +1,7 @@
 ---
 import type { VariantOptionGroupDTO } from "@bnomei/emdash-mika/types";
 import type { MikaPurchaseVariantMapItem } from "@bnomei/emdash-mika/astro";
+import { mikaHiddenInput } from "../lib/form";
 
 interface Props {
   variantGroups: readonly VariantOptionGroupDTO[];
@@ -36,9 +37,9 @@ const selectedOptions = selected?.options ?? {};
     class={className}
   >
     <legend>{label}</legend>
-    <input type="hidden" name="sellableId" value={selected?.id ?? ""} />
+    <input type="hidden" {...mikaHiddenInput("sellableId", selected?.id)} />
     {includePriceId && selected?.priceId && (
-      <input type="hidden" name="priceId" value={selected.priceId} />
+      <input type="hidden" {...mikaHiddenInput("priceId", selected.priceId)} />
     )}
     {variantGroups.map((group) => (
       <label>

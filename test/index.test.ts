@@ -129,6 +129,7 @@ import {
   mikaAdminActionRuntimeDefinitions,
 } from "../src/api/admin-action-runner";
 import { mikaActionTreeDefinitionKeys, validateMikaActionTreeSpec } from "../src/api/action-tree";
+import { mikaOperationFacadeSpec } from "../src/api/operation-facade";
 import { resolveMikaOperationPolicy, setDefaultMikaOperationPolicy } from "../src/api/runtime-api";
 import {
   mikaEmailTemplates,
@@ -153,6 +154,54 @@ import {
   type ProviderHealthDTO,
   type RemoveWishlistItemInput,
 } from "../src/api/types";
+
+const expectedOperationContracts = [
+  ["catalogSellables", "catalog", "sellables", "catalogSellables"],
+  ["stockAvailability", "stock", "availability", "stockAvailability"],
+  ["cartGet", "cart", "get", ""],
+  ["cartQuote", "cart", "quote", ""],
+  ["cartAdd", "cart", "add", "cartAdd"],
+  ["cartUpdate", "cart", "update", "cartUpdate"],
+  ["cartRemove", "cart", "remove", "cartRemove"],
+  ["cartMerge", "cart", "merge", "cartMerge"],
+  ["cartApplyCoupon", "cart", "applyCoupon", "cartApplyCoupon"],
+  ["cartRemoveCoupon", "cart", "removeCoupon", "cartRemoveCoupon"],
+  ["wishlistGet", "wishlist", "get", ""],
+  ["wishlistAdd", "wishlist", "add", "wishlistAdd"],
+  ["wishlistRemove", "wishlist", "remove", "wishlistRemove"],
+  ["wishlistMoveToCart", "wishlist", "moveToCart", "wishlistMoveToCart"],
+  ["wishlistSaveForLater", "wishlist", "saveForLater", "wishlistSaveForLater"],
+  ["wishlistMerge", "wishlist", "merge", "wishlistMerge"],
+  ["checkoutStart", "checkout", "start", "checkoutStart"],
+  ["checkoutPreview", "checkout", "preview", ""],
+  ["checkoutStatus", "checkout", "status", "checkoutStatus"],
+  ["magicLinkRequest", "magicLink", "request", "magicLinkRequest"],
+  ["magicLinkVerify", "magicLink", "verify", "magicLinkVerify"],
+  ["accountGet", "account", "get", ""],
+  ["accountExport", "account", "export", "accountExport"],
+  ["accountExportStatus", "account", "exportStatus", "accountExportStatus"],
+  ["accountExportDownload", "account", "exportDownload", ""],
+  ["accountDelete", "account", "delete", "accountDelete"],
+  ["accountPortal", "account", "portal", "accountPortal"],
+  ["subscriptionCancel", "subscription", "cancel", "subscriptionCancel"],
+  ["subscriptionChange", "subscription", "change", "subscriptionChange"],
+  ["subscriptionRenew", "subscription", "renew", "subscriptionRenew"],
+  ["downloadResolve", "download", "resolve", ""],
+  ["orderInvoice", "order", "invoice", ""],
+  ["webhookReceive", "webhook", "receive", ""],
+  ["adminProviderHealth", "admin", "providerHealth", ""],
+  ["adminProviderSync", "admin", "providerSync", ""],
+  ["adminStockAdjust", "admin", "stockAdjust", ""],
+  ["adminStockReleaseExpiredReservations", "admin", "releaseExpiredReservations", ""],
+  ["adminWebhookReplay", "admin", "webhookReplay", ""],
+  ["adminOrderRefund", "admin", "orderRefund", ""],
+  ["adminOrderCancel", "admin", "orderCancel", ""],
+  ["adminEntitlementGrant", "admin", "entitlementGrant", ""],
+  ["adminEntitlementRevoke", "admin", "entitlementRevoke", ""],
+  ["adminEmailResend", "admin", "emailResend", ""],
+  ["adminLicenseRevoke", "admin", "licenseRevoke", ""],
+  ["adminDownloadIssue", "admin", "downloadIssue", ""],
+] as const;
 import {
   createCurrencyCode,
   createISODateTime,
@@ -1057,6 +1106,32 @@ describe("Mika client", () => {
       "adminLicenseRevoke|admin.licenseRevoke|admin.licenseRevoke|adminLicenseRevoke|POST|body|trusted|noctx||",
       "adminDownloadIssue|admin.downloadIssue|admin.downloadIssue|adminDownloadIssue|POST|body|trusted|noctx||",
     ]);
+  });
+
+  it("projects operation, action, and facade keys from one expected contract table", () => {
+    expect(Object.keys(mikaOperationDefinitions)).toEqual(
+      expectedOperationContracts.map(([operationKey]) => operationKey),
+    );
+
+    for (const [operationKey, namespace, method, actionKey] of expectedOperationContracts) {
+      const operation = mikaOperationDefinitions[operationKey];
+
+      expect(operation.namespace).toBe(namespace);
+      expect(operation.method).toBe(method);
+      expect(
+        (mikaOperationFacadeSpec as Record<string, Record<string, string>>)[namespace]?.[method],
+      ).toBe(operationKey);
+
+      if (actionKey) {
+        expect(mikaActionDefinitions[actionKey].operation).toBe(operation);
+      } else {
+        expect(
+          Object.values(mikaActionDefinitions).some(
+            (definition) => definition.operation === operation,
+          ),
+        ).toBe(false);
+      }
+    }
   });
 
   it("keeps operation policy classes aligned with public and agent projections", () => {

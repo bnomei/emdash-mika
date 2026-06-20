@@ -12,6 +12,13 @@ import {
   type CreateMikaBackendApiInput,
   type MikaBackendDependencies,
   type MikaBackendRepositories,
+  type MikaAccountRepositoryPort,
+  type MikaCatalogRepositoryPort,
+  type MikaEphemeralRepositoryPort,
+  type MikaLedgerRepositoryPort,
+  type MikaOpsRepositoryPort,
+  type MikaSessionRepositoryPort,
+  type MikaStockRepositoryPort,
 } from "../src/api/backend";
 import { MIKA_AGENT_IDEMPOTENCY_KEY_HEADER } from "../src/api/agent-types";
 import { callMikaOperation, mikaActionDefinitions } from "../src/api/operations";
@@ -162,6 +169,17 @@ describe("backend test storage helpers", () => {
         ["type", "customerId", "currentPeriodEnd"],
       ]),
     );
+  });
+
+  it("keeps concrete repositories aligned with backend ports", () => {
+    expectTypeOf<CatalogRepository>().toMatchTypeOf<MikaCatalogRepositoryPort>();
+    expectTypeOf<SessionRepository>().toMatchTypeOf<MikaSessionRepositoryPort>();
+    expectTypeOf<AccountRepository>().toMatchTypeOf<MikaAccountRepositoryPort>();
+    expectTypeOf<LedgerRepository>().toMatchTypeOf<MikaLedgerRepositoryPort>();
+    expectTypeOf<OpsRepository>().toMatchTypeOf<MikaOpsRepositoryPort>();
+    expectTypeOf<StockRepository>().toMatchTypeOf<MikaStockRepositoryPort>();
+    expectTypeOf<EphemeralRepository>().toMatchTypeOf<MikaEphemeralRepositoryPort>();
+    expectTypeOf(createTestStockRepository()).toMatchTypeOf<MikaStockRepositoryPort>();
   });
 
   it("enforces configured unique indexes in memory storage", async () => {
@@ -1594,6 +1612,106 @@ describe("backend test Kysely stock database harness", () => {
           },
         );
       }
+    });
+
+    it(`${repositoryKind} stock repository contract adjusts stock and replays idempotency keys`, async () => {
+      const stockItem = createStockRecord({
+        quantityOnHand: 5,
+        quantityReserved: 2,
+      });
+
+      await withStockRepositoryContractHarness(
+        repositoryKind,
+        stockItem,
+        async ({ repository, service }) => {
+          const result = await service.adjust({
+            stockItemId: stockItem.id,
+            quantityDelta: 3,
+            reason: "sync",
+            idempotencyKey: `${repositoryKind}_adjust_contract_1`,
+            metadata: { source: "contract-test" },
+          });
+
+          expect(result).toMatchObject({
+            status: "adjusted",
+            event: {
+              kind: "movement",
+              status: "recorded",
+              reason: "sync",
+              quantityDelta: 3,
+              idempotencyKey: `${repositoryKind}_adjust_contract_1`,
+              metadata: { source: "contract-test" },
+            },
+            stock: {
+              quantityOnHand: 8,
+              quantityReserved: 2,
+            },
+          });
+          if (result.status !== "adjusted") {
+            throw new Error(`Expected adjusted stock, received '${result.status}'.`);
+          }
+
+          const replay = await service.adjust({
+            stockItemId: stockItem.id,
+            quantityDelta: 3,
+            idempotencyKey: `${repositoryKind}_adjust_contract_1`,
+          });
+
+          expect(replay).toMatchObject({
+            status: "replayed",
+            event: { id: result.event.id },
+            stock: { quantityOnHand: 8, quantityReserved: 2 },
+          });
+          await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+            quantityOnHand: 8,
+            quantityReserved: 2,
+          });
+        },
+      );
+    });
+
+    it(`${repositoryKind} stock repository contract reports missing and invalid adjustments`, async () => {
+      const stockItem = createStockRecord({
+        quantityOnHand: 5,
+        quantityReserved: 2,
+      });
+
+      await withStockRepositoryContractHarness(
+        repositoryKind,
+        stockItem,
+        async ({ repository, service }) => {
+          await expect(
+            service.adjust({
+              stockItemId: createTestMikaId("stock", 404),
+              quantityDelta: 1,
+              idempotencyKey: `${repositoryKind}_adjust_missing_1`,
+            }),
+          ).resolves.toEqual({ status: "not_found" });
+
+          await expect(
+            service.adjust({
+              stockItemId: stockItem.id,
+              quantityDelta: -6,
+              idempotencyKey: `${repositoryKind}_adjust_negative_1`,
+            }),
+          ).resolves.toMatchObject({
+            status: "would_go_negative",
+            stock: { quantityOnHand: 5, quantityReserved: 2 },
+          });
+
+          await expect(
+            service.adjust({
+              stockItemId: stockItem.id,
+              quantityDelta: 0,
+            }),
+          ).rejects.toThrow("Stock adjustment quantity must be a non-zero whole number.");
+
+          await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+            quantityOnHand: 5,
+            quantityReserved: 2,
+          });
+        },
+      );
     });
   }
 
@@ -9388,8 +9506,59 @@ function createTestStockRepository(
 
       return { scannedCount, releasedCount, stockItemsAffected: stockItemsAffected.size };
     },
-    async adjustStock() {
-      throw new Error("The test stock repository does not implement adjustStock().");
+    async adjustStock(adjustment) {
+      if (!Number.isInteger(adjustment.quantityDelta) || adjustment.quantityDelta === 0) {
+        throw new RangeError("Stock adjustment quantity must be a non-zero whole number.");
+      }
+
+      const replayed = adjustment.idempotencyKey
+        ? eventsByIdempotencyKey.get(adjustment.idempotencyKey)
+        : undefined;
+      if (replayed) {
+        return {
+          status: "replayed",
+          event: replayed,
+          stock:
+            Array.from(stockItems.values()).find((stock) => stock.id === replayed.stockItemId) ??
+            null,
+        };
+      }
+
+      const current =
+        Array.from(stockItems.values()).find((stock) => stock.id === adjustment.stockItemId) ??
+        null;
+      if (!current) return { status: "not_found" };
+
+      const nextQuantityOnHand = current.quantityOnHand + adjustment.quantityDelta;
+      if (nextQuantityOnHand < 0) {
+        return { status: "would_go_negative", stock: current };
+      }
+
+      const stock: StockItemRecord = {
+        ...current,
+        quantityOnHand: nextQuantityOnHand,
+        updatedAt: adjustment.now,
+      };
+      const event: StockEventRecord = {
+        id: adjustment.movementEventId,
+        stockItemId: adjustment.stockItemId,
+        kind: "movement",
+        status: "recorded",
+        reason: adjustment.reason ?? "manual_adjustment",
+        adminAuditId: adjustment.adminAuditId,
+        idempotencyKey: adjustment.idempotencyKey,
+        quantityDelta: adjustment.quantityDelta,
+        createdAt: adjustment.now,
+        updatedAt: adjustment.now,
+        metadata: adjustment.metadata,
+      };
+      stockItems.set(stock.sellableId, stock);
+      eventsById.set(event.id, event);
+      if (event.idempotencyKey) {
+        eventsByIdempotencyKey.set(event.idempotencyKey, event);
+      }
+
+      return { status: "adjusted", event, stock };
     },
   };
 }

@@ -335,18 +335,7 @@ export interface MikaOpsRepositoryPort {
   failWorkflow(input: WorkflowFailureRepositoryInput): Promise<WorkflowDocument | null>;
   findAdminAudit(auditId: MikaId): Promise<AdminAuditDocument | null>;
   findEmail(emailId: MikaId): Promise<EmailDocument | null>;
-  listWebhookFailures(now: string, limit?: number): Promise<MikaDocumentList<WebhookDocument>>;
   writeAudit(document: AdminAuditDocument): Promise<void>;
-  listDue(
-    type: WebhookDocument["type"],
-    now: string,
-    limit?: number,
-  ): Promise<MikaDocumentList<WebhookDocument>>;
-  listDue(
-    type: EmailDocument["type"],
-    now: string,
-    limit?: number,
-  ): Promise<MikaDocumentList<EmailDocument>>;
   put(document: OpsDocument): Promise<void>;
 }
 
@@ -2804,28 +2793,33 @@ function magicLinkTokenError(
   return null;
 }
 
-function tokenResult(code: MikaError["code"], message: string): MikaApiFailure {
+function apiFailure(
+  status: MikaApiFailure["status"],
+  code: MikaError["code"],
+  message: string,
+  fieldErrors?: Record<string, string>,
+): MikaApiFailure {
   return {
     ok: false,
-    status: code === "TOKEN_INVALID" ? 400 : 410,
-    error: { code, message },
+    status,
+    error: {
+      code,
+      message,
+      ...(fieldErrors ? { fieldErrors } : {}),
+    },
   };
+}
+
+function tokenResult(code: MikaError["code"], message: string): MikaApiFailure {
+  return apiFailure(code === "TOKEN_INVALID" ? 400 : 410, code, message);
 }
 
 function authRequired(message: string): MikaApiFailure {
-  return {
-    ok: false,
-    status: 401,
-    error: { code: "AUTH_REQUIRED", message },
-  };
+  return apiFailure(401, "AUTH_REQUIRED", message);
 }
 
 function forbidden(message: string): MikaApiFailure {
-  return {
-    ok: false,
-    status: 403,
-    error: { code: "FORBIDDEN", message },
-  };
+  return apiFailure(403, "FORBIDDEN", message);
 }
 
 async function receiveWebhook(
@@ -3171,8 +3165,12 @@ function isReplayableWebhookStatus(status: WebhookDocument["status"]): boolean {
     status === "failed" ||
     status === "received" ||
     status === "processing" ||
-    (status as string) === "queued"
+    isLegacyQueuedWebhookStatus(status)
   );
+}
+
+function isLegacyQueuedWebhookStatus(status: unknown): status is "queued" {
+  return status === "queued";
 }
 
 function storedWebhookEvent(webhook: WebhookDocument): MikaProviderWebhookEvent | null {
@@ -3422,7 +3420,7 @@ async function processStoredWebhook(
       try {
         return await processPaymentWebhook(input, ctx, webhook, event);
       } catch (error) {
-        if (error instanceof PaymentWebhookWorkflowLeaseLostError) return webhook;
+        if (error instanceof WorkflowRunnerLeaseLostError) return webhook;
 
         return markWebhookFailed(
           input,
@@ -3540,86 +3538,33 @@ async function runPaymentWebhookWorkflow(
   const leasedWorkflow = await startPaymentWebhookWorkflow(input, ctx, webhook, event);
   if (!leasedWorkflow) return webhook;
 
-  let workflow = leasedWorkflow;
-  const leaseKey = leasedWorkflow.record.leaseKey;
-  if (!leaseKey) throw new PaymentWebhookWorkflowLeaseLostError();
-
-  let workflowFailurePersisted = false;
-  const runWorkflowStep: RunPaymentWebhookWorkflowStep = async (name, fn) => {
-    workflow = requirePaymentWebhookWorkflowLease(
-      await input.repositories.ops.startWorkflowStep({
-        workflowId: workflow.id,
-        leaseKey,
-        stepName: name,
-        now: currentBackendISODateTime(input),
-      }),
-    );
-
-    try {
-      const result = await fn();
-      workflow = requirePaymentWebhookWorkflowLease(
-        await input.repositories.ops.completeWorkflowStep({
-          workflowId: workflow.id,
-          leaseKey,
-          stepName: name,
-          now: currentBackendISODateTime(input),
-        }),
-      );
-
-      return result;
-    } catch (error) {
-      const lastError = error instanceof Error ? error.message : "Payment webhook workflow failed.";
-      const now = currentBackendISODateTime(input);
-      workflow = requirePaymentWebhookWorkflowLease(
-        await input.repositories.ops.failWorkflowStep({
-          workflowId: workflow.id,
-          leaseKey,
-          stepName: name,
-          now,
-          lastError,
-          nextAttemptAt: nextWorkflowAttemptAt(now, workflow),
-        }),
-      );
-      workflowFailurePersisted = true;
-      throw error;
-    }
-  };
+  const runner = new WorkflowRunner<PaymentWebhookWorkflowStep>({
+    ops: input.repositories.ops,
+    workflow: leasedWorkflow,
+    now: () => currentBackendISODateTime(input),
+    nextAttemptAt: nextWorkflowAttemptAt,
+    stepFailureMessage: "Payment webhook workflow failed.",
+  });
 
   try {
-    const result = await run(runWorkflowStep);
+    const result = await run((name, fn) => runner.runStep(name, fn));
     if (result.status === "failed") {
-      await failPaymentWebhookWorkflow(
-        input,
-        workflow,
-        leaseKey,
-        currentBackendISODateTime(input),
-        result.record.lastError ?? "Payment webhook could not be processed.",
-      );
+      await runner.fail(result.record.lastError ?? "Payment webhook could not be processed.");
 
       return result;
     }
 
-    await completePaymentWebhookWorkflow(
-      input,
-      workflow,
-      leaseKey,
-      currentBackendISODateTime(input),
-      {
-        webhookStatus: result.status,
-        ...(result.record.relatedOrderId ? { relatedOrderId: result.record.relatedOrderId } : {}),
-      },
-    );
+    await runner.complete({
+      webhookStatus: result.status,
+      ...(result.record.relatedOrderId ? { relatedOrderId: result.record.relatedOrderId } : {}),
+    });
 
     return result;
   } catch (error) {
-    if (error instanceof PaymentWebhookWorkflowLeaseLostError) throw error;
+    if (error instanceof WorkflowRunnerLeaseLostError) throw error;
 
-    if (!workflowFailurePersisted) {
-      await failPaymentWebhookWorkflow(
-        input,
-        workflow,
-        leaseKey,
-        currentBackendISODateTime(input),
+    if (!runner.failurePersisted) {
+      await runner.fail(
         error instanceof Error ? error.message : "Payment webhook workflow failed.",
       );
     }
@@ -3627,16 +3572,111 @@ async function runPaymentWebhookWorkflow(
   }
 }
 
-class PaymentWebhookWorkflowLeaseLostError extends Error {
+class WorkflowRunnerLeaseLostError extends Error {
   constructor() {
-    super("Payment webhook workflow lease is no longer active.");
+    super("Workflow lease is no longer active.");
   }
 }
 
-function requirePaymentWebhookWorkflowLease(workflow: WorkflowDocument | null): WorkflowDocument {
-  if (!workflow) throw new PaymentWebhookWorkflowLeaseLostError();
+class WorkflowRunner<TStep extends string> {
+  private readonly input: {
+    readonly ops: MikaBackendRepositories["ops"];
+    readonly workflow: WorkflowDocument;
+    readonly now: () => ISODateTime;
+    readonly nextAttemptAt: (now: ISODateTime, workflow: WorkflowDocument) => ISODateTime;
+    readonly stepFailureMessage: string;
+  };
+  private workflow: WorkflowDocument;
+  private readonly leaseKey: string;
+  private workflowFailurePersisted = false;
 
-  return workflow;
+  constructor(input: {
+    readonly ops: MikaBackendRepositories["ops"];
+    readonly workflow: WorkflowDocument;
+    readonly now: () => ISODateTime;
+    readonly nextAttemptAt: (now: ISODateTime, workflow: WorkflowDocument) => ISODateTime;
+    readonly stepFailureMessage: string;
+  }) {
+    const leaseKey = input.workflow.record.leaseKey;
+    if (!leaseKey) throw new WorkflowRunnerLeaseLostError();
+
+    this.input = input;
+    this.workflow = input.workflow;
+    this.leaseKey = leaseKey;
+  }
+
+  get failurePersisted(): boolean {
+    return this.workflowFailurePersisted;
+  }
+
+  async runStep<TResult>(name: TStep, fn: () => Promise<TResult>): Promise<TResult> {
+    this.workflow = this.requireLease(
+      await this.input.ops.startWorkflowStep({
+        workflowId: this.workflow.id,
+        leaseKey: this.leaseKey,
+        stepName: name,
+        now: this.input.now(),
+      }),
+    );
+
+    try {
+      const result = await fn();
+      this.workflow = this.requireLease(
+        await this.input.ops.completeWorkflowStep({
+          workflowId: this.workflow.id,
+          leaseKey: this.leaseKey,
+          stepName: name,
+          now: this.input.now(),
+        }),
+      );
+
+      return result;
+    } catch (error) {
+      const now = this.input.now();
+      this.workflow = this.requireLease(
+        await this.input.ops.failWorkflowStep({
+          workflowId: this.workflow.id,
+          leaseKey: this.leaseKey,
+          stepName: name,
+          now,
+          lastError: error instanceof Error ? error.message : this.input.stepFailureMessage,
+          nextAttemptAt: this.input.nextAttemptAt(now, this.workflow),
+        }),
+      );
+      this.workflowFailurePersisted = true;
+      throw error;
+    }
+  }
+
+  async complete(state: JsonObject): Promise<void> {
+    this.workflow = this.requireLease(
+      await this.input.ops.completeWorkflow({
+        workflowId: this.workflow.id,
+        leaseKey: this.leaseKey,
+        now: this.input.now(),
+        state,
+      }),
+    );
+  }
+
+  async fail(lastError: string): Promise<void> {
+    const now = this.input.now();
+    this.workflow = this.requireLease(
+      await this.input.ops.failWorkflow({
+        workflowId: this.workflow.id,
+        leaseKey: this.leaseKey,
+        now,
+        lastError,
+        nextAttemptAt: this.input.nextAttemptAt(now, this.workflow),
+      }),
+    );
+  }
+
+  private requireLease(workflow: WorkflowDocument | null): WorkflowDocument {
+    if (!workflow) throw new WorkflowRunnerLeaseLostError();
+
+    return workflow;
+  }
 }
 
 type RunPaymentWebhookWorkflowStep = <TResult>(
@@ -3773,41 +3813,6 @@ function paymentWorkflowSteps(
       state: prior?.state,
     };
   });
-}
-
-async function completePaymentWebhookWorkflow(
-  input: CreateMikaBackendApiInput,
-  workflow: WorkflowDocument,
-  leaseKey: string,
-  now: ISODateTime,
-  state: JsonObject,
-): Promise<void> {
-  requirePaymentWebhookWorkflowLease(
-    await input.repositories.ops.completeWorkflow({
-      workflowId: workflow.id,
-      leaseKey,
-      now,
-      state,
-    }),
-  );
-}
-
-async function failPaymentWebhookWorkflow(
-  input: CreateMikaBackendApiInput,
-  workflow: WorkflowDocument,
-  leaseKey: string,
-  now: ISODateTime,
-  lastError: string,
-): Promise<void> {
-  requirePaymentWebhookWorkflowLease(
-    await input.repositories.ops.failWorkflow({
-      workflowId: workflow.id,
-      leaseKey,
-      now,
-      lastError,
-      nextAttemptAt: nextWorkflowAttemptAt(now, workflow),
-    }),
-  );
 }
 
 function nextWorkflowAttemptAt(now: ISODateTime, workflow: WorkflowDocument): ISODateTime {
@@ -6127,36 +6132,9 @@ async function cartDocumentToDTO(
   input: MikaCartWishlistBackendInput,
   cart: CartDocument,
 ): Promise<CartDTO> {
-  const stockRecords = await Promise.all(
-    cart.aggregate.items.map(async (line) => ({
-      sellableId: line.item.sellableId,
-      stock: await input.repositories.stock.findBySellableId(line.item.sellableId),
-    })),
-  );
-  const availabilityBySellableId = new Map(
-    stockRecords
-      .flatMap((record) =>
-        record.stock
-          ? [
-              [
-                record.sellableId,
-                stockAvailabilityToDTO(
-                  {
-                    id: record.sellableId,
-                    active: true,
-                    sortOrder: 0,
-                    variantOptions: [],
-                    prices: [],
-                  },
-                  record.stock,
-                ),
-              ] as const,
-            ]
-          : [],
-      )
-      .filter((entry): entry is readonly [MikaId, NonNullable<(typeof entry)[1]>] =>
-        Boolean(entry[1]),
-      ),
+  const availabilityBySellableId = await loadAvailabilityBySellableId(
+    input,
+    cart.aggregate.items.map((line) => line.item.sellableId),
   );
 
   return cartToDTO({
@@ -6171,29 +6149,38 @@ async function wishlistDocumentToDTO(
   input: MikaCartWishlistBackendInput,
   wishlist: WishlistDocument,
 ): Promise<WishlistDTO> {
+  const availabilityBySellableId = await loadAvailabilityBySellableId(
+    input,
+    wishlist.aggregate.items.map((item) => item.item.sellableId),
+  );
+
+  return wishlistToDTO({
+    id: wishlist.id,
+    wishlist: wishlist.aggregate,
+    availabilityBySellableId,
+  });
+}
+
+async function loadAvailabilityBySellableId(
+  input: MikaCartWishlistBackendInput,
+  sellableIds: readonly MikaId[],
+) {
+  const uniqueSellableIds = [...new Set(sellableIds)];
   const stockRecords = await Promise.all(
-    wishlist.aggregate.items.map(async (item) => ({
-      sellableId: item.item.sellableId,
-      stock: await input.repositories.stock.findBySellableId(item.item.sellableId),
+    uniqueSellableIds.map(async (sellableId) => ({
+      sellableId,
+      stock: await input.repositories.stock.findBySellableId(sellableId),
     })),
   );
-  const availabilityBySellableId = new Map(
+
+  return new Map(
     stockRecords
       .flatMap((record) =>
         record.stock
           ? [
               [
                 record.sellableId,
-                stockAvailabilityToDTO(
-                  {
-                    id: record.sellableId,
-                    active: true,
-                    sortOrder: 0,
-                    variantOptions: [],
-                    prices: [],
-                  },
-                  record.stock,
-                ),
+                stockAvailabilityToDTO(stockAvailabilitySellable(record.sellableId), record.stock),
               ] as const,
             ]
           : [],
@@ -6202,12 +6189,16 @@ async function wishlistDocumentToDTO(
         Boolean(entry[1]),
       ),
   );
+}
 
-  return wishlistToDTO({
-    id: wishlist.id,
-    wishlist: wishlist.aggregate,
-    availabilityBySellableId,
-  });
+function stockAvailabilitySellable(sellableId: MikaId): SellableDefinition {
+  return {
+    id: sellableId,
+    active: true,
+    sortOrder: 0,
+    variantOptions: [],
+    prices: [],
+  };
 }
 
 async function resolveCartLine(
@@ -6497,114 +6488,45 @@ function addMilliseconds(value: ISODateTime, milliseconds: number): ISODateTime 
 }
 
 function checkoutEmpty(): MikaApiFailure {
-  return {
-    ok: false,
-    status: 409,
-    error: {
-      code: "CHECKOUT_EMPTY",
-      message: "Checkout requires at least one cart line.",
-    },
-  };
+  return apiFailure(409, "CHECKOUT_EMPTY", "Checkout requires at least one cart line.");
 }
 
 function checkoutExpired(): MikaApiFailure {
-  return {
-    ok: false,
-    status: 409,
-    error: {
-      code: "CHECKOUT_EXPIRED",
-      message: "Checkout cannot start from an expired cart.",
-    },
-  };
+  return apiFailure(409, "CHECKOUT_EXPIRED", "Checkout cannot start from an expired cart.");
 }
 
 function checkoutIdempotencyInProgress(): MikaApiFailure {
-  return {
-    ok: false,
-    status: 409,
-    error: {
-      code: "CONFLICT",
-      message: "Checkout idempotency replay is already in progress.",
-    },
-  };
+  return apiFailure(409, "CONFLICT", "Checkout idempotency replay is already in progress.");
 }
 
 function checkoutIdempotencyInputMismatch(): MikaApiFailure {
-  return {
-    ok: false,
-    status: 409,
-    error: {
-      code: "CONFLICT",
-      message: "Checkout idempotency key was reused with different input.",
-    },
-  };
+  return apiFailure(409, "CONFLICT", "Checkout idempotency key was reused with different input.");
 }
 
 function checkoutPersistenceFailed(): MikaApiFailure {
-  return {
-    ok: false,
-    status: 409,
-    error: {
-      code: "CONFLICT",
-      message: "Checkout could not be persisted after provider handoff.",
-    },
-  };
+  return apiFailure(409, "CONFLICT", "Checkout could not be persisted after provider handoff.");
 }
 
 function checkoutFailedReplay(checkoutId: MikaId): MikaApiFailure {
-  return {
-    ok: false,
-    status: 409,
-    error: {
-      code: "CONFLICT",
-      message: `Checkout '${checkoutId}' failed and cannot be replayed.`,
-    },
-  };
+  return apiFailure(409, "CONFLICT", `Checkout '${checkoutId}' failed and cannot be replayed.`);
 }
 
 function outOfStock(sellableId: MikaId): MikaApiFailure {
-  return {
-    ok: false,
-    status: 409,
-    error: {
-      code: "OUT_OF_STOCK",
-      message: `Sellable '${sellableId}' does not have enough stock.`,
-    },
-  };
+  return apiFailure(409, "OUT_OF_STOCK", `Sellable '${sellableId}' does not have enough stock.`);
 }
 
 function providerUnsupportedForAction(message: string): MikaApiFailure {
-  return {
-    ok: false,
-    status: 409,
-    error: {
-      code: "PROVIDER_UNSUPPORTED",
-      message,
-    },
-  };
+  return apiFailure(409, "PROVIDER_UNSUPPORTED", message);
 }
 
 function providerFailed(message: string): MikaApiFailure {
-  return {
-    ok: false,
-    status: 502,
-    error: {
-      code: "PROVIDER_FAILED",
-      message,
-    },
-  };
+  return apiFailure(502, "PROVIDER_FAILED", message);
 }
 
 function orderNotFound(orderId: MikaId): MikaApiFailure {
-  return {
-    ok: false,
-    status: 404,
-    error: {
-      code: "VALIDATION_FAILED",
-      message: `Order '${orderId}' was not found.`,
-      fieldErrors: { orderId: "Order was not found." },
-    },
-  };
+  return apiFailure(404, "VALIDATION_FAILED", `Order '${orderId}' was not found.`, {
+    orderId: "Order was not found.",
+  });
 }
 
 function createAdminAuditDocument(
@@ -6631,84 +6553,41 @@ function createAdminAuditDocument(
 }
 
 function webhookInvalid(message: string): MikaApiFailure {
-  return {
-    ok: false,
-    status: 400,
-    error: {
-      code: "WEBHOOK_INVALID",
-      message,
-    },
-  };
+  return apiFailure(400, "WEBHOOK_INVALID", message);
 }
 
 function validationFailed(field: string, message: string): MikaApiFailure {
-  return {
-    ok: false,
-    status: 422,
-    error: {
-      code: "VALIDATION_FAILED",
-      message: "Mika input validation failed.",
-      fieldErrors: { [field]: message },
-    },
-  };
+  return apiFailure(422, "VALIDATION_FAILED", "Mika input validation failed.", {
+    [field]: message,
+  });
 }
 
 function cartLineNotFound(lineId: MikaId): MikaApiFailure {
-  return {
-    ok: false,
-    status: 404,
-    error: {
-      code: "VALIDATION_FAILED",
-      message: `Cart line '${lineId}' was not found.`,
-      fieldErrors: { lineId: "Cart line was not found." },
-    },
-  };
+  return apiFailure(404, "VALIDATION_FAILED", `Cart line '${lineId}' was not found.`, {
+    lineId: "Cart line was not found.",
+  });
 }
 
 function wishlistItemNotFound(itemId: MikaId): MikaApiFailure {
-  return {
-    ok: false,
-    status: 404,
-    error: {
-      code: "VALIDATION_FAILED",
-      message: `Wishlist item '${itemId}' was not found.`,
-      fieldErrors: { itemId: "Wishlist item was not found." },
-    },
-  };
+  return apiFailure(404, "VALIDATION_FAILED", `Wishlist item '${itemId}' was not found.`, {
+    itemId: "Wishlist item was not found.",
+  });
 }
 
 function invalidCart(field: string, cartId: MikaId): MikaApiFailure {
-  return {
-    ok: false,
-    status: 404,
-    error: {
-      code: "VALIDATION_FAILED",
-      message: `Cart '${cartId}' was not found.`,
-      fieldErrors: { [field]: "Open cart was not found." },
-    },
-  };
+  return apiFailure(404, "VALIDATION_FAILED", `Cart '${cartId}' was not found.`, {
+    [field]: "Open cart was not found.",
+  });
 }
 
 function invalidCheckout(field: string, checkoutId: MikaId): MikaApiFailure {
-  return {
-    ok: false,
-    status: 404,
-    error: {
-      code: "VALIDATION_FAILED",
-      message: `Checkout '${checkoutId}' was not found.`,
-      fieldErrors: { [field]: "Checkout was not found." },
-    },
-  };
+  return apiFailure(404, "VALIDATION_FAILED", `Checkout '${checkoutId}' was not found.`, {
+    [field]: "Checkout was not found.",
+  });
 }
 
 function invalidWishlist(field: string, wishlistId: MikaId): MikaApiFailure {
-  return {
-    ok: false,
-    status: 404,
-    error: {
-      code: "VALIDATION_FAILED",
-      message: `Wishlist '${wishlistId}' was not found.`,
-      fieldErrors: { [field]: "Active wishlist was not found." },
-    },
-  };
+  return apiFailure(404, "VALIDATION_FAILED", `Wishlist '${wishlistId}' was not found.`, {
+    [field]: "Active wishlist was not found.",
+  });
 }

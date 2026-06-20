@@ -5,6 +5,7 @@ import AccountDownloads from "../components/AccountDownloads.astro";
 import AccountOrders from "../components/AccountOrders.astro";
 import AccountSubscriptions from "../components/AccountSubscriptions.astro";
 import MagicLinkForm from "../components/MagicLinkForm.astro";
+import { mikaReturnToInput } from "../lib/form";
 import { mikaTemplateRoutes } from "../lib/routes";
 
 export const prerender = false;
@@ -82,15 +83,15 @@ const accountLoadError =
       <AccountDownloads downloads={account.downloads} />
 
       <form action={actions.mika.account.portal} method="post">
-        <input type="hidden" name="returnTo" value={mikaTemplateRoutes.account} />
+        <input type="hidden" {...mikaReturnToInput(mikaTemplateRoutes.account)} />
         <button type="submit">Billing portal</button>
       </form>
       <form action={actions.mika.account.export} method="post">
-        <input type="hidden" name="returnTo" value={mikaTemplateRoutes.account} />
+        <input type="hidden" {...mikaReturnToInput(mikaTemplateRoutes.account)} />
         <button type="submit">Export account data</button>
       </form>
       <form action={actions.mika.account.delete} method="post">
-        <input type="hidden" name="returnTo" value={mikaTemplateRoutes.account} />
+        <input type="hidden" {...mikaReturnToInput(mikaTemplateRoutes.account)} />
         <button type="submit">Delete account</button>
       </form>
     </>

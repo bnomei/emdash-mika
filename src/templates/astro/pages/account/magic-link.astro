@@ -1,6 +1,7 @@
 ---
 import { actions, isInputError } from "astro:actions";
 import MagicLinkForm from "../../components/MagicLinkForm.astro";
+import { mikaHiddenInput, mikaReturnToInput } from "../../lib/form";
 import { mikaTemplateRoutes } from "../../lib/routes";
 
 export const prerender = false;
@@ -29,8 +30,8 @@ if (verifyResult?.data) {
 
   {token ? (
     <form action={actions.mika.magicLink.verify} method="post">
-      <input type="hidden" name="token" value={token} />
-      <input type="hidden" name="returnTo" value={mikaTemplateRoutes.account} />
+      <input type="hidden" {...mikaHiddenInput("token", token)} />
+      <input type="hidden" {...mikaReturnToInput(mikaTemplateRoutes.account)} />
       <button type="submit">Continue</button>
     </form>
   ) : (

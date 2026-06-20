@@ -1,6 +1,7 @@
 ---
 import { actions } from "astro:actions";
 import { mikaReturnTo } from "@bnomei/emdash-mika/astro";
+import { mikaHiddenInput, mikaReturnToInput } from "../lib/form";
 
 interface Props {
   sellableId: string;
@@ -34,17 +35,15 @@ const {
 >
   <input
     type="hidden"
-    name="sellableId"
-    value={sellableId}
+    {...mikaHiddenInput("sellableId", sellableId)}
     data-mika-selected-sellable-id
   />
   <input
     type="hidden"
-    name="priceId"
-    value={priceId ?? ""}
+    {...mikaHiddenInput("priceId", priceId)}
     data-mika-selected-price-id
   />
-  <input type="hidden" name="returnTo" value={returnTo} />
+  <input type="hidden" {...mikaReturnToInput(returnTo)} />
   <button
     type="submit"
     class={buttonClass}

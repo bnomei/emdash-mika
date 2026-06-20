@@ -6,6 +6,7 @@ import {
   mikaReturnTo
 } from "@bnomei/emdash-mika/astro";
 import type { MikaPurchaseModel } from "@bnomei/emdash-mika/astro";
+import { mikaHiddenInput, mikaReturnToInput } from "../lib/form";
 import AddToCartFormSync from "./AddToCartFormSync.astro";
 import LowStockNotice from "./LowStockNotice.astro";
 import StockBadge from "./StockBadge.astro";
@@ -50,19 +51,17 @@ const needsAddToCartSync = showPurchaseControls && purchase.useGroupedVariantCon
   action={actions.mika.cart.add}
   method="post"
 >
-  <input type="hidden" name="returnTo" value={returnTo} />
+  <input type="hidden" {...mikaReturnToInput(returnTo)} />
   {!showPurchaseControls && (
     <>
       <input
         type="hidden"
-        name="sellableId"
-        value={purchase.selectedSellable?.id ?? ""}
+        {...mikaHiddenInput("sellableId", purchase.selectedSellable?.id)}
         data-mika-selected-sellable-id
       />
       <input
         type="hidden"
-        name="priceId"
-        value={purchase.selectedPrice?.id ?? ""}
+        {...mikaHiddenInput("priceId", purchase.selectedPrice?.id)}
         data-mika-selected-price-id
       />
     </>
@@ -117,7 +116,7 @@ const needsAddToCartSync = showPurchaseControls && purchase.useGroupedVariantCon
       ))}
     </fieldset>
   ) : showPurchaseControls && purchase.selectedOption ? (
-    <input type="hidden" name="purchase" value={purchase.selectedOption.fields.purchase} />
+    <input type="hidden" {...mikaHiddenInput("purchase", purchase.selectedOption.fields.purchase)} />
   ) : showPurchaseControls ? (
     <VariantSelector sellables={purchase.activeSellables} />
   ) : null}

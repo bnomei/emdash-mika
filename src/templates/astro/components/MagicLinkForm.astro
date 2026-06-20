@@ -1,5 +1,6 @@
 ---
 import { actions } from "astro:actions";
+import { mikaReturnToInput } from "../lib/form";
 import { mikaTemplateRoutes } from "../lib/routes";
 
 interface Props {
@@ -41,7 +42,7 @@ const resolvedEmailErrorId = emailError
   action={actions.mika.magicLink.request}
   method="post"
 >
-  <input type="hidden" name="returnTo" value={returnTo} />
+  <input type="hidden" {...mikaReturnToInput(returnTo)} />
   <label>
     <span>{emailLabel}</span>
     <input
