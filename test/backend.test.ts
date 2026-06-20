@@ -1261,6 +1261,16 @@ describe("backend test Kysely stock database harness", () => {
           },
         },
       });
+      await expect(api.admin.releaseExpiredReservations()).resolves.toMatchObject({
+        ok: true,
+        status: 200,
+        data: {
+          status: "completed",
+          affected: {
+            reservationsReleased: 0,
+          },
+        },
+      });
     } finally {
       await rollbackMikaInitialMigration(db);
       await database.destroy();

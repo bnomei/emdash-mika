@@ -170,7 +170,7 @@ export interface MikaApi {
     providerSync(input: ProviderSyncInput): Promise<MikaApiResult<AdminActionResultDTO>>;
     stockAdjust(input: StockAdjustInput): Promise<MikaApiResult<AdminActionResultDTO>>;
     releaseExpiredReservations(
-      input: ReleaseExpiredReservationsInput,
+      input?: ReleaseExpiredReservationsInput,
     ): Promise<MikaApiResult<AdminActionResultDTO>>;
     webhookReplay(input: WebhookReplayInput): Promise<MikaApiResult<AdminActionResultDTO>>;
     orderRefund(input: OrderRefundInput): Promise<MikaApiResult<AdminActionResultDTO>>;

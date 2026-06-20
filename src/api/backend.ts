@@ -448,7 +448,7 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
             data: adminStockAdjustmentResult(result),
           };
         },
-        releaseExpiredReservations: async (releaseInput) => {
+        releaseExpiredReservations: async (releaseInput = {}) => {
           const result = await createMikaStockLifecycleService(input).releaseExpiredReservations({
             now: releaseInput.now ?? currentBackendISODateTime(input),
           });
