@@ -2,11 +2,8 @@ import type { MikaRequestContext } from "./context";
 import type { MikaApi } from "./server";
 import type { MikaApiResult } from "./types";
 import { createMikaId } from "../types/primitives";
-import {
-  MIKA_AGENT_IDEMPOTENCY_KEY_HEADER,
-  type MikaAgentIdempotencyMetadata,
-  type MikaAgentOperationMetadata,
-} from "./agent-types";
+import type { MikaAgentOperationMetadata } from "./agent-types";
+import { agentOperationMetadata } from "./operation-agent-metadata";
 import {
   accountExportDownloadInputSchema,
   accountExportStatusInputSchema,
@@ -50,11 +47,10 @@ import {
   webhookReceiveInputSchema,
   webhookReplayInputSchema,
   wishlistItemInputSchema,
-  parseMikaInput,
-  searchParamsObject,
   type z,
 } from "./validation";
-import type { MikaRequestInit } from "./request";
+
+export { mikaOperationRequestInit, parseMikaOperationInput } from "./operation-transport";
 
 export type MikaOperationHttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
 export type MikaOperationTransport = "body" | "search" | "none";
@@ -267,49 +263,6 @@ export type MikaApiOperationInput<TOperation> = TOperation extends {
   ? TInput
   : undefined;
 
-export function mikaOperationRequestInit(
-  operation: Pick<MikaRouteOperation, "httpMethod" | "transport">,
-  input: unknown,
-): MikaRequestInit {
-  if (operation.transport === "none") {
-    return { method: operation.httpMethod };
-  }
-
-  if (operation.transport === "search") {
-    return {
-      method: operation.httpMethod,
-      search: input as MikaRequestInit["search"],
-    };
-  }
-
-  return {
-    method: operation.httpMethod,
-    body: input,
-  };
-}
-
-export function parseMikaOperationInput(
-  operation: MikaRouteOperation,
-  input: unknown,
-  requestUrl: string | URL,
-) {
-  if (operation.transport === "none") {
-    return { ok: true as const, data: undefined };
-  }
-
-  const schema = "schema" in operation ? operation.schema : undefined;
-  if (!schema) {
-    throw new Error(`Mika operation '${operation.name}' is missing an input schema.`);
-  }
-
-  const rawInput =
-    operation.transport === "search"
-      ? searchParamsObject(new URL(requestUrl), operation.searchKeys ?? [])
-      : (input ?? {});
-
-  return parseMikaInput(schema as z.ZodType<unknown>, rawInput);
-}
-
 export class MikaActionInputError extends Error {
   readonly code: "BAD_REQUEST";
 
@@ -334,235 +287,6 @@ export const mikaRouteOnlyDefinitions = defineMikaRouteOnlyDefinitions({
     routeKey: "actionsManifest",
     routePath: ".well-known/actions",
     public: false,
-  },
-});
-
-type MikaAgentOperationMetadataInput = Omit<
-  MikaAgentOperationMetadata,
-  "scopes" | "requiredProofs"
-> &
-  Partial<Pick<MikaAgentOperationMetadata, "scopes" | "requiredProofs">>;
-
-const hostOwnedIdempotencyKey = {
-  keyHeader: MIKA_AGENT_IDEMPOTENCY_KEY_HEADER,
-  scope: "actor_operation_resource_input",
-  replay: "same_key_same_input",
-  owner: "host",
-} as const satisfies MikaAgentIdempotencyMetadata;
-
-function defineAgentOperationMetadata<
-  const TDefinitions extends Record<string, MikaAgentOperationMetadataInput>,
->(
-  definitions: TDefinitions,
-): { readonly [TKey in keyof TDefinitions]: MikaAgentOperationMetadata } {
-  return Object.fromEntries(
-    Object.entries(definitions).map(([key, definition]) => [
-      key,
-      {
-        ...definition,
-        scopes: definition.scopes ?? [definition.capability],
-        requiredProofs: definition.requiredProofs ?? [],
-        ...(definition.idempotency === "not_needed" || definition.idempotencyKey
-          ? {}
-          : { idempotencyKey: hostOwnedIdempotencyKey }),
-      },
-    ]),
-  ) as { readonly [TKey in keyof TDefinitions]: MikaAgentOperationMetadata };
-}
-
-const agentOperationMetadata = defineAgentOperationMetadata({
-  catalogRead: {
-    visible: "public",
-    capability: "catalog:read",
-    effect: "read",
-    risk: "none",
-    requiresActor: "none",
-    confirmation: "none",
-    idempotency: "not_needed",
-    resources: ["sellable", "price"],
-  },
-  stockRead: {
-    visible: "public",
-    capability: "stock:read",
-    effect: "read",
-    risk: "none",
-    requiresActor: "none",
-    confirmation: "none",
-    idempotency: "not_needed",
-    resources: ["stock", "sellable"],
-  },
-  cartRead: {
-    visible: "trusted",
-    capability: "cart:read",
-    effect: "read",
-    risk: "low",
-    requiresActor: "session",
-    confirmation: "none",
-    idempotency: "not_needed",
-    resources: ["cart"],
-  },
-  cartQuote: {
-    visible: "trusted",
-    capability: "cart:read",
-    effect: "read",
-    risk: "low",
-    requiresActor: "session",
-    confirmation: "none",
-    idempotency: "not_needed",
-    resources: ["cart", "sellable", "price", "stock"],
-  },
-  cartWrite: {
-    visible: "trusted",
-    capability: "cart:write",
-    effect: "cart_mutation",
-    risk: "low",
-    requiresActor: "session",
-    confirmation: "host",
-    idempotency: "recommended",
-    resources: ["cart", "sellable", "price"],
-  },
-  wishlistRead: {
-    visible: "trusted",
-    capability: "wishlist:read",
-    effect: "read",
-    risk: "low",
-    requiresActor: "session",
-    confirmation: "none",
-    idempotency: "not_needed",
-    resources: ["wishlist"],
-  },
-  wishlistWrite: {
-    visible: "trusted",
-    capability: "wishlist:write",
-    effect: "wishlist_mutation",
-    risk: "low",
-    requiresActor: "session",
-    confirmation: "host",
-    idempotency: "recommended",
-    resources: ["wishlist", "sellable", "price"],
-  },
-  checkoutHandoff: {
-    visible: "trusted",
-    capability: "checkout:start",
-    effect: "checkout_handoff",
-    risk: "purchase",
-    requiresActor: "session",
-    confirmation: "payment",
-    idempotency: "required",
-    resources: ["checkout", "cart", "sellable", "price"],
-    acceptsProofs: ["consent", "mandate", "payment_authorization"],
-  },
-  checkoutPreview: {
-    visible: "trusted",
-    capability: "checkout:read",
-    effect: "read",
-    risk: "purchase",
-    requiresActor: "session",
-    confirmation: "none",
-    idempotency: "not_needed",
-    resources: ["checkout", "cart", "sellable", "price"],
-    acceptsProofs: ["consent", "mandate", "payment_authorization"],
-  },
-  checkoutRead: {
-    visible: "trusted",
-    capability: "checkout:read",
-    effect: "read",
-    risk: "purchase",
-    requiresActor: "session",
-    confirmation: "none",
-    idempotency: "not_needed",
-    resources: ["checkout"],
-  },
-  magicLinkWrite: {
-    visible: "trusted",
-    capability: "magic_link:write",
-    effect: "account_mutation",
-    risk: "account",
-    requiresActor: "none",
-    confirmation: "host",
-    idempotency: "recommended",
-    resources: ["account"],
-  },
-  accountRead: {
-    visible: "trusted",
-    capability: "account:read",
-    effect: "read",
-    risk: "account",
-    requiresActor: "customer",
-    confirmation: "none",
-    idempotency: "not_needed",
-    resources: ["account", "order", "subscription", "download"],
-  },
-  accountWrite: {
-    visible: "trusted",
-    capability: "account:write",
-    effect: "account_mutation",
-    risk: "account",
-    requiresActor: "customer",
-    confirmation: "user",
-    idempotency: "recommended",
-    resources: ["account"],
-  },
-  subscriptionWrite: {
-    visible: "trusted",
-    capability: "subscription:write",
-    effect: "subscription_mutation",
-    risk: "account",
-    requiresActor: "customer",
-    confirmation: "user",
-    idempotency: "required",
-    resources: ["subscription", "account"],
-  },
-  downloadRead: {
-    visible: "trusted",
-    capability: "download:read",
-    effect: "download_resolution",
-    risk: "low",
-    requiresActor: "none",
-    confirmation: "none",
-    idempotency: "not_needed",
-    resources: ["download"],
-    acceptsProofs: ["receipt"],
-  },
-  orderRead: {
-    visible: "trusted",
-    capability: "order:read",
-    effect: "read",
-    risk: "account",
-    requiresActor: "customer",
-    confirmation: "none",
-    idempotency: "not_needed",
-    resources: ["order"],
-  },
-  webhookReceive: {
-    visible: "hidden",
-    capability: "webhook:receive",
-    effect: "webhook_ingest",
-    risk: "admin",
-    requiresActor: "service",
-    confirmation: "none",
-    idempotency: "required",
-    resources: ["webhook"],
-  },
-  adminRead: {
-    visible: "admin",
-    capability: "admin:read",
-    effect: "read",
-    risk: "admin",
-    requiresActor: "admin",
-    confirmation: "none",
-    idempotency: "not_needed",
-    resources: ["admin"],
-  },
-  adminWrite: {
-    visible: "admin",
-    capability: "admin:write",
-    effect: "admin_mutation",
-    risk: "admin",
-    requiresActor: "admin",
-    confirmation: "user",
-    idempotency: "required",
-    resources: ["admin"],
   },
 });
 
@@ -1257,6 +981,8 @@ export const mikaRoutedOperationDefinitions = Object.values(
   mikaOperationDefinitions,
 ) as readonly MikaRouteOperation[];
 
+export const mikaRouteOperationsByPath = collectMikaRouteOperationsByPath();
+
 type MikaOperationPluginRoutes = {
   readonly [TOperation in MikaRouteOperation as TOperation["routeKey"]]: TOperation["routePath"];
 } & {
@@ -1353,6 +1079,18 @@ function collectMikaPluginRoutes(): Record<string, string> {
   }
 
   return routes;
+}
+
+function collectMikaRouteOperationsByPath(): ReadonlyMap<string, readonly MikaRouteOperation[]> {
+  const operationsByPath = new Map<string, MikaRouteOperation[]>();
+
+  for (const operation of mikaRoutedOperationDefinitions) {
+    const operations = operationsByPath.get(operation.routePath) ?? [];
+    operations.push(operation);
+    operationsByPath.set(operation.routePath, operations);
+  }
+
+  return operationsByPath;
 }
 
 function collectMikaApiMethodNames(): Record<string, readonly string[]> {

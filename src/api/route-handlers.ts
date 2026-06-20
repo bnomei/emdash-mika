@@ -2,12 +2,12 @@ import { createMikaAdminActionsManifest } from "../admin";
 import { MIKA_AGENT_IDEMPOTENCY_KEY_HEADER } from "./agent-types";
 import { createMikaRequestContext, type MikaSessionAccess } from "./context";
 import {
-  callMikaOperation,
   parseMikaOperationInput,
-  mikaRoutedOperationDefinitions,
+  mikaRouteOperationsByPath,
   type MikaRouteOperation,
 } from "./operations";
-import { runMikaOperationPolicy, type MikaOperationPolicy } from "./operation-policy";
+import { runMikaOperation } from "./operation-runner";
+import type { MikaOperationPolicy } from "./operation-policy";
 import { mikaPluginRoutes, type MikaPluginRouteName } from "./routes";
 import { createMikaApi, type MikaApi } from "./server";
 
@@ -42,27 +42,15 @@ export function createMikaPluginRoutes(
     },
   };
 
-  for (const [path, operations] of routeOperationsByPath()) {
-    routes[path] = {
+  for (const [path, operations] of mikaRouteOperationsByPath) {
+    const routePath = path as MikaPluginRoutePath;
+    routes[routePath] = {
       public: operations.some((operation) => operation.public),
-      handler: async (ctx) => handleRouteOperation(api, ctx, operations, options),
+      handler: async (ctx: MikaRouteContext) => handleRouteOperation(api, ctx, operations, options),
     };
   }
 
   return routes as MikaPluginRoutes;
-}
-
-function routeOperationsByPath(): Map<MikaPluginRoutePath, readonly MikaRouteOperation[]> {
-  const operationsByPath = new Map<MikaPluginRoutePath, MikaRouteOperation[]>();
-
-  for (const operation of mikaRoutedOperationDefinitions) {
-    const path = operation.routePath as MikaPluginRoutePath;
-    const operations = operationsByPath.get(path) ?? [];
-    operations.push(operation);
-    operationsByPath.set(path, operations);
-  }
-
-  return operationsByPath;
 }
 
 async function handleRouteOperation(
@@ -78,14 +66,13 @@ async function handleRouteOperation(
   if (!parsedInput.ok) return parsedInput.result;
 
   const mikaContext = requestContext(ctx);
-  const policyRejection = await runMikaOperationPolicy(options.operationPolicy, {
+  return runMikaOperation({
     operation,
+    api,
     ctx: mikaContext,
     input: parsedInput.data,
+    operationPolicy: options.operationPolicy,
   });
-  if (policyRejection) return policyRejection;
-
-  return callMikaOperation(operation, api, mikaContext, parsedInput.data);
 }
 
 function selectRouteOperation(

@@ -5,8 +5,10 @@ export {
   type MikaSessionAccess,
 } from "./api/context";
 export {
+  assertMikaApiWired,
   createMikaApi,
   mikaApiMethodNames,
+  type AssertMikaApiWiredOptions,
   type MikaApi,
   type MikaApiOverrides,
 } from "./api/server";

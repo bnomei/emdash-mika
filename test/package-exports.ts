@@ -20,6 +20,7 @@ import type { MikaEmailInput, renderMikaEmail } from "@bnomei/emdash-mika/email"
 import type { createMikaProviderRegistry, MikaProviderAdapter } from "@bnomei/emdash-mika/provider";
 import type { MikaProvider } from "@bnomei/emdash-mika/react";
 import type {
+  assertMikaApiWired,
   CreateMikaBackendApiInput,
   createMikaBackendApi,
   createMikaServerClient,
@@ -77,6 +78,7 @@ export type PackageEntryContract = {
   readonly server: typeof createMikaServerClient;
   readonly serverFacade: MikaServerClient;
   readonly backend: typeof createMikaBackendApi;
+  readonly assertWired: typeof assertMikaApiWired;
   readonly backendInput: CreateMikaBackendApiInput;
   readonly backendDependencies: MikaBackendDependencies;
   readonly api: MikaApi;
@@ -116,6 +118,18 @@ export type MissingApiSubpath =
 export type MissingOperationRegistry =
   // @ts-expect-error Operation metadata is intentionally internal to the source package.
   typeof import("@bnomei/emdash-mika/server").mikaOperationDefinitions;
+
+export type MissingOperationRunner =
+  // @ts-expect-error Operation execution helpers are intentionally internal.
+  typeof import("@bnomei/emdash-mika/server").runMikaOperation;
+
+export type MissingCallMikaOperation =
+  // @ts-expect-error Dynamic operation dispatch is intentionally internal.
+  typeof import("@bnomei/emdash-mika/server").callMikaOperation;
+
+export type MissingRootAssertMikaApiWired =
+  // @ts-expect-error Server wiring assertions are intentionally exported from the server subpath.
+  typeof import("@bnomei/emdash-mika").assertMikaApiWired;
 
 export type MissingAccidentalTypes =
   // @ts-expect-error Deprecated aliases should not appear through the published types barrel.

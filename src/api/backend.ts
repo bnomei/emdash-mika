@@ -37,6 +37,7 @@ import {
 } from "../model/builders";
 import { renderMikaEmail } from "../email";
 import { mikaPluginRoute } from "./routes";
+import { createMikaAdminBackend } from "./backend-admin";
 import type {
   CartLine,
   CheckoutLine,
@@ -392,88 +393,90 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
       },
       ...input.overrides?.stock,
     },
-    admin: {
-      providerHealth: async (healthInput) => providerHealth(input, healthInput),
-      providerSync: async (syncInput) => providerSync(input, syncInput),
-      stockAdjust: async (adjustment) => {
-        if (!Number.isInteger(adjustment.quantityDelta) || adjustment.quantityDelta === 0) {
-          return validationFailed(
-            "quantityDelta",
-            "Quantity delta must be a non-zero whole number.",
-          );
-        }
+    admin: createMikaAdminBackend({
+      handlers: {
+        providerHealth: async (healthInput) => providerHealth(input, healthInput),
+        providerSync: async (syncInput) => providerSync(input, syncInput),
+        stockAdjust: async (adjustment) => {
+          if (!Number.isInteger(adjustment.quantityDelta) || adjustment.quantityDelta === 0) {
+            return validationFailed(
+              "quantityDelta",
+              "Quantity delta must be a non-zero whole number.",
+            );
+          }
 
-        const result = await createMikaStockLifecycleService(input).adjust({
-          stockItemId: adjustment.stockItemId,
-          quantityDelta: adjustment.quantityDelta,
-          ...(adjustment.reason !== undefined ? { reason: adjustment.reason } : {}),
-          ...(adjustment.adminAuditId !== undefined
-            ? { adminAuditId: adjustment.adminAuditId }
-            : {}),
-          ...(adjustment.idempotencyKey !== undefined
-            ? { idempotencyKey: adjustment.idempotencyKey }
-            : {}),
-          ...(adjustment.metadata !== undefined ? { metadata: adjustment.metadata } : {}),
-          now: currentBackendISODateTime(input),
-        });
+          const result = await createMikaStockLifecycleService(input).adjust({
+            stockItemId: adjustment.stockItemId,
+            quantityDelta: adjustment.quantityDelta,
+            ...(adjustment.reason !== undefined ? { reason: adjustment.reason } : {}),
+            ...(adjustment.adminAuditId !== undefined
+              ? { adminAuditId: adjustment.adminAuditId }
+              : {}),
+            ...(adjustment.idempotencyKey !== undefined
+              ? { idempotencyKey: adjustment.idempotencyKey }
+              : {}),
+            ...(adjustment.metadata !== undefined ? { metadata: adjustment.metadata } : {}),
+            now: currentBackendISODateTime(input),
+          });
 
-        if (result.status === "not_found") {
+          if (result.status === "not_found") {
+            return {
+              ok: false,
+              status: 404,
+              error: {
+                code: "VALIDATION_FAILED",
+                message: `Stock item '${adjustment.stockItemId}' was not found.`,
+                fieldErrors: { stockItemId: "Stock item was not found." },
+              },
+            };
+          }
+
+          if (result.status === "would_go_negative") {
+            return {
+              ok: false,
+              status: 409,
+              error: {
+                code: "CONFLICT",
+                message: `Stock adjustment for '${adjustment.stockItemId}' would make on-hand quantity negative.`,
+              },
+            };
+          }
+
           return {
-            ok: false,
-            status: 404,
-            error: {
-              code: "VALIDATION_FAILED",
-              message: `Stock item '${adjustment.stockItemId}' was not found.`,
-              fieldErrors: { stockItemId: "Stock item was not found." },
+            ok: true,
+            status: 200,
+            data: adminStockAdjustmentResult(result),
+          };
+        },
+        releaseExpiredReservations: async (releaseInput) => {
+          const result = await createMikaStockLifecycleService(input).releaseExpiredReservations({
+            now: releaseInput.now ?? currentBackendISODateTime(input),
+          });
+
+          return {
+            ok: true,
+            status: 200,
+            data: {
+              status: "completed",
+              affected: {
+                reservationsScanned: result.scannedCount,
+                reservationsReleased: result.releasedCount,
+                stockItems: result.stockItemsAffected,
+              },
             },
           };
-        }
-
-        if (result.status === "would_go_negative") {
-          return {
-            ok: false,
-            status: 409,
-            error: {
-              code: "CONFLICT",
-              message: `Stock adjustment for '${adjustment.stockItemId}' would make on-hand quantity negative.`,
-            },
-          };
-        }
-
-        return {
-          ok: true,
-          status: 200,
-          data: adminStockAdjustmentResult(result),
-        };
+        },
+        webhookReplay: async (replayInput) => replayWebhook(input, replayInput),
+        orderRefund: async (refundInput) => refundOrder(input, refundInput),
+        orderCancel: async (cancelInput) => cancelOrder(input, cancelInput),
+        entitlementGrant: async (grantInput) => grantEntitlement(input, grantInput),
+        entitlementRevoke: async (revokeInput) => revokeEntitlement(input, revokeInput),
+        emailResend: async (resendInput) => resendEmail(input, resendInput),
+        licenseRevoke: async (revokeInput) => revokeLicense(input, revokeInput),
+        downloadIssue: async (issueInput) => issueDownload(input, issueInput),
       },
-      releaseExpiredReservations: async (releaseInput = {}) => {
-        const result = await createMikaStockLifecycleService(input).releaseExpiredReservations({
-          now: releaseInput.now ?? currentBackendISODateTime(input),
-        });
-
-        return {
-          ok: true,
-          status: 200,
-          data: {
-            status: "completed",
-            affected: {
-              reservationsScanned: result.scannedCount,
-              reservationsReleased: result.releasedCount,
-              stockItems: result.stockItemsAffected,
-            },
-          },
-        };
-      },
-      webhookReplay: async (replayInput) => replayWebhook(input, replayInput),
-      orderRefund: async (refundInput) => refundOrder(input, refundInput),
-      orderCancel: async (cancelInput) => cancelOrder(input, cancelInput),
-      entitlementGrant: async (grantInput) => grantEntitlement(input, grantInput),
-      entitlementRevoke: async (revokeInput) => revokeEntitlement(input, revokeInput),
-      emailResend: async (resendInput) => resendEmail(input, resendInput),
-      licenseRevoke: async (revokeInput) => revokeLicense(input, revokeInput),
-      downloadIssue: async (issueInput) => issueDownload(input, issueInput),
-      ...input.overrides?.admin,
-    },
+      overrides: input.overrides?.admin,
+    }),
     cart: createCartBackend(input),
     wishlist: createWishlistBackend(input),
     checkout: {

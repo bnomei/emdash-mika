@@ -10,14 +10,14 @@ import {
 } from "astro:actions";
 import { createMikaRequestContext } from "./api/context";
 import {
-  callMikaOperation,
   MikaActionInputError,
   mikaActionDefinitions,
   type MikaActionDefinition as MikaOperationActionDefinition,
   type MikaActionName as MikaOperationActionName,
 } from "./api/operations";
 import { mikaActionTreeSpec, type MikaActionTreeSpec } from "./api/action-tree";
-import { runMikaOperationPolicy, type MikaOperationPolicy } from "./api/operation-policy";
+import { runMikaOperation } from "./api/operation-runner";
+import type { MikaOperationPolicy } from "./api/operation-policy";
 import { resolveMikaApiOverrides, resolveMikaOperationPolicy } from "./api/runtime-api";
 import { createMikaApi, type MikaApi, type MikaApiOverrides } from "./api/server";
 import { z } from "./api/validation";
@@ -126,22 +126,18 @@ export function createMikaActions(options: MikaActionsOptions = {}): MikaActions
     ctx: ActionAPIContext,
     definition: MikaActionDefinition,
     input: unknown,
-    request: (api: MikaApi, requestContext: MikaRequestContext) => Promise<MikaApiResult<T>>,
+    request: (
+      api: MikaApi,
+      requestContext: MikaRequestContext,
+      operationPolicy: MikaOperationPolicy | undefined,
+    ) => Promise<MikaApiResult<T>>,
   ): Promise<T> => {
     const requestContext = actionRequestContext(ctx);
     await options.guard?.(ctx, definition.name, input);
-    const policyRejection = await runMikaOperationPolicy(
-      resolveMikaOperationPolicy(options.operationPolicy),
-      {
-        operation: definition.operation,
-        ctx: requestContext,
-        input,
-      },
-    );
-    if (policyRejection) return unwrap(policyRejection);
-
     const api = createMikaApi(resolveMikaApiOverrides(options.api));
-    return unwrap(await request(api, requestContext));
+    return unwrap(
+      await request(api, requestContext, resolveMikaOperationPolicy(options.operationPolicy)),
+    );
   };
 
   const createActionClient = <
@@ -166,8 +162,14 @@ export function createMikaActions(options: MikaActionsOptions = {}): MikaActions
   ): ActionClient<unknown, "form" | "json", z.ZodType> =>
     createActionClient(definition, definition.schema, (actionInput, ctx) => {
       const requestInput = normalizeMikaActionInput(definition, actionInput);
-      return run(ctx, definition, requestInput, (api, requestContext) =>
-        callMikaOperation(definition.operation, api, requestContext, requestInput),
+      return run(ctx, definition, requestInput, (api, requestContext, operationPolicy) =>
+        runMikaOperation({
+          operation: definition.operation,
+          api,
+          ctx: requestContext,
+          input: requestInput,
+          operationPolicy,
+        }),
       );
     });
 

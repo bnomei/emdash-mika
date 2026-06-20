@@ -204,6 +204,12 @@ function defineMikaApiMethodNames<const TNames extends MikaApiMethodNameMap>(
 export const mikaApiMethodNames = defineMikaApiMethodNames(mikaOperationApiMethodNames);
 
 type MikaApiNamespace = keyof typeof mikaApiMethodNames;
+const mikaNotImplementedApiMethod = Symbol("mika.notImplementedApiMethod");
+
+type NotImplementedMikaApiMethod = {
+  (...args: readonly unknown[]): Promise<MikaApiResult<unknown>>;
+  readonly [mikaNotImplementedApiMethod]: string;
+};
 
 export function createMikaApi(overrides: MikaApiOverrides = {}): MikaApi {
   return {
@@ -231,10 +237,32 @@ function createMikaApiNamespace<TNamespace extends MikaApiNamespace>(
   return Object.fromEntries(
     mikaApiMethodNames[namespace].map((method) => [
       method,
-      namespaceOverrides?.[String(method)] ??
-        (() => notImplemented(`${namespace}.${String(method)}`)),
+      namespaceOverrides?.[String(method)] ?? createNotImplementedMikaApiMethod(namespace, method),
     ]),
   ) as MikaApi[TNamespace];
+}
+
+export interface AssertMikaApiWiredOptions {
+  readonly scope?: readonly string[];
+}
+
+export function assertMikaApiWired(api: MikaApi, options: AssertMikaApiWiredOptions = {}): void {
+  const scope = options.scope ? new Set(options.scope) : undefined;
+  const missing: string[] = [];
+
+  for (const [namespace, methods] of Object.entries(mikaApiMethodNames)) {
+    for (const method of methods) {
+      const name = `${namespace}.${String(method)}`;
+      if (scope && !scope.has(namespace) && !scope.has(name)) continue;
+
+      const candidate = api[namespace as keyof MikaApi][method as never] as unknown;
+      if (isNotImplementedMikaApiMethod(candidate)) missing.push(name);
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new Error(`Mika API is missing wired methods: ${missing.sort().join(", ")}.`);
+  }
 }
 
 export async function notImplemented<TData>(feature: string): Promise<MikaApiResult<TData>> {
@@ -246,4 +274,22 @@ export async function notImplemented<TData>(feature: string): Promise<MikaApiRes
       message: `Mika API '${feature}' has not been wired yet.`,
     },
   };
+}
+
+function createNotImplementedMikaApiMethod<TNamespace extends MikaApiNamespace>(
+  namespace: TNamespace,
+  method: PropertyKey,
+): NotImplementedMikaApiMethod {
+  const feature = `${namespace}.${String(method)}`;
+  return Object.assign(() => notImplemented(feature), {
+    [mikaNotImplementedApiMethod]: feature,
+  });
+}
+
+function isNotImplementedMikaApiMethod(value: unknown): value is NotImplementedMikaApiMethod {
+  return (
+    typeof value === "function" &&
+    mikaNotImplementedApiMethod in value &&
+    typeof value[mikaNotImplementedApiMethod] === "string"
+  );
 }

@@ -2,13 +2,16 @@ import type { APIContext } from "astro";
 
 import { createMikaRequestContext } from "./api/context";
 import { type MikaClientRoute } from "./api/client";
-import { resolveMikaApiOverrides } from "./api/runtime-api";
+import { resolveMikaApiOverrides, resolveMikaOperationPolicy } from "./api/runtime-api";
 import {
   normalizeAccountExportDownloadInput,
   normalizeAccountExportInput,
   normalizeMagicLinkVerifyInput,
   normalizeOrderInvoiceInput,
 } from "./api/input-normalizers";
+import { runMikaOperation } from "./api/operation-runner";
+import { mikaOperationDefinitions, type MikaApiOperationData } from "./api/operations";
+import type { MikaOperationPolicy } from "./api/operation-policy";
 import { createMikaPluginRouteBuilder } from "./api/routes";
 import { createMikaApi, type MikaApiOverrides } from "./api/server";
 import type { MikaServerClient } from "./api/server-client";
@@ -17,6 +20,7 @@ import type {
   MoneyDTO,
   PriceDTO,
   SellableDTO,
+  MikaApiResult,
   VariantOptionGroupDTO,
   VariantOptionValueDTO,
 } from "./api/types";
@@ -26,6 +30,7 @@ export type MikaAstroContext = Pick<APIContext, "request" | "url"> &
 
 export interface MikaAstroClientOptions {
   readonly api?: MikaApiOverrides;
+  readonly operationPolicy?: MikaOperationPolicy;
 }
 
 export type MikaAstroClient = Omit<MikaServerClient, "admin" | "webhook" | "routes"> & {
@@ -90,6 +95,21 @@ export function createMikaAstroClient(
     session: ctx.session,
     locale: ctx.currentLocale,
   });
+  const requestOperation = <TOperation extends keyof typeof mikaOperationDefinitions>(
+    operationKey: TOperation,
+    input?: unknown,
+  ): Promise<
+    MikaApiResult<MikaApiOperationData<(typeof mikaOperationDefinitions)[TOperation]>>
+  > => {
+    const operation = mikaOperationDefinitions[operationKey];
+    return runMikaOperation({
+      operation,
+      api,
+      ctx: requestContext,
+      input,
+      operationPolicy: resolveMikaOperationPolicy(options.operationPolicy),
+    });
+  };
 
   return {
     routes: createMikaPluginRouteBuilder({
@@ -97,61 +117,63 @@ export function createMikaAstroClient(
     }),
     catalog: {
       sellables: (collection, id, catalogOptions = {}) =>
-        api.catalog.sellables({
-          contentRef: { collection, id, locale: catalogOptions.locale ?? requestContext.locale },
+        requestOperation("catalogSellables", {
+          collection,
+          id,
+          locale: catalogOptions.locale ?? requestContext.locale,
         }),
     },
     stock: {
-      availability: (sellableId) => api.stock.availability({ sellableId }),
+      availability: (sellableId) => requestOperation("stockAvailability", { sellableId }),
     },
     cart: {
-      get: () => api.cart.get(requestContext),
-      quote: (input = {}) => api.cart.quote(requestContext, input),
-      add: (input) => api.cart.add(requestContext, input),
-      update: (input) => api.cart.update(requestContext, input),
-      remove: (input) => api.cart.remove(requestContext, input),
-      merge: (input = {}) => api.cart.merge(requestContext, input),
-      applyCoupon: (input) => api.cart.applyCoupon(requestContext, input),
-      removeCoupon: (input = {}) => api.cart.removeCoupon(requestContext, input),
+      get: () => requestOperation("cartGet"),
+      quote: (input = {}) => requestOperation("cartQuote", input),
+      add: (input) => requestOperation("cartAdd", input),
+      update: (input) => requestOperation("cartUpdate", input),
+      remove: (input) => requestOperation("cartRemove", input),
+      merge: (input = {}) => requestOperation("cartMerge", input),
+      applyCoupon: (input) => requestOperation("cartApplyCoupon", input),
+      removeCoupon: (input = {}) => requestOperation("cartRemoveCoupon", input),
     },
     wishlist: {
-      get: () => api.wishlist.get(requestContext),
-      add: (input) => api.wishlist.add(requestContext, input),
-      remove: (input) => api.wishlist.remove(requestContext, input),
-      moveToCart: (input) => api.wishlist.moveToCart(requestContext, input),
-      saveForLater: (input) => api.wishlist.saveForLater(requestContext, input),
-      merge: (input = {}) => api.wishlist.merge(requestContext, input),
+      get: () => requestOperation("wishlistGet"),
+      add: (input) => requestOperation("wishlistAdd", input),
+      remove: (input) => requestOperation("wishlistRemove", input),
+      moveToCart: (input) => requestOperation("wishlistMoveToCart", input),
+      saveForLater: (input) => requestOperation("wishlistSaveForLater", input),
+      merge: (input = {}) => requestOperation("wishlistMerge", input),
     },
     checkout: {
-      start: (input = {}) => api.checkout.start(requestContext, input),
-      preview: (input = {}) => api.checkout.preview(requestContext, input),
-      status: (checkoutId) => api.checkout.status({ checkoutId }),
+      start: (input = {}) => requestOperation("checkoutStart", input),
+      preview: (input = {}) => requestOperation("checkoutPreview", input),
+      status: (checkoutId) => requestOperation("checkoutStatus", { checkoutId }),
     },
     magicLink: {
-      request: (input) => api.magicLink.request(requestContext, input),
-      verify: (input) => api.magicLink.verify(requestContext, normalizeMagicLinkVerifyInput(input)),
+      request: (input) => requestOperation("magicLinkRequest", input),
+      verify: (input) => requestOperation("magicLinkVerify", normalizeMagicLinkVerifyInput(input)),
     },
     account: {
-      get: () => api.account.get(requestContext),
-      export: (input = {}) => api.account.export(requestContext, input),
+      get: () => requestOperation("accountGet"),
+      export: (input = {}) => requestOperation("accountExport", input),
       exportStatus: (input) =>
-        api.account.exportStatus(requestContext, normalizeAccountExportInput(input)),
+        requestOperation("accountExportStatus", normalizeAccountExportInput(input)),
       exportDownload: (input) =>
-        api.account.exportDownload(requestContext, normalizeAccountExportDownloadInput(input)),
-      delete: (input = {}) => api.account.delete(requestContext, input),
+        requestOperation("accountExportDownload", normalizeAccountExportDownloadInput(input)),
+      delete: (input = {}) => requestOperation("accountDelete", input),
       portal: (input = {}) =>
-        api.account.portal(requestContext, typeof input === "string" ? { returnTo: input } : input),
+        requestOperation("accountPortal", typeof input === "string" ? { returnTo: input } : input),
     },
     subscription: {
-      cancel: (input) => api.subscription.cancel(requestContext, input),
-      change: (input) => api.subscription.change(requestContext, input),
-      renew: (input) => api.subscription.renew(requestContext, input),
+      cancel: (input) => requestOperation("subscriptionCancel", input),
+      change: (input) => requestOperation("subscriptionChange", input),
+      renew: (input) => requestOperation("subscriptionRenew", input),
     },
     download: {
-      resolve: (token) => api.download.resolve({ token }),
+      resolve: (token) => requestOperation("downloadResolve", { token }),
     },
     order: {
-      invoice: (input) => api.order.invoice(normalizeOrderInvoiceInput(input)),
+      invoice: (input) => requestOperation("orderInvoice", normalizeOrderInvoiceInput(input)),
     },
   };
 }

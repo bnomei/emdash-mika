@@ -24,7 +24,13 @@ import {
   type MikaApiResult,
   type MikaProviderCapability,
 } from "../src/api/types";
-import { createMikaApi, mikaApiMethodNames, type MikaApi } from "../src/api/server";
+import {
+  assertMikaApiWired,
+  createMikaApi,
+  mikaApiMethodNames,
+  type MikaApi,
+  type MikaApiOverrides,
+} from "../src/api/server";
 import type {
   MikaProviderAdapter,
   MikaProviderCheckoutInput,
@@ -1511,6 +1517,12 @@ describe("backend API composition", () => {
       status: 200,
       data: [],
     });
+    expect(() => assertMikaApiWired(api, { scope: ["catalog"] })).not.toThrow();
+    expect(() => assertMikaApiWired(api, { scope: ["cart.add"] })).toThrow(
+      "Mika API is missing wired methods: cart.add.",
+    );
+    expect(() => assertMikaApiWired(api)).toThrow("cart.add");
+    expect(() => assertMikaApiWired(createFullyWiredTestApi())).not.toThrow();
 
     for (const [namespace, methods] of Object.entries(mikaApiMethodNames)) {
       const apiNamespace = api[namespace as keyof MikaApi] as Record<
@@ -1573,6 +1585,23 @@ describe("backend API composition", () => {
     const api = createMikaBackendApi(dependencies);
 
     expectTypeOf(api).toEqualTypeOf<MikaApi>();
+    expect(() =>
+      assertMikaApiWired(api, {
+        scope: [
+          "catalog",
+          "stock",
+          "cart",
+          "wishlist",
+          "checkout",
+          "magicLink",
+          "account",
+          "subscription",
+          "download",
+          "webhook",
+          "admin",
+        ],
+      }),
+    ).not.toThrow();
     for (const [namespace, methods] of Object.entries(mikaApiMethodNames)) {
       const apiNamespace = api[namespace as keyof MikaApi] as Record<string, unknown>;
 
@@ -7826,6 +7855,26 @@ function createRecord(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
     createdAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
   };
+}
+
+function createFullyWiredTestApi(): MikaApi {
+  return createMikaApi(
+    Object.fromEntries(
+      Object.entries(mikaApiMethodNames).map(([namespace, methods]) => [
+        namespace,
+        Object.fromEntries(
+          methods.map((method) => [
+            method,
+            async () => ({
+              ok: true,
+              status: 200,
+              data: {},
+            }),
+          ]),
+        ),
+      ]),
+    ) as MikaApiOverrides,
+  );
 }
 
 function createTestBackendDependencies(
