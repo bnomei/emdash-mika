@@ -1,9 +1,10 @@
 import { definePlugin, type PluginDescriptor, type PluginStorageConfig } from "emdash";
 
 import { createMikaPluginRoutes } from "./api/route-handlers";
-import { setDefaultMikaApiOverrides } from "./api/runtime-api";
+import { setDefaultMikaApiOverrides, setDefaultMikaOperationPolicy } from "./api/runtime-api";
 import { MIKA_PLUGIN_ID } from "./api/routes";
 import { createMikaApi, type MikaApiOverrides } from "./api/server";
+import type { MikaOperationPolicy } from "./api/operation-policy";
 import { mikaStorageConfig } from "./storage/collections";
 
 export { MIKA_PLUGIN_ID } from "./api/routes";
@@ -13,18 +14,22 @@ export const MIKA_PACKAGE_NAME = "@bnomei/emdash-mika";
 export interface MikaDescriptorOptions {
   readonly entrypoint?: string;
   readonly api?: MikaApiOverrides;
+  readonly operationPolicy?: MikaOperationPolicy;
 }
 
 export interface MikaCreatePluginOptions {
   readonly api?: MikaApiOverrides;
+  readonly operationPolicy?: MikaOperationPolicy;
 }
 
 export function mikaPlugin(
   options: MikaDescriptorOptions = {},
 ): PluginDescriptor<MikaCreatePluginOptions> {
   const entrypoint = options.entrypoint ?? MIKA_PACKAGE_NAME;
-  const pluginOptions: MikaCreatePluginOptions =
-    options.api === undefined ? {} : { api: options.api };
+  const pluginOptions: MikaCreatePluginOptions = {
+    ...(options.api === undefined ? {} : { api: options.api }),
+    ...(options.operationPolicy === undefined ? {} : { operationPolicy: options.operationPolicy }),
+  };
 
   return {
     id: MIKA_PLUGIN_ID,
@@ -40,6 +45,7 @@ export function mikaPlugin(
 
 export function createPlugin(options: MikaCreatePluginOptions = {}) {
   setDefaultMikaApiOverrides(options.api);
+  setDefaultMikaOperationPolicy(options.operationPolicy);
   const api = createMikaApi(options.api);
 
   return definePlugin({
@@ -47,7 +53,7 @@ export function createPlugin(options: MikaCreatePluginOptions = {}) {
     version: MIKA_PLUGIN_VERSION,
     capabilities: ["content:read", "email:send"],
     storage: mikaStorageConfig as PluginStorageConfig,
-    routes: createMikaPluginRoutes(api),
+    routes: createMikaPluginRoutes(api, { operationPolicy: options.operationPolicy }),
   });
 }
 

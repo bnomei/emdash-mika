@@ -251,18 +251,23 @@ describe("backend repository characterization", () => {
     await expect(repository.findPriceById(createTestMikaId("price", 404))).resolves.toBeNull();
   });
 
-  it("finds checkout idempotency keys only from checkout metadata", async () => {
+  it("finds checkout idempotency keys through indexed fields with metadata fallback", async () => {
     const collection = createStorageCollection("session");
     const repository = new SessionRepository(collection);
     const noMetadataCheckout = createCheckoutDocument({
       id: createTestMikaId("checkout", 1),
     });
-    const idempotentCheckout = createCheckoutDocument({
+    const metadataIdempotentCheckout = createCheckoutDocument({
       id: createTestMikaId("checkout", 2),
       metadata: {
-        checkoutIdempotencyKey: "checkout_replay_key",
+        checkoutIdempotencyKey: "checkout_metadata_replay_key",
         checkoutIdempotencyInputHash: "hash_1",
       },
+    });
+    const indexedIdempotentCheckout = createCheckoutDocument({
+      id: createTestMikaId("checkout", 4),
+      checkoutIdempotencyKey: "checkout_replay_key",
+      checkoutIdempotencyInputHash: "hash_2",
     });
     const sanitizedCheckout = createCheckoutDocument({
       id: createTestMikaId("checkout", 3),
@@ -272,12 +277,21 @@ describe("backend repository characterization", () => {
     });
 
     await repository.put(noMetadataCheckout);
-    await repository.put(idempotentCheckout);
+    await repository.put(metadataIdempotentCheckout);
     await repository.put(sanitizedCheckout);
+    await repository.put(indexedIdempotentCheckout);
 
     await expect(repository.findCheckoutByIdempotencyKey("checkout_replay_key")).resolves.toEqual(
-      idempotentCheckout,
+      indexedIdempotentCheckout,
     );
+    await expect(
+      repository.findCheckoutByIdempotencyKey("checkout_metadata_replay_key"),
+    ).resolves.toEqual(metadataIdempotentCheckout);
+    await expect(
+      repository.findCheckoutByIdempotencyKey("checkout_metadata_replay_key"),
+    ).resolves.toMatchObject({
+      aggregate: { metadata: { checkoutIdempotencyInputHash: "hash_1" } },
+    });
     await expect(repository.findCheckoutByIdempotencyKey("missing_key")).resolves.toBeNull();
     await expect(repository.findCheckoutByIdempotencyKey("")).resolves.toBeNull();
   });
@@ -6791,6 +6805,12 @@ describe("backend API composition", () => {
     if (!started.ok) {
       throw new Error("Expected checkout.start to succeed.");
     }
+    await expect(repositories.session.findCheckoutById(started.data.id)).resolves.toMatchObject({
+      id: "checkout_1",
+      checkoutIdempotencyKey: "idem_1",
+      providerStatus: "created",
+      redirectUrl: "https://checkout.example.test/session/checkout_fake",
+    });
 
     await expect(api.checkout.status({ checkoutId: started.data.id })).resolves.toMatchObject({
       ok: true,
@@ -6860,8 +6880,15 @@ describe("backend API composition", () => {
       createCheckoutDocument({
         id: createTestMikaId("checkout", 1),
         status: "completed",
+        providerStatus: "completed",
+        orderId: createTestMikaId("order", 1),
+        redirectUrl: "https://checkout.example.test/complete",
         expiresAt: createTestClock().isoAt(-1),
-        metadata: { checkoutProviderStatus: "completed", checkoutOrderId: "order_1" },
+        metadata: {
+          checkoutProviderStatus: "pending",
+          checkoutOrderId: "order_stale",
+          checkoutRedirectUrl: "https://checkout.example.test/stale",
+        },
       }),
     );
     await repositories.session.put(
@@ -6891,8 +6918,10 @@ describe("backend API composition", () => {
         status: "completed",
         mode: "payment",
         provider: TEST_PROVIDER,
+        redirectUrl: "https://checkout.example.test/complete",
         orderId: "order_1",
       },
+      effects: [{ type: "redirect", url: "https://checkout.example.test/complete" }],
     });
     await expect(
       api.checkout.status({ checkoutId: createTestMikaId("checkout", 2) }),
@@ -8585,6 +8614,12 @@ function createCheckoutDocument(
     readonly id?: CheckoutDocument["id"];
     readonly status?: CheckoutDocument["status"];
     readonly providerCheckoutId?: string;
+    readonly checkoutIdempotencyKey?: string;
+    readonly checkoutIdempotencyInputHash?: string;
+    readonly providerStatus?: CheckoutDocument["providerStatus"];
+    readonly redirectUrl?: string;
+    readonly orderId?: MikaId;
+    readonly failureReason?: string;
     readonly bindingProviderCheckoutId?: string;
     readonly expiresAt?: CheckoutDocument["expiresAt"];
     readonly metadata?: CheckoutDocument["aggregate"]["metadata"];
@@ -8599,6 +8634,12 @@ function createCheckoutDocument(
     schemaVersion: 1,
     provider: TEST_PROVIDER,
     providerCheckoutId,
+    checkoutIdempotencyKey: overrides.checkoutIdempotencyKey,
+    checkoutIdempotencyInputHash: overrides.checkoutIdempotencyInputHash,
+    providerStatus: overrides.providerStatus,
+    redirectUrl: overrides.redirectUrl,
+    orderId: overrides.orderId,
+    failureReason: overrides.failureReason,
     status: overrides.status ?? "created",
     expiresAt: overrides.expiresAt ?? createTestClock().isoAt(60 * 60_000),
     aggregate: {

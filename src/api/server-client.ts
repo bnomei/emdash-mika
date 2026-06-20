@@ -1,5 +1,9 @@
 import { createMikaClient, type MikaClient, type MikaClientOptions } from "./client";
-import { mikaOperationDefinitions, type MikaRouteOperation } from "./operations";
+import {
+  mikaOperationDefinitions,
+  type MikaApiOperationData,
+  type MikaRouteOperation,
+} from "./operations";
 import {
   normalizeAccountExportDownloadInput,
   normalizeAccountExportInput,
@@ -143,8 +147,11 @@ export interface MikaServerClient extends Omit<MikaClient, "routes"> {
 export function createMikaServerClient(options: MikaServerClientOptions = {}): MikaServerClient {
   const request = <TData>(route: MikaPluginRouteName, init: MikaRequestInit = {}) =>
     requestMika<TData>(route, init, options);
-  const requestOperation = <TData>(operation: MikaRouteOperation, input?: unknown) =>
-    request<TData>(
+  const requestOperation = <TOperation extends MikaRouteOperation>(
+    operation: TOperation,
+    input?: unknown,
+  ) =>
+    request<MikaApiOperationData<TOperation>>(
       operation.routeKey as MikaPluginRouteName,
       operationRequestInit(operation, input),
     );

@@ -119,6 +119,12 @@ export type CheckoutDocument = AggregateDocument<
     readonly customerId?: MikaId;
     readonly provider: ProviderName;
     readonly providerCheckoutId?: string;
+    readonly checkoutIdempotencyKey?: string;
+    readonly checkoutIdempotencyInputHash?: string;
+    readonly providerStatus?: CheckoutStatus | "pending" | "binding_mismatch";
+    readonly redirectUrl?: string;
+    readonly orderId?: MikaId;
+    readonly failureReason?: string;
     readonly status: CheckoutStatus;
     readonly expiresAt?: ISODateTime;
   },

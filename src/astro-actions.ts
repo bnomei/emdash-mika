@@ -11,27 +11,26 @@ import {
 import { createMikaRequestContext } from "./api/context";
 import {
   callMikaOperation,
+  MikaActionInputError,
   mikaActionDefinitions,
   type MikaActionDefinition as MikaOperationActionDefinition,
   type MikaActionName as MikaOperationActionName,
 } from "./api/operations";
-import { resolveMikaApiOverrides } from "./api/runtime-api";
+import { runMikaOperationPolicy, type MikaOperationPolicy } from "./api/operation-policy";
+import { resolveMikaApiOverrides, resolveMikaOperationPolicy } from "./api/runtime-api";
 import { createMikaApi, type MikaApi, type MikaApiOverrides } from "./api/server";
 import { z } from "./api/validation";
-import { createMikaId } from "./types/primitives";
 import type { MikaRequestContext } from "./api/context";
 import type {
   AccountExportDTO,
   AccountExportStatusInput,
   AccountDTO,
-  AddCartItemInput,
   AvailabilityDTO,
   CartDTO,
   CheckoutSessionDTO,
   ContentRefDTO,
   MikaApiResult,
   SellableDTO,
-  StartCheckoutInput,
   WishlistDTO,
 } from "./api/types";
 
@@ -42,9 +41,11 @@ export interface MikaActionsOptions {
     action: MikaActionName,
     input: unknown,
   ) => Promise<void> | void;
+  readonly operationPolicy?: MikaOperationPolicy;
 }
 
 export type MikaActionName = MikaOperationActionName;
+export type { MikaOperationPolicy } from "./api/operation-policy";
 
 type MikaActionDefinition<
   TName extends MikaActionName = MikaActionName,
@@ -122,13 +123,24 @@ export interface MikaActions {
 export function createMikaActions(options: MikaActionsOptions = {}): MikaActions {
   const run = async <T>(
     ctx: ActionAPIContext,
-    action: MikaActionName,
+    definition: MikaActionDefinition,
     input: unknown,
     request: (api: MikaApi, requestContext: MikaRequestContext) => Promise<MikaApiResult<T>>,
   ): Promise<T> => {
-    await options.guard?.(ctx, action, input);
+    const requestContext = actionRequestContext(ctx);
+    await options.guard?.(ctx, definition.name, input);
+    const policyRejection = await runMikaOperationPolicy(
+      resolveMikaOperationPolicy(options.operationPolicy),
+      {
+        operation: definition.operation,
+        ctx: requestContext,
+        input,
+      },
+    );
+    if (policyRejection) return unwrap(policyRejection);
+
     const api = createMikaApi(resolveMikaApiOverrides(options.api));
-    return unwrap(await request(api, actionRequestContext(ctx)));
+    return unwrap(await request(api, requestContext));
   };
 
   const createActionClient = <
@@ -159,34 +171,12 @@ export function createMikaActions(options: MikaActionsOptions = {}): MikaActions
     request: (
       api: MikaApi,
       requestContext: MikaRequestContext,
-      input: z.infer<TSchema>,
+      input: unknown,
     ) => Promise<MikaApiResult<TData>>,
-  ): ActionClient<TData, TAccept, TSchema> =>
-    createActionClient(definition, input, (actionInput, ctx) =>
-      run(ctx, definition.name, actionInput, (api, requestContext) =>
-        request(api, requestContext, actionInput),
-      ),
-    );
-
-  const defineNormalizedMikaAction = <
-    TName extends MikaActionName,
-    TAccept extends "form" | "json",
-    TSchema extends z.ZodType,
-    TRequestInput,
-    TData = unknown,
-  >(
-    definition: MikaActionDefinition<TName, TAccept, TSchema>,
-    input: TSchema,
-    request: (
-      api: MikaApi,
-      requestContext: MikaRequestContext,
-      input: TRequestInput,
-    ) => Promise<MikaApiResult<TData>>,
-    normalize: (input: z.infer<TSchema>) => TRequestInput,
   ): ActionClient<TData, TAccept, TSchema> =>
     createActionClient(definition, input, (actionInput, ctx) => {
-      const requestInput = normalize(actionInput);
-      return run(ctx, definition.name, requestInput, (api, requestContext) =>
+      const requestInput = normalizeMikaActionInput(definition, actionInput);
+      return run(ctx, definition, requestInput, (api, requestContext) =>
         request(api, requestContext, requestInput),
       );
     });
@@ -197,7 +187,9 @@ export function createMikaActions(options: MikaActionsOptions = {}): MikaActions
     requestContext: MikaRequestContext,
     input: unknown,
   ): Promise<MikaApiResult<TData>> =>
-    callMikaOperation<TData>(definition.operation, api, requestContext, input);
+    callMikaOperation(definition.operation, api, requestContext, input) as Promise<
+      MikaApiResult<TData>
+    >;
 
   const actions = {
     catalog: {
@@ -222,11 +214,10 @@ export function createMikaActions(options: MikaActionsOptions = {}): MikaActions
       ),
     },
     cart: {
-      add: defineNormalizedMikaAction(
+      add: defineMikaAction(
         mikaActionDefinitions.cartAdd,
         mikaActionDefinitions.cartAdd.schema,
         (api, ctx, input) => runOperation<CartDTO>(mikaActionDefinitions.cartAdd, api, ctx, input),
-        normalizeCartAddInput,
       ),
       update: defineMikaAction(
         mikaActionDefinitions.cartUpdate,
@@ -292,12 +283,11 @@ export function createMikaActions(options: MikaActionsOptions = {}): MikaActions
       ),
     },
     checkout: {
-      start: defineNormalizedMikaAction(
+      start: defineMikaAction(
         mikaActionDefinitions.checkoutStart,
         mikaActionDefinitions.checkoutStart.schema,
         (api, ctx, input) =>
           runOperation<CheckoutSessionDTO>(mikaActionDefinitions.checkoutStart, api, ctx, input),
-        normalizeCheckoutStartInput,
       ),
       status: defineMikaAction(
         mikaActionDefinitions.checkoutStatus,
@@ -425,67 +415,20 @@ function actionCode(status: number): ActionErrorCode {
   return "BAD_REQUEST";
 }
 
-type CartAddFormInput = z.infer<typeof mikaActionDefinitions.cartAdd.schema>;
-type CheckoutStartFormInput = z.infer<typeof mikaActionDefinitions.checkoutStart.schema>;
-
-function normalizeCartAddInput(input: CartAddFormInput): AddCartItemInput {
-  const purchase = input.purchase ? new URLSearchParams(input.purchase) : undefined;
-  const purchaseSellableId = parsePurchaseMikaId(purchase?.get("sellableId"), "sellableId");
-  const purchasePriceId = parsePurchaseMikaId(purchase?.get("priceId"), "priceId");
-  const sellableId = purchaseSellableId ?? input.sellableId;
-  const priceId = purchasePriceId ?? input.priceId;
-
-  if (!sellableId) {
-    throw new ActionError({
-      code: "BAD_REQUEST",
-      message: "sellableId is required.",
-    });
-  }
-
-  return {
-    sellableId,
-    priceId: priceId || undefined,
-    variantKey: input.variantKey,
-    variantOptions: input.variantOptions,
-    quantity: input.quantity,
-    returnTo: input.returnTo,
-  };
-}
-
-function parsePurchaseMikaId(value: string | null | undefined, field: string) {
-  if (!value) return undefined;
-
+function normalizeMikaActionInput<TSchema extends z.ZodType>(
+  definition: MikaActionDefinition<MikaActionName, "form" | "json", TSchema>,
+  input: z.infer<TSchema>,
+): unknown {
   try {
-    return createMikaId(value);
-  } catch {
+    const normalize = ("normalize" in definition ? definition.normalize : undefined) as
+      | ((input: unknown) => unknown)
+      | undefined;
+    return normalize ? normalize(input) : input;
+  } catch (error) {
+    if (!(error instanceof MikaActionInputError)) throw error;
     throw new ActionError({
-      code: "BAD_REQUEST",
-      message: `${field} is invalid.`,
+      code: error.code,
+      message: error.message,
     });
   }
-}
-
-function normalizeCheckoutStartInput(input: CheckoutStartFormInput): StartCheckoutInput {
-  const customer =
-    input.email || input.name || input.company || input.vatId
-      ? {
-          email: input.email,
-          name: input.name,
-          company: input.company,
-          vatId: input.vatId,
-        }
-      : undefined;
-
-  return {
-    cartId: input.cartId,
-    sellableId: input.sellableId,
-    priceId: input.priceId,
-    quantity: input.quantity,
-    provider: input.provider,
-    customer,
-    customFields: input.customFields,
-    successPath: input.successPath,
-    cancelPath: input.cancelPath,
-    returnTo: input.returnTo,
-  };
 }

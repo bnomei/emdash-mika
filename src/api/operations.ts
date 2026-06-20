@@ -1,6 +1,7 @@
 import type { MikaRequestContext } from "./context";
 import type { MikaApi } from "./server";
 import type { MikaApiResult } from "./types";
+import { createMikaId } from "../types/primitives";
 import {
   MIKA_AGENT_IDEMPOTENCY_KEY_HEADER,
   type MikaAgentIdempotencyMetadata,
@@ -56,15 +57,18 @@ export type MikaOperationHttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
 export type MikaOperationTransport = "body" | "search" | "none";
 export type MikaActionAccept = "form" | "json";
 
-type MikaApiOperationCall<TInput> = {
-  call(api: MikaApi, ctx: MikaRequestContext, input: TInput): Promise<MikaApiResult<unknown>>;
+type MikaApiOperationCall<TInput, TData> = {
+  call(api: MikaApi, ctx: MikaRequestContext, input: TInput): Promise<MikaApiResult<TData>>;
 }["call"];
 
-interface MikaOperationActionDefinition {
+type MikaOperationActionNormalizer = (input: any) => unknown;
+
+interface MikaOperationActionDefinition<TActionInput = unknown> {
   readonly key: string;
   readonly name: string;
   readonly accept: MikaActionAccept;
-  readonly schema: z.ZodType;
+  readonly schema: z.ZodType<TActionInput>;
+  readonly normalize?: MikaOperationActionNormalizer;
 }
 
 interface MikaApiOperationBaseDefinition {
@@ -79,37 +83,59 @@ interface MikaApiOperationBaseDefinition {
   readonly requiresRequestContext: boolean;
   readonly agent: MikaAgentOperationMetadata;
   readonly searchKeys?: readonly string[];
-  readonly action?: MikaOperationActionDefinition;
 }
 
 type MikaApiOperationDefinition = MikaApiOperationBaseDefinition & {
   readonly schema?: z.ZodType;
-  readonly call: MikaApiOperationCall<unknown>;
+  readonly action?: MikaOperationActionDefinition;
+  readonly call: MikaApiOperationCall<unknown, unknown>;
 };
 
 function defineMikaOperation<
   const TSchema extends z.ZodType,
+  TData,
   const TDefinition extends MikaApiOperationBaseDefinition,
 >(
   definition: TDefinition & {
     readonly schema: TSchema;
-    readonly call: MikaApiOperationCall<z.infer<TSchema>>;
+    readonly call: MikaApiOperationCall<z.infer<TSchema>, TData>;
   },
 ): TDefinition & {
   readonly schema: TSchema;
-  readonly call: MikaApiOperationCall<z.infer<TSchema>>;
+  readonly call: MikaApiOperationCall<z.infer<TSchema>, TData>;
 };
-function defineMikaOperation<const TDefinition extends MikaApiOperationBaseDefinition>(
+function defineMikaOperation<TData, const TDefinition extends MikaApiOperationBaseDefinition>(
   definition: TDefinition & {
     readonly schema?: undefined;
-    readonly call: MikaApiOperationCall<undefined>;
+    readonly call: MikaApiOperationCall<undefined, TData>;
   },
 ): TDefinition & {
   readonly schema?: undefined;
-  readonly call: MikaApiOperationCall<undefined>;
+  readonly call: MikaApiOperationCall<undefined, TData>;
 };
 function defineMikaOperation(definition: MikaApiOperationDefinition): MikaApiOperationDefinition {
   return definition;
+}
+
+export type MikaApiOperationData<TOperation extends { readonly call: (...args: any) => any }> =
+  TOperation extends { readonly call: (...args: any) => Promise<MikaApiResult<infer TData>> }
+    ? TData
+    : never;
+
+export type MikaApiOperationInput<TOperation> = TOperation extends {
+  readonly schema: z.ZodType<infer TInput>;
+}
+  ? TInput
+  : undefined;
+
+export class MikaActionInputError extends Error {
+  readonly code: "BAD_REQUEST";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "MikaActionInputError";
+    this.code = "BAD_REQUEST";
+  }
 }
 
 function defineMikaRouteOnlyDefinitions<
@@ -358,6 +384,65 @@ const agentOperationMetadata = defineAgentOperationMetadata({
   },
 });
 
+type CartAddFormInput = z.infer<typeof cartAddFormInputSchema>;
+type CheckoutStartFormInput = z.infer<typeof checkoutStartFormInputSchema>;
+
+function normalizeCartAddActionInput(input: CartAddFormInput) {
+  const purchase = input.purchase ? new URLSearchParams(input.purchase) : undefined;
+  const purchaseSellableId = parsePurchaseMikaId(purchase?.get("sellableId"), "sellableId");
+  const purchasePriceId = parsePurchaseMikaId(purchase?.get("priceId"), "priceId");
+  const sellableId = purchaseSellableId ?? input.sellableId;
+  const priceId = purchasePriceId ?? input.priceId;
+
+  if (!sellableId) {
+    throw new MikaActionInputError("sellableId is required.");
+  }
+
+  return {
+    sellableId,
+    priceId: priceId || undefined,
+    variantKey: input.variantKey,
+    variantOptions: input.variantOptions,
+    quantity: input.quantity,
+    returnTo: input.returnTo,
+  };
+}
+
+function normalizeCheckoutStartActionInput(input: CheckoutStartFormInput) {
+  const customer =
+    input.email || input.name || input.company || input.vatId
+      ? {
+          email: input.email,
+          name: input.name,
+          company: input.company,
+          vatId: input.vatId,
+        }
+      : undefined;
+
+  return {
+    cartId: input.cartId,
+    sellableId: input.sellableId,
+    priceId: input.priceId,
+    quantity: input.quantity,
+    provider: input.provider,
+    customer,
+    customFields: input.customFields,
+    successPath: input.successPath,
+    cancelPath: input.cancelPath,
+    returnTo: input.returnTo,
+  };
+}
+
+function parsePurchaseMikaId(value: string | null | undefined, field: string) {
+  if (!value) return undefined;
+
+  try {
+    return createMikaId(value);
+  } catch {
+    throw new MikaActionInputError(`${field} is invalid.`);
+  }
+}
+
 export const mikaOperationDefinitions = {
   catalogSellables: defineMikaOperation({
     name: "catalog.sellables",
@@ -445,6 +530,7 @@ export const mikaOperationDefinitions = {
       name: "cart.add",
       accept: "form",
       schema: cartAddFormInputSchema,
+      normalize: normalizeCartAddActionInput,
     },
     call: (api, ctx, input) => api.cart.add(ctx, input),
   }),
@@ -678,6 +764,7 @@ export const mikaOperationDefinitions = {
       name: "checkout.start",
       accept: "form",
       schema: checkoutStartFormInputSchema,
+      normalize: normalizeCheckoutStartActionInput,
     },
     call: (api, ctx, input) => api.checkout.start(ctx, input),
   }),
@@ -1195,15 +1282,27 @@ export type MikaActionDefinition = MikaActionDefinitions[keyof MikaActionDefinit
 
 export const mikaActionDefinitions = collectMikaActionDefinitions() as MikaActionDefinitions;
 
-export function callMikaOperation<TData = unknown>(
+export function callMikaOperation<TOperation extends MikaApiOperation>(
+  operation: TOperation,
+  api: MikaApi,
+  ctx: MikaRequestContext,
+  input: unknown,
+): Promise<MikaApiResult<MikaApiOperationData<TOperation>>>;
+export function callMikaOperation<TData>(
   operation: MikaApiOperation,
   api: MikaApi,
   ctx: MikaRequestContext,
   input: unknown,
-): Promise<MikaApiResult<TData>> {
+): Promise<MikaApiResult<TData>>;
+export function callMikaOperation(
+  operation: MikaApiOperation,
+  api: MikaApi,
+  ctx: MikaRequestContext,
+  input: unknown,
+): Promise<MikaApiResult<unknown>> {
   // Dynamic route/action dispatch loses the schema-to-operation correlation after validation.
-  const call = operation.call as MikaApiOperationCall<unknown>;
-  return call(api, ctx, input) as Promise<MikaApiResult<TData>>;
+  const call = operation.call as MikaApiOperationCall<unknown, unknown>;
+  return call(api, ctx, input);
 }
 
 function collectMikaPluginRoutes(): Record<string, string> {

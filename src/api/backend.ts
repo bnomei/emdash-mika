@@ -1,4 +1,5 @@
 import type {
+  MikaProviderAdapter,
   MikaProviderLineItem,
   MikaProviderPaymentEvent,
   MikaProviderOrderCancelInput,
@@ -91,6 +92,7 @@ import type {
   CheckoutSessionDTO,
   MikaError,
   MikaApiResult,
+  MikaProviderCapability,
   MoneyDTO,
   DownloadDTO,
   DownloadIssueInput,
@@ -117,6 +119,41 @@ import type {
 } from "./types";
 
 type MikaApiFailure = Extract<MikaApiResult<never>, { readonly ok: false }>;
+type MikaProviderMethodName =
+  | "capabilities"
+  | "health"
+  | "createCheckoutSession"
+  | "retrieveCheckoutSession"
+  | "createPortalSession"
+  | "getInvoiceUrl"
+  | "cancelSubscription"
+  | "changeSubscription"
+  | "renewSubscription"
+  | "refundPayment"
+  | "cancelOrder"
+  | "syncCatalog"
+  | "verifyWebhook"
+  | "parseWebhookEvent";
+
+type MikaProviderFeature<TMethod extends MikaProviderMethodName> =
+  | {
+      readonly ok: true;
+      readonly providerName: ProviderName;
+      readonly provider: MikaProviderAdapter;
+      readonly method: NonNullable<MikaProviderAdapter[TMethod]>;
+    }
+  | MikaApiFailure;
+
+interface MikaProviderFeatureOptions<TMethod extends MikaProviderMethodName> {
+  readonly providerName?: ProviderName;
+  readonly method: TMethod;
+  readonly capability?: MikaProviderCapability;
+  readonly capabilityFailureMessage?: string;
+  readonly missingProviderMessage?: string;
+  readonly unsupportedMessage: (providerName: ProviderName) => string;
+}
+
+type MikaAdminAuditStartRecord = Omit<AdminAuditDocument["record"], "id" | "status" | "createdAt">;
 
 const DEFAULT_BACKEND_CURRENCY = createCurrencyCode("EUR");
 const CHECKOUT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY = "checkoutIdempotencyInputHash";
@@ -1130,20 +1167,16 @@ async function createAccountPortalSession(
     };
   }
 
-  const provider = input.providers.get(providerAccount.provider);
-  if (!provider?.createPortalSession) {
-    return {
-      ok: false,
-      status: 409,
-      error: {
-        code: "PROVIDER_UNSUPPORTED",
-        message: `Provider '${providerAccount.provider}' does not support portal sessions.`,
-      },
-    };
-  }
+  const providerFeature = await requireProviderFeature(input, {
+    providerName: providerAccount.provider,
+    method: "createPortalSession",
+    unsupportedMessage: (providerName) =>
+      `Provider '${providerName}' does not support portal sessions.`,
+  });
+  if (!providerFeature.ok) return providerFeature;
 
   try {
-    const session = await provider.createPortalSession({
+    const session = await providerFeature.method.call(providerFeature.provider, {
       providerCustomerId: providerAccount.providerCustomerId,
       returnUrl: accountPortalReturnUrl(ctx, portalInput.returnTo),
     });
@@ -1194,16 +1227,14 @@ async function runSubscriptionAction(
     };
   }
 
-  const provider = input.providers.get(subscription.provider);
   const methodName = subscriptionActionMethods[action];
-  const method = provider?.[methodName];
-  if (!provider || !method) {
-    return providerUnsupportedForAction(
-      provider
-        ? `Provider '${subscription.provider}' does not support subscription ${action}.`
-        : `Provider '${subscription.provider}' is not configured.`,
-    );
-  }
+  const providerFeature = await requireProviderFeature(input, {
+    providerName: subscription.provider,
+    method: methodName,
+    unsupportedMessage: (providerName) =>
+      `Provider '${providerName}' does not support subscription ${action}.`,
+  });
+  if (!providerFeature.ok) return providerFeature;
 
   const priceMatch =
     action === "change" && actionInput.priceId
@@ -1249,7 +1280,7 @@ async function runSubscriptionAction(
   };
 
   try {
-    await method.call(provider, providerInput);
+    await providerFeature.method.call(providerFeature.provider, providerInput);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : `Provider subscription ${action} failed.`;
@@ -1354,43 +1385,29 @@ async function providerSync(
   input: CreateMikaBackendApiInput,
   syncInput: ProviderSyncInput,
 ): Promise<MikaApiResult<AdminActionResultDTO>> {
-  const providerName = syncInput.provider ?? input.defaults?.provider;
-  if (!providerName) return providerUnsupportedForAction("No provider is configured.");
-
-  const provider = input.providers.get(providerName);
-  if (!provider?.syncCatalog) {
-    return providerUnsupportedForAction(
-      provider
-        ? `Provider '${providerName}' does not support catalog sync.`
-        : `Provider '${providerName}' is not configured.`,
-    );
-  }
-
-  const now = currentBackendISODateTime(input);
-  const audit = createAdminAuditDocument(input, {
-    action: "provider.syncCatalog",
-    status: "started",
-    createdAt: now,
-    metadata: {
-      provider: providerName,
-      mode: syncInput.mode ?? "dry_run",
-    },
+  const providerFeature = await requireProviderFeature(input, {
+    providerName: syncInput.provider,
+    method: "syncCatalog",
+    unsupportedMessage: (providerName) =>
+      `Provider '${providerName}' does not support catalog sync.`,
   });
-  await input.repositories.ops.writeAudit(audit);
+  if (!providerFeature.ok) return providerFeature;
 
-  try {
-    const result = await provider.syncCatalog({
-      mode: syncInput.mode ?? "dry_run",
-    });
-    await completeAdminAudit(input, audit);
-
-    return { ok: true, status: 200, data: result };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Provider catalog sync failed.";
-    await failAdminAudit(input, audit, message);
-
-    return providerFailed(message);
-  }
+  return runAdminProviderAction(
+    input,
+    {
+      action: "provider.syncCatalog",
+      metadata: {
+        provider: providerFeature.providerName,
+        mode: syncInput.mode ?? "dry_run",
+      },
+    },
+    () =>
+      providerFeature.method.call(providerFeature.provider, {
+        mode: syncInput.mode ?? "dry_run",
+      }),
+    "Provider catalog sync failed.",
+  );
 }
 
 async function refundOrder(
@@ -1402,31 +1419,13 @@ async function refundOrder(
     return orderNotFound(refundInput.orderId);
   }
 
-  const provider = input.providers.get(order.provider);
-  if (!provider?.refundPayment) {
-    return providerUnsupportedForAction(
-      provider
-        ? `Provider '${order.provider}' does not support order refunds.`
-        : `Provider '${order.provider}' is not configured.`,
-    );
-  }
-
-  const now = currentBackendISODateTime(input);
-  const audit = createAdminAuditDocument(input, {
-    action: "order.refund",
-    targetType: "order",
-    targetId: order.id,
-    status: "started",
-    createdAt: now,
-    metadata: {
-      provider: order.provider,
-      orderId: order.id,
-      ...(order.providerPaymentId ? { providerPaymentId: order.providerPaymentId } : {}),
-      ...(refundInput.amount !== undefined ? { amount: refundInput.amount } : {}),
-      ...(refundInput.reason ? { reason: refundInput.reason } : {}),
-    },
+  const providerFeature = await requireProviderFeature(input, {
+    providerName: order.provider,
+    method: "refundPayment",
+    unsupportedMessage: (providerName) =>
+      `Provider '${providerName}' does not support order refunds.`,
   });
-  await input.repositories.ops.writeAudit(audit);
+  if (!providerFeature.ok) return providerFeature;
 
   const providerInput: MikaProviderRefundInput = {
     orderId: order.id,
@@ -1435,27 +1434,33 @@ async function refundOrder(
     ...(refundInput.reason ? { reason: refundInput.reason } : {}),
   };
 
-  try {
-    const result = await provider.refundPayment(providerInput);
-    const updated = updateOrderAfterRefund(order, refundInput, currentBackendISODateTime(input));
-    await input.repositories.ledger.put(updated);
-    await completeAdminAudit(input, audit);
+  return runAdminProviderAction(
+    input,
+    {
+      action: "order.refund",
+      targetType: "order",
+      targetId: order.id,
+      metadata: {
+        provider: order.provider,
+        orderId: order.id,
+        ...(order.providerPaymentId ? { providerPaymentId: order.providerPaymentId } : {}),
+        ...(refundInput.amount !== undefined ? { amount: refundInput.amount } : {}),
+        ...(refundInput.reason ? { reason: refundInput.reason } : {}),
+      },
+    },
+    async () => {
+      const result = await providerFeature.method.call(providerFeature.provider, providerInput);
+      const updated = updateOrderAfterRefund(order, refundInput, currentBackendISODateTime(input));
+      await input.repositories.ledger.put(updated);
 
-    return {
-      ok: true,
-      status: 200,
-      data: {
+      return {
         ...result,
         id: result.id ?? order.id,
         status: "completed",
-      },
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Provider order refund failed.";
-    await failAdminAudit(input, audit, message);
-
-    return providerFailed(message);
-  }
+      };
+    },
+    "Provider order refund failed.",
+  );
 }
 
 async function cancelOrder(
@@ -1467,30 +1472,13 @@ async function cancelOrder(
     return orderNotFound(cancelInput.orderId);
   }
 
-  const provider = input.providers.get(order.provider);
-  if (!provider?.cancelOrder) {
-    return providerUnsupportedForAction(
-      provider
-        ? `Provider '${order.provider}' does not support order cancellation.`
-        : `Provider '${order.provider}' is not configured.`,
-    );
-  }
-
-  const now = currentBackendISODateTime(input);
-  const audit = createAdminAuditDocument(input, {
-    action: "order.cancel",
-    targetType: "order",
-    targetId: order.id,
-    status: "started",
-    createdAt: now,
-    metadata: {
-      provider: order.provider,
-      orderId: order.id,
-      ...(order.providerOrderId ? { providerOrderId: order.providerOrderId } : {}),
-      ...(cancelInput.reason ? { reason: cancelInput.reason } : {}),
-    },
+  const providerFeature = await requireProviderFeature(input, {
+    providerName: order.provider,
+    method: "cancelOrder",
+    unsupportedMessage: (providerName) =>
+      `Provider '${providerName}' does not support order cancellation.`,
   });
-  await input.repositories.ops.writeAudit(audit);
+  if (!providerFeature.ok) return providerFeature;
 
   const providerInput: MikaProviderOrderCancelInput = {
     orderId: order.id,
@@ -1498,27 +1486,32 @@ async function cancelOrder(
     ...(cancelInput.reason ? { reason: cancelInput.reason } : {}),
   };
 
-  try {
-    const result = await provider.cancelOrder(providerInput);
-    const updated = updateOrderAfterCancel(order, cancelInput, currentBackendISODateTime(input));
-    await input.repositories.ledger.put(updated);
-    await completeAdminAudit(input, audit);
+  return runAdminProviderAction(
+    input,
+    {
+      action: "order.cancel",
+      targetType: "order",
+      targetId: order.id,
+      metadata: {
+        provider: order.provider,
+        orderId: order.id,
+        ...(order.providerOrderId ? { providerOrderId: order.providerOrderId } : {}),
+        ...(cancelInput.reason ? { reason: cancelInput.reason } : {}),
+      },
+    },
+    async () => {
+      const result = await providerFeature.method.call(providerFeature.provider, providerInput);
+      const updated = updateOrderAfterCancel(order, cancelInput, currentBackendISODateTime(input));
+      await input.repositories.ledger.put(updated);
 
-    return {
-      ok: true,
-      status: 200,
-      data: {
+      return {
         ...result,
         id: result.id ?? order.id,
         status: "completed",
-      },
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Provider order cancellation failed.";
-    await failAdminAudit(input, audit, message);
-
-    return providerFailed(message);
-  }
+      };
+    },
+    "Provider order cancellation failed.",
+  );
 }
 
 async function grantEntitlement(
@@ -2033,6 +2026,79 @@ async function failAdminAudit(
       },
     },
   });
+}
+
+async function requireProviderFeature<TMethod extends MikaProviderMethodName>(
+  input: CreateMikaBackendApiInput,
+  options: MikaProviderFeatureOptions<TMethod>,
+): Promise<MikaProviderFeature<TMethod>> {
+  const providerName = options.providerName ?? input.defaults?.provider;
+  if (!providerName) {
+    return providerUnsupportedForAction(
+      options.missingProviderMessage ?? "No provider is configured.",
+    );
+  }
+
+  const provider = input.providers.get(providerName);
+  if (!provider) {
+    return providerUnsupportedForAction(`Provider '${providerName}' is not configured.`);
+  }
+
+  if (options.capability) {
+    let capabilities: readonly MikaProviderCapability[];
+    try {
+      capabilities = await provider.capabilities();
+    } catch {
+      return providerFailed(
+        options.capabilityFailureMessage ?? "Provider capabilities could not be verified.",
+      );
+    }
+    if (!capabilities.includes(options.capability)) {
+      return providerUnsupportedForAction(options.unsupportedMessage(providerName));
+    }
+  }
+
+  const method = provider[options.method];
+  if (typeof method !== "function") {
+    return providerUnsupportedForAction(options.unsupportedMessage(providerName));
+  }
+
+  return {
+    ok: true,
+    providerName,
+    provider,
+    method: method as NonNullable<MikaProviderAdapter[TMethod]>,
+  };
+}
+
+async function runAdminProviderAction<TData>(
+  input: CreateMikaBackendApiInput,
+  record: MikaAdminAuditStartRecord,
+  action: (audit: AdminAuditDocument) => Promise<TData>,
+  fallbackMessage: string,
+): Promise<MikaApiResult<TData>> {
+  const audit = createAdminAuditDocument(input, {
+    ...record,
+    status: "started",
+    createdAt: currentBackendISODateTime(input),
+  });
+  await input.repositories.ops.writeAudit(audit);
+
+  try {
+    const data = await action(audit);
+    await completeAdminAudit(input, audit);
+
+    return {
+      ok: true,
+      status: 200,
+      data,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : fallbackMessage;
+    await failAdminAudit(input, audit, message);
+
+    return providerFailed(message);
+  }
 }
 
 function missingTarget(targetType: string, field: string, value: string): MikaApiFailure {
@@ -3628,6 +3694,8 @@ async function completeCheckoutForPaymentOrder(
   const completedCheckout: CheckoutDocument = {
     ...checkout,
     status: "completed",
+    providerStatus: "completed",
+    orderId: order.id,
     updatedAt: ctx.now,
     aggregate: {
       ...checkout.aggregate,
@@ -4362,17 +4430,14 @@ async function startCheckout(
     return validationFailed("provider", "A checkout provider is required.");
   }
 
-  const provider = input.providers.get(providerName);
-  if (!provider) return providerUnsupported(providerName);
-
-  try {
-    const capabilities = await provider.capabilities();
-    if (!capabilities.includes("hosted_checkout")) {
-      return providerUnsupported(providerName);
-    }
-  } catch {
-    return providerFailed("Checkout provider capabilities could not be verified.");
-  }
+  const providerFeature = await requireProviderFeature(input, {
+    providerName,
+    method: "createCheckoutSession",
+    capability: "hosted_checkout",
+    capabilityFailureMessage: "Checkout provider capabilities could not be verified.",
+    unsupportedMessage: (provider) => `Provider '${provider}' does not support hosted checkout.`,
+  });
+  if (!providerFeature.ok) return providerFeature;
 
   const checkoutId = input.createId("checkout");
   const expiresAt = checkoutExpiresAt(input, ctx);
@@ -4381,7 +4446,7 @@ async function startCheckout(
 
   const providerSession = await (async () => {
     try {
-      return await provider.createCheckoutSession({
+      return await providerFeature.method.call(providerFeature.provider, {
         idempotencyKey: ctx.idempotencyKey,
         mode: resolved.mode,
         provider: providerName,
@@ -4410,6 +4475,10 @@ async function startCheckout(
     customerId: ctx.customerId,
     provider: providerName,
     providerCheckoutId,
+    checkoutIdempotencyKey: ctx.idempotencyKey,
+    checkoutIdempotencyInputHash: idempotencyInputHash,
+    providerStatus: providerSession.status,
+    redirectUrl: providerSession.redirectUrl,
     status: checkoutDocumentStatus(providerSession.status),
     expiresAt: providerSession.expiresAt ?? expiresAt,
     aggregate: createCheckoutAggregate({
@@ -4727,6 +4796,9 @@ async function markCheckoutPersistenceFailed(
     await input.repositories.session.put({
       ...checkoutDocument,
       status: "failed",
+      providerStatus: "failed",
+      redirectUrl: undefined,
+      failureReason: "Checkout could not be persisted after provider handoff.",
       updatedAt: now,
       aggregate: {
         ...checkoutDocument.aggregate,
@@ -4796,7 +4868,10 @@ async function checkoutIdempotencyInputHash(
 }
 
 function checkoutStoredIdempotencyInputHash(document: CheckoutDocument): string | undefined {
-  return metadataString(document.aggregate.metadata, CHECKOUT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY);
+  return (
+    document.checkoutIdempotencyInputHash ??
+    metadataString(document.aggregate.metadata, CHECKOUT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY)
+  );
 }
 
 function stableJsonStringify(value: unknown): string {
@@ -4845,11 +4920,14 @@ async function checkoutStatus(
 function checkoutDocumentSuccessResult(
   document: CheckoutDocument,
 ): MikaApiResult<CheckoutSessionDTO> {
-  const redirectUrl = metadataString(document.aggregate.metadata, "checkoutRedirectUrl");
+  const redirectUrl =
+    document.redirectUrl ?? metadataString(document.aggregate.metadata, "checkoutRedirectUrl");
   const status =
+    document.providerStatus ??
     metadataString(document.aggregate.metadata, "checkoutProviderStatus") ??
     checkoutSessionStatus(document.status);
-  const orderId = metadataMikaId(document.aggregate.metadata, "checkoutOrderId");
+  const orderId =
+    document.orderId ?? metadataMikaId(document.aggregate.metadata, "checkoutOrderId");
 
   return {
     ok: true,
@@ -6001,17 +6079,6 @@ function outOfStock(sellableId: MikaId): MikaApiFailure {
     error: {
       code: "OUT_OF_STOCK",
       message: `Sellable '${sellableId}' does not have enough stock.`,
-    },
-  };
-}
-
-function providerUnsupported(provider: ProviderName): MikaApiFailure {
-  return {
-    ok: false,
-    status: 409,
-    error: {
-      code: "PROVIDER_UNSUPPORTED",
-      message: `Provider '${provider}' does not support hosted checkout.`,
     },
   };
 }

@@ -28,3 +28,4 @@ export {
   type MikaServerClient,
   type MikaServerClientOptions,
 } from "./api/server-client";
+export type { MikaOperationPolicy } from "./api/operation-policy";

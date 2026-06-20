@@ -8,3 +8,4 @@ export {
   type MikaCreatePluginOptions,
   type MikaDescriptorOptions,
 } from "./plugin";
+export type { MikaOperationPolicy } from "./api/operation-policy";

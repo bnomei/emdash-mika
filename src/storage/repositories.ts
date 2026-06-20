@@ -377,6 +377,13 @@ export class SessionRepository {
   }
 
   async findCheckoutByIdempotencyKey(idempotencyKey: string): Promise<CheckoutDocument | null> {
+    if (!idempotencyKey) return null;
+
+    const indexed = await findOneByType(this.collection, "checkout", {
+      checkoutIdempotencyKey: idempotencyKey,
+    });
+    if (indexed) return indexed;
+
     const result = await listByType(this.collection, "checkout");
 
     return (

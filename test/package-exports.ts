@@ -1,4 +1,4 @@
-import type { mikaPlugin } from "@bnomei/emdash-mika";
+import type { mikaPlugin, MikaOperationPolicy } from "@bnomei/emdash-mika";
 import type {
   createMikaAgentManifest,
   mikaAgentManifestJsonSchema,
@@ -13,6 +13,7 @@ import type {
   createMikaActions,
   MikaActionName,
   MikaActions,
+  MikaOperationPolicy as MikaActionsOperationPolicy,
 } from "@bnomei/emdash-mika/astro-actions";
 import type { createMikaClient, MikaClient, MikaClientOptions } from "@bnomei/emdash-mika/client";
 import type { MikaEmailInput, renderMikaEmail } from "@bnomei/emdash-mika/email";
@@ -25,6 +26,7 @@ import type {
   MikaApi,
   MikaBackendDependencies,
   MikaApiOverrides,
+  MikaOperationPolicy as MikaServerOperationPolicy,
   MikaServerClient,
 } from "@bnomei/emdash-mika/server";
 import type {
@@ -62,6 +64,8 @@ export type PackageEntryContract = {
   readonly actions: typeof createMikaActions;
   readonly actionsClient: MikaActions;
   readonly actionName: MikaActionName;
+  readonly operationPolicy: MikaOperationPolicy;
+  readonly actionsOperationPolicy: MikaActionsOperationPolicy;
   readonly client: typeof createMikaClient;
   readonly clientFacade: MikaClient;
   readonly clientOptions: MikaClientOptions;
@@ -77,6 +81,7 @@ export type PackageEntryContract = {
   readonly backendDependencies: MikaBackendDependencies;
   readonly api: MikaApi;
   readonly apiOverrides: MikaApiOverrides;
+  readonly serverOperationPolicy: MikaServerOperationPolicy;
   readonly result: MikaApiResult<CartDTO | CartQuoteDTO | CheckoutPreviewDTO | ProviderHealthDTO>;
   readonly errorCodes: typeof MIKA_ERROR_CODES;
   readonly providerCapabilities: typeof MIKA_PROVIDER_CAPABILITIES;

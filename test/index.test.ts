@@ -8,7 +8,10 @@ import {
   createPlugin,
   mikaPlugin,
 } from "../src/index";
-import type { mikaPlugin as PackageMikaPlugin } from "@bnomei/emdash-mika";
+import type {
+  mikaPlugin as PackageMikaPlugin,
+  MikaOperationPolicy as PackageRootMikaOperationPolicy,
+} from "@bnomei/emdash-mika";
 import type {
   createMikaAgentManifest as PackageCreateMikaAgentManifest,
   mikaAgentManifestJsonSchema as PackageMikaAgentManifestJsonSchema,
@@ -26,6 +29,7 @@ import type {
   createMikaServerClient as PackageCreateMikaServerClient,
   mikaApiMethodNames as PackageMikaApiMethodNames,
   MikaBackendDependencies as PackageMikaBackendDependencies,
+  MikaOperationPolicy as PackageServerMikaOperationPolicy,
 } from "@bnomei/emdash-mika/server";
 import type {
   MIKA_ERROR_CODES as PACKAGE_MIKA_ERROR_CODES,
@@ -76,6 +80,7 @@ import {
   type MikaBackendDependencies,
   type MikaApi,
   type MikaApiOverrides,
+  type MikaOperationPolicy,
   type MikaServerClient,
 } from "../src/server";
 import { createMikaClient, type MikaClient } from "../src/api/client";
@@ -109,6 +114,7 @@ import {
   mikaRoutedOperationDefinitions,
   mikaRouteOnlyDefinitions,
 } from "../src/api/operations";
+import { resolveMikaOperationPolicy, setDefaultMikaOperationPolicy } from "../src/api/runtime-api";
 import {
   mikaEmailTemplates,
   renderMikaEmail,
@@ -1017,6 +1023,46 @@ describe("Mika client", () => {
     ]);
   });
 
+  it("keeps form action normalizers in operation metadata", () => {
+    const cartInput = mikaActionDefinitions.cartAdd.schema.parse({
+      purchase: "sellableId=sellable_1&priceId=price_1",
+      quantity: "2",
+      returnTo: "/products/ring",
+    });
+    const checkoutInput = mikaActionDefinitions.checkoutStart.schema.parse({
+      sellableId: "sellable_1",
+      email: "customer@example.test",
+      name: "Customer Test",
+      quantity: "1",
+    });
+
+    expect(mikaActionDefinitions.cartAdd.normalize?.(cartInput)).toEqual({
+      sellableId: id("sellable_1"),
+      priceId: id("price_1"),
+      variantKey: undefined,
+      variantOptions: undefined,
+      quantity: 2,
+      returnTo: "/products/ring",
+    });
+    expect(mikaActionDefinitions.checkoutStart.normalize?.(checkoutInput)).toEqual({
+      cartId: undefined,
+      sellableId: id("sellable_1"),
+      priceId: undefined,
+      quantity: 1,
+      provider: undefined,
+      customer: {
+        email: "customer@example.test",
+        name: "Customer Test",
+        company: undefined,
+        vatId: undefined,
+      },
+      customFields: undefined,
+      successPath: undefined,
+      cancelPath: undefined,
+      returnTo: undefined,
+    });
+  });
+
   it("covers every routed operation with handler and validation metadata", () => {
     const routes = createMikaPluginRoutes();
     const expectedRoutePaths = [
@@ -1194,10 +1240,19 @@ describe("Mika client", () => {
 
     expect(operationsSource).toContain("z.infer<TSchema>");
     expect(operationsSource).toContain("export function callMikaOperation");
+    expect(operationsSource).toContain("MikaApiOperationData<TOperation>");
     expect(operationsSource).not.toContain("input: never");
     expect(routeHandlersSource).toContain("callMikaOperation(operation");
+    expect(routeHandlersSource).toContain("runMikaOperationPolicy");
     expect(routeHandlersSource).not.toContain("as never");
-    expect(astroActionsSource).toContain("callMikaOperation<TData>");
+    expect(astroActionsSource).toContain("runMikaOperationPolicy");
+    expect(astroActionsSource).toContain("callMikaOperation(definition.operation");
+    expect(astroActionsSource).toContain(
+      "runMikaOperationPolicy(\n      resolveMikaOperationPolicy(options.operationPolicy)",
+    );
+    expect(astroActionsSource).not.toContain(
+      "const operationPolicy = resolveMikaOperationPolicy(options.operationPolicy)",
+    );
     expect(astroActionsSource).not.toContain("as never");
   });
 
@@ -1513,6 +1568,139 @@ describe("Mika client", () => {
       priceId: id("price_1"),
       quantity: 2,
     });
+  });
+
+  it("allows JSON route operations by default when no policy is configured", async () => {
+    let called = false;
+    const routes = createMikaPluginRoutes(
+      createMikaApi({
+        catalog: {
+          sellables: async () => {
+            called = true;
+            return { ok: true, status: 200, data: [] };
+          },
+        },
+      } satisfies MikaApiOverrides),
+    );
+
+    await expect(
+      routes[mikaPluginRoutes.catalogSellables].handler({
+        input: {},
+        request: new Request(
+          "https://shop.test/_emdash/api/plugins/mika/catalog/sellables?collection=products&id=ring",
+        ),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: [],
+    });
+    expect(called).toBe(true);
+  });
+
+  it("passes operation, request context, and parsed input to JSON route policy", async () => {
+    const observed: Array<{
+      readonly operation: string;
+      readonly sessionId?: string;
+      readonly input: unknown;
+    }> = [];
+    const policy: MikaOperationPolicy = ({ operation, ctx, input }) => {
+      observed.push({ operation: operation.name, sessionId: ctx.sessionId, input });
+    };
+    const routes = createMikaPluginRoutes(
+      createMikaApi({
+        cart: {
+          add: async (_ctx, input) => ({
+            ok: true,
+            status: 200,
+            data: {
+              id: id("cart_1"),
+              items: [{ sellableId: input.sellableId }],
+            } as unknown as CartDTO,
+          }),
+        },
+      } satisfies MikaApiOverrides),
+      { operationPolicy: policy },
+    );
+
+    await routes[mikaPluginRoutes.cartItems].handler({
+      input: { sellableId: " sellable_1 ", quantity: "2" },
+      request: new Request("https://shop.test/_emdash/api/plugins/mika/cart/items", {
+        method: "POST",
+      }),
+      sessionId: "session_policy_1",
+    });
+
+    expect(observed).toEqual([
+      {
+        operation: "cart.add",
+        sessionId: "session_policy_1",
+        input: {
+          sellableId: id("sellable_1"),
+          quantity: 2,
+        },
+      },
+    ]);
+  });
+
+  it("returns stable JSON route failures when operation policy rejects", async () => {
+    let called = false;
+    const policy: MikaOperationPolicy = () => ({
+      ok: false,
+      status: 409,
+      error: {
+        code: "CONFLICT",
+        message: "Policy rejected cart mutation.",
+      },
+    });
+    const routes = createMikaPluginRoutes(
+      createMikaApi({
+        cart: {
+          add: async () => {
+            called = true;
+            return { ok: true, status: 200, data: { id: id("cart_1") } as CartDTO };
+          },
+        },
+      } satisfies MikaApiOverrides),
+      { operationPolicy: policy },
+    );
+
+    await expect(
+      routes[mikaPluginRoutes.cartItems].handler({
+        input: { sellableId: "sellable_1", quantity: 1 },
+        request: new Request("https://shop.test/_emdash/api/plugins/mika/cart/items", {
+          method: "POST",
+        }),
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      status: 409,
+      error: {
+        code: "CONFLICT",
+        message: "Policy rejected cart mutation.",
+      },
+    });
+    expect(called).toBe(false);
+  });
+
+  it("resolves default operation policy at dispatch time", () => {
+    const firstPolicy: MikaOperationPolicy = () => true;
+    const secondPolicy: MikaOperationPolicy = () => false;
+
+    try {
+      setDefaultMikaOperationPolicy(undefined);
+      const earlyResolved = resolveMikaOperationPolicy(undefined);
+
+      setDefaultMikaOperationPolicy(firstPolicy);
+      expect(earlyResolved).toBeUndefined();
+      expect(resolveMikaOperationPolicy(undefined)).toBe(firstPolicy);
+      expect(resolveMikaOperationPolicy(secondPolicy)).toBe(secondPolicy);
+
+      setDefaultMikaOperationPolicy(secondPolicy);
+      expect(resolveMikaOperationPolicy(undefined)).toBe(secondPolicy);
+    } finally {
+      setDefaultMikaOperationPolicy(undefined);
+    }
   });
 
   it("validates JSON route query parameters", async () => {
@@ -2374,6 +2562,8 @@ describe("public types", () => {
     expectTypeOf<typeof PackageCreateMikaBackendApi>().toEqualTypeOf<typeof createMikaBackendApi>();
     expectTypeOf<PackageMikaBackendDependencies>().toEqualTypeOf<MikaBackendDependencies>();
     expectTypeOf<typeof PackageMikaApiMethodNames>().toEqualTypeOf<typeof mikaApiMethodNames>();
+    expectTypeOf<PackageRootMikaOperationPolicy>().toEqualTypeOf<MikaOperationPolicy>();
+    expectTypeOf<PackageServerMikaOperationPolicy>().toEqualTypeOf<MikaOperationPolicy>();
     expectTypeOf<typeof PACKAGE_MIKA_ERROR_CODES>().toEqualTypeOf<typeof MIKA_ERROR_CODES>();
     expectTypeOf<typeof PackageCreateMikaId>().toEqualTypeOf<typeof createMikaId>();
   });
@@ -2382,12 +2572,18 @@ describe("public types", () => {
 describe("Mika Astro template contracts", () => {
   it("keeps Astro Actions on the request-bound API instead of private JSON routes", () => {
     const source = readFileSync(new URL("../src/astro-actions.ts", import.meta.url), "utf8");
+    const operationsSource = readFileSync(
+      new URL("../src/api/operations.ts", import.meta.url),
+      "utf8",
+    );
 
     expect(source).toContain("createMikaRequestContext");
     expect(source).toContain("createMikaApi");
     expect(source).not.toContain("createMikaClient");
-    expect(source).toContain("const purchaseSellableId = parsePurchaseMikaId");
-    expect(source).toContain("const sellableId = purchaseSellableId ?? input.sellableId");
+    expect(source).toContain("normalizeMikaActionInput");
+    expect(source).not.toContain("const purchaseSellableId = parsePurchaseMikaId");
+    expect(operationsSource).toContain("const purchaseSellableId = parsePurchaseMikaId");
+    expect(operationsSource).toContain("normalizeCheckoutStartActionInput");
   });
 
   it("documents the core copy path separately from contract examples", () => {
