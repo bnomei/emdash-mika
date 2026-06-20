@@ -226,6 +226,17 @@ a redirect resolver. If a site needs private file streaming instead of signed
 redirects, wire that endpoint to a server-only Mika service rather than the
 browser-safe JSON client.
 
+Use `mikaSafeReturnTo()` for host-owned return fields that are not produced by
+the copied helpers. Mika treats form-provided `returnTo`, checkout success, and
+checkout cancel values as same-origin local paths; backend checkout config is
+trusted deployment configuration.
+
+Checkout cancel pages are passive browser return surfaces. Expired stock
+reservations should be released by calling `admin.releaseExpiredReservations`
+from host maintenance code, for example a Cloudflare Cron Worker, queue worker,
+or admin job. Do not release stock solely because a customer visited the cancel
+page while a provider-hosted checkout session may still be open.
+
 Provider webhooks and raw-body signature verification should be host Astro
 endpoints or explicitly supported EmDash raw-body public routes, not generic
 plugin JSON routes by default. The copied webhook endpoint is a host Astro

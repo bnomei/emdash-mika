@@ -217,9 +217,14 @@ the backend service layer is stable enough to support as public API.
 Mika currently ships the typed shell, backend API composer, plugin
 registration, route contracts, client methods, Astro Actions, copyable
 templates, provider interfaces, stock tables, document shapes, admin action
-descriptors, and email renderers. Production storefronts still need host
-provider adapters, auth/session policy, rate limits, and deployment-specific
-guards.
+descriptors, safe return-path normalization, and email renderers. Production
+storefronts still need host provider adapters, auth/session policy, rate
+limits, and deployment-specific guards.
+
+Hosted checkout cancel redirects are treated as UX only. Mika releases expired
+stock reservations through `admin.releaseExpiredReservations`; wire that
+operation to a host scheduler such as Cloudflare Cron, a queue worker, or an
+admin maintenance job.
 
 ## License
 

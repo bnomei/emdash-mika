@@ -2384,6 +2384,38 @@ describe("backend API composition", () => {
     }
   });
 
+  it("normalizes unsafe magic link return targets before storing and emailing them", async () => {
+    const harness = await createMagicLinkHarness({ ttlMs: 60_000 });
+
+    try {
+      await expect(
+        harness.api.magicLink.request(
+          createTestRequestContext({ customerId: false, userId: false }),
+          { email: "Subscriber@Example.test", returnTo: "https://evil.test/phish" },
+        ),
+      ).resolves.toEqual({ ok: true, status: 200, data: { sent: true } });
+
+      const tokenHash = createTestHash("magic-link-token:magic_link_token_1");
+      await expect(harness.repositories.ephemeral.get(tokenHash)).resolves.toMatchObject({
+        data: {
+          returnTo: "/products/test-product?ref=test",
+        },
+      });
+
+      const emails = await harness.opsCollection.query({ where: { type: "email" } });
+      const queuedEmail = emails.items[0]?.data;
+      if (!queuedEmail || queuedEmail.type !== "email") {
+        throw new Error("Expected a queued magic link email document.");
+      }
+      expect(queuedEmail.record.metadata?.["returnTo"]).toBe("/products/test-product?ref=test");
+      expect(queuedEmail.record.metadata?.["link"]).toBe(
+        "https://shop.example.test/_emdash/api/plugins/mika/magic-link/verify?token=magic_link_token_1&returnTo=%2Fproducts%2Ftest-product%3Fref%3Dtest",
+      );
+    } finally {
+      await harness.destroy();
+    }
+  });
+
   it("verifies magic links once and returns the matching account DTO", async () => {
     const harness = await createMagicLinkHarness();
 
@@ -3109,6 +3141,42 @@ describe("backend API composition", () => {
       {
         providerCustomerId: "provider_customer_1",
         returnUrl: "https://shop.example.test/account",
+      },
+    ]);
+  });
+
+  it("normalizes unsafe provider portal return targets", async () => {
+    const accountCollection = createStorageCollection("account");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+    } satisfies MikaBackendRepositories;
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["createPortalSession"],
+    });
+    const api = createMikaBackendApi(
+      createTestBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.account.put(createCustomerDocument());
+    await repositories.account.put(createProviderAccountDocument());
+
+    await expect(
+      api.account.portal(
+        createTestRequestContext({ url: "https://shop.example.test/account?tab=billing" }),
+        { returnTo: "//evil.test/portal" },
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+    });
+    expect(fake.getCalls().createPortalSession).toEqual([
+      {
+        providerCustomerId: "provider_customer_1",
+        returnUrl: "https://shop.example.test/account?tab=billing",
       },
     ]);
   });
@@ -7807,6 +7875,64 @@ describe("backend API composition", () => {
     });
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
       quantityReserved: 2,
+    });
+  });
+
+  it("normalizes unsafe checkout redirect overrides before provider handoff and storage", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+
+    await expect(
+      api.checkout.start(ctx, {
+        cartId: added.data.id,
+        successPath: "https://evil.test/success",
+        cancelPath: "//evil.test/cancel",
+        returnTo: "javascript:alert(1)",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+    });
+
+    expect(fake.getCalls().createCheckoutSession).toHaveLength(1);
+    expect(fake.getCalls().createCheckoutSession[0]).toMatchObject({
+      successUrl: "https://shop.example.test/checkout/success?checkoutId=checkout_1",
+      cancelUrl: "https://shop.example.test/checkout/cancel",
+    });
+    await expect(
+      repositories.session.findById(createTestMikaId("checkout", 1)),
+    ).resolves.toMatchObject({
+      type: "checkout",
+      aggregate: {
+        binding: {
+          returnPath: "/products/test-product?ref=test",
+          successPath: "/checkout/success",
+          cancelPath: "/checkout/cancel",
+        },
+      },
     });
   });
 

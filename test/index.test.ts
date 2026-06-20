@@ -23,6 +23,7 @@ import type { createMikaAdminActionsManifest as PackageCreateMikaAdminActionsMan
 import type {
   createMika as PackageCreateMika,
   MikaAstroClientOptions as PackageMikaAstroClientOptions,
+  mikaSafeReturnTo as PackageMikaSafeReturnTo,
 } from "@bnomei/emdash-mika/astro";
 import type { createMikaClient as PackageCreateMikaClient } from "@bnomei/emdash-mika/client";
 import type { renderMikaEmail as PackageRenderMikaEmail } from "@bnomei/emdash-mika/email";
@@ -103,6 +104,7 @@ import {
   type MikaAstroClientOptions,
   mikaMaxPurchaseQuantity,
   mikaReturnTo,
+  mikaSafeReturnTo,
 } from "../src/astro";
 import {
   createMikaProviderRegistry,
@@ -322,6 +324,24 @@ describe("Mika Astro helpers", () => {
     expect(mikaReturnTo(new URL("https://shop.test/products/ring?size=5"))).toBe(
       "/products/ring?size=5",
     );
+  });
+
+  it("normalizes safe return targets and rejects open redirects", () => {
+    const options = { origin: "https://shop.test/products/ring?size=5", fallback: "/fallback" };
+
+    expect(mikaSafeReturnTo("/account?tab=orders#latest", options)).toBe(
+      "/account?tab=orders#latest",
+    );
+    expect(mikaSafeReturnTo("https://shop.test/account?tab=orders", options)).toBe(
+      "/account?tab=orders",
+    );
+    expect(mikaSafeReturnTo("https://evil.test/account", options)).toBe("/fallback");
+    expect(mikaSafeReturnTo("//evil.test/account", options)).toBe("/fallback");
+    expect(mikaSafeReturnTo("javascript:alert(1)", options)).toBe("/fallback");
+    expect(mikaSafeReturnTo("data:text/html,hi", options)).toBe("/fallback");
+    expect(mikaSafeReturnTo("account", options)).toBe("/fallback");
+    expect(mikaSafeReturnTo("/account/../admin", options)).toBe("/fallback");
+    expect(mikaSafeReturnTo("/account/%2e%2e/admin", options)).toBe("/fallback");
   });
 
   it("uses native plugin API overrides for direct Astro helpers by default", async () => {
@@ -3447,6 +3467,7 @@ describe("public types", () => {
     >();
     expectTypeOf<typeof PackageCreateMikaAdminActionsManifest>().toBeFunction();
     expectTypeOf<typeof PackageCreateMika>().toBeFunction();
+    expectTypeOf<typeof PackageMikaSafeReturnTo>().toEqualTypeOf<typeof mikaSafeReturnTo>();
     expectTypeOf<typeof PackageCreateMikaActions>().toBeFunction();
     expectTypeOf<typeof PackageCreateMikaClient>().toBeFunction();
     expectTypeOf<typeof PackageRenderMikaEmail>().toBeFunction();

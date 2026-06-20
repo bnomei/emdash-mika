@@ -2,6 +2,7 @@
 import { actions } from "astro:actions";
 import type { SubscriptionDTO } from "@bnomei/emdash-mika/types";
 import { mikaReturnTo } from "@bnomei/emdash-mika/astro";
+import { mikaReturnToInput } from "../lib/form";
 
 interface Props {
   subscriptions: readonly SubscriptionDTO[];
@@ -56,7 +57,7 @@ const hasEmptySlot = Astro.slots.has("empty");
                 name="subscriptionId"
                 value={subscription.id}
               />
-              <input type="hidden" name="returnTo" value={returnTo} />
+              <input type="hidden" {...mikaReturnToInput(returnTo)} />
               <button
                 type="submit"
                 aria-label={`${cancelLabel} ${subscription.title}`}
@@ -72,7 +73,7 @@ const hasEmptySlot = Astro.slots.has("empty");
                 name="subscriptionId"
                 value={subscription.id}
               />
-              <input type="hidden" name="returnTo" value={returnTo} />
+              <input type="hidden" {...mikaReturnToInput(returnTo)} />
               <button
                 type="submit"
                 aria-label={`${renewLabel} ${subscription.title}`}
@@ -93,7 +94,7 @@ const hasEmptySlot = Astro.slots.has("empty");
                 name="priceId"
                 value={changePriceIds[subscription.id] ?? ""}
               />
-              <input type="hidden" name="returnTo" value={returnTo} />
+              <input type="hidden" {...mikaReturnToInput(returnTo)} />
               <button
                 type="submit"
                 aria-label={`${changeLabel} ${subscription.title}`}

@@ -47,6 +47,7 @@ import {
 } from "../model/builders";
 import { renderMikaEmail } from "../email";
 import { mikaPluginRoute } from "./routes";
+import { mikaSafeReturnPath } from "./redirect-policy";
 import { createMikaAdminBackend } from "./backend-admin";
 import {
   applyOrderCancel,
@@ -2431,6 +2432,10 @@ async function requestMagicLink(
   const now = ctx.now;
   const expiresAt = addMilliseconds(now, input.config?.magicLink?.ttlMs ?? 15 * 60_000);
   const customer = await input.repositories.account.findCustomerByEmailHash(emailHash);
+  const safeReturnTo =
+    requestInput.returnTo === undefined
+      ? undefined
+      : safeRequestReturnPath(ctx, requestInput.returnTo);
 
   await input.repositories.ephemeral.put({
     key: tokenHash,
@@ -2448,11 +2453,11 @@ async function requestMagicLink(
       email,
       emailHash,
       ...(customer?.customerId ? { customerId: customer.customerId } : {}),
-      ...(requestInput.returnTo ? { returnTo: requestInput.returnTo } : {}),
+      ...(safeReturnTo ? { returnTo: safeReturnTo } : {}),
     },
   });
 
-  const link = magicLinkUrl(ctx, token, requestInput.returnTo);
+  const link = magicLinkUrl(ctx, token, safeReturnTo);
   const rendered = renderMikaEmail("magic_link", {
     toEmail: email,
     url: link,
@@ -2479,7 +2484,7 @@ async function requestMagicLink(
       purpose: "sign_in",
       expiresAt,
       link,
-      ...(requestInput.returnTo ? { returnTo: requestInput.returnTo } : {}),
+      ...(safeReturnTo ? { returnTo: safeReturnTo } : {}),
     },
   };
 
@@ -2841,9 +2846,9 @@ function magicLinkUrl(ctx: MikaRequestContext, token: string, returnTo?: string)
 
 function accountPortalReturnUrl(ctx: MikaRequestContext, returnTo?: string): string {
   if (!returnTo) return ctx.url?.href ?? "/";
-  if (!ctx.url) return returnTo;
+  if (!ctx.url) return safeRequestReturnPath(ctx, returnTo);
 
-  return new URL(returnTo, ctx.url.origin).toString();
+  return new URL(safeRequestReturnPath(ctx, returnTo), ctx.url.origin).toString();
 }
 
 function magicLinkTokenError(
@@ -5107,11 +5112,9 @@ async function startCheckout(
         provider: providerName,
         providerCheckoutId,
         providerCustomerId: providerSession.providerCustomerId,
-        returnPath: checkoutInput.returnTo ?? ctx.url?.pathname ?? "/",
-        cancelPath:
-          checkoutInput.cancelPath ?? input.config?.checkout?.cancelUrl ?? "/checkout/cancel",
-        successPath:
-          checkoutInput.successPath ?? input.config?.checkout?.successUrl ?? "/checkout/success",
+        returnPath: safeRequestReturnPath(ctx, checkoutInput.returnTo),
+        cancelPath: checkoutCancelTarget(input, ctx, checkoutInput),
+        successPath: checkoutSuccessTarget(input, ctx, checkoutInput),
         cartHash: await input.hash(
           JSON.stringify({
             cartId: resolved.cart?.id,
@@ -5710,7 +5713,7 @@ function checkoutSuccessUrl(
   checkoutId: MikaId,
 ): string {
   const url = new URL(
-    checkoutInput.successPath ?? input.config?.checkout?.successUrl ?? "/checkout/success",
+    checkoutSuccessTarget(input, ctx, checkoutInput),
     ctx.url ?? "http://mika.local",
   );
   url.searchParams.set("checkoutId", checkoutId);
@@ -5724,9 +5727,40 @@ function checkoutCancelUrl(
   checkoutInput: StartCheckoutInput,
 ): string {
   return new URL(
-    checkoutInput.cancelPath ?? input.config?.checkout?.cancelUrl ?? "/checkout/cancel",
+    checkoutCancelTarget(input, ctx, checkoutInput),
     ctx.url ?? "http://mika.local",
   ).toString();
+}
+
+function checkoutSuccessTarget(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  checkoutInput: StartCheckoutInput,
+): string {
+  return checkoutInput.successPath === undefined
+    ? (input.config?.checkout?.successUrl ?? "/checkout/success")
+    : safeRequestReturnPath(ctx, checkoutInput.successPath, "/checkout/success");
+}
+
+function checkoutCancelTarget(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  checkoutInput: StartCheckoutInput,
+): string {
+  return checkoutInput.cancelPath === undefined
+    ? (input.config?.checkout?.cancelUrl ?? "/checkout/cancel")
+    : safeRequestReturnPath(ctx, checkoutInput.cancelPath, "/checkout/cancel");
+}
+
+function safeRequestReturnPath(
+  ctx: MikaRequestContext,
+  candidate?: string,
+  fallback = ctx.url ? `${ctx.url.pathname}${ctx.url.search}${ctx.url.hash}` : "/",
+): string {
+  return mikaSafeReturnPath(candidate ?? fallback, {
+    origin: ctx.url,
+    fallback,
+  });
 }
 
 function checkoutExpiresAt(input: CreateMikaBackendApiInput, ctx: MikaRequestContext): ISODateTime {

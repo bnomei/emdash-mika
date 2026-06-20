@@ -1,3 +1,7 @@
+import { mikaSafeReturnTo } from "@bnomei/emdash-mika/astro";
+
+import { mikaTemplateRoutes } from "./routes";
+
 export function mikaHiddenInput(name: string, value: string | number | null | undefined) {
   return {
     name,
@@ -6,7 +10,7 @@ export function mikaHiddenInput(name: string, value: string | number | null | un
 }
 
 export function mikaReturnToInput(returnTo: string) {
-  return mikaHiddenInput("returnTo", returnTo);
+  return mikaHiddenInput("returnTo", mikaSafeReturnTo(returnTo));
 }
 
 export function mikaRedirectInputs(input: {
@@ -15,8 +19,14 @@ export function mikaRedirectInputs(input: {
   readonly returnTo: string;
 }) {
   return {
-    successPath: mikaHiddenInput("successPath", input.successPath),
-    cancelPath: mikaHiddenInput("cancelPath", input.cancelPath),
+    successPath: mikaHiddenInput(
+      "successPath",
+      mikaSafeReturnTo(input.successPath, { fallback: mikaTemplateRoutes.checkoutSuccess }),
+    ),
+    cancelPath: mikaHiddenInput(
+      "cancelPath",
+      mikaSafeReturnTo(input.cancelPath, { fallback: mikaTemplateRoutes.checkoutCancel }),
+    ),
     returnTo: mikaReturnToInput(input.returnTo),
   };
 }

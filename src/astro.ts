@@ -12,6 +12,7 @@ import {
 } from "./api/operation-facade";
 import { serializeMikaPurchaseField } from "./api/form-contracts";
 import type { MikaOperationPolicy } from "./api/operation-policy";
+import { mikaSafeReturnPath, type MikaSafeReturnPathOptions } from "./api/redirect-policy";
 import { createMikaPluginRouteBuilder } from "./api/routes";
 import { createMikaApi, type MikaApiOverrides } from "./api/server";
 import type {
@@ -129,6 +130,15 @@ export const createMika = createMikaAstroClient;
 
 export function mikaReturnTo(url: URL): string {
   return `${url.pathname}${url.search}`;
+}
+
+export type MikaSafeReturnToOptions = MikaSafeReturnPathOptions;
+
+export function mikaSafeReturnTo(
+  candidate: string | URL | null | undefined,
+  options: MikaSafeReturnToOptions = {},
+): string {
+  return mikaSafeReturnPath(candidate, options);
 }
 
 export function formatMikaMoney(value?: MoneyDTO | null, options: MikaFormatOptions = {}): string {
