@@ -232,7 +232,7 @@ checkout cancel values as same-origin local paths; backend checkout config is
 trusted deployment configuration.
 
 Checkout cancel pages are passive browser return surfaces. Expired stock
-reservations are released by Mika's `mika.maintenance` plugin cron task, which
+reservations are released by Mika's `mika_maintenance` plugin cron task, which
 EmDash runs during its scheduled cycle. On Cloudflare, the host Worker's
 `scheduled()` handler should call EmDash `runScheduledTasks()` so EmDash can run
 scheduled publishing and Mika maintenance. Do not release stock solely because a

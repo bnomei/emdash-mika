@@ -213,7 +213,7 @@ repositories, migrations, and SQL statements are implementation details until
 the backend service layer is stable enough to support as public API.
 
 Mika background work runs through the EmDash scheduled lifecycle. The native
-plugin registers the `mika.maintenance` cron task by default with the
+plugin registers the `mika_maintenance` cron task by default with the
 `* * * * *` schedule; configure it with
 `mikaPlugin({ maintenance: { enabled, schedule } })` or
 `createPlugin({ maintenance: { enabled, schedule } })`. The task calls
@@ -225,7 +225,7 @@ maintenance runner to EmDash's selected email provider.
 
 On Node, EmDash drives plugin cron tasks through its scheduler. On Cloudflare,
 the host Worker's `scheduled()` handler should call EmDash `runScheduledTasks()`;
-EmDash then runs scheduled publishing and Mika's `mika.maintenance` task. Queue
+EmDash then runs scheduled publishing and Mika's `mika_maintenance` task. Queue
 workers can still be added for high-volume email delivery, but they are optional
 deployment infrastructure rather than Mika's default maintenance path.
 

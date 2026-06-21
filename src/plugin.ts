@@ -17,7 +17,7 @@ import { createISODateTime } from "./types/primitives";
 export { MIKA_PLUGIN_ID } from "./api/routes";
 export const MIKA_PLUGIN_VERSION = "0.1.0";
 export const MIKA_PACKAGE_NAME = "@bnomei/emdash-mika";
-export const MIKA_MAINTENANCE_CRON_TASK = "mika.maintenance";
+export const MIKA_MAINTENANCE_CRON_TASK = "mika_maintenance";
 export const MIKA_MAINTENANCE_CRON_SCHEDULE = "* * * * *";
 
 export interface MikaMaintenancePluginOptions {
