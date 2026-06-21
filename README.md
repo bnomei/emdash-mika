@@ -212,27 +212,37 @@ The package intentionally does not expose a public `storage` subpath. Storage
 repositories, migrations, and SQL statements are implementation details until
 the backend service layer is stable enough to support as public API.
 
-Queued magic-link and order-confirmation emails can be drained with
-`createMikaEmailOutboxRunner()` from the server entry. Mika owns the outbox
-state, retry/backoff, and rendering; the host still owns scheduling and the
-actual EmDash email provider selection. Use `createEmDashMikaEmailSender()` with
-`locals.emdash.email` when you want the runner to deliver through EmDash's
-selected provider.
+Mika background work runs through the EmDash scheduled lifecycle. The native
+plugin registers the `mika.maintenance` cron task by default with the
+`* * * * *` schedule; configure it with
+`mikaPlugin({ maintenance: { enabled, schedule } })` or
+`createPlugin({ maintenance: { enabled, schedule } })`. The task calls
+`createMikaMaintenanceRunner().runOnce()` to drain due email outbox rows, release
+expired stock reservations, purge expired ephemeral rows, and process queued
+account-delete requests. Use `createMikaEmailOutboxRunner()` and
+`createEmDashMikaEmailSender()` from the server entry when wiring the backend
+maintenance runner to EmDash's selected email provider.
+
+On Node, EmDash drives plugin cron tasks through its scheduler. On Cloudflare,
+the host Worker's `scheduled()` handler should call EmDash `runScheduledTasks()`;
+EmDash then runs scheduled publishing and Mika's `mika.maintenance` task. Queue
+workers can still be added for high-volume email delivery, but they are optional
+deployment infrastructure rather than Mika's default maintenance path.
 
 ## Status
 
 Mika currently ships the typed shell, backend API composer, plugin
 registration, route contracts, client methods, Astro Actions, copyable
 templates, provider interfaces, stock tables, document shapes, admin action
-descriptors, safe return-path normalization, email renderers, and an email
-outbox runner. Production
-storefronts still need host provider adapters, auth/session policy, rate
-limits, and deployment-specific guards.
+descriptors, safe return-path normalization, email renderers, an email outbox
+runner, and a scheduled maintenance runner. Production storefronts still need
+host provider adapters, auth/session policy, rate limits, and deployment-specific
+guards.
 
 Hosted checkout cancel redirects are treated as UX only. Mika releases expired
-stock reservations through `admin.releaseExpiredReservations`; wire that
-operation to a host scheduler such as Cloudflare Cron, a queue worker, or an
-admin maintenance job.
+stock reservations from the plugin maintenance cron task. The manual
+`admin.releaseExpiredReservations` operation and `mika.stock.releaseExpiredReservations`
+action remain available for admin-triggered cleanup.
 
 ## License
 

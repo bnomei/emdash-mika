@@ -232,10 +232,12 @@ checkout cancel values as same-origin local paths; backend checkout config is
 trusted deployment configuration.
 
 Checkout cancel pages are passive browser return surfaces. Expired stock
-reservations should be released by calling `admin.releaseExpiredReservations`
-from host maintenance code, for example a Cloudflare Cron Worker, queue worker,
-or admin job. Do not release stock solely because a customer visited the cancel
-page while a provider-hosted checkout session may still be open.
+reservations are released by Mika's `mika.maintenance` plugin cron task, which
+EmDash runs during its scheduled cycle. On Cloudflare, the host Worker's
+`scheduled()` handler should call EmDash `runScheduledTasks()` so EmDash can run
+scheduled publishing and Mika maintenance. Do not release stock solely because a
+customer visited the cancel page while a provider-hosted checkout session may
+still be open.
 
 Provider webhooks and raw-body signature verification should be host Astro
 endpoints or explicitly supported EmDash raw-body public routes, not generic
