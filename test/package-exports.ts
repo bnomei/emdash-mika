@@ -25,11 +25,13 @@ import type {
   createEmDashMikaEmailSender,
   createMikaBackendApi,
   createMikaEmailOutboxRunner,
+  createMikaMaintenanceRunner,
   createMikaServerClient,
   MikaApi,
   MikaBackendDependencies,
   MikaEmailDeliveryMessage,
   MikaEmailOutboxRunner,
+  MikaMaintenanceRunner,
   MikaApiOverrides,
   MikaOperationPolicy as MikaServerOperationPolicy,
   MikaOperationDescriptor as MikaServerOperationDescriptor,
@@ -85,8 +87,10 @@ export type PackageEntryContract = {
   readonly serverFacade: MikaServerClient;
   readonly backend: typeof createMikaBackendApi;
   readonly emailOutboxRunnerFactory: typeof createMikaEmailOutboxRunner;
+  readonly maintenanceRunnerFactory: typeof createMikaMaintenanceRunner;
   readonly emdashEmailSenderFactory: typeof createEmDashMikaEmailSender;
   readonly emailOutboxRunner: MikaEmailOutboxRunner;
+  readonly maintenanceRunner: MikaMaintenanceRunner;
   readonly emailDeliveryMessage: MikaEmailDeliveryMessage;
   readonly assertWired: typeof assertMikaApiWired;
   readonly backendInput: CreateMikaBackendApiInput;

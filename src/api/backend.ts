@@ -14,6 +14,9 @@ import type {
 import type {
   AdjustStockRepositoryResult,
   AdjustStockRepositoryInput,
+  AccountDeleteEmailRedactionRepositoryInput,
+  AccountDeleteRequestCompletionRepositoryInput,
+  AccountDeleteRequestFailureRepositoryInput,
   CatalogProviderPriceMatch,
   ConsumeReservedStockRepositoryInput,
   ConsumeReservedStockRepositoryResult,
@@ -23,6 +26,7 @@ import type {
   EmailSkipRepositoryInput,
   ReleaseExpiredReservationsRepositoryInput,
   ReleaseExpiredReservationsRepositoryResult,
+  ReleaseActiveReservationsByCustomerRepositoryInput,
   ReleaseReservedStockRepositoryInput,
   ReleaseReservedStockRepositoryResult,
   ReserveStockRepositoryInput,
@@ -320,6 +324,15 @@ export interface MikaOpsRepositoryPort {
     customerId: MikaId,
     limit?: number,
   ): Promise<MikaDocumentList<AccountDeleteRequestDocument>>;
+  listQueuedAccountDeleteRequests(
+    limit?: number,
+  ): Promise<MikaDocumentList<AccountDeleteRequestDocument>>;
+  completeAccountDeleteRequest(
+    input: AccountDeleteRequestCompletionRepositoryInput,
+  ): Promise<AccountDeleteRequestDocument | null>;
+  failAccountDeleteRequest(
+    input: AccountDeleteRequestFailureRepositoryInput,
+  ): Promise<AccountDeleteRequestDocument | null>;
   findProviderSyncRun(runId: MikaId): Promise<ProviderSyncRunDocument | null>;
   findWorkflow(workflowId: MikaId): Promise<WorkflowDocument | null>;
   createWorkflow(document: WorkflowDocument): Promise<WorkflowDocument | null>;
@@ -348,6 +361,9 @@ export interface MikaOpsRepositoryPort {
   completeEmail(input: EmailCompleteRepositoryInput): Promise<EmailDocument | null>;
   failEmail(input: EmailFailureRepositoryInput): Promise<EmailDocument | null>;
   skipEmail(input: EmailSkipRepositoryInput): Promise<EmailDocument | null>;
+  redactQueuedFailedEmailsForAccountDelete(
+    input: AccountDeleteEmailRedactionRepositoryInput,
+  ): Promise<number>;
   /** @deprecated Use workflow-specific leasing APIs for webhook fulfillment work. */
   listWebhookFailures(now: string, limit?: number): Promise<MikaDocumentList<WebhookDocument>>;
   writeAudit(document: AdminAuditDocument): Promise<void>;
@@ -384,6 +400,9 @@ export interface MikaStockRepositoryPort {
   releaseExpiredReservations(
     input: ReleaseExpiredReservationsRepositoryInput,
   ): Promise<ReleaseExpiredReservationsRepositoryResult>;
+  releaseActiveReservationsByCustomer(
+    input: ReleaseActiveReservationsByCustomerRepositoryInput,
+  ): Promise<ReleaseExpiredReservationsRepositoryResult>;
   adjustStock(input: AdjustStockRepositoryInput): Promise<AdjustStockRepositoryResult>;
 }
 
@@ -401,6 +420,7 @@ export interface MikaEphemeralRepositoryPort {
   }): Promise<EphemeralRecord>;
   consumeToken(key: string, now: ISODateTime): Promise<boolean>;
   purgeExpired(now: ISODateTime): Promise<number>;
+  deleteTokensBySubjectHashes(subjectHashes: readonly string[]): Promise<number>;
 }
 
 export interface MikaBackendRepositories {

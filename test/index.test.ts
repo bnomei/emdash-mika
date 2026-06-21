@@ -36,6 +36,7 @@ import type {
   createEmDashMikaEmailSender as PackageCreateEmDashMikaEmailSender,
   createMikaBackendApi as PackageCreateMikaBackendApi,
   createMikaEmailOutboxRunner as PackageCreateMikaEmailOutboxRunner,
+  createMikaMaintenanceRunner as PackageCreateMikaMaintenanceRunner,
   createMikaServerClient as PackageCreateMikaServerClient,
   mikaApiMethodNames as PackageMikaApiMethodNames,
   MikaBackendDependencies as PackageMikaBackendDependencies,
@@ -89,6 +90,7 @@ import {
   createMikaRequestContext,
   createMikaApi,
   createMikaEmailOutboxRunner,
+  createMikaMaintenanceRunner,
   createMikaServerClient,
   mikaApiMethodNames,
   type MikaBackendDependencies,
@@ -327,19 +329,24 @@ describe("Mika native plugin package", () => {
     const plugin = createPlugin();
     const calls: unknown[] = [];
 
-    await plugin.hooks["plugin:install"]?.handler({} as never, {
-      cron: {
-        schedule: async (...args: unknown[]) => {
-          calls.push(args);
+    await plugin.hooks["plugin:install"]?.handler(
+      {} as never,
+      {
+        cron: {
+          schedule: async (...args: unknown[]) => {
+            calls.push(args);
+          },
+          cancel: async (...args: unknown[]) => {
+            calls.push(["cancel", ...args]);
+          },
+          list: async () => [],
         },
-        cancel: async (...args: unknown[]) => {
-          calls.push(["cancel", ...args]);
-        },
-        list: async () => [],
-      },
-    } as never);
+      } as never,
+    );
 
-    expect(calls).toEqual([[MIKA_MAINTENANCE_CRON_TASK, { schedule: MIKA_MAINTENANCE_CRON_SCHEDULE }]]);
+    expect(calls).toEqual([
+      [MIKA_MAINTENANCE_CRON_TASK, { schedule: MIKA_MAINTENANCE_CRON_SCHEDULE }],
+    ]);
   });
 
   it("supports disabled and custom Mika maintenance schedules", async () => {
@@ -348,28 +355,34 @@ describe("Mika native plugin package", () => {
     const disabledCalls: unknown[] = [];
     const customCalls: unknown[] = [];
 
-    await disabled.hooks["plugin:activate"]?.handler({} as never, {
-      cron: {
-        schedule: async (...args: unknown[]) => {
-          disabledCalls.push(["schedule", ...args]);
+    await disabled.hooks["plugin:activate"]?.handler(
+      {} as never,
+      {
+        cron: {
+          schedule: async (...args: unknown[]) => {
+            disabledCalls.push(["schedule", ...args]);
+          },
+          cancel: async (...args: unknown[]) => {
+            disabledCalls.push(["cancel", ...args]);
+          },
+          list: async () => [],
         },
-        cancel: async (...args: unknown[]) => {
-          disabledCalls.push(["cancel", ...args]);
+      } as never,
+    );
+    await custom.hooks["plugin:activate"]?.handler(
+      {} as never,
+      {
+        cron: {
+          schedule: async (...args: unknown[]) => {
+            customCalls.push(args);
+          },
+          cancel: async (...args: unknown[]) => {
+            customCalls.push(["cancel", ...args]);
+          },
+          list: async () => [],
         },
-        list: async () => [],
-      },
-    } as never);
-    await custom.hooks["plugin:activate"]?.handler({} as never, {
-      cron: {
-        schedule: async (...args: unknown[]) => {
-          customCalls.push(args);
-        },
-        cancel: async (...args: unknown[]) => {
-          customCalls.push(["cancel", ...args]);
-        },
-        list: async () => [],
-      },
-    } as never);
+      } as never,
+    );
 
     expect(disabledCalls).toEqual([["cancel", MIKA_MAINTENANCE_CRON_TASK]]);
     expect(customCalls).toEqual([[MIKA_MAINTENANCE_CRON_TASK, { schedule: "*/5 * * * *" }]]);
@@ -2980,7 +2993,6 @@ describe("Mika storage boundaries", () => {
       /must be a JSON object/,
     );
   });
-
 });
 
 describe("Mika provider contracts", () => {
@@ -3529,6 +3541,9 @@ describe("public types", () => {
     expectTypeOf<typeof PackageCreateMikaBackendApi>().toEqualTypeOf<typeof createMikaBackendApi>();
     expectTypeOf<typeof PackageCreateMikaEmailOutboxRunner>().toEqualTypeOf<
       typeof createMikaEmailOutboxRunner
+    >();
+    expectTypeOf<typeof PackageCreateMikaMaintenanceRunner>().toEqualTypeOf<
+      typeof createMikaMaintenanceRunner
     >();
     expectTypeOf<typeof PackageCreateEmDashMikaEmailSender>().toEqualTypeOf<
       typeof createEmDashMikaEmailSender

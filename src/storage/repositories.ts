@@ -115,6 +115,11 @@ export interface ReleaseExpiredReservationsRepositoryResult {
   readonly stockItemsAffected: number;
 }
 
+export interface ReleaseActiveReservationsByCustomerRepositoryInput {
+  readonly customerId: MikaId;
+  readonly now: ISODateTime;
+}
+
 export interface AdjustStockRepositoryInput {
   readonly movementEventId: MikaId;
   readonly stockItemId: MikaId;
@@ -198,6 +203,25 @@ export interface EmailSkipRepositoryInput {
   readonly leaseKey: string;
   readonly now: ISODateTime;
   readonly lastError: string;
+}
+
+export interface AccountDeleteRequestCompletionRepositoryInput {
+  readonly requestId: MikaId;
+  readonly now: ISODateTime;
+  readonly metadata?: JsonObject;
+}
+
+export interface AccountDeleteRequestFailureRepositoryInput {
+  readonly requestId: MikaId;
+  readonly now: ISODateTime;
+  readonly lastError: string;
+}
+
+export interface AccountDeleteEmailRedactionRepositoryInput {
+  readonly now: ISODateTime;
+  readonly customerId?: MikaId;
+  readonly userId?: string;
+  readonly emailHash?: string;
 }
 
 type ReservationEventMutationRepositoryResult<TStatus extends "released" | "consumed"> =
@@ -831,6 +855,56 @@ export class OpsRepository {
     });
   }
 
+  async listQueuedAccountDeleteRequests(
+    limit = 25,
+  ): Promise<DocumentList<AccountDeleteRequestDocument>> {
+    return this.documents.listByType("accountDeleteRequest", {
+      where: { status: "queued" },
+      orderBy: { createdAt: "asc" },
+      limit,
+    });
+  }
+
+  async completeAccountDeleteRequest(
+    input: AccountDeleteRequestCompletionRepositoryInput,
+  ): Promise<AccountDeleteRequestDocument | null> {
+    const updated = await this.documents.update(input.requestId, (current) => {
+      const request = documentOfType(current, "accountDeleteRequest");
+      if (!request || request.status !== "queued") return null;
+
+      return accountDeleteRequestDocumentWithRecord(request, input.now, {
+        status: "completed",
+        completedAt: input.now,
+        userId: undefined,
+        emailHash: undefined,
+        confirmTokenHash: undefined,
+        lastError: undefined,
+        metadata: {
+          ...request.record.metadata,
+          ...input.metadata,
+        },
+      });
+    });
+
+    return documentOfType(updated, "accountDeleteRequest");
+  }
+
+  async failAccountDeleteRequest(
+    input: AccountDeleteRequestFailureRepositoryInput,
+  ): Promise<AccountDeleteRequestDocument | null> {
+    const updated = await this.documents.update(input.requestId, (current) => {
+      const request = documentOfType(current, "accountDeleteRequest");
+      if (!request || request.status !== "queued") return null;
+
+      return accountDeleteRequestDocumentWithRecord(request, input.now, {
+        status: "failed",
+        lastError: input.lastError,
+      });
+    });
+
+    return documentOfType(updated, "accountDeleteRequest");
+  }
+
   async findProviderSyncRun(runId: MikaId): Promise<ProviderSyncRunDocument | null> {
     return this.documents.findByIdOfType(runId, "providerSyncRun");
   }
@@ -1178,6 +1252,51 @@ export class OpsRepository {
     return documentOfType(updated, "email");
   }
 
+  async redactQueuedFailedEmailsForAccountDelete(
+    input: AccountDeleteEmailRedactionRepositoryInput,
+  ): Promise<number> {
+    const candidates = await listByTypeCandidates(
+      this.documents,
+      "email",
+      1000,
+      {
+        where: { status: { in: ["queued", "failed"] } },
+        orderBy: { createdAt: "asc" },
+      },
+      (email) => emailMatchesAccountDeleteIdentity(email, input),
+    );
+    let redacted = 0;
+
+    for (const item of candidates.items) {
+      const updated = await this.documents.update(item.id, (current) => {
+        const email = documentOfType(current, "email");
+        if (!email || !emailMatchesAccountDeleteIdentity(email, input)) return null;
+        if (email.status !== "queued" && email.status !== "failed") return null;
+
+        return emailDocumentWithRecord(email, input.now, {
+          customerId: undefined,
+          orderId: undefined,
+          tokenId: undefined,
+          toEmail: `redacted-${email.id}@redacted.invalid`,
+          subject: "Redacted email",
+          status: "skipped",
+          nextAttemptAt: undefined,
+          leaseKey: undefined,
+          leasedAt: undefined,
+          leaseExpiresAt: undefined,
+          lastError: "Redacted after account deletion.",
+          metadata: {
+            redactedAt: input.now,
+          },
+        });
+      });
+
+      if (updated) redacted += 1;
+    }
+
+    return redacted;
+  }
+
   /** @deprecated Use workflow-specific leasing APIs for webhook fulfillment work. */
   async listWebhookFailures(now: string, limit = 50): Promise<DocumentList<WebhookDocument>> {
     return this.documents.listByType("webhook", {
@@ -1326,6 +1445,41 @@ function emailDocumentWithRecord(
     orderId: record.orderId,
     tokenId: record.tokenId,
     kind: record.kind,
+    record,
+    updatedAt: now,
+  };
+}
+
+function emailMatchesAccountDeleteIdentity(
+  email: EmailDocument,
+  identity: AccountDeleteEmailRedactionRepositoryInput,
+): boolean {
+  const record = email.record;
+
+  return Boolean(
+    (identity.customerId && record.customerId === identity.customerId) ||
+    (identity.userId && record.metadata?.["userId"] === identity.userId) ||
+    (identity.emailHash && record.metadata?.["emailHash"] === identity.emailHash),
+  );
+}
+
+function accountDeleteRequestDocumentWithRecord(
+  request: AccountDeleteRequestDocument,
+  now: ISODateTime,
+  patch: Partial<AccountDeleteRequestDocument["record"]>,
+): AccountDeleteRequestDocument {
+  const record = {
+    ...request.record,
+    ...patch,
+  };
+
+  return {
+    ...request,
+    customerId: record.customerId,
+    userId: record.userId,
+    emailHash: record.emailHash,
+    status: record.status,
+    expiresAt: record.expiresAt,
     record,
     updatedAt: now,
   };
@@ -1555,6 +1709,60 @@ export class StockRepository {
 
       return {
         scannedCount: expiredRows.length,
+        releasedCount,
+        stockItemsAffected: affectedStockItemIds.size,
+      };
+    });
+  }
+
+  async releaseActiveReservationsByCustomer(
+    input: ReleaseActiveReservationsByCustomerRepositoryInput,
+  ): Promise<ReleaseExpiredReservationsRepositoryResult> {
+    return withTransaction(this.db, async (executor) => {
+      const activeRows = await executor
+        .selectFrom("mika_stock_events")
+        .selectAll()
+        .where("kind", "=", "reservation")
+        .where("status", "=", "active")
+        .where("customer_id", "=", input.customerId)
+        .orderBy("id", "asc")
+        .execute();
+      let releasedCount = 0;
+      const affectedStockItemIds = new Set<MikaId>();
+
+      for (const row of activeRows) {
+        const event = mapStockEvent(row);
+        const eventMutation = await executor
+          .updateTable("mika_stock_events")
+          .set({
+            status: "released",
+            updated_at: input.now,
+          })
+          .where("id", "=", event.id)
+          .where("kind", "=", "reservation")
+          .where("status", "=", "active")
+          .where("customer_id", "=", input.customerId)
+          .executeTakeFirst();
+
+        if (!mutationAffected(eventMutation)) continue;
+
+        const stockMutation = await releaseStockStatement({
+          stockItemId: event.stockItemId,
+          quantity: event.quantityDelta,
+          now: input.now,
+        }).execute(executor);
+        if (!mutationAffected(stockMutation)) {
+          throw new Error(
+            `Stock item '${event.stockItemId}' for account-delete reservation event '${event.id}' could not be updated.`,
+          );
+        }
+
+        releasedCount += 1;
+        affectedStockItemIds.add(event.stockItemId);
+      }
+
+      return {
+        scannedCount: activeRows.length,
         releasedCount,
         stockItemsAffected: affectedStockItemIds.size,
       };
@@ -1873,6 +2081,18 @@ export class EphemeralRepository {
     const result = await this.db
       .deleteFrom("mika_ephemeral_records")
       .where("expires_at", "<=", now)
+      .executeTakeFirst();
+
+    return Number(result.numDeletedRows ?? 0);
+  }
+
+  async deleteTokensBySubjectHashes(subjectHashes: readonly string[]): Promise<number> {
+    if (subjectHashes.length === 0) return 0;
+
+    const result = await this.db
+      .deleteFrom("mika_ephemeral_records")
+      .where("kind", "=", "token")
+      .where("subject_hash", "in", [...new Set(subjectHashes)])
       .executeTakeFirst();
 
     return Number(result.numDeletedRows ?? 0);

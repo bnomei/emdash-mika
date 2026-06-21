@@ -3585,6 +3585,235 @@ describe("backend API composition", () => {
     }
   });
 
+  it("completes queued account delete requests with safe local cleanup", async () => {
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const accountCollection = createStorageCollection("account");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+      stock: new StockRepository(db),
+      ephemeral: new EphemeralRepository(db),
+    } satisfies MikaBackendRepositories;
+    const dependencies = createIncrementingBackendDependencies({ repositories });
+    const api = createMikaBackendApi(dependencies);
+    const service = createMikaStockLifecycleService(dependencies);
+    const clock = createTestClock();
+    const customer = createCustomerDocument();
+    const order = createOrderDocument();
+    const stockItem = createStockRecord({ quantityOnHand: 4, quantityReserved: 0 });
+    const email = createEmailDocument({
+      id: createTestMikaId("email", 1),
+      record: {
+        id: createTestMikaId("email", 1),
+        kind: "magic_link",
+        templateKey: "magic_link",
+        customerId: customer.customerId,
+        toEmail: "Subscriber@Example.test",
+        metadata: { link: "https://shop.example.test/account/delete/confirm?token=secret" },
+      },
+    });
+
+    try {
+      await mikaInitialMigration.up(db);
+      await repositories.account.put(customer);
+      await repositories.ledger.put(order);
+      await repositories.stock.putItem(stockItem);
+      await service.reserve({
+        stockItemId: stockItem.id,
+        quantity: 2,
+        customerId: customer.customerId,
+        expiresAt: clock.isoAt(15 * 60_000),
+      });
+      await repositories.ephemeral.put({
+        key: "customer_download_token",
+        kind: "token",
+        subjectHash: customer.customerId,
+        status: "pending",
+        count: 0,
+        expiresAt: clock.isoAt(15 * 60_000),
+        version: 1,
+        createdAt: TEST_NOW,
+        updatedAt: TEST_NOW,
+      });
+      await repositories.ephemeral.put({
+        key: "customer_export_token",
+        kind: "token",
+        subjectHash: `customer:${customer.customerId}`,
+        status: "pending",
+        count: 0,
+        expiresAt: clock.isoAt(15 * 60_000),
+        version: 1,
+        createdAt: TEST_NOW,
+        updatedAt: TEST_NOW,
+      });
+      await repositories.ephemeral.put({
+        key: "customer_rate_limit",
+        kind: "rate_limit",
+        subjectHash: customer.customerId,
+        status: "active",
+        count: 1,
+        expiresAt: clock.isoAt(15 * 60_000),
+        version: 1,
+        createdAt: TEST_NOW,
+        updatedAt: TEST_NOW,
+      });
+      await repositories.ops.put(email);
+
+      await expect(api.account.delete(createTestRequestContext(), {})).resolves.toMatchObject({
+        ok: true,
+        status: 202,
+      });
+
+      const runner = createMikaMaintenanceRunner({ repositories });
+      await expect(runner.runOnce({ now: clock.isoAt(60_000) })).resolves.toMatchObject({
+        accountDeleteRequests: {
+          status: "completed",
+          result: {
+            scanned: 1,
+            completed: 1,
+            failed: 0,
+            items: [
+              {
+                requestId: "account_delete_request_1",
+                status: "completed",
+                tokensDeleted: 2,
+                reservationsReleased: 1,
+                emailsRedacted: 1,
+              },
+            ],
+          },
+        },
+      });
+
+      const request = await repositories.ops.findAccountDeleteRequest(
+        createTestMikaId("account_delete_request", 1),
+      );
+      expect(request).toMatchObject({
+        status: "completed",
+        customerId: customer.customerId,
+        record: {
+          status: "completed",
+          completedAt: clock.isoAt(60_000),
+          metadata: {
+            maintenance: {
+              tokensDeleted: 2,
+              reservationsReleased: 1,
+              emailsRedacted: 1,
+            },
+          },
+        },
+      });
+      expect(request?.userId).toBeUndefined();
+      expect(request?.emailHash).toBeUndefined();
+      expect(request?.record.confirmTokenHash).toBeUndefined();
+      await expect(repositories.ephemeral.get("customer_download_token")).resolves.toBeNull();
+      await expect(repositories.ephemeral.get("customer_export_token")).resolves.toBeNull();
+      await expect(repositories.ephemeral.get("customer_rate_limit")).resolves.toMatchObject({
+        kind: "rate_limit",
+      });
+      await expect(
+        repositories.stock.findBySellableId(stockItem.sellableId),
+      ).resolves.toMatchObject({
+        quantityOnHand: 4,
+        quantityReserved: 0,
+      });
+      await expect(repositories.ledger.findOrderById(order.id)).resolves.toEqual(order);
+      await expect(repositories.ops.findEmail(email.id)).resolves.toMatchObject({
+        status: "skipped",
+        nextAttemptAt: undefined,
+        tokenId: undefined,
+        orderId: undefined,
+        record: {
+          toEmail: "redacted-email_1@redacted.invalid",
+          subject: "Redacted email",
+          status: "skipped",
+          lastError: "Redacted after account deletion.",
+          metadata: { redactedAt: clock.isoAt(60_000) },
+        },
+      });
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
+    }
+  });
+
+  it("marks queued account delete requests failed when cleanup fails", async () => {
+    const repositories = {
+      ...createTestBackendRepositories(),
+      ephemeral: {
+        async get() {
+          return null;
+        },
+        async put() {
+          return undefined;
+        },
+        async incrementCounter() {
+          throw new Error("not used");
+        },
+        async consumeToken() {
+          return false;
+        },
+        async purgeExpired() {
+          return 0;
+        },
+        async deleteTokensBySubjectHashes() {
+          throw new Error("token cleanup failed");
+        },
+      } satisfies MikaEphemeralRepositoryPort,
+    } satisfies MikaBackendRepositories;
+    const record = {
+      id: createTestMikaId("account_delete_request", 1),
+      customerId: createTestMikaId("customer", 1),
+      userId: "user_1",
+      emailHash: createTestHash("email:subscriber@example.test"),
+      status: "queued" as const,
+      requestedAt: TEST_NOW,
+    };
+
+    await repositories.ops.put({
+      id: record.id,
+      type: "accountDeleteRequest",
+      schemaVersion: 1,
+      customerId: record.customerId,
+      userId: record.userId,
+      emailHash: record.emailHash,
+      status: record.status,
+      record,
+      createdAt: TEST_NOW,
+      updatedAt: TEST_NOW,
+    });
+
+    await expect(createMikaMaintenanceRunner({ repositories }).runOnce()).resolves.toMatchObject({
+      accountDeleteRequests: {
+        status: "completed",
+        result: {
+          scanned: 1,
+          completed: 0,
+          failed: 1,
+          items: [
+            {
+              requestId: "account_delete_request_1",
+              status: "failed",
+              error: "token cleanup failed",
+            },
+          ],
+        },
+      },
+    });
+    await expect(repositories.ops.findAccountDeleteRequest(record.id)).resolves.toMatchObject({
+      status: "failed",
+      record: {
+        status: "failed",
+        lastError: "token cleanup failed",
+      },
+    });
+  });
+
   it("creates a provider portal session for a known provider account", async () => {
     const accountCollection = createStorageCollection("account");
     const repositories = {
@@ -10229,6 +10458,46 @@ function createTestStockRepository(
         eventsById.set(expiredEvent.id, expiredEvent);
         if (expiredEvent.idempotencyKey) {
           eventsByIdempotencyKey.set(expiredEvent.idempotencyKey, expiredEvent);
+        }
+        if (!current) continue;
+
+        const stock = {
+          ...current,
+          quantityReserved: Math.max(0, current.quantityReserved - event.quantityDelta),
+          updatedAt: input.now,
+        };
+        stockItems.set(stock.sellableId, stock);
+        stockItemsAffected.add(stock.id);
+        releasedCount += 1;
+      }
+
+      return { scannedCount, releasedCount, stockItemsAffected: stockItemsAffected.size };
+    },
+    async releaseActiveReservationsByCustomer(input) {
+      let scannedCount = 0;
+      let releasedCount = 0;
+      const stockItemsAffected = new Set<MikaId>();
+
+      for (const event of Array.from(eventsById.values())) {
+        if (
+          event.kind !== "reservation" ||
+          event.status !== "active" ||
+          event.customerId !== input.customerId
+        ) {
+          continue;
+        }
+
+        scannedCount += 1;
+        const releasedEvent: StockEventRecord = {
+          ...event,
+          status: "released",
+          updatedAt: input.now,
+        };
+        const current =
+          Array.from(stockItems.values()).find((stock) => stock.id === event.stockItemId) ?? null;
+        eventsById.set(releasedEvent.id, releasedEvent);
+        if (releasedEvent.idempotencyKey) {
+          eventsByIdempotencyKey.set(releasedEvent.idempotencyKey, releasedEvent);
         }
         if (!current) continue;
 
