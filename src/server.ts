@@ -46,5 +46,11 @@ export {
   type MikaEmailOutboxRunnerInput,
   type MikaEmailSender,
 } from "./api/email-outbox";
+export {
+  createMikaMaintenanceRunner,
+  type MikaMaintenanceRunner,
+  type MikaMaintenanceRunOptions,
+  type MikaMaintenanceRunResult,
+} from "./api/maintenance";
 export type { MikaOperationPolicy } from "./api/operation-policy";
 export type { MikaOperationDescriptor } from "./api/operations";

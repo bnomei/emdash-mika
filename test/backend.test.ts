@@ -41,6 +41,7 @@ import {
 import {
   createEmDashMikaEmailSender,
   createMikaEmailOutboxRunner,
+  createMikaMaintenanceRunner,
   type MikaEmailDeliveryMessage,
 } from "../src/server";
 import type {
@@ -632,6 +633,129 @@ describe("backend test storage helpers", () => {
       record: {
         attemptCount: 1,
         lastError: "Email kind 'download' has no Mika renderer.",
+      },
+    });
+  });
+
+  it("runs Mika maintenance across email, stock, and ephemeral tasks", async () => {
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const clock = createTestClock();
+    const stock = new StockRepository(db);
+    const repositories = {
+      ...createTestBackendRepositories(),
+      stock,
+      ephemeral: new EphemeralRepository(db),
+    } satisfies MikaBackendRepositories;
+    const service = createMikaStockLifecycleService(
+      createIncrementingBackendDependencies({ repositories }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const sent: MikaEmailDeliveryMessage[] = [];
+    const stockItem = createStockRecord({ quantityOnHand: 5, quantityReserved: 0 });
+    const email = createEmailDocument({
+      id: createTestMikaId("email", 1),
+      record: {
+        id: createTestMikaId("email", 1),
+        kind: "magic_link",
+        templateKey: "magic_link",
+        attemptCount: 0,
+        nextAttemptAt: TEST_NOW,
+        metadata: { link: "https://shop.example.test/sign-in" },
+      },
+    });
+
+    try {
+      await mikaInitialMigration.up(db);
+      await stock.putItem(stockItem);
+      await service.reserve({
+        stockItemId: stockItem.id,
+        quantity: 2,
+        expiresAt: clock.isoAt(30_000),
+      });
+      await repositories.ephemeral.put({
+        key: "expired_token",
+        kind: "token",
+        status: "pending",
+        count: 0,
+        expiresAt: clock.isoAt(-1_000),
+        version: 1,
+        createdAt: TEST_NOW,
+        updatedAt: TEST_NOW,
+      });
+      await repositories.ops.put(email);
+
+      const runner = createMikaMaintenanceRunner({
+        api,
+        repositories,
+        emailOutboxRunner: createMikaEmailOutboxRunner({
+          repositories,
+          createId: createIncrementingIdFactory("email_lease"),
+          sender: async (message) => {
+            sent.push(message);
+          },
+        }),
+      });
+
+      await expect(runner.runOnce({ now: clock.isoAt(60_000) })).resolves.toMatchObject({
+        now: clock.isoAt(60_000),
+        emailOutbox: {
+          status: "completed",
+          result: { scanned: 1, sent: 1, failed: 0 },
+        },
+        stockReservations: {
+          status: "completed",
+          result: { reservationsScanned: 1, reservationsReleased: 1, stockItems: 1 },
+        },
+        ephemeralRecords: {
+          status: "completed",
+          result: { purged: 1 },
+        },
+      });
+      expect(sent).toHaveLength(1);
+      await expect(repositories.ops.findEmail(email.id)).resolves.toMatchObject({
+        status: "sent",
+      });
+      await expect(repositories.ephemeral.get("expired_token")).resolves.toBeNull();
+      await expect(stock.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+        quantityOnHand: 5,
+        quantityReserved: 0,
+      });
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
+    }
+  });
+
+  it("continues Mika maintenance tasks when one task fails", async () => {
+    const runner = createMikaMaintenanceRunner({
+      now: () => new Date(TEST_NOW),
+      emailOutboxRunner: {
+        runOnce: async () => {
+          throw new Error("outbox unavailable");
+        },
+      },
+      releaseExpiredReservations: async () => ({
+        reservationsScanned: 2,
+        reservationsReleased: 1,
+        stockItems: 1,
+      }),
+      purgeExpiredEphemeralRecords: async () => ({ purged: 3 }),
+    });
+
+    await expect(runner.runOnce()).resolves.toMatchObject({
+      now: TEST_NOW,
+      emailOutbox: {
+        status: "failed",
+        error: "outbox unavailable",
+      },
+      stockReservations: {
+        status: "completed",
+        result: { reservationsScanned: 2, reservationsReleased: 1, stockItems: 1 },
+      },
+      ephemeralRecords: {
+        status: "completed",
+        result: { purged: 3 },
       },
     });
   });

@@ -3,6 +3,8 @@ import Ajv2020 from "ajv/dist/2020";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import {
   MIKA_PACKAGE_NAME,
+  MIKA_MAINTENANCE_CRON_SCHEDULE,
+  MIKA_MAINTENANCE_CRON_TASK,
   MIKA_PLUGIN_ID,
   MIKA_PLUGIN_VERSION,
   createPlugin,
@@ -319,6 +321,88 @@ describe("Mika native plugin package", () => {
     expect(Object.keys(plugin.routes)).toEqual(
       expect.arrayContaining([".well-known/actions", "cart", "wishlist", "checkout", "account"]),
     );
+  });
+
+  it("registers the default Mika maintenance cron task", async () => {
+    const plugin = createPlugin();
+    const calls: unknown[] = [];
+
+    await plugin.hooks["plugin:install"]?.handler({} as never, {
+      cron: {
+        schedule: async (...args: unknown[]) => {
+          calls.push(args);
+        },
+        cancel: async (...args: unknown[]) => {
+          calls.push(["cancel", ...args]);
+        },
+        list: async () => [],
+      },
+    } as never);
+
+    expect(calls).toEqual([[MIKA_MAINTENANCE_CRON_TASK, { schedule: MIKA_MAINTENANCE_CRON_SCHEDULE }]]);
+  });
+
+  it("supports disabled and custom Mika maintenance schedules", async () => {
+    const disabled = createPlugin({ maintenance: { enabled: false } });
+    const custom = createPlugin({ maintenance: { schedule: "*/5 * * * *" } });
+    const disabledCalls: unknown[] = [];
+    const customCalls: unknown[] = [];
+
+    await disabled.hooks["plugin:activate"]?.handler({} as never, {
+      cron: {
+        schedule: async (...args: unknown[]) => {
+          disabledCalls.push(["schedule", ...args]);
+        },
+        cancel: async (...args: unknown[]) => {
+          disabledCalls.push(["cancel", ...args]);
+        },
+        list: async () => [],
+      },
+    } as never);
+    await custom.hooks["plugin:activate"]?.handler({} as never, {
+      cron: {
+        schedule: async (...args: unknown[]) => {
+          customCalls.push(args);
+        },
+        cancel: async (...args: unknown[]) => {
+          customCalls.push(["cancel", ...args]);
+        },
+        list: async () => [],
+      },
+    } as never);
+
+    expect(disabledCalls).toEqual([["cancel", MIKA_MAINTENANCE_CRON_TASK]]);
+    expect(customCalls).toEqual([[MIKA_MAINTENANCE_CRON_TASK, { schedule: "*/5 * * * *" }]]);
+  });
+
+  it("invokes Mika maintenance from the cron hook", async () => {
+    const calls: unknown[] = [];
+    const plugin = createPlugin({
+      api: {
+        admin: {
+          releaseExpiredReservations: async (input) => {
+            calls.push(input);
+
+            return {
+              ok: true,
+              status: 200,
+              data: { status: "completed", affected: { reservationsReleased: 2 } },
+            };
+          },
+        },
+      },
+    });
+
+    await plugin.hooks.cron?.handler(
+      { name: MIKA_MAINTENANCE_CRON_TASK, scheduledAt: "2026-06-21T10:00:00.000Z" },
+      {} as never,
+    );
+    await plugin.hooks.cron?.handler(
+      { name: "unrelated", scheduledAt: "2026-06-21T10:01:00.000Z" },
+      {} as never,
+    );
+
+    expect(calls).toEqual([{ now: "2026-06-21T10:00:00.000Z" }]);
   });
 });
 
