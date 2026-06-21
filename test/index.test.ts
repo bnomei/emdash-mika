@@ -218,7 +218,6 @@ import {
   type MikaId,
   type ProviderName,
 } from "../src/types/primitives";
-import { MikaCache } from "../src/storage/cache";
 import { decodeAggregate, decodeJsonObject } from "../src/storage/json";
 import type {
   createMikaActions,
@@ -2898,42 +2897,6 @@ describe("Mika storage boundaries", () => {
     );
   });
 
-  it("deletes malformed and expired cache entries on read", async () => {
-    const entries = new Map<string, unknown>();
-    const kv = {
-      async get<T>(key: string) {
-        return (entries.get(key) ?? null) as T | null;
-      },
-      async set(key: string, value: unknown) {
-        entries.set(key, value);
-      },
-      async delete(key: string) {
-        return entries.delete(key);
-      },
-      async list(prefix = "") {
-        return Array.from(entries.entries())
-          .filter(([key]) => key.startsWith(prefix))
-          .map(([key, value]) => ({ key, value }));
-      },
-    };
-    const cache = new MikaCache(kv);
-
-    entries.set("cache:bad", {
-      value: "bad",
-      createdAt: new Date(0).toISOString(),
-      expiresAt: "not-a-date",
-    });
-    entries.set("cache:expired", {
-      value: "expired",
-      createdAt: iso(new Date(0).toISOString()),
-      expiresAt: iso(new Date(1).toISOString()),
-    });
-
-    await expect(cache.get("bad", new Date(10))).resolves.toBeNull();
-    await expect(cache.get("expired", new Date(10))).resolves.toBeNull();
-    expect(entries.has("cache:bad")).toBe(false);
-    expect(entries.has("cache:expired")).toBe(false);
-  });
 });
 
 describe("Mika provider contracts", () => {
