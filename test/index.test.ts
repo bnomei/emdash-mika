@@ -3653,6 +3653,7 @@ describe("Mika Astro template contracts", () => {
 
     expect(source).toContain("Core product flow:");
     expect(source).toContain("styles/kumo.css");
+    expect(source).toContain("components/MikaKumoAppFrame.tsx");
     expect(source).toContain("components/MikaKumoPage.astro");
     expect(source).toContain("components/ProductPurchase.astro");
     expect(source).toContain("components/AddToCartForm.astro");
@@ -3670,6 +3671,42 @@ describe("Mika Astro template contracts", () => {
     expect(source).toContain("@cloudflare/kumo/styles/standalone");
     expect(source).toContain("@cloudflare/kumo/styles/tailwind");
     expect(source).toContain("Mika.webhook.receive");
+  });
+
+  it("ships the Kumo app shell around copied pages", () => {
+    const page = readFileSync(
+      new URL("../src/templates/astro/components/MikaKumoPage.astro", import.meta.url),
+      "utf8",
+    );
+    const frame = readFileSync(
+      new URL("../src/templates/astro/components/MikaKumoAppFrame.tsx", import.meta.url),
+      "utf8",
+    );
+    const styles = readFileSync(
+      new URL("../src/templates/astro/styles/kumo.css", import.meta.url),
+      "utf8",
+    );
+    const tsconfig = readFileSync(new URL("../tsconfig.json", import.meta.url), "utf8");
+
+    expect(page).toContain('import MikaKumoAppFrame from "./MikaKumoAppFrame"');
+    expect(page).toContain("productNavItems?: readonly MikaKumoNavItem[]");
+    expect(page).toContain("<MikaKumoAppFrame");
+    expect(page).toContain("client:load");
+    expect(page).toContain('aria-label="Page shortcuts"');
+
+    expect(frame).toContain("<Sidebar.Provider");
+    expect(frame).toContain("mobileBreakpoint={900}");
+    expect(frame).toContain("function ProductsSidebarMenu");
+    expect(frame).toContain("const [productsOpen, setProductsOpen]");
+    expect(frame).toContain("aria-controls={productMenuId}");
+    expect(frame).toContain("All products");
+    expect(frame).toContain("mika-kumo-mobile-topbar");
+
+    expect(styles).toContain(".mika-kumo-app-frame");
+    expect(styles).toContain(".mika-kumo-mobile-topbar");
+    expect(styles).toContain(".mika-kumo-footer");
+    expect(styles).toContain(".mika-kumo-products-caret");
+    expect(tsconfig).toContain('"src/**/*.tsx"');
   });
 
   it("ships copyable agent-readable storefront examples", () => {
@@ -3739,7 +3776,10 @@ describe("Mika Astro template contracts", () => {
         ),
     );
     const templateSources = sourceFiles(new URL("../src/templates/astro/", import.meta.url)).filter(
-      (file) => file.pathname.endsWith(".astro") || file.pathname.endsWith(".ts"),
+      (file) =>
+        file.pathname.endsWith(".astro") ||
+        file.pathname.endsWith(".ts") ||
+        file.pathname.endsWith(".tsx"),
     );
 
     for (const file of templateSources) {

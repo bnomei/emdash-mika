@@ -1,5 +1,7 @@
 ---
 import { Badge, Link, Text } from "@cloudflare/kumo";
+import MikaKumoAppFrame from "./MikaKumoAppFrame";
+import type { MikaKumoNavItem } from "./MikaKumoAppFrame";
 import "../styles/kumo.css";
 
 interface Props {
@@ -10,6 +12,7 @@ interface Props {
   backHref?: string;
   backLabel?: string;
   pageSize?: "default" | "narrow";
+  productNavItems?: readonly MikaKumoNavItem[];
   class?: string;
   [attribute: string]: unknown;
 }
@@ -22,10 +25,12 @@ const {
   backHref,
   backLabel = "Back",
   pageSize = "default",
+  productNavItems = [],
   class: className,
   ...attrs
 } = Astro.props;
 const hasHeaderSlot = Astro.slots.has("header");
+const currentPath = Astro.url.pathname;
 ---
 
 <html lang="en" data-theme="kumo">
@@ -36,22 +41,37 @@ const hasHeaderSlot = Astro.slots.has("header");
     <slot name="head" />
   </head>
   <body>
-    <main
-      {...attrs}
-      data-mika-kumo-page
-      data-mika-page-size={pageSize}
-      class:list={["mika-kumo-page", className]}
+    <MikaKumoAppFrame
+      client:load
+      title={title}
+      currentPath={currentPath}
+      productNavItems={productNavItems}
     >
-      <header class="mika-kumo-header">
-        {backHref && <Link href={backHref}>{backLabel}</Link>}
-        {eyebrow && <Badge variant="secondary">{eyebrow}</Badge>}
-        <Text as="h1" variant="heading1">{title}</Text>
-        {description && (
-          <Text as="p" variant="secondary" size="lg">{description}</Text>
-        )}
-        {hasHeaderSlot && <slot name="header" />}
-      </header>
-      <slot />
-    </main>
+      <main
+        {...attrs}
+        data-mika-kumo-page
+        data-mika-page-size={pageSize}
+        class:list={["mika-kumo-page", className]}
+      >
+        <header class="mika-kumo-header">
+          <div class="mika-kumo-title-row">
+            <div class="mika-kumo-kicker">
+              {backHref && <Link href={backHref}>{backLabel}</Link>}
+              {eyebrow && <Badge variant="secondary">{eyebrow}</Badge>}
+            </div>
+            <nav class="mika-kumo-header-actions" aria-label="Page shortcuts">
+              <Link href="/cart" variant="plain">Cart</Link>
+              <Link href="/account" variant="plain">Account</Link>
+            </nav>
+          </div>
+          <Text as="h1" variant="heading1">{title}</Text>
+          {description && (
+            <Text as="p" variant="secondary" size="lg">{description}</Text>
+          )}
+          {hasHeaderSlot && <slot name="header" />}
+        </header>
+        <slot />
+      </main>
+    </MikaKumoAppFrame>
   </body>
 </html>

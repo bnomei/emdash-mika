@@ -16,6 +16,7 @@ html {
 
 body {
   margin: 0;
+  min-height: 100vh;
 }
 
 a {
@@ -27,12 +28,125 @@ a {
   display: none !important;
 }
 
+.mika-kumo-app-frame {
+  min-height: 100vh;
+  background: var(--color-kumo-canvas);
+}
+
+.mika-kumo-app-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.mika-kumo-sidebar {
+  --sidebar-bg: var(--color-kumo-base);
+}
+
+.mika-kumo-sidebar [data-sidebar="footer"] {
+  height: auto;
+  min-height: 72px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.mika-kumo-brand,
+.mika-kumo-mobile-brand,
+.mika-kumo-sidebar-footer a,
+.mika-kumo-footer-links a {
+  text-decoration: none;
+}
+
+.mika-kumo-brand {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  color: var(--text-color-kumo-default);
+}
+
+.mika-kumo-brand-mark {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--color-kumo-brand);
+  color: var(--text-color-kumo-inverse);
+}
+
+.mika-kumo-brand-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.mika-kumo-sidebar-footer {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.mika-kumo-sidebar-footer a,
+.mika-kumo-footer-links a {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.mika-kumo-mobile-topbar {
+  display: none;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 56px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--color-kumo-line);
+  background: color-mix(in oklab, var(--color-kumo-base), transparent 4%);
+  backdrop-filter: blur(12px);
+}
+
+.mika-kumo-mobile-brand {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  color: var(--text-color-kumo-strong);
+  font-weight: 600;
+}
+
+.mika-kumo-mobile-actions {
+  display: inline-flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.mika-kumo-mobile-trigger {
+  color: var(--text-color-kumo-default);
+}
+
+.mika-kumo-products-caret {
+  flex: 0 0 auto;
+  transition: transform 160ms ease;
+}
+
+.mika-kumo-products-caret[data-open="true"] {
+  transform: rotate(90deg);
+}
+
 .mika-kumo-page {
   box-sizing: border-box;
   display: grid;
   gap: 24px;
-  width: min(1120px, calc(100% - 32px));
-  margin: 32px auto 64px;
+  width: min(1160px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 32px 0 40px;
 }
 
 .mika-kumo-page[data-mika-page-size="narrow"] {
@@ -51,7 +165,24 @@ a {
 }
 
 .mika-kumo-header {
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-kumo-hairline);
+}
+
+.mika-kumo-title-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+
+.mika-kumo-kicker,
+.mika-kumo-header-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
   gap: 10px;
+  align-items: center;
 }
 
 .mika-kumo-grid {
@@ -65,6 +196,28 @@ a {
   grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
   gap: 24px;
   align-items: start;
+}
+
+.mika-kumo-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: center;
+  width: min(1160px, calc(100% - 48px));
+  margin: auto auto 0;
+  padding: 20px 0 28px;
+  border-top: 1px solid var(--color-kumo-hairline);
+}
+
+.mika-kumo-footer-copy {
+  max-width: 560px;
+}
+
+.mika-kumo-footer-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
 }
 
 .mika-kumo-card,
@@ -214,5 +367,31 @@ a {
 @media (max-width: 760px) {
   .mika-kumo-product-layout {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .mika-kumo-mobile-topbar {
+    display: flex;
+  }
+
+  .mika-kumo-page {
+    width: min(100% - 32px, 760px);
+    padding-top: 24px;
+  }
+
+  .mika-kumo-title-row,
+  .mika-kumo-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .mika-kumo-header-actions,
+  .mika-kumo-footer-links {
+    justify-content: flex-start;
+  }
+
+  .mika-kumo-footer {
+    width: min(100% - 32px, 760px);
   }
 }

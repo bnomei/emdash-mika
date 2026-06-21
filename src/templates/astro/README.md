@@ -28,6 +28,7 @@ actions/
   index.ts
   mika.ts
 components/
+  MikaKumoAppFrame.tsx
   MikaKumoPage.astro
   ProductPurchase.astro
   AddToCartForm.astro
@@ -79,6 +80,7 @@ Core product flow:
 actions/index.ts
 actions/mika.ts
 styles/kumo.css
+components/MikaKumoAppFrame.tsx
 components/MikaKumoPage.astro
 components/ProductPurchase.astro
 components/AddToCartForm.astro
