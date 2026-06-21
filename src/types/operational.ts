@@ -188,6 +188,9 @@ export interface EmailMessageRecord {
   readonly attemptCount: number;
   readonly maxAttempts: number;
   readonly nextAttemptAt?: ISODateTime;
+  readonly leaseKey?: string;
+  readonly leasedAt?: ISODateTime;
+  readonly leaseExpiresAt?: ISODateTime;
   readonly lastError?: string;
   readonly createdAt: ISODateTime;
   readonly sentAt?: ISODateTime;

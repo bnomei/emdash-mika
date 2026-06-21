@@ -247,9 +247,6 @@ type StockMutationResult = {
   readonly numUpdatedRows?: bigint | number;
   readonly numChangedRows?: bigint | number;
 };
-const EMAIL_DELIVERY_LEASE_KEY_METADATA_KEY = "deliveryLeaseKey";
-const EMAIL_DELIVERY_LEASE_EXPIRES_AT_METADATA_KEY = "deliveryLeaseExpiresAt";
-const EMAIL_DELIVERY_LEASED_AT_METADATA_KEY = "deliveryLeasedAt";
 type TypedCollectionFacade<TDocument extends TypedDocument & { readonly id: string }> = ReturnType<
   typeof typedCollection<TDocument>
 >;
@@ -1088,7 +1085,6 @@ export class OpsRepository {
       {
         where: {
           status: { in: ["queued", "failed"] },
-          nextAttemptAt: { lte: now },
         },
         orderBy: { nextAttemptAt: "asc" },
       },
@@ -1114,7 +1110,9 @@ export class OpsRepository {
         attemptCount: email.record.attemptCount + 1,
         nextAttemptAt: input.leaseExpiresAt,
         lastError: undefined,
-        metadata: emailMetadataWithLease(email.record.metadata, input),
+        leaseKey: input.leaseKey,
+        leasedAt: input.now,
+        leaseExpiresAt: input.leaseExpiresAt,
       });
     });
 
@@ -1131,9 +1129,11 @@ export class OpsRepository {
         status: "sent",
         providerMessageId: input.providerMessageId,
         nextAttemptAt: undefined,
+        leaseKey: undefined,
+        leasedAt: undefined,
+        leaseExpiresAt: undefined,
         lastError: undefined,
         sentAt: input.now,
-        metadata: emailMetadataWithoutLease(email.record.metadata),
       });
     });
 
@@ -1149,8 +1149,10 @@ export class OpsRepository {
       return emailDocumentWithRecord(email, input.now, {
         status: "failed",
         nextAttemptAt: input.nextAttemptAt,
+        leaseKey: undefined,
+        leasedAt: undefined,
+        leaseExpiresAt: undefined,
         lastError: input.lastError,
-        metadata: emailMetadataWithoutLease(email.record.metadata),
       });
     });
 
@@ -1166,8 +1168,10 @@ export class OpsRepository {
       return emailDocumentWithRecord(email, input.now, {
         status: "skipped",
         nextAttemptAt: undefined,
+        leaseKey: undefined,
+        leasedAt: undefined,
+        leaseExpiresAt: undefined,
         lastError: input.lastError,
-        metadata: emailMetadataWithoutLease(email.record.metadata),
       });
     });
 
@@ -1287,10 +1291,7 @@ function workflowDocumentWithRecord(
 
 function emailIsDueForLease(email: EmailDocument, now: ISODateTime, force = false): boolean {
   if (email.status === "sent" || email.status === "skipped") return false;
-  const leaseExpiresAt = emailMetadataString(
-    email.record.metadata,
-    EMAIL_DELIVERY_LEASE_EXPIRES_AT_METADATA_KEY,
-  );
+  const leaseExpiresAt = email.record.leaseExpiresAt;
   if (leaseExpiresAt && leaseExpiresAt > now) return false;
   if (force) return true;
   if (email.record.attemptCount >= email.record.maxAttempts) return false;
@@ -1302,14 +1303,8 @@ function emailHasActiveLease(
   email: EmailDocument,
   input: { readonly leaseKey: string; readonly now: ISODateTime },
 ): boolean {
-  const leaseKey = emailMetadataString(
-    email.record.metadata,
-    EMAIL_DELIVERY_LEASE_KEY_METADATA_KEY,
-  );
-  const leaseExpiresAt = emailMetadataString(
-    email.record.metadata,
-    EMAIL_DELIVERY_LEASE_EXPIRES_AT_METADATA_KEY,
-  );
+  const leaseKey = email.record.leaseKey;
+  const leaseExpiresAt = email.record.leaseExpiresAt;
 
   return leaseKey === input.leaseKey && leaseExpiresAt !== undefined && leaseExpiresAt > input.now;
 }
@@ -1334,39 +1329,6 @@ function emailDocumentWithRecord(
     record,
     updatedAt: now,
   };
-}
-
-function emailMetadataWithLease(
-  metadata: JsonObject | undefined,
-  input: EmailLeaseRepositoryInput,
-): JsonObject {
-  return {
-    ...metadata,
-    [EMAIL_DELIVERY_LEASE_KEY_METADATA_KEY]: input.leaseKey,
-    [EMAIL_DELIVERY_LEASE_EXPIRES_AT_METADATA_KEY]: input.leaseExpiresAt,
-    [EMAIL_DELIVERY_LEASED_AT_METADATA_KEY]: input.now,
-  };
-}
-
-function emailMetadataWithoutLease(metadata: JsonObject | undefined): JsonObject | undefined {
-  if (!metadata) return undefined;
-
-  const rest = Object.fromEntries(
-    Object.entries(metadata).filter(
-      ([key]) =>
-        key !== EMAIL_DELIVERY_LEASE_KEY_METADATA_KEY &&
-        key !== EMAIL_DELIVERY_LEASE_EXPIRES_AT_METADATA_KEY &&
-        key !== EMAIL_DELIVERY_LEASED_AT_METADATA_KEY,
-    ),
-  ) as JsonObject;
-
-  return Object.keys(rest).length > 0 ? rest : undefined;
-}
-
-function emailMetadataString(metadata: JsonObject | undefined, key: string): string | undefined {
-  const value = metadata?.[key];
-
-  return typeof value === "string" ? value : undefined;
 }
 
 export class StockRepository {

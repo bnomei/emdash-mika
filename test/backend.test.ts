@@ -363,12 +363,26 @@ describe("backend test storage helpers", () => {
         metadata: { link: "https://shop.example.test/future" },
       },
     });
+    const immediateEmail = createEmailDocument({
+      id: createTestMikaId("email", 3),
+      nextAttemptAt: undefined,
+      record: {
+        id: createTestMikaId("email", 3),
+        kind: "magic_link",
+        templateKey: "magic_link",
+        attemptCount: 0,
+        nextAttemptAt: undefined,
+        metadata: { link: "https://shop.example.test/immediate" },
+      },
+    });
     await ops.put(dueEmail);
     await ops.put(futureEmail);
+    await ops.put(immediateEmail);
 
-    await expect(ops.listDueEmails(TEST_NOW)).resolves.toMatchObject({
-      items: [{ id: dueEmail.id }],
-    });
+    const due = await ops.listDueEmails(TEST_NOW);
+    expect(due.items.map((item) => item.id).sort()).toEqual(
+      [dueEmail.id, immediateEmail.id].sort(),
+    );
     await expect(
       ops.tryLeaseEmail({
         emailId: dueEmail.id,
@@ -381,13 +395,14 @@ describe("backend test storage helpers", () => {
       nextAttemptAt: clock.isoAt(300_000),
       record: {
         attemptCount: 1,
-        metadata: expect.objectContaining({
-          deliveryLeaseKey: "email_worker_1",
-          deliveryLeaseExpiresAt: clock.isoAt(300_000),
-        }),
+        leaseKey: "email_worker_1",
+        leaseExpiresAt: clock.isoAt(300_000),
+        metadata: { link: "https://shop.example.test/sign-in" },
       },
     });
-    await expect(ops.listDueEmails(TEST_NOW)).resolves.toMatchObject({ items: [] });
+    await expect(ops.listDueEmails(TEST_NOW)).resolves.toMatchObject({
+      items: [{ id: immediateEmail.id }],
+    });
     await expect(
       ops.completeEmail({
         emailId: dueEmail.id,
@@ -461,6 +476,11 @@ describe("backend test storage helpers", () => {
       to: "Subscriber@Example.test",
       subject: "Continue checkout on Mika",
       text: expect.stringContaining("token=token_1"),
+    });
+    expect(sent[0]?.metadata).toEqual({
+      link: "https://shop.example.test/_emdash/api/plugins/mika/magic-link/verify?token=token_1",
+      purpose: "checkout",
+      expiresAt: createTestClock().isoAt(15 * 60_000),
     });
     await expect(repositories.ops.findEmail(email.id)).resolves.toMatchObject({
       status: "sent",
