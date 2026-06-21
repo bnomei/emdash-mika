@@ -298,6 +298,33 @@ export type MissingPublicCallMikaOperation =
   typeof import("@bnomei/emdash-mika/server").callMikaOperation;
 
 describe("Mika native plugin package", () => {
+  const createPluginCronContext = (cronCalls: unknown[], logCalls: unknown[] = []) =>
+    ({
+      cron: {
+        schedule: async (...args: unknown[]) => {
+          cronCalls.push(args);
+        },
+        cancel: async (...args: unknown[]) => {
+          cronCalls.push(["cancel", ...args]);
+        },
+        list: async () => [],
+      },
+      log: {
+        debug: (message: string, data?: unknown) => {
+          logCalls.push(["debug", message, data]);
+        },
+        info: (message: string, data?: unknown) => {
+          logCalls.push(["info", message, data]);
+        },
+        warn: (message: string, data?: unknown) => {
+          logCalls.push(["warn", message, data]);
+        },
+        error: (message: string, data?: unknown) => {
+          logCalls.push(["error", message, data]);
+        },
+      },
+    }) as never;
+
   it("creates an EmDash native plugin descriptor", () => {
     expect(mikaPlugin()).toMatchObject({
       id: MIKA_PLUGIN_ID,
@@ -329,20 +356,7 @@ describe("Mika native plugin package", () => {
     const plugin = createPlugin();
     const calls: unknown[] = [];
 
-    await plugin.hooks["plugin:install"]?.handler(
-      {} as never,
-      {
-        cron: {
-          schedule: async (...args: unknown[]) => {
-            calls.push(args);
-          },
-          cancel: async (...args: unknown[]) => {
-            calls.push(["cancel", ...args]);
-          },
-          list: async () => [],
-        },
-      } as never,
-    );
+    await plugin.hooks["plugin:install"]?.handler({} as never, createPluginCronContext(calls));
 
     expect(calls).toEqual([
       [MIKA_MAINTENANCE_CRON_TASK, { schedule: MIKA_MAINTENANCE_CRON_SCHEDULE }],
@@ -357,39 +371,34 @@ describe("Mika native plugin package", () => {
 
     await disabled.hooks["plugin:activate"]?.handler(
       {} as never,
-      {
-        cron: {
-          schedule: async (...args: unknown[]) => {
-            disabledCalls.push(["schedule", ...args]);
-          },
-          cancel: async (...args: unknown[]) => {
-            disabledCalls.push(["cancel", ...args]);
-          },
-          list: async () => [],
-        },
-      } as never,
+      createPluginCronContext(disabledCalls),
     );
     await custom.hooks["plugin:activate"]?.handler(
       {} as never,
-      {
-        cron: {
-          schedule: async (...args: unknown[]) => {
-            customCalls.push(args);
-          },
-          cancel: async (...args: unknown[]) => {
-            customCalls.push(["cancel", ...args]);
-          },
-          list: async () => [],
-        },
-      } as never,
+      createPluginCronContext(customCalls),
     );
 
     expect(disabledCalls).toEqual([["cancel", MIKA_MAINTENANCE_CRON_TASK]]);
     expect(customCalls).toEqual([[MIKA_MAINTENANCE_CRON_TASK, { schedule: "*/5 * * * *" }]]);
   });
 
+  it("cancels Mika maintenance cron on plugin deactivate and uninstall", async () => {
+    const plugin = createPlugin();
+    const calls: unknown[] = [];
+    const ctx = createPluginCronContext(calls);
+
+    await plugin.hooks["plugin:deactivate"]?.handler({} as never, ctx);
+    await plugin.hooks["plugin:uninstall"]?.handler({ deleteData: false } as never, ctx);
+
+    expect(calls).toEqual([
+      ["cancel", MIKA_MAINTENANCE_CRON_TASK],
+      ["cancel", MIKA_MAINTENANCE_CRON_TASK],
+    ]);
+  });
+
   it("invokes Mika maintenance from the cron hook", async () => {
     const calls: unknown[] = [];
+    const logCalls: unknown[] = [];
     const plugin = createPlugin({
       api: {
         admin: {
@@ -408,14 +417,73 @@ describe("Mika native plugin package", () => {
 
     await plugin.hooks.cron?.handler(
       { name: MIKA_MAINTENANCE_CRON_TASK, scheduledAt: "2026-06-21T10:00:00.000Z" },
-      {} as never,
+      createPluginCronContext([], logCalls),
     );
     await plugin.hooks.cron?.handler(
       { name: "unrelated", scheduledAt: "2026-06-21T10:01:00.000Z" },
-      {} as never,
+      createPluginCronContext([], logCalls),
     );
 
     expect(calls).toEqual([{ now: "2026-06-21T10:00:00.000Z" }]);
+    expect(logCalls).toEqual([
+      [
+        "info",
+        "Mika maintenance completed",
+        expect.objectContaining({
+          now: "2026-06-21T10:00:00.000Z",
+          tasks: expect.objectContaining({
+            stockReservations: expect.objectContaining({
+              status: "completed",
+              reservationsReleased: 2,
+            }),
+            emailOutbox: expect.objectContaining({
+              status: "skipped",
+            }),
+            accountDeleteRequests: expect.objectContaining({
+              status: "skipped",
+            }),
+          }),
+        }),
+      ],
+    ]);
+  });
+
+  it("logs Mika maintenance failures before surfacing stock cleanup errors", async () => {
+    const logCalls: unknown[] = [];
+    const plugin = createPlugin({
+      api: {
+        admin: {
+          releaseExpiredReservations: async () => ({
+            ok: false,
+            status: 500,
+            error: { code: "PROVIDER_FAILED", message: "release failed" },
+          }),
+        },
+      },
+    });
+
+    await expect(
+      plugin.hooks.cron?.handler(
+        { name: MIKA_MAINTENANCE_CRON_TASK, scheduledAt: "2026-06-21T10:00:00.000Z" },
+        createPluginCronContext([], logCalls),
+      ),
+    ).rejects.toThrow("release failed");
+
+    expect(logCalls).toEqual([
+      [
+        "warn",
+        "Mika maintenance completed with failures",
+        expect.objectContaining({
+          now: "2026-06-21T10:00:00.000Z",
+          tasks: expect.objectContaining({
+            stockReservations: expect.objectContaining({
+              status: "failed",
+              error: "release failed",
+            }),
+          }),
+        }),
+      ],
+    ]);
   });
 });
 

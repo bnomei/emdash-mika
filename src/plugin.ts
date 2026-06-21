@@ -5,7 +5,7 @@ import {
   type PluginStorageConfig,
 } from "emdash";
 
-import { createMikaMaintenanceRunner } from "./api/maintenance";
+import { createMikaMaintenanceRunner, type MikaMaintenanceRunResult } from "./api/maintenance";
 import { createMikaPluginRoutes } from "./api/route-handlers";
 import { setDefaultMikaApiOverrides, setDefaultMikaOperationPolicy } from "./api/runtime-api";
 import { MIKA_PLUGIN_ID } from "./api/routes";
@@ -77,7 +77,7 @@ export function createPlugin(options: MikaCreatePluginOptions = {}) {
     if (!ctx.cron) return;
 
     if (!maintenanceEnabled) {
-      await ctx.cron.cancel(MIKA_MAINTENANCE_CRON_TASK);
+      await cancelMaintenance(_event, ctx);
       return;
     }
 
@@ -95,18 +95,98 @@ export function createPlugin(options: MikaCreatePluginOptions = {}) {
     hooks: {
       "plugin:install": registerMaintenance,
       "plugin:activate": registerMaintenance,
-      cron: async (event: MikaCronEvent) => {
+      "plugin:deactivate": cancelMaintenance,
+      "plugin:uninstall": cancelMaintenance,
+      cron: async (event: MikaCronEvent, ctx: PluginContext) => {
         if (!maintenanceEnabled || event.name !== MIKA_MAINTENANCE_CRON_TASK) return;
 
         const result = await createMikaMaintenanceRunner({ api }).runOnce({
           now: createISODateTime(event.scheduledAt),
         });
+        logMikaMaintenanceResult(ctx, result);
         if (result.stockReservations.status === "failed") {
           throw new Error(result.stockReservations.error);
         }
       },
     },
   });
+}
+
+async function cancelMaintenance(_event: unknown, ctx: PluginContext): Promise<void> {
+  if (!ctx.cron) return;
+
+  await ctx.cron.cancel(MIKA_MAINTENANCE_CRON_TASK);
+}
+
+function logMikaMaintenanceResult(ctx: PluginContext, result: MikaMaintenanceRunResult): void {
+  const summary = summarizeMikaMaintenanceResult(result);
+  const hasFailure = Object.values(summary.tasks).some((task) => task.status === "failed");
+
+  if (hasFailure) {
+    ctx.log.warn("Mika maintenance completed with failures", summary);
+    return;
+  }
+
+  ctx.log.info("Mika maintenance completed", summary);
+}
+
+function summarizeMikaMaintenanceResult(result: MikaMaintenanceRunResult) {
+  return {
+    now: result.now,
+    tasks: {
+      emailOutbox: summarizeTask(result.emailOutbox, (taskResult) => ({
+        scanned: taskResult.scanned,
+        leased: taskResult.leased,
+        sent: taskResult.sent,
+        failed: taskResult.failed,
+        skipped: taskResult.skipped,
+        leaseMissed: taskResult.leaseMissed,
+        leaseLost: taskResult.leaseLost,
+        hasMore: taskResult.hasMore,
+      })),
+      stockReservations: summarizeTask(result.stockReservations, (taskResult) => ({
+        reservationsScanned: taskResult.reservationsScanned,
+        reservationsReleased: taskResult.reservationsReleased,
+        stockItems: taskResult.stockItems,
+      })),
+      ephemeralRecords: summarizeTask(result.ephemeralRecords, (taskResult) => ({
+        purged: taskResult.purged,
+      })),
+      accountDeleteRequests: summarizeTask(result.accountDeleteRequests, (taskResult) => ({
+        scanned: taskResult.scanned,
+        completed: taskResult.completed,
+        failed: taskResult.failed,
+        hasMore: taskResult.hasMore,
+      })),
+    },
+  };
+}
+
+function summarizeTask<TResult extends object>(
+  task:
+    | { readonly status: "completed"; readonly result: TResult }
+    | { readonly status: "failed"; readonly error: string }
+    | { readonly status: "skipped"; readonly reason: string },
+  summarize: (result: TResult) => Record<string, unknown>,
+): Record<string, unknown> & { readonly status: string } {
+  if (task.status === "completed") {
+    return {
+      status: task.status,
+      ...summarize(task.result),
+    };
+  }
+
+  if (task.status === "failed") {
+    return {
+      status: task.status,
+      error: task.error,
+    };
+  }
+
+  return {
+    status: task.status,
+    reason: task.reason,
+  };
 }
 
 export const mika = mikaPlugin;
