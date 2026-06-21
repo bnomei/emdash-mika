@@ -1,10 +1,12 @@
 ---
 import { actions } from "astro:actions";
+import { Text } from "@cloudflare/kumo";
 import { createMika } from "@bnomei/emdash-mika/astro";
 import CartLines from "../components/CartLines.astro";
 import CartSummary from "../components/CartSummary.astro";
 import CheckoutForm from "../components/CheckoutForm.astro";
 import CouponForm from "../components/CouponForm.astro";
+import MikaKumoPage from "../components/MikaKumoPage.astro";
 
 export const prerender = false;
 
@@ -32,11 +34,12 @@ const cart = cartResult.ok ? cartResult.data : null;
 const error = actionError ?? (cartResult.ok ? null : cartResult.error.message);
 ---
 
-<main data-mika-cart-page>
-  <h1>Cart</h1>
-  {error && <p role="alert">{error}</p>}
-  <CartLines cart={cart} />
-  <CouponForm cart={cart} />
-  <CartSummary cart={cart} />
-  <CheckoutForm cart={cart} />
-</main>
+<MikaKumoPage title="Cart" pageSize="narrow" data-mika-cart-page>
+  <section class="mika-kumo-panel mika-kumo-stack">
+    {error && <Text as="p" variant="error" role="alert">{error}</Text>}
+    <CartLines cart={cart} />
+    <CouponForm cart={cart} />
+    <CartSummary cart={cart} />
+    <CheckoutForm cart={cart} />
+  </section>
+</MikaKumoPage>

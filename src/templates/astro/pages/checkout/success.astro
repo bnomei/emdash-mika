@@ -1,5 +1,7 @@
 ---
+import { Link, Text } from "@cloudflare/kumo";
 import { createMika } from "@bnomei/emdash-mika/astro";
+import MikaKumoPage from "../../components/MikaKumoPage.astro";
 import {
   mikaTemplateCheckoutSuccessHref,
   mikaTemplateRoutes
@@ -25,11 +27,14 @@ const messageByStatus: Record<string, string> = {
 };
 ---
 
-<main data-mika-checkout-success>
-  <h1>Checkout</h1>
-  <p aria-live="polite">{messageByStatus[status] ?? "Checkout received."}</p>
-  {status === "pending" && checkoutId && (
-    <a href={mikaTemplateCheckoutSuccessHref(checkoutId)}>Refresh status</a>
-  )}
-  {checkout?.orderId && <a href={mikaTemplateRoutes.account}>View account</a>}
-</main>
+<MikaKumoPage title="Checkout" pageSize="narrow" data-mika-checkout-success>
+  <section class="mika-kumo-panel mika-kumo-stack">
+    <Text as="p" aria-live="polite">{messageByStatus[status] ?? "Checkout received."}</Text>
+    <div class="mika-kumo-actions">
+      {status === "pending" && checkoutId && (
+        <Link href={mikaTemplateCheckoutSuccessHref(checkoutId)}>Refresh status</Link>
+      )}
+      {checkout?.orderId && <Link href={mikaTemplateRoutes.account}>View account</Link>}
+    </div>
+  </section>
+</MikaKumoPage>

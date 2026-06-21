@@ -5,7 +5,7 @@ import {
 } from "@bnomei/emdash-mika/agent";
 import type { APIRoute } from "astro";
 
-export const prerender = true;
+export const prerender = false;
 
 const agentManifestSchemaId =
   typeof mikaAgentManifestJsonSchema["$id"] === "string"

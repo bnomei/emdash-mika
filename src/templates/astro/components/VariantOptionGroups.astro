@@ -34,17 +34,17 @@ const selectedOptions = selected?.options ?? {};
     {...attrs}
     data-mika-variant-groups
     data-mika-sellables={JSON.stringify(variantOptionMap)}
-    class={className}
+    class:list={["mika-kumo-fieldset", className]}
   >
-    <legend>{label}</legend>
+    <legend class="mika-kumo-legend">{label}</legend>
     <input type="hidden" {...mikaHiddenInput("sellableId", selected?.id)} />
     {includePriceId && selected?.priceId && (
       <input type="hidden" {...mikaHiddenInput("priceId", selected.priceId)} />
     )}
     {variantGroups.map((group) => (
-      <label>
+      <label class="mika-kumo-field">
         <span>{group.label}</span>
-        <select data-mika-variant-option={group.option}>
+        <select class="mika-kumo-select" data-mika-variant-option={group.option}>
           {group.values.map((value) => (
             <option
               value={value.value}

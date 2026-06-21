@@ -1,0 +1,57 @@
+---
+import { Badge, Link, Text } from "@cloudflare/kumo";
+import "../styles/kumo.css";
+
+interface Props {
+  title: string;
+  description?: string;
+  eyebrow?: string;
+  documentTitle?: string;
+  backHref?: string;
+  backLabel?: string;
+  pageSize?: "default" | "narrow";
+  class?: string;
+  [attribute: string]: unknown;
+}
+
+const {
+  title,
+  description,
+  eyebrow,
+  documentTitle = title,
+  backHref,
+  backLabel = "Back",
+  pageSize = "default",
+  class: className,
+  ...attrs
+} = Astro.props;
+const hasHeaderSlot = Astro.slots.has("header");
+---
+
+<html lang="en" data-theme="kumo">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>{documentTitle}</title>
+    <slot name="head" />
+  </head>
+  <body>
+    <main
+      {...attrs}
+      data-mika-kumo-page
+      data-mika-page-size={pageSize}
+      class:list={["mika-kumo-page", className]}
+    >
+      <header class="mika-kumo-header">
+        {backHref && <Link href={backHref}>{backLabel}</Link>}
+        {eyebrow && <Badge variant="secondary">{eyebrow}</Badge>}
+        <Text as="h1" variant="heading1">{title}</Text>
+        {description && (
+          <Text as="p" variant="secondary" size="lg">{description}</Text>
+        )}
+        {hasHeaderSlot && <slot name="header" />}
+      </header>
+      <slot />
+    </main>
+  </body>
+</html>

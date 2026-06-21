@@ -1,4 +1,5 @@
 ---
+import { Badge, Link, Text } from "@cloudflare/kumo";
 import type { OrderSummaryDTO } from "@bnomei/emdash-mika/types";
 import { formatMikaMoney } from "@bnomei/emdash-mika/astro";
 
@@ -24,22 +25,22 @@ const {
 const hasEmptySlot = Astro.slots.has("empty");
 ---
 
-<section {...attrs} data-mika-account-orders class={className}>
-  <h2><slot name="heading">{headingLabel}</slot></h2>
+<section {...attrs} data-mika-account-orders class:list={["mika-kumo-stack", className]}>
+  <Text as="h2" variant="heading2"><slot name="heading">{headingLabel}</slot></Text>
   {orders.length ? (
-    <ul>
+    <ul class="mika-kumo-list">
       {orders.map((order) => {
         const href = orderHref?.(order);
         return (
-        <li>
+        <li class="mika-kumo-line-item">
           {href ? (
-            <a href={href}>{order.orderNumber}</a>
+            <Link href={href}>{order.orderNumber}</Link>
           ) : (
             <span>{order.orderNumber}</span>
           )}
-          <span>{order.status}</span>
-          <span>{formatMikaMoney(order.total)}</span>
-          {order.invoiceUrl && <a href={order.invoiceUrl}>{invoiceLabel}</a>}
+          <Badge variant="secondary">{order.status}</Badge>
+          <span class="mika-kumo-strong">{formatMikaMoney(order.total)}</span>
+          {order.invoiceUrl && <Link href={order.invoiceUrl}>{invoiceLabel}</Link>}
         </li>
         );
       })}
@@ -47,6 +48,6 @@ const hasEmptySlot = Astro.slots.has("empty");
   ) : hasEmptySlot ? (
     <slot name="empty" />
   ) : (
-    <p>{emptyLabel}</p>
+    <Text as="p" variant="secondary">{emptyLabel}</Text>
   )}
 </section>

@@ -1,4 +1,5 @@
 ---
+import { Link, Text } from "@cloudflare/kumo";
 import type { DownloadDTO } from "@bnomei/emdash-mika/types";
 
 interface Props {
@@ -19,15 +20,15 @@ const {
 const hasEmptySlot = Astro.slots.has("empty");
 ---
 
-<section {...attrs} data-mika-account-downloads class={className}>
-  <h2><slot name="heading">{headingLabel}</slot></h2>
+<section {...attrs} data-mika-account-downloads class:list={["mika-kumo-stack", className]}>
+  <Text as="h2" variant="heading2"><slot name="heading">{headingLabel}</slot></Text>
   {downloads.length ? (
-    <ul>
+    <ul class="mika-kumo-list">
       {downloads.map((download) => (
-        <li>
-          <a href={download.href}>{download.title}</a>
+        <li class="mika-kumo-line-item">
+          <Link href={download.href}>{download.title}</Link>
           {download.expiresAt && (
-            <time datetime={download.expiresAt}>
+            <time class="mika-kumo-muted" datetime={download.expiresAt}>
               {new Date(download.expiresAt).toLocaleDateString()}
             </time>
           )}
@@ -37,6 +38,6 @@ const hasEmptySlot = Astro.slots.has("empty");
   ) : hasEmptySlot ? (
     <slot name="empty" />
   ) : (
-    <p>{emptyLabel}</p>
+    <Text as="p" variant="secondary">{emptyLabel}</Text>
   )}
 </section>

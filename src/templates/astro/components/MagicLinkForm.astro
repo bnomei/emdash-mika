@@ -1,5 +1,6 @@
 ---
 import { actions } from "astro:actions";
+import { Button } from "@cloudflare/kumo";
 import { mikaReturnToInput } from "../lib/form";
 import { mikaTemplateRoutes } from "../lib/routes";
 
@@ -38,14 +39,15 @@ const resolvedEmailErrorId = emailError
   {...attrs}
   id={formId}
   data-mika-magic-link
-  class={className}
+  class:list={["mika-kumo-form", className]}
   action={actions.mika.magicLink.request}
   method="post"
 >
   <input type="hidden" {...mikaReturnToInput(returnTo)} />
-  <label>
+  <label class="mika-kumo-field">
     <span>{emailLabel}</span>
     <input
+      class="mika-kumo-input"
       id={resolvedEmailId}
       name="email"
       type="email"
@@ -61,5 +63,5 @@ const resolvedEmailErrorId = emailError
       {emailError}
     </p>
   )}
-  <button type="submit">{label}</button>
+  <Button type="submit" variant="primary">{label}</Button>
 </form>

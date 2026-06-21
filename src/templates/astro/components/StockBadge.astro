@@ -1,4 +1,5 @@
 ---
+import { Badge } from "@cloudflare/kumo";
 import type { AvailabilityDTO } from "@bnomei/emdash-mika/types";
 
 interface Props {
@@ -19,11 +20,26 @@ const labelByStatus: Record<string, string> = {
   manual: "Available"
 };
 const label = labels[status] ?? labelByStatus[status] ?? status;
+const variantByStatus: Record<string, "success" | "warning" | "error" | "secondary"> = {
+  available: "success",
+  low_stock: "warning",
+  out_of_stock: "error",
+  backorder: "warning",
+  untracked: "secondary",
+  manual: "secondary"
+};
+const variant = variantByStatus[status] ?? "secondary";
 ---
 
-<span {...attrs} data-mika-stock={status} class={className} aria-live="polite">
+<Badge
+  {...attrs}
+  data-mika-stock={status}
+  className={className}
+  variant={variant}
+  aria-live="polite"
+>
   {label}
   {availability?.availableQuantity !== undefined && status !== "out_of_stock" && (
     <span> ({availability.availableQuantity})</span>
   )}
-</span>
+</Badge>

@@ -1,6 +1,8 @@
 ---
 import { actions } from "astro:actions";
+import { Text } from "@cloudflare/kumo";
 import { createMika } from "@bnomei/emdash-mika/astro";
+import MikaKumoPage from "../components/MikaKumoPage.astro";
 import WishlistList from "../components/WishlistList.astro";
 
 export const prerender = false;
@@ -15,9 +17,12 @@ const wishlist = wishlistResult.ok ? wishlistResult.data : null;
 const error = actionError ?? (wishlistResult.ok ? null : wishlistResult.error.message);
 ---
 
-<main data-mika-wishlist-page>
-  <h1>Wishlist</h1>
-  {error && <p role="alert">{error}</p>}
-  {moveToCartResult?.data && <p role="status">Item moved to cart.</p>}
-  <WishlistList wishlist={wishlist} />
-</main>
+<MikaKumoPage title="Wishlist" pageSize="narrow" data-mika-wishlist-page>
+  <section class="mika-kumo-panel mika-kumo-stack">
+    {error && <Text as="p" variant="error" role="alert">{error}</Text>}
+    {moveToCartResult?.data && (
+      <Text as="p" variant="success" role="status">Item moved to cart.</Text>
+    )}
+    <WishlistList wishlist={wishlist} />
+  </section>
+</MikaKumoPage>

@@ -20,7 +20,12 @@ const show =
 ---
 
 {show && (
-  <p {...attrs} data-mika-low-stock class={className} role="status">
+  <p
+    {...attrs}
+    data-mika-low-stock
+    class:list={["mika-kumo-status", className]}
+    role="status"
+  >
     {label}
   </p>
 )}

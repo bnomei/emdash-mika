@@ -1,0 +1,50 @@
+---
+import { Badge, Text } from "@cloudflare/kumo";
+
+interface AccountLicenseDisplay {
+  readonly id: string;
+  readonly title: string;
+  readonly status: string;
+  readonly displayKeySuffix?: string;
+}
+
+interface Props {
+  licenses: readonly AccountLicenseDisplay[];
+  headingLabel?: string;
+  emptyLabel?: string;
+  class?: string;
+  [attribute: string]: unknown;
+}
+
+const {
+  licenses,
+  headingLabel = "Licenses",
+  emptyLabel = "No licenses.",
+  class: className,
+  ...attrs
+} = Astro.props;
+const hasEmptySlot = Astro.slots.has("empty");
+---
+
+<section {...attrs} data-mika-account-licenses class:list={["mika-kumo-stack", className]}>
+  <Text as="h2" variant="heading2"><slot name="heading">{headingLabel}</slot></Text>
+  {licenses.length ? (
+    <ul class="mika-kumo-list">
+      {licenses.map((license) => (
+        <li class="mika-kumo-line-item">
+          <strong>{license.title}</strong>
+          <Badge variant={license.status === "active" ? "success" : "secondary"}>
+            {license.status}
+          </Badge>
+          {license.displayKeySuffix && (
+            <span class="mika-kumo-muted">Key ending {license.displayKeySuffix}</span>
+          )}
+        </li>
+      ))}
+    </ul>
+  ) : hasEmptySlot ? (
+    <slot name="empty" />
+  ) : (
+    <p class="mika-kumo-muted">{emptyLabel}</p>
+  )}
+</section>

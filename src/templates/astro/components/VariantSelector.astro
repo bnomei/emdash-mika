@@ -33,10 +33,10 @@ const hiddenValue = selected ?? activeSellables[0]?.id ?? "";
 ---
 
 {activeSellables.length > 1 ? (
-  <fieldset {...attrs} data-mika-variants class={className}>
-    <legend>{label}</legend>
+  <fieldset {...attrs} data-mika-variants class:list={["mika-kumo-fieldset", className]}>
+    <legend class="mika-kumo-legend">{label}</legend>
     {activeSellables.map((sellable) => (
-      <label>
+      <label class="mika-kumo-choice">
         <input
           type="radio"
           name="sellableId"

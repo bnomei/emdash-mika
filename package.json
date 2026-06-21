@@ -94,7 +94,9 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.3",
+    "@cloudflare/kumo": "^2.5.2",
     "@libsql/kysely-libsql": "^0.4.1",
+    "@phosphor-icons/react": "^2.1.10",
     "@types/react": "^19.2.7",
     "ajv": "^8.20.0",
     "astro": "^6.4.4",
@@ -102,16 +104,29 @@
     "kysely": "^0.28.0",
     "publint": "^0.3.21",
     "react": "^19.2.3",
+    "react-dom": "^19.2.7",
     "typescript": "^6.0.3",
     "vite-plus": "^0.1.24"
   },
   "peerDependencies": {
+    "@cloudflare/kumo": "^2.5.2",
+    "@phosphor-icons/react": "^2.1.10",
     "astro": "^5.0.0 || ^6.0.0",
     "emdash": ">=0.19.0",
-    "react": "^18.3.0 || ^19.0.0"
+    "react": "^18.3.0 || ^19.0.0",
+    "react-dom": "^18.3.0 || ^19.0.0"
   },
   "peerDependenciesMeta": {
+    "@cloudflare/kumo": {
+      "optional": true
+    },
+    "@phosphor-icons/react": {
+      "optional": true
+    },
     "react": {
+      "optional": true
+    },
+    "react-dom": {
       "optional": true
     }
   },

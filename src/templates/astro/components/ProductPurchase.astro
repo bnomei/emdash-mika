@@ -30,7 +30,11 @@ const primaryPrice = purchase.selectedPrice;
 const needsPurchaseSync = purchase.useGroupedVariantControls || purchase.options.length > 1;
 ---
 
-<mika-product-purchase {...attrs} data-mika-product-purchase class={className}>
+<mika-product-purchase
+  {...attrs}
+  data-mika-product-purchase
+  class:list={["mika-kumo-purchase", className]}
+>
   {purchase.useGroupedVariantControls ? (
     <VariantOptionGroups
       variantGroups={purchase.variantGroups}
@@ -39,10 +43,10 @@ const needsPurchaseSync = purchase.useGroupedVariantControls || purchase.options
       includePriceId
     />
   ) : purchase.options.length > 1 ? (
-    <fieldset data-mika-shared-purchase-options>
-      <legend>Purchase</legend>
+    <fieldset data-mika-shared-purchase-options class="mika-kumo-fieldset">
+      <legend class="mika-kumo-legend">Purchase</legend>
       {purchase.options.map((option, index) => (
-        <label>
+        <label class="mika-kumo-choice">
           <input
             type="radio"
             name="mikaPurchase"
@@ -84,9 +88,3 @@ const needsPurchaseSync = purchase.useGroupedVariantControls || purchase.options
   )}
   {needsPurchaseSync && <ProductPurchaseSync />}
 </mika-product-purchase>
-
-<style>
-  mika-product-purchase {
-    display: block;
-  }
-</style>

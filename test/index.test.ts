@@ -3645,30 +3645,30 @@ describe("Mika Astro template contracts", () => {
     expect(operationsSource).toContain("normalizeCheckoutStartActionInput");
   });
 
-  it("documents the core copy path separately from contract examples", () => {
+  it("documents the Kumo core copy path separately from contract examples", () => {
     const source = readFileSync(
       new URL("../src/templates/astro/README.md", import.meta.url),
       "utf8",
     );
 
-    expect(source).toContain("The core kit is the smallest copy path");
-    expect(source).toContain("`ProductPurchase`, `AddToCartForm`, `BuyNowForm`, `WishlistForm`");
-    expect(source).toContain("Contract examples stay in place");
-    expect(source).toContain("`CouponForm`, `CheckoutForm`, account export/delete pages");
-    expect(source).toContain("the provider webhook endpoint");
-    expect(source).toContain("owns cross-form grouped variant synchronization");
-    expect(source).toContain("`VariantOptionGroups` is render-focused");
-    expect(source).toContain("Agent-readable examples are optional copyable references");
-    expect(source).toContain("`ProductStructuredData`");
-    expect(source).toContain("`.well-known/mika-agent.json.ts`");
-    expect(source).toContain('createMikaAgentManifest({ include: ["public"] })');
-    expect(source).toContain("manifest schema, version, and EmDash Mika plugin route base path");
-    expect(source).toContain("not an auth, payment, or tool contract");
-    expect(source).toContain("OAuth, policy, confirmation, and replay");
-    expect(source).toContain("It emits `Product` for simple products and `ProductGroup`");
-    expect(source).toContain("Product groups include `productGroupID`");
-    expect(source).toContain("schema.org variant properties");
-    expect(source).toContain("seller, shipping details, return policy, and");
+    expect(source).toContain("Core product flow:");
+    expect(source).toContain("styles/kumo.css");
+    expect(source).toContain("components/MikaKumoPage.astro");
+    expect(source).toContain("components/ProductPurchase.astro");
+    expect(source).toContain("components/AddToCartForm.astro");
+    expect(source).toContain("components/BuyNowForm.astro");
+    expect(source).toContain("components/WishlistForm.astro");
+    expect(source).toContain("Contract examples such as `CouponForm`, `CheckoutForm`");
+    expect(source).toContain("account export/delete");
+    expect(source).toContain("provider webhook endpoint");
+    expect(source).toContain("coordinates hidden");
+    expect(source).toContain("grouped variant selection");
+    expect(source).toContain("Agent-readable storefront flow:");
+    expect(source).toContain("components/ProductStructuredData.astro");
+    expect(source).toContain("pages/.well-known/mika-agent.json.ts");
+    expect(source).toContain("Install and enable Kumo UI");
+    expect(source).toContain("@cloudflare/kumo/styles/standalone");
+    expect(source).toContain("@cloudflare/kumo/styles/tailwind");
     expect(source).toContain("Mika.webhook.receive");
   });
 
@@ -3801,7 +3801,7 @@ describe("Mika Astro template contracts", () => {
     expect(magicLink).toContain("aria-describedby={resolvedEmailErrorId}");
     expect(account).toContain('id="mika-account-magic-link"');
     expect(checkout).toContain("customerLegend");
-    expect(checkout).toContain("<legend>{customerLegend}</legend>");
+    expect(checkout).toContain('<legend class="mika-kumo-legend">{customerLegend}</legend>');
   });
 
   it("keeps grouped variant cross-form sync owned by ProductPurchase", () => {

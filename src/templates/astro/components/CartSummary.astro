@@ -25,7 +25,7 @@ const {
 } = Astro.props;
 ---
 
-<dl {...attrs} data-mika-cart-summary class={className}>
+<dl {...attrs} data-mika-cart-summary class:list={["mika-kumo-summary", className]}>
   <div>
     <dt>{subtotalLabel}</dt>
     <dd>{formatMikaMoney(cart?.subtotal)}</dd>

@@ -1,11 +1,140 @@
 # Mika Astro Templates
 
-These files are copyable examples for an Astro + EmDash project. They are not a
-theme and they are not hidden routes owned by Mika.
+These files are copyable Kumo UI examples for an Astro + EmDash project. They
+are not hidden routes owned by Mika.
+
+Copy only the pieces the host storefront needs. Keep final product routing,
+localization, auth policy, provider credentials, tax/shipping rules, and
+deployment behavior in the host app.
+
+## Examples
+
+Use the focused examples for setup detail:
+
+- [First release slice](./examples/release-slice.md): the package story, what
+  should ship first, and what should stay out of scope.
+- [Astro storefront](./examples/astro-storefront.md): plugin registration,
+  actions, product pages, cart, wishlist, checkout, account, downloads, and
+  webhooks.
+- [Backend and provider wiring](./examples/backend-provider.md): repository
+  ports, provider adapters, email delivery, and maintenance.
+- [Agent-ready storefront](./examples/agent-ready-storefront.md): JSON-LD,
+  `llms.txt`, `.well-known/mika-agent.json`, and protected agent boundaries.
+
+## Directory Map
+
+```txt
+actions/
+  index.ts
+  mika.ts
+components/
+  MikaKumoPage.astro
+  ProductPurchase.astro
+  AddToCartForm.astro
+  BuyNowForm.astro
+  WishlistForm.astro
+  VariantOptionGroups.astro
+  CartLines.astro
+  CartSummary.astro
+  CouponForm.astro
+  CheckoutForm.astro
+  AccountOrders.astro
+  AccountSubscriptions.astro
+  AccountLicenses.astro
+  AccountDownloads.astro
+  MagicLinkForm.astro
+  ProductStructuredData.astro
+  StockBadge.astro
+  LowStockNotice.astro
+  UnavailableNotice.astro
+lib/
+  form.ts
+  routes.ts
+styles/
+  kumo.css
+pages/
+  cart.astro
+  wishlist.astro
+  account.astro
+  account/magic-link.astro
+  checkout/success.astro
+  checkout/cancel.astro
+  download/[token].ts
+  api/mika-webhook/[provider].ts
+  llms.txt.ts
+  .well-known/mika-agent.json.ts
+examples/
+  README.md
+  release-slice.md
+  astro-storefront.md
+  backend-provider.md
+  agent-ready-storefront.md
+```
+
+## Copy Paths
+
+Core product flow:
+
+```txt
+actions/index.ts
+actions/mika.ts
+styles/kumo.css
+components/MikaKumoPage.astro
+components/ProductPurchase.astro
+components/AddToCartForm.astro
+components/BuyNowForm.astro
+components/WishlistForm.astro
+components/VariantOptionGroups.astro
+components/StockBadge.astro
+components/LowStockNotice.astro
+components/UnavailableNotice.astro
+components/ProductStructuredData.astro
+```
+
+Full storefront flow:
+
+```txt
+components/CartLines.astro
+components/CartSummary.astro
+components/CouponForm.astro
+components/CheckoutForm.astro
+components/WishlistList.astro
+components/MagicLinkForm.astro
+components/AccountOrders.astro
+components/AccountSubscriptions.astro
+components/AccountLicenses.astro
+components/AccountDownloads.astro
+pages/cart.astro
+pages/wishlist.astro
+pages/account.astro
+pages/account/magic-link.astro
+pages/checkout/success.astro
+pages/checkout/cancel.astro
+pages/download/[token].ts
+pages/api/mika-webhook/[provider].ts
+```
+
+Agent-readable storefront flow:
+
+```txt
+components/ProductStructuredData.astro
+pages/llms.txt.ts
+pages/.well-known/mika-agent.json.ts
+```
+
+`ProductPurchase` is the main product form owner. It coordinates hidden
+sellable/price fields, add-to-cart, buy-now, wishlist, quantity limits,
+availability panels, and grouped variant selection.
+
+Contract examples such as `CouponForm`, `CheckoutForm`, account export/delete
+forms, wishlist move/save-for-later forms, subscription actions, and the
+provider webhook endpoint depend on the same request-bound Mika API and
+provider adapters as the rest of the copied kit. Keep or delete them based on
+the storefront and provider integration.
 
 ## Wiring
 
-1. Register the native plugin in `astro.config.mjs`:
+Register the native plugin in `astro.config.mjs`:
 
 ```ts
 import { defineConfig } from "astro/config";
@@ -22,97 +151,55 @@ export default defineConfig({
 });
 ```
 
-2. Copy `actions/index.ts` and `actions/mika.ts` into your project
-   `src/actions/` folder. The `mika.ts` file is only a shim over
-   `@bnomei/emdash-mika/astro-actions`, so the action factory stays versioned
-   with Mika.
+Install and enable Kumo UI in the host app:
 
-3. Copy only the pages and components you want. The examples use regular Astro
-   forms with `astro:actions`, so product pages and layouts stay in the host
-   project.
-
-## Copy Paths
-
-The core kit is the smallest copy path for a storefront product flow:
-`ProductPurchase`, `AddToCartForm`, `BuyNowForm`, `WishlistForm`,
-`StockBadge`, `LowStockNotice`, and `UnavailableNotice`. `ProductPurchase`
-owns cross-form grouped variant synchronization for hidden sellable/price
-fields, purchase buttons, quantity limits, and availability panels.
-`VariantOptionGroups` is render-focused: it keeps its own local hidden fields in
-sync and emits selection events for the product-level owner.
-
-Contract examples stay in place as copyable references for fuller projects:
-`CouponForm`, `CheckoutForm`, account export/delete pages, wishlist move and
-save-for-later forms, grouped variant selection, checkout customer fields, and
-the provider webhook endpoint. Keep or delete them based on the storefront and
-provider adapters wired in the host project.
-
-Agent-readable examples are optional copyable references: `ProductStructuredData`
-for JSON-LD `Product`/`Offer` metadata, `llms.txt.ts` for a root `llms.txt`, and
-`.well-known/mika-agent.json.ts` for a Mika-native capability manifest. These
-examples describe the storefront and safe public reads. The well-known example
-wraps a public-only `createMikaAgentManifest({ include: ["public"] })` payload
-with the manifest schema, version, and EmDash Mika plugin route base path. The
-`llms.txt` example is only a concise discovery index for agents and LLMs; it is
-not an auth, payment, or tool contract. Mika also exposes trusted quote and
-checkout preview contracts for host-owned agent projections, but protected
-agent-tool flows still need host OAuth, policy, confirmation, and replay
-storage.
-
-`ProductStructuredData` accepts either small legacy props (`name`, `brand`,
-`images`) or a `product` object with identifiers, brand, category, item
-condition, variant overrides, seller, shipping details, return policy, and
-price validity. It emits `Product` for simple products and `ProductGroup` with
-variant `Product` and per-price `Offer` nodes when sellables have variant
-options. Product groups include `productGroupID`, `hasVariant`, `isVariantOf`,
-and `inProductGroupWithID` links. Common variant dimensions such as color, size,
-material, and pattern are also emitted as schema.org variant properties, while
-custom dimensions remain in `additionalProperty`.
-
-The copied pages export `prerender = false` because Astro Actions, sessions,
-and request-bound cart/account state need on-demand rendering. If your whole
-site uses `output: "server"`, that export is still harmless.
-
-Host product pages that render Mika forms need the same on-demand/action-result
-shape. A minimal product page looks like this:
-
-```astro
----
-import { actions } from "astro:actions";
-import { createMika } from "@bnomei/emdash-mika/astro";
-import ProductPurchase from "../components/ProductPurchase.astro";
-
-export const prerender = false;
-
-const Mika = createMika(Astro);
-const checkoutResult = Astro.getActionResult(actions.mika.checkout.start);
-if (checkoutResult?.data?.redirectUrl) {
-  return Astro.redirect(checkoutResult.data.redirectUrl);
-}
-
-const addResult = Astro.getActionResult(actions.mika.cart.add);
-const wishlistResult = Astro.getActionResult(actions.mika.wishlist.add);
-const formError =
-  checkoutResult?.error?.message ??
-  addResult?.error?.message ??
-  wishlistResult?.error?.message;
-const id = Astro.params["id"];
-if (!id) return Astro.redirect("/404");
-
-const sellablesResult = await Mika.catalog.sellables("products", id);
-const sellables = sellablesResult.ok ? sellablesResult.data : [];
----
-
-{formError && <p role="alert">{formError}</p>}
-<ProductPurchase sellables={sellables} />
+```sh
+npm install @cloudflare/kumo @phosphor-icons/react react react-dom @astrojs/react
 ```
+
+```ts
+import react from "@astrojs/react";
+import { defineConfig } from "astro/config";
+
+export default defineConfig({
+  integrations: [react()],
+});
+```
+
+The copied `styles/kumo.css` file imports Kumo's standalone stylesheet:
+
+```css
+@import "@cloudflare/kumo/styles/standalone";
+```
+
+That path works without adding Tailwind to a host app. If the host already uses
+Tailwind CSS v4, replace the first line with Kumo's Tailwind setup:
+
+```css
+@source "../../node_modules/@cloudflare/kumo/dist/**/*.{js,jsx,ts,tsx}";
+@import "@cloudflare/kumo/styles/tailwind";
+@import "tailwindcss";
+```
+
+Adjust the `@source` path to the copied CSS file location.
+
+Copy `actions/index.ts` and `actions/mika.ts` into the host project's
+`src/actions/` folder. The `mika.ts` file is only a shim over
+`@bnomei/emdash-mika/astro-actions`, so the action factory stays versioned with
+Mika.
+
+When a backend API is wired through `mikaPlugin({ api })`, copied pages that
+call `createMika(Astro)` and action modules that call `createMikaActions()` use
+that same API by default. Pass `{ api }` directly only when a page or action
+module needs different wiring.
 
 ## Imports
 
 Use the small public subpaths in copied code:
 
 - `@bnomei/emdash-mika/astro` for Astro helpers like `createMika()`,
-  `formatMikaMoney()`, and purchase-option selection.
+  `formatMikaMoney()`, `mikaReturnTo()`, `mikaSafeReturnTo()`, and purchase
+  option selection.
 - `@bnomei/emdash-mika/astro-actions` from `src/actions/mika.ts`.
 - `@bnomei/emdash-mika/agent` for optional agent-readable manifest examples.
 - `@bnomei/emdash-mika/types` for DTOs and action/client input types.
@@ -126,74 +213,41 @@ const Mika = createMika(Astro);
 const cartResult = await Mika.cart.get();
 ```
 
-That keeps call sites visually close to `actions.mika.*` while still avoiding
+That keeps call sites visually close to `actions.mika.*` while avoiding
 browser-facing plugin JSON mutation routes.
 
 ## Astro Surface
 
-The storefront path is intentionally Astro-native:
+The storefront path is intentionally Astro-native and Kumo-backed:
 
 - HTML forms submit to `action={actions.mika.*}` with `method="post"`.
 - `@bnomei/emdash-mika/astro-actions` uses
   `defineAction({ accept: "form", input })` and Zod schemas, so Astro handles
   form parsing and field validation.
 - Pages use `Astro.getActionResult()` for action results and redirects.
-- Components are unstyled primitives with `data-mika-*` attributes instead of a
-  bundled theme.
+- Components use Kumo components and Kumo semantic tokens for visible UI, while
+  keeping `data-mika-*` attributes for behavior and testing hooks.
 - Component root elements accept `class` and normal HTML attributes, matching
   Astro's explicit `class` pass-through model.
-- Form primitives are named as forms (`BuyNowForm`, `WishlistForm`).
-- `CouponForm`, the copied wishlist page, wishlist move/save-for-later forms,
-  checkout customer fields, grouped variant selection, account export/delete
-  forms, and the provider webhook endpoint are contract examples. They depend
-  on the same request-bound Mika API and provider adapters as the rest of the
-  copied kit.
 - Common form labels and empty states are props or named slots, so copied
   components can be localized or restyled without editing Mika logic first.
-  Full status-label localization is intentionally left to copied project code.
 
 Use the `guard` option in `createMikaActions()` for host policy that Mika should
 not hard-code: rate limits, account checks, bot checks, or temporary feature
 locks.
 
-Use `createMikaAgentManifest()` only as a descriptor source for host-owned
-agent endpoints. It does not publish protected mutation routes, validate OAuth
-tokens, verify AP2 mandates, run MCP servers, store idempotency records, or
-process MPP/x402 payments.
+## Sessions And Rendering
 
-When a backend API is wired through `mikaPlugin({ api })`, copied pages that
-call `createMika(Astro)` and action modules that call `createMikaActions()` use
-that same API by default. Pass `{ api }` directly only when a page or action
-module needs different wiring. Actions call the request-bound Mika API directly;
-they do not use private plugin JSON routes for browser form mutations.
+The copied pages export `prerender = false` because Astro Actions, sessions,
+and request-bound cart/account state need on-demand rendering. If the whole site
+uses `output: "server"`, that export is still harmless.
 
-```ts
-import { ActionError } from "astro:actions";
-import { createMikaActions } from "./mika";
-
-export const server = {
-  mika: createMikaActions({
-    guard: async (ctx, action, input) => {
-      // Call your limiter with action, input, ctx.clientAddress, or headers.
-      const limited = false;
-      if (limited) {
-        throw new ActionError({
-          code: "TOO_MANY_REQUESTS",
-          message: "Please try again later.",
-        });
-      }
-    },
-  }),
-};
-```
-
-## Sessions
-
-Astro Sessions are a good fit for anonymous, non-resumable carts and short-lived
-form state because they are server-side and available as `Astro.session` in
-pages and `context.session` in actions, endpoints, and middleware. Mika keeps
-sessions optional so the templates still work on sites that use durable carts,
-provider checkouts, or deployments without an Astro session driver.
+Astro Sessions are a good fit for anonymous, non-resumable carts and
+short-lived form state because they are server-side and available as
+`Astro.session` in pages and `context.session` in actions, endpoints, and
+middleware. Mika keeps sessions optional so the templates still work on sites
+that use durable carts, provider checkouts, or deployments without an Astro
+session driver.
 
 Session examples require Astro 5.7 or newer.
 
@@ -214,12 +268,13 @@ Mika's plugin route keys use EmDash's exact shape under:
 
 Agent manifest `route.path` values are relative to that plugin base path. IDs
 are passed in query strings or JSON bodies rather than dynamic route segments.
-This matches the EmDash plugin route dispatcher. The only public plugin JSON
-routes are catalog sellables and sellable availability. Do not treat plugin
-JSON routes as the default browser mutation surface for carts, checkout,
-accounts, exports, deletes, webhooks, admin actions, or subscriptions until the
-route is explicitly designed with the right EmDash auth, CSRF, rate-limit, and
-method gates.
+The only public plugin JSON routes are catalog sellables and sellable
+availability.
+
+Do not treat plugin JSON routes as the default browser mutation surface for
+carts, checkout, accounts, exports, deletes, webhooks, admin actions, or
+subscriptions until the route is explicitly designed with the right EmDash auth,
+CSRF, rate-limit, and method gates.
 
 The copied `download/[token].ts` endpoint uses the request-bound Mika helper as
 a redirect resolver. If a site needs private file streaming instead of signed
@@ -233,9 +288,7 @@ trusted deployment configuration.
 
 Checkout cancel pages are passive browser return surfaces. Expired stock
 reservations are released by Mika's `mika_maintenance` plugin cron task, which
-EmDash runs during its scheduled cycle. On Cloudflare, the host Worker's
-`scheduled()` handler should call EmDash `runScheduledTasks()` so EmDash can run
-scheduled publishing and Mika maintenance. Do not release stock solely because a
+EmDash runs during its scheduled cycle. Do not release stock solely because a
 customer visited the cancel page while a provider-hosted checkout session may
 still be open.
 
@@ -253,9 +306,12 @@ action `guard` option or host middleware for rate limiting and authorization.
 
 Real Mika route handlers must still enforce Mika-level stock idempotency, token
 expiry, provider signature checks, and direct-route protection. Required Mika
-idempotency keys are enforced on admin and agent runner paths; storefront
+idempotency keys are enforced on admin and agent runner paths. Storefront
 checkout and subscription forms stay browser-friendly here, while checkout
 replay is handled by Mika's internal checkout idempotency storage when the host
-request context provides a key. Webhooks that need raw-body signature
-verification should be host Astro endpoints that call Mika services, not generic
-plugin JSON routes.
+request context supplies a key.
+
+Use `createMikaAgentManifest()` only as a descriptor source for host-owned
+agent endpoints. It does not publish protected mutation routes, validate OAuth
+tokens, verify AP2 mandates, run MCP servers, store idempotency records, or
+process MPP/x402 payments.

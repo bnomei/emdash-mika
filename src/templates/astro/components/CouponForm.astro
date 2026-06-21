@@ -1,5 +1,6 @@
 ---
 import { actions } from "astro:actions";
+import { Button } from "@cloudflare/kumo";
 import type { CartDTO } from "@bnomei/emdash-mika/types";
 import { mikaReturnTo } from "@bnomei/emdash-mika/astro";
 import { mikaHiddenInput, mikaReturnToInput } from "../lib/form";
@@ -25,22 +26,22 @@ const {
 } = Astro.props;
 ---
 
-<div {...attrs} data-mika-coupon class={className}>
-  <form action={actions.mika.cart.applyCoupon} method="post">
+<div {...attrs} data-mika-coupon class:list={["mika-kumo-stack", className]}>
+  <form class="mika-kumo-form" action={actions.mika.cart.applyCoupon} method="post">
     {cart?.id && <input type="hidden" {...mikaHiddenInput("cartId", cart.id)} />}
     <input type="hidden" {...mikaReturnToInput(returnTo)} />
-    <label>
+    <label class="mika-kumo-field">
       <span>{codeLabel}</span>
-      <input name="code" autocomplete="off" />
+      <input class="mika-kumo-input" name="code" autocomplete="off" />
     </label>
-    <button type="submit">{applyLabel}</button>
+    <Button type="submit" variant="secondary">{applyLabel}</Button>
   </form>
 
   {cart?.coupon && (
-    <form action={actions.mika.cart.removeCoupon} method="post">
+    <form class="mika-kumo-form" action={actions.mika.cart.removeCoupon} method="post">
       {cart.id && <input type="hidden" {...mikaHiddenInput("cartId", cart.id)} />}
       <input type="hidden" {...mikaReturnToInput(returnTo)} />
-      <button type="submit">{removeLabel}</button>
+      <Button type="submit" variant="secondary">{removeLabel}</Button>
     </form>
   )}
 </div>

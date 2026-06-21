@@ -21,7 +21,12 @@ const visible = show ?? !isMikaPurchasable(availability);
 ---
 
 {visible && (
-  <p {...attrs} data-mika-unavailable class={className} role="status">
+  <p
+    {...attrs}
+    data-mika-unavailable
+    class:list={["mika-kumo-alert", className]}
+    role="status"
+  >
     {label}
   </p>
 )}

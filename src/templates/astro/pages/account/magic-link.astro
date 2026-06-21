@@ -1,6 +1,8 @@
 ---
 import { actions, isInputError } from "astro:actions";
+import { Button, Text } from "@cloudflare/kumo";
 import MagicLinkForm from "../../components/MagicLinkForm.astro";
+import MikaKumoPage from "../../components/MikaKumoPage.astro";
 import { mikaHiddenInput, mikaReturnToInput } from "../../lib/form";
 import { mikaTemplateRoutes } from "../../lib/routes";
 
@@ -21,18 +23,17 @@ if (verifyResult?.data) {
 }
 ---
 
-<main data-mika-magic-link-page>
-  <h1>Account</h1>
-
-  {requestResult?.data?.sent && <p role="status">Email sent.</p>}
-  {requestError && <p role="alert">{requestError}</p>}
-  {verifyResult?.error && <p role="alert">{verifyResult.error.message}</p>}
+<MikaKumoPage title="Account" pageSize="narrow" data-mika-magic-link-page>
+  <section class="mika-kumo-panel mika-kumo-stack">
+  {requestResult?.data?.sent && <Text as="p" variant="success" role="status">Email sent.</Text>}
+  {requestError && <Text as="p" variant="error" role="alert">{requestError}</Text>}
+  {verifyResult?.error && <Text as="p" variant="error" role="alert">{verifyResult.error.message}</Text>}
 
   {token ? (
-    <form action={actions.mika.magicLink.verify} method="post">
+    <form class="mika-kumo-form" action={actions.mika.magicLink.verify} method="post">
       <input type="hidden" {...mikaHiddenInput("token", token)} />
       <input type="hidden" {...mikaReturnToInput(mikaTemplateRoutes.account)} />
-      <button type="submit">Continue</button>
+      <Button type="submit" variant="primary">Continue</Button>
     </form>
   ) : (
     <MagicLinkForm
@@ -41,4 +42,5 @@ if (verifyResult?.data) {
       emailError={requestInputErrors.email?.join(", ")}
     />
   )}
-</main>
+  </section>
+</MikaKumoPage>

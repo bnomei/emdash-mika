@@ -1,5 +1,6 @@
 ---
 import { actions } from "astro:actions";
+import { Badge, Button, Text } from "@cloudflare/kumo";
 import type { SubscriptionDTO } from "@bnomei/emdash-mika/types";
 import { mikaReturnTo } from "@bnomei/emdash-mika/astro";
 import { mikaReturnToInput } from "../lib/form";
@@ -36,54 +37,58 @@ const {
 const hasEmptySlot = Astro.slots.has("empty");
 ---
 
-<section {...attrs} data-mika-account-subscriptions class={className}>
-  <h2><slot name="heading">{headingLabel}</slot></h2>
-  {error && <p role="alert">{error}</p>}
+<section {...attrs} data-mika-account-subscriptions class:list={["mika-kumo-stack", className]}>
+  <Text as="h2" variant="heading2"><slot name="heading">{headingLabel}</slot></Text>
+  {error && <Text as="p" variant="error" role="alert">{error}</Text>}
   {subscriptions.length ? (
-    <ul>
+    <ul class="mika-kumo-list">
       {subscriptions.map((subscription) => (
-        <li>
+        <li class="mika-kumo-line-item">
           <strong>{subscription.title}</strong>
-          <span>{subscription.status}</span>
+          <Badge variant={subscription.status === "active" ? "success" : "secondary"}>
+            {subscription.status}
+          </Badge>
           {subscription.currentPeriodEnd && (
-            <time datetime={subscription.currentPeriodEnd}>
+            <time class="mika-kumo-muted" datetime={subscription.currentPeriodEnd}>
               {new Date(subscription.currentPeriodEnd).toLocaleDateString()}
             </time>
           )}
           {subscription.providerActions?.includes("cancel") && (
-            <form action={actions.mika.subscription.cancel} method="post">
+            <form class="mika-kumo-form" action={actions.mika.subscription.cancel} method="post">
               <input
                 type="hidden"
                 name="subscriptionId"
                 value={subscription.id}
               />
               <input type="hidden" {...mikaReturnToInput(returnTo)} />
-              <button
+              <Button
                 type="submit"
+                variant="secondary"
                 aria-label={`${cancelLabel} ${subscription.title}`}
               >
                 {cancelLabel}
-              </button>
+              </Button>
             </form>
           )}
           {subscription.providerActions?.includes("renew") && (
-            <form action={actions.mika.subscription.renew} method="post">
+            <form class="mika-kumo-form" action={actions.mika.subscription.renew} method="post">
               <input
                 type="hidden"
                 name="subscriptionId"
                 value={subscription.id}
               />
               <input type="hidden" {...mikaReturnToInput(returnTo)} />
-              <button
+              <Button
                 type="submit"
+                variant="secondary"
                 aria-label={`${renewLabel} ${subscription.title}`}
               >
                 {renewLabel}
-              </button>
+              </Button>
             </form>
           )}
           {showChangeAction && subscription.providerActions?.includes("change") && changePriceIds[subscription.id] && (
-            <form action={actions.mika.subscription.change} method="post">
+            <form class="mika-kumo-form" action={actions.mika.subscription.change} method="post">
               <input
                 type="hidden"
                 name="subscriptionId"
@@ -95,12 +100,13 @@ const hasEmptySlot = Astro.slots.has("empty");
                 value={changePriceIds[subscription.id] ?? ""}
               />
               <input type="hidden" {...mikaReturnToInput(returnTo)} />
-              <button
+              <Button
                 type="submit"
+                variant="secondary"
                 aria-label={`${changeLabel} ${subscription.title}`}
               >
                 {changeLabel}
-              </button>
+              </Button>
             </form>
           )}
         </li>
@@ -109,6 +115,6 @@ const hasEmptySlot = Astro.slots.has("empty");
   ) : hasEmptySlot ? (
     <slot name="empty" />
   ) : (
-    <p>{emptyLabel}</p>
+    <Text as="p" variant="secondary">{emptyLabel}</Text>
   )}
 </section>

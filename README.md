@@ -8,35 +8,54 @@
 
 Lightweight commerce primitives for EmDash and Astro.
 
-`@bnomei/emdash-mika` is a native EmDash plugin shell for small storefronts
-that need carts, wishlists, checkout handoff, account links, subscriptions, and
-stock-aware product variants without adopting a full WooCommerce-style system.
-It is intentionally narrow: Mika provides typed primitives, routes, provider
-contracts, Astro Actions, and copyable unstyled Astro templates. The host
-project still owns product content, frontend layout, payment-provider wiring,
-and the final backend service behavior.
+Mika is a native EmDash plugin shell for small storefronts that need carts,
+wishlists, checkout handoff, account links, subscriptions, downloads,
+license-key fulfillment, stock-aware product variants, provider webhooks, and
+agent-readable commerce metadata without adopting a full WooCommerce-style
+system.
 
-## What It Provides
+It is intentionally narrow. Mika provides typed primitives, route contracts,
+provider interfaces, Astro Actions, server helpers, operation descriptors, and
+copyable Kumo-backed Astro templates. The host project still owns product content,
+frontend layout, payment-provider wiring, auth/session policy, rate limits,
+tax/shipping rules, and final backend behavior.
 
-- Native EmDash plugin factories: `mikaPlugin()` for config and `createPlugin()`
-  for runtime loading.
-- Agent-ready operation descriptors under `@bnomei/emdash-mika/agent` for host
-  UCP, ACP, MCP, or OpenAPI adapters.
-- A browser-safe JSON client under `@bnomei/emdash-mika/client` for public
-  catalog and stock reads.
-- Astro helpers under `@bnomei/emdash-mika/astro`, including
-  `createMika()` and `createMikaPurchaseModel()`.
-- Astro Actions under `@bnomei/emdash-mika/astro-actions` for form-first cart,
-  wishlist, checkout, account, magic-link, and subscription flows.
-- Copyable Astro pages, endpoints, actions, and unstyled components under the
-  `@bnomei/emdash-mika/templates/astro/*` export subtree.
-- DTOs and provider contracts for one-time purchases, subscriptions, stock,
-  entitlements, downloads, webhooks, and lightweight admin actions.
-- Minimal email renderers for magic links and order confirmations.
+## What It Can Do
+
+Storefront flows:
+
+- Product purchase forms for one-time payments and subscriptions.
+- Stock-aware variants, quantity caps, low-stock notices, and unavailable
+  states.
+- Cart, wishlist, save-for-later, coupon, checkout start, checkout return, and
+  account portal flows through Astro Actions.
+- Magic-link account access, orders, subscriptions, downloads, account export,
+  and account delete request examples.
+
+Backend flows:
+
+- Host-owned `MikaApi` composition through explicit method overrides or
+  `createMikaBackendApi()`.
+- Provider contracts for hosted checkout, portal sessions, invoices,
+  subscriptions, refunds, catalog sync, and signed webhooks.
+- Paid-order fulfillment side effects for entitlement documents, download refs,
+  and hashed license-key records.
+- Stock reservation lifecycle, email outbox delivery, account-delete cleanup,
+  and scheduled maintenance, including expired reservation release, through the
+  EmDash plugin lifecycle.
+- Admin operation descriptors and runner helpers for EmDash action UIs.
+
+Agent-ready flows:
+
+- Public operation descriptors under `@bnomei/emdash-mika/agent`.
+- Copyable JSON-LD `Product`/`ProductGroup`/`Offer` metadata.
+- Copyable root `llms.txt` and `.well-known/mika-agent.json` examples.
+- Source material for host-owned UCP, ACP, MCP, OpenAPI, AP2, MPP, x402, or
+  other protocol projections.
 
 Mika is not a catalog manager, page builder, tax engine, shipping-rate engine,
-marketplace platform, or full payment-provider abstraction. It is the small
-commerce layer that sits next to EmDash collections.
+marketplace platform, hosted OAuth provider, MCP server, or bundled payment
+provider SDK.
 
 ## Install
 
@@ -61,28 +80,47 @@ export default defineConfig({
 });
 ```
 
-## Astro Actions
+`api` is the host-owned Mika backend implementation. It can be built from
+repositories and provider adapters with `createMikaBackendApi()`, or supplied as
+explicit `MikaApi` method overrides.
 
-Copy the template action files into your app:
+## Examples
+
+The package includes copyable Astro templates and stable example docs under:
+
+```txt
+src/templates/astro/actions
+src/templates/astro/components
+src/templates/astro/pages
+src/templates/astro/examples
+src/templates/astro/README.md
+```
+
+Start with:
+
+- [First release slice](./src/templates/astro/examples/release-slice.md) for
+  what should ship first and what should stay out of scope.
+- [Astro storefront](./src/templates/astro/examples/astro-storefront.md) for
+  plugin registration, actions, product pages, cart, wishlist, checkout,
+  account, downloads, and webhook copy paths.
+- [Backend and provider wiring](./src/templates/astro/examples/backend-provider.md)
+  for repositories, provider adapters, email delivery, and maintenance.
+- [Agent-ready storefront](./src/templates/astro/examples/agent-ready-storefront.md)
+  for JSON-LD, `llms.txt`, `.well-known/mika-agent.json`, and protected agent
+  flow boundaries.
+- [Astro template README](./src/templates/astro/README.md) for the directory
+  map, copy paths, imports, route shape, sessions, and security boundary.
+
+## High-Level Usage
+
+Copy the template action files into the host app:
 
 ```txt
 src/actions/index.ts
 src/actions/mika.ts
 ```
 
-The copied `src/actions/mika.ts` shim re-exports Mika's versioned action factory:
-
-```ts
-export {
-  createMikaActions,
-  mika,
-  type MikaActionName,
-  type MikaActions,
-  type MikaActionsOptions,
-} from "@bnomei/emdash-mika/astro-actions";
-```
-
-Then `src/actions/index.ts` wires those actions into Astro:
+Then expose Mika's Astro Actions:
 
 ```ts
 import { createMikaActions } from "./mika";
@@ -92,58 +130,27 @@ export const server = {
 };
 ```
 
-The actions are regular Astro Actions. Browser forms submit to
-`actions.mika.cart.add`, `actions.mika.checkout.start`,
-`actions.mika.wishlist.add`, and related action names. Host projects can pass a
-`guard` option to apply rate limits, auth checks, bot checks, or feature locks
-before a Mika action reaches the request-bound Mika API.
-When the backend API is wired through `mikaPlugin({ api })` or
-`createPlugin({ api })`, `createMikaActions()` and `createMika(Astro)` use that
-same API by default. Pass `{ api }` directly only when a page or action module
-needs different wiring. `createMikaApi()` remains available as a partial
-override shell for tests and host-owned composition; use `assertMikaApiWired()`
-when a deployment must reject unwired methods.
+Browser forms submit to action names such as `actions.mika.cart.add`,
+`actions.mika.checkout.start`, and `actions.mika.wishlist.add`. Host projects
+can pass a `guard` option to apply rate limits, auth checks, bot checks, or
+feature locks before a Mika action reaches the request-bound backend API.
 
-## Product Page
+Storefront pages use the request-bound Astro helper:
 
-Mika product UI is copyable Astro, not a hidden route system. A minimal product
-page fetches sellables for an EmDash content entry and renders unstyled forms:
-
-```astro
----
-import { actions } from "astro:actions";
+```ts
 import { createMika } from "@bnomei/emdash-mika/astro";
-import ProductPurchase from "../components/ProductPurchase.astro";
-
-export const prerender = false;
 
 const Mika = createMika(Astro);
-const checkoutResult = Astro.getActionResult(actions.mika.checkout.start);
-if (checkoutResult?.data?.redirectUrl) {
-  return Astro.redirect(checkoutResult.data.redirectUrl);
-}
-
-const addResult = Astro.getActionResult(actions.mika.cart.add);
-const wishlistResult = Astro.getActionResult(actions.mika.wishlist.add);
-const formError =
-  checkoutResult?.error?.message ??
-  addResult?.error?.message ??
-  wishlistResult?.error?.message;
-const id = Astro.params["id"];
-if (!id) return Astro.redirect("/404");
-
-const sellablesResult = await Mika.catalog.sellables("products", id);
-const sellables = sellablesResult.ok ? sellablesResult.data : [];
----
-
-{formError && <p role="alert">{formError}</p>}
-<ProductPurchase sellables={sellables} />
+const sellablesResult = await Mika.catalog.sellables("products", productId);
 ```
 
-`createMikaPurchaseModel()` is the main storefront helper for product forms. It
-selects the active sellable and price, derives purchase form fields, computes
-quantity caps from availability, and exposes grouped variant metadata for the
-copyable variant controls.
+Product UI is copyable Astro, not a hidden route system. Copy only the pages and
+components the host project needs, then keep localization and product routing in
+the host app. The template UI uses Kumo components and Kumo semantic tokens.
+
+Checkout success and cancel pages are return surfaces for the browser. Treat
+cancel redirects as UX only, and confirm final payment/order state through the
+host's provider-backed checkout and order APIs.
 
 ## Agent-Ready Commerce
 
@@ -160,47 +167,20 @@ export const schema = mikaAgentManifestJsonSchema;
 
 The manifest describes operation names, capabilities, side effects, risk,
 required actor shape, scopes, confirmation policy, idempotency expectations,
-proof refs, resources, and public route hints. Manifest `route.path` values are
-relative to the EmDash Mika plugin base path
-`/_emdash/api/plugins/mika/`; the copyable `.well-known` example exposes that
-base path beside the manifest. Trusted host/server operations include quote and
-checkout preview primitives for agent projections. The storefront browser
-client stays limited to catalog and stock reads, and storefront forms do not
-generate required idempotency keys in this pass. Required idempotency is
-enforced on admin and agent runner paths; checkout replay remains backed by
-Mika's internal checkout idempotency storage when a host request context
-supplies a key. Mika does not export its
-internal operation registry or Zod schemas, and it does not make private cart,
-checkout, account, webhook, or admin routes public. Host projects still own
-OAuth, MCP servers, UCP/ACP endpoints, AP2 mandate verification, MPP/x402
-payment rails, user confirmation, replay storage, rate limits, and
-payment-provider wiring.
-
-## Templates
-
-The package includes copyable Astro templates:
-
-```txt
-src/templates/astro/actions
-src/templates/astro/components
-src/templates/astro/pages
-src/templates/astro/README.md
-```
-
-They are examples, not a theme. Copy only the pieces you need and keep final
-markup, styles, localization, and product-page routing in the host app. The
-template README goes deeper into sessions, route shape, webhook boundaries, and
-security expectations.
+proof refs, resources, and public route hints. Public storefront examples expose
+safe catalog and stock reads. Protected cart, checkout, account, order,
+payment, admin, and agent-tool flows still require host-owned OAuth or session
+policy, confirmation, replay storage, rate limits, provider wiring, and payment
+rail verification.
 
 ## Package Surface
 
 - ESM entry: `@bnomei/emdash-mika` for plugin registration.
 - Agent descriptors: `@bnomei/emdash-mika/agent`.
-- Client entry: `@bnomei/emdash-mika/client` for the browser-safe catalog/stock
-  JSON client.
+- Admin action helpers: `@bnomei/emdash-mika/admin`.
 - Astro helpers: `@bnomei/emdash-mika/astro`.
 - Astro Actions: `@bnomei/emdash-mika/astro-actions`.
-- Admin action helpers: `@bnomei/emdash-mika/admin`.
+- Browser-safe catalog and stock client: `@bnomei/emdash-mika/client`.
 - Email helpers: `@bnomei/emdash-mika/email`.
 - Provider contracts: `@bnomei/emdash-mika/provider`.
 - React headless helpers: `@bnomei/emdash-mika/react`.
@@ -211,38 +191,6 @@ security expectations.
 The package intentionally does not expose a public `storage` subpath. Storage
 repositories, migrations, and SQL statements are implementation details until
 the backend service layer is stable enough to support as public API.
-
-Mika background work runs through the EmDash scheduled lifecycle. The native
-plugin registers the `mika_maintenance` cron task by default with the
-`* * * * *` schedule; configure it with
-`mikaPlugin({ maintenance: { enabled, schedule } })` or
-`createPlugin({ maintenance: { enabled, schedule } })`. The task calls
-`createMikaMaintenanceRunner().runOnce()` to drain due email outbox rows, release
-expired stock reservations, purge expired ephemeral rows, and process queued
-account-delete requests. Use `createMikaEmailOutboxRunner()` and
-`createEmDashMikaEmailSender()` from the server entry when wiring the backend
-maintenance runner to EmDash's selected email provider.
-
-On Node, EmDash drives plugin cron tasks through its scheduler. On Cloudflare,
-the host Worker's `scheduled()` handler should call EmDash `runScheduledTasks()`;
-EmDash then runs scheduled publishing and Mika's `mika_maintenance` task. Queue
-workers can still be added for high-volume email delivery, but they are optional
-deployment infrastructure rather than Mika's default maintenance path.
-
-## Status
-
-Mika currently ships the typed shell, backend API composer, plugin
-registration, route contracts, client methods, Astro Actions, copyable
-templates, provider interfaces, stock tables, document shapes, admin action
-descriptors, safe return-path normalization, email renderers, an email outbox
-runner, and a scheduled maintenance runner. Production storefronts still need
-host provider adapters, auth/session policy, rate limits, and deployment-specific
-guards.
-
-Hosted checkout cancel redirects are treated as UX only. Mika releases expired
-stock reservations from the plugin maintenance cron task. The manual
-`admin.releaseExpiredReservations` operation and `mika.stock.releaseExpiredReservations`
-action remain available for admin-triggered cleanup.
 
 ## License
 

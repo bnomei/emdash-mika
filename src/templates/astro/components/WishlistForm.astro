@@ -1,5 +1,6 @@
 ---
 import { actions } from "astro:actions";
+import { Button } from "@cloudflare/kumo";
 import { mikaReturnTo } from "@bnomei/emdash-mika/astro";
 import { mikaHiddenInput, mikaReturnToInput } from "../lib/form";
 
@@ -29,7 +30,7 @@ const {
 <form
   {...attrs}
   data-mika-wishlist
-  class={className}
+  class:list={["mika-kumo-form", className]}
   action={actions.mika.wishlist.add}
   method="post"
 >
@@ -44,13 +45,14 @@ const {
     data-mika-selected-price-id
   />
   <input type="hidden" {...mikaReturnToInput(returnTo)} />
-  <button
+  <Button
     type="submit"
-    class={buttonClass}
+    className={buttonClass}
+    variant="secondary"
     disabled={disabled}
     data-mika-purchase-submit
     data-mika-initial-disabled={disabled ? "true" : "false"}
   >
     <slot>{label}</slot>
-  </button>
+  </Button>
 </form>

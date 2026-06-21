@@ -1,5 +1,6 @@
 ---
 import { actions } from "astro:actions";
+import { Button } from "@cloudflare/kumo";
 import { mikaReturnTo } from "@bnomei/emdash-mika/astro";
 import { mikaHiddenInput, mikaRedirectInputs } from "../lib/form";
 import { mikaTemplateRoutes } from "../lib/routes";
@@ -37,7 +38,7 @@ const redirectInputs = mikaRedirectInputs({ successPath, cancelPath, returnTo })
 <form
   {...attrs}
   data-mika-buy-now
-  class={className}
+  class:list={["mika-kumo-form", className]}
   action={actions.mika.checkout.start}
   method="post"
 >
@@ -55,13 +56,14 @@ const redirectInputs = mikaRedirectInputs({ successPath, cancelPath, returnTo })
   <input type="hidden" {...redirectInputs.successPath} />
   <input type="hidden" {...redirectInputs.cancelPath} />
   <input type="hidden" {...redirectInputs.returnTo} />
-  <button
+  <Button
     type="submit"
-    class={buttonClass}
+    className={buttonClass}
+    variant="primary"
     disabled={disabled}
     data-mika-purchase-submit
     data-mika-initial-disabled={disabled ? "true" : "false"}
   >
     <slot>{label}</slot>
-  </button>
+  </Button>
 </form>

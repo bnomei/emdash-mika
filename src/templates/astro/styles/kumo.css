@@ -1,0 +1,218 @@
+@import "@cloudflare/kumo/styles/standalone";
+
+html {
+  color-scheme: light dark;
+  background: var(--color-kumo-canvas);
+  color: var(--text-color-kumo-default);
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+a {
+  color: var(--text-color-kumo-link);
+  text-underline-offset: 0.2em;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.mika-kumo-page {
+  box-sizing: border-box;
+  display: grid;
+  gap: 24px;
+  width: min(1120px, calc(100% - 32px));
+  margin: 32px auto 64px;
+}
+
+.mika-kumo-page[data-mika-page-size="narrow"] {
+  width: min(760px, calc(100% - 32px));
+}
+
+.mika-kumo-header,
+.mika-kumo-stack,
+.mika-kumo-form,
+.mika-kumo-field,
+.mika-kumo-list,
+.mika-kumo-line-item,
+.mika-kumo-card {
+  display: grid;
+  gap: 12px;
+}
+
+.mika-kumo-header {
+  gap: 10px;
+}
+
+.mika-kumo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 16px;
+}
+
+.mika-kumo-product-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
+  gap: 24px;
+  align-items: start;
+}
+
+.mika-kumo-card,
+.mika-kumo-panel {
+  border: 1px solid var(--color-kumo-line);
+  border-radius: 8px;
+  background: var(--color-kumo-base);
+}
+
+.mika-kumo-card {
+  padding: 16px;
+}
+
+.mika-kumo-panel {
+  padding: 18px;
+}
+
+.mika-kumo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.mika-kumo-form {
+  margin: 0;
+}
+
+.mika-kumo-field > span,
+.mika-kumo-field > legend,
+.mika-kumo-legend {
+  color: var(--text-color-kumo-strong);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.mika-kumo-input,
+.mika-kumo-select {
+  box-sizing: border-box;
+  min-height: 36px;
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  outline: 0;
+  background: var(--color-kumo-control);
+  color: var(--text-color-kumo-default);
+  box-shadow: inset 0 0 0 1px var(--color-kumo-line);
+  font: inherit;
+}
+
+.mika-kumo-input {
+  padding: 0 12px;
+}
+
+.mika-kumo-select {
+  padding: 0 36px 0 12px;
+}
+
+.mika-kumo-input:focus-visible,
+.mika-kumo-select:focus-visible {
+  box-shadow:
+    inset 0 0 0 1px var(--color-kumo-focus),
+    0 0 0 2px var(--color-kumo-hairline);
+}
+
+.mika-kumo-fieldset {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--color-kumo-line);
+  border-radius: 8px;
+  background: var(--color-kumo-base);
+}
+
+.mika-kumo-choice {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--text-color-kumo-default);
+}
+
+.mika-kumo-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mika-kumo-line-item {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--color-kumo-hairline);
+}
+
+.mika-kumo-line-item:last-child {
+  border-bottom: 0;
+}
+
+.mika-kumo-meta,
+.mika-kumo-muted {
+  color: var(--text-color-kumo-subtle);
+}
+
+.mika-kumo-summary {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.mika-kumo-summary > div,
+.mika-kumo-meta-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.mika-kumo-summary dt,
+.mika-kumo-summary dd {
+  margin: 0;
+}
+
+.mika-kumo-summary dd,
+.mika-kumo-strong {
+  color: var(--text-color-kumo-strong);
+  font-weight: 600;
+}
+
+.mika-kumo-alert {
+  color: var(--text-color-kumo-danger);
+}
+
+.mika-kumo-status {
+  color: var(--text-color-kumo-success);
+}
+
+.mika-kumo-purchase {
+  display: grid;
+  gap: 14px;
+}
+
+.mika-kumo-availability {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+@media (max-width: 760px) {
+  .mika-kumo-product-layout {
+    grid-template-columns: 1fr;
+  }
+}
