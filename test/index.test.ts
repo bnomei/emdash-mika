@@ -31,7 +31,9 @@ import type { createMikaProviderRegistry as PackageCreateMikaProviderRegistry } 
 import type { MikaProvider as PackageMikaProvider } from "@bnomei/emdash-mika/react";
 import type {
   assertMikaApiWired as PackageAssertMikaApiWired,
+  createEmDashMikaEmailSender as PackageCreateEmDashMikaEmailSender,
   createMikaBackendApi as PackageCreateMikaBackendApi,
+  createMikaEmailOutboxRunner as PackageCreateMikaEmailOutboxRunner,
   createMikaServerClient as PackageCreateMikaServerClient,
   mikaApiMethodNames as PackageMikaApiMethodNames,
   MikaBackendDependencies as PackageMikaBackendDependencies,
@@ -81,8 +83,10 @@ import {
 import {
   assertMikaApiWired,
   createMikaBackendApi,
+  createEmDashMikaEmailSender,
   createMikaRequestContext,
   createMikaApi,
+  createMikaEmailOutboxRunner,
   createMikaServerClient,
   mikaApiMethodNames,
   type MikaBackendDependencies,
@@ -3476,6 +3480,12 @@ describe("public types", () => {
     expectTypeOf<typeof PackageAssertMikaApiWired>().toEqualTypeOf<typeof assertMikaApiWired>();
     expectTypeOf<typeof PackageCreateMikaServerClient>().toBeFunction();
     expectTypeOf<typeof PackageCreateMikaBackendApi>().toEqualTypeOf<typeof createMikaBackendApi>();
+    expectTypeOf<typeof PackageCreateMikaEmailOutboxRunner>().toEqualTypeOf<
+      typeof createMikaEmailOutboxRunner
+    >();
+    expectTypeOf<typeof PackageCreateEmDashMikaEmailSender>().toEqualTypeOf<
+      typeof createEmDashMikaEmailSender
+    >();
     expectTypeOf<PackageMikaBackendDependencies>().toEqualTypeOf<MikaBackendDependencies>();
     expectTypeOf<typeof PackageMikaApiMethodNames>().toEqualTypeOf<typeof mikaApiMethodNames>();
     expectTypeOf<PackageMikaAstroClientOptions>().toEqualTypeOf<MikaAstroClientOptions>();

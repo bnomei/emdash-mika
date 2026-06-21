@@ -212,12 +212,20 @@ The package intentionally does not expose a public `storage` subpath. Storage
 repositories, migrations, and SQL statements are implementation details until
 the backend service layer is stable enough to support as public API.
 
+Queued magic-link and order-confirmation emails can be drained with
+`createMikaEmailOutboxRunner()` from the server entry. Mika owns the outbox
+state, retry/backoff, and rendering; the host still owns scheduling and the
+actual EmDash email provider selection. Use `createEmDashMikaEmailSender()` with
+`locals.emdash.email` when you want the runner to deliver through EmDash's
+selected provider.
+
 ## Status
 
 Mika currently ships the typed shell, backend API composer, plugin
 registration, route contracts, client methods, Astro Actions, copyable
 templates, provider interfaces, stock tables, document shapes, admin action
-descriptors, safe return-path normalization, and email renderers. Production
+descriptors, safe return-path normalization, email renderers, and an email
+outbox runner. Production
 storefronts still need host provider adapters, auth/session policy, rate
 limits, and deployment-specific guards.
 

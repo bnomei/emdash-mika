@@ -17,6 +17,10 @@ import type {
   CatalogProviderPriceMatch,
   ConsumeReservedStockRepositoryInput,
   ConsumeReservedStockRepositoryResult,
+  EmailCompleteRepositoryInput,
+  EmailFailureRepositoryInput,
+  EmailLeaseRepositoryInput,
+  EmailSkipRepositoryInput,
   ReleaseExpiredReservationsRepositoryInput,
   ReleaseExpiredReservationsRepositoryResult,
   ReleaseReservedStockRepositoryInput,
@@ -339,6 +343,11 @@ export interface MikaOpsRepositoryPort {
   failWorkflow(input: WorkflowFailureRepositoryInput): Promise<WorkflowDocument | null>;
   findAdminAudit(auditId: MikaId): Promise<AdminAuditDocument | null>;
   findEmail(emailId: MikaId): Promise<EmailDocument | null>;
+  listDueEmails(now: ISODateTime, limit?: number): Promise<MikaDocumentList<EmailDocument>>;
+  tryLeaseEmail(input: EmailLeaseRepositoryInput): Promise<EmailDocument | null>;
+  completeEmail(input: EmailCompleteRepositoryInput): Promise<EmailDocument | null>;
+  failEmail(input: EmailFailureRepositoryInput): Promise<EmailDocument | null>;
+  skipEmail(input: EmailSkipRepositoryInput): Promise<EmailDocument | null>;
   /** @deprecated Use workflow-specific leasing APIs for webhook fulfillment work. */
   listWebhookFailures(now: string, limit?: number): Promise<MikaDocumentList<WebhookDocument>>;
   writeAudit(document: AdminAuditDocument): Promise<void>;

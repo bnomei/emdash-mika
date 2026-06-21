@@ -22,10 +22,14 @@ import type { MikaProvider } from "@bnomei/emdash-mika/react";
 import type {
   assertMikaApiWired,
   CreateMikaBackendApiInput,
+  createEmDashMikaEmailSender,
   createMikaBackendApi,
+  createMikaEmailOutboxRunner,
   createMikaServerClient,
   MikaApi,
   MikaBackendDependencies,
+  MikaEmailDeliveryMessage,
+  MikaEmailOutboxRunner,
   MikaApiOverrides,
   MikaOperationPolicy as MikaServerOperationPolicy,
   MikaOperationDescriptor as MikaServerOperationDescriptor,
@@ -80,6 +84,10 @@ export type PackageEntryContract = {
   readonly server: typeof createMikaServerClient;
   readonly serverFacade: MikaServerClient;
   readonly backend: typeof createMikaBackendApi;
+  readonly emailOutboxRunnerFactory: typeof createMikaEmailOutboxRunner;
+  readonly emdashEmailSenderFactory: typeof createEmDashMikaEmailSender;
+  readonly emailOutboxRunner: MikaEmailOutboxRunner;
+  readonly emailDeliveryMessage: MikaEmailDeliveryMessage;
   readonly assertWired: typeof assertMikaApiWired;
   readonly backendInput: CreateMikaBackendApiInput;
   readonly backendDependencies: MikaBackendDependencies;

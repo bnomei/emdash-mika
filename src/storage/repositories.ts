@@ -170,6 +170,36 @@ export interface WorkflowFailureRepositoryInput {
   readonly stepName?: string;
 }
 
+export interface EmailLeaseRepositoryInput {
+  readonly emailId: MikaId;
+  readonly leaseKey: string;
+  readonly now: ISODateTime;
+  readonly leaseExpiresAt: ISODateTime;
+  readonly force?: boolean;
+}
+
+export interface EmailCompleteRepositoryInput {
+  readonly emailId: MikaId;
+  readonly leaseKey: string;
+  readonly now: ISODateTime;
+  readonly providerMessageId?: string;
+}
+
+export interface EmailFailureRepositoryInput {
+  readonly emailId: MikaId;
+  readonly leaseKey: string;
+  readonly now: ISODateTime;
+  readonly lastError: string;
+  readonly nextAttemptAt?: ISODateTime;
+}
+
+export interface EmailSkipRepositoryInput {
+  readonly emailId: MikaId;
+  readonly leaseKey: string;
+  readonly now: ISODateTime;
+  readonly lastError: string;
+}
+
 type ReservationEventMutationRepositoryResult<TStatus extends "released" | "consumed"> =
   | {
       readonly status: TStatus;
@@ -217,6 +247,9 @@ type StockMutationResult = {
   readonly numUpdatedRows?: bigint | number;
   readonly numChangedRows?: bigint | number;
 };
+const EMAIL_DELIVERY_LEASE_KEY_METADATA_KEY = "deliveryLeaseKey";
+const EMAIL_DELIVERY_LEASE_EXPIRES_AT_METADATA_KEY = "deliveryLeaseExpiresAt";
+const EMAIL_DELIVERY_LEASED_AT_METADATA_KEY = "deliveryLeasedAt";
 type TypedCollectionFacade<TDocument extends TypedDocument & { readonly id: string }> = ReturnType<
   typeof typedCollection<TDocument>
 >;
@@ -1046,6 +1079,101 @@ export class OpsRepository {
     return this.documents.findByIdOfType(emailId, "email");
   }
 
+  async listDueEmails(now: ISODateTime, limit = 50): Promise<DocumentList<EmailDocument>> {
+    const target = limit + 1;
+    const result = await listByTypeCandidates(
+      this.documents,
+      "email",
+      target,
+      {
+        where: {
+          status: { in: ["queued", "failed"] },
+          nextAttemptAt: { lte: now },
+        },
+        orderBy: { nextAttemptAt: "asc" },
+      },
+      (email) => emailIsDueForLease(email, now),
+    );
+    const items = result.items.slice(0, limit);
+    const hasMore = result.hasMore || result.items.length > limit;
+
+    return {
+      items,
+      cursor: hasMore ? String(items.length) : undefined,
+      hasMore,
+    };
+  }
+
+  async tryLeaseEmail(input: EmailLeaseRepositoryInput): Promise<EmailDocument | null> {
+    const updated = await this.documents.update(input.emailId, (current) => {
+      const email = documentOfType(current, "email");
+      if (!email) return null;
+      if (!emailIsDueForLease(email, input.now, input.force)) return null;
+
+      return emailDocumentWithRecord(email, input.now, {
+        attemptCount: email.record.attemptCount + 1,
+        nextAttemptAt: input.leaseExpiresAt,
+        lastError: undefined,
+        metadata: emailMetadataWithLease(email.record.metadata, input),
+      });
+    });
+
+    return documentOfType(updated, "email");
+  }
+
+  async completeEmail(input: EmailCompleteRepositoryInput): Promise<EmailDocument | null> {
+    const updated = await this.documents.update(input.emailId, (current) => {
+      const email = documentOfType(current, "email");
+      if (!email) return null;
+      if (!emailHasActiveLease(email, input)) return null;
+
+      return emailDocumentWithRecord(email, input.now, {
+        status: "sent",
+        providerMessageId: input.providerMessageId,
+        nextAttemptAt: undefined,
+        lastError: undefined,
+        sentAt: input.now,
+        metadata: emailMetadataWithoutLease(email.record.metadata),
+      });
+    });
+
+    return documentOfType(updated, "email");
+  }
+
+  async failEmail(input: EmailFailureRepositoryInput): Promise<EmailDocument | null> {
+    const updated = await this.documents.update(input.emailId, (current) => {
+      const email = documentOfType(current, "email");
+      if (!email) return null;
+      if (!emailHasActiveLease(email, input)) return null;
+
+      return emailDocumentWithRecord(email, input.now, {
+        status: "failed",
+        nextAttemptAt: input.nextAttemptAt,
+        lastError: input.lastError,
+        metadata: emailMetadataWithoutLease(email.record.metadata),
+      });
+    });
+
+    return documentOfType(updated, "email");
+  }
+
+  async skipEmail(input: EmailSkipRepositoryInput): Promise<EmailDocument | null> {
+    const updated = await this.documents.update(input.emailId, (current) => {
+      const email = documentOfType(current, "email");
+      if (!email) return null;
+      if (!emailHasActiveLease(email, input)) return null;
+
+      return emailDocumentWithRecord(email, input.now, {
+        status: "skipped",
+        nextAttemptAt: undefined,
+        lastError: input.lastError,
+        metadata: emailMetadataWithoutLease(email.record.metadata),
+      });
+    });
+
+    return documentOfType(updated, "email");
+  }
+
   /** @deprecated Use workflow-specific leasing APIs for webhook fulfillment work. */
   async listWebhookFailures(now: string, limit = 50): Promise<DocumentList<WebhookDocument>> {
     return this.documents.listByType("webhook", {
@@ -1155,6 +1283,90 @@ function workflowDocumentWithRecord(
     record,
     updatedAt: now,
   };
+}
+
+function emailIsDueForLease(email: EmailDocument, now: ISODateTime, force = false): boolean {
+  if (email.status === "sent" || email.status === "skipped") return false;
+  const leaseExpiresAt = emailMetadataString(
+    email.record.metadata,
+    EMAIL_DELIVERY_LEASE_EXPIRES_AT_METADATA_KEY,
+  );
+  if (leaseExpiresAt && leaseExpiresAt > now) return false;
+  if (force) return true;
+  if (email.record.attemptCount >= email.record.maxAttempts) return false;
+
+  return !email.nextAttemptAt || email.nextAttemptAt <= now;
+}
+
+function emailHasActiveLease(
+  email: EmailDocument,
+  input: { readonly leaseKey: string; readonly now: ISODateTime },
+): boolean {
+  const leaseKey = emailMetadataString(
+    email.record.metadata,
+    EMAIL_DELIVERY_LEASE_KEY_METADATA_KEY,
+  );
+  const leaseExpiresAt = emailMetadataString(
+    email.record.metadata,
+    EMAIL_DELIVERY_LEASE_EXPIRES_AT_METADATA_KEY,
+  );
+
+  return leaseKey === input.leaseKey && leaseExpiresAt !== undefined && leaseExpiresAt > input.now;
+}
+
+function emailDocumentWithRecord(
+  email: EmailDocument,
+  now: ISODateTime,
+  patch: Partial<EmailDocument["record"]>,
+): EmailDocument {
+  const record = {
+    ...email.record,
+    ...patch,
+  };
+
+  return {
+    ...email,
+    status: record.status,
+    nextAttemptAt: record.nextAttemptAt,
+    orderId: record.orderId,
+    tokenId: record.tokenId,
+    kind: record.kind,
+    record,
+    updatedAt: now,
+  };
+}
+
+function emailMetadataWithLease(
+  metadata: JsonObject | undefined,
+  input: EmailLeaseRepositoryInput,
+): JsonObject {
+  return {
+    ...metadata,
+    [EMAIL_DELIVERY_LEASE_KEY_METADATA_KEY]: input.leaseKey,
+    [EMAIL_DELIVERY_LEASE_EXPIRES_AT_METADATA_KEY]: input.leaseExpiresAt,
+    [EMAIL_DELIVERY_LEASED_AT_METADATA_KEY]: input.now,
+  };
+}
+
+function emailMetadataWithoutLease(metadata: JsonObject | undefined): JsonObject | undefined {
+  if (!metadata) return undefined;
+
+  const rest = Object.fromEntries(
+    Object.entries(metadata).filter(
+      ([key]) =>
+        key !== EMAIL_DELIVERY_LEASE_KEY_METADATA_KEY &&
+        key !== EMAIL_DELIVERY_LEASE_EXPIRES_AT_METADATA_KEY &&
+        key !== EMAIL_DELIVERY_LEASED_AT_METADATA_KEY,
+    ),
+  ) as JsonObject;
+
+  return Object.keys(rest).length > 0 ? rest : undefined;
+}
+
+function emailMetadataString(metadata: JsonObject | undefined, key: string): string | undefined {
+  const value = metadata?.[key];
+
+  return typeof value === "string" ? value : undefined;
 }
 
 export class StockRepository {

@@ -30,5 +30,21 @@ export {
   type MikaServerClient,
   type MikaServerClientOptions,
 } from "./api/server-client";
+export {
+  createEmDashMikaEmailSender,
+  createMikaEmailOutboxRunner,
+  type MikaEmDashEmailMessage,
+  type MikaEmDashEmailPipeline,
+  type MikaEmDashEmailSenderOptions,
+  type MikaEmailDeliveryMessage,
+  type MikaEmailDeliveryResult,
+  type MikaEmailOutboxRetryInput,
+  type MikaEmailOutboxRunItem,
+  type MikaEmailOutboxRunOptions,
+  type MikaEmailOutboxRunResult,
+  type MikaEmailOutboxRunner,
+  type MikaEmailOutboxRunnerInput,
+  type MikaEmailSender,
+} from "./api/email-outbox";
 export type { MikaOperationPolicy } from "./api/operation-policy";
 export type { MikaOperationDescriptor } from "./api/operations";

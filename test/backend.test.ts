@@ -38,6 +38,11 @@ import {
   type MikaApi,
   type MikaApiOverrides,
 } from "../src/api/server";
+import {
+  createEmDashMikaEmailSender,
+  createMikaEmailOutboxRunner,
+  type MikaEmailDeliveryMessage,
+} from "../src/server";
 import type {
   MikaProviderAdapter,
   MikaProviderCheckoutInput,
@@ -330,6 +335,333 @@ describe("backend test storage helpers", () => {
         leaseKey: "worker_forced",
       },
     });
+  });
+
+  it("lists due emails and requires an active delivery lease for terminal mutations", async () => {
+    const clock = createTestClock();
+    const ops = new OpsRepository(createStorageCollection("ops"));
+    const dueEmail = createEmailDocument({
+      id: createTestMikaId("email", 1),
+      record: {
+        id: createTestMikaId("email", 1),
+        kind: "magic_link",
+        templateKey: "magic_link",
+        attemptCount: 0,
+        nextAttemptAt: clock.isoAt(-1_000),
+        metadata: { link: "https://shop.example.test/sign-in" },
+      },
+    });
+    const futureEmail = createEmailDocument({
+      id: createTestMikaId("email", 2),
+      nextAttemptAt: clock.isoAt(60_000),
+      record: {
+        id: createTestMikaId("email", 2),
+        kind: "magic_link",
+        templateKey: "magic_link",
+        attemptCount: 0,
+        nextAttemptAt: clock.isoAt(60_000),
+        metadata: { link: "https://shop.example.test/future" },
+      },
+    });
+    await ops.put(dueEmail);
+    await ops.put(futureEmail);
+
+    await expect(ops.listDueEmails(TEST_NOW)).resolves.toMatchObject({
+      items: [{ id: dueEmail.id }],
+    });
+    await expect(
+      ops.tryLeaseEmail({
+        emailId: dueEmail.id,
+        leaseKey: "email_worker_1",
+        now: TEST_NOW,
+        leaseExpiresAt: clock.isoAt(300_000),
+      }),
+    ).resolves.toMatchObject({
+      status: "queued",
+      nextAttemptAt: clock.isoAt(300_000),
+      record: {
+        attemptCount: 1,
+        metadata: expect.objectContaining({
+          deliveryLeaseKey: "email_worker_1",
+          deliveryLeaseExpiresAt: clock.isoAt(300_000),
+        }),
+      },
+    });
+    await expect(ops.listDueEmails(TEST_NOW)).resolves.toMatchObject({ items: [] });
+    await expect(
+      ops.completeEmail({
+        emailId: dueEmail.id,
+        leaseKey: "email_worker_2",
+        now: TEST_NOW,
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      ops.completeEmail({
+        emailId: dueEmail.id,
+        leaseKey: "email_worker_1",
+        now: TEST_NOW,
+        providerMessageId: "provider_message_1",
+      }),
+    ).resolves.toMatchObject({
+      status: "sent",
+      nextAttemptAt: undefined,
+      record: {
+        status: "sent",
+        providerMessageId: "provider_message_1",
+        sentAt: TEST_NOW,
+        metadata: { link: "https://shop.example.test/sign-in" },
+      },
+    });
+  });
+
+  it("delivers queued magic-link email through the outbox runner", async () => {
+    const repositories = createTestBackendRepositories();
+    const sent: MikaEmailDeliveryMessage[] = [];
+    const email = createEmailDocument({
+      id: createTestMikaId("email", 1),
+      record: {
+        id: createTestMikaId("email", 1),
+        kind: "magic_link",
+        toEmail: "Subscriber@Example.test",
+        templateKey: "magic_link",
+        attemptCount: 0,
+        nextAttemptAt: TEST_NOW,
+        metadata: {
+          link: "https://shop.example.test/_emdash/api/plugins/mika/magic-link/verify?token=token_1",
+          purpose: "checkout",
+          expiresAt: createTestClock().isoAt(15 * 60_000),
+        },
+      },
+    });
+    await repositories.ops.put(email);
+
+    const runner = createMikaEmailOutboxRunner({
+      repositories,
+      now: () => new Date(TEST_NOW),
+      createId: createIncrementingIdFactory("email_lease"),
+      sender: async (message) => {
+        sent.push(message);
+
+        return { providerMessageId: "provider_message_1" };
+      },
+    });
+
+    await expect(runner.runOnce()).resolves.toMatchObject({
+      scanned: 1,
+      leased: 1,
+      sent: 1,
+      failed: 0,
+      skipped: 0,
+      items: [{ emailId: email.id, status: "sent", providerMessageId: "provider_message_1" }],
+    });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      emailId: email.id,
+      kind: "magic_link",
+      to: "Subscriber@Example.test",
+      subject: "Continue checkout on Mika",
+      text: expect.stringContaining("token=token_1"),
+    });
+    await expect(repositories.ops.findEmail(email.id)).resolves.toMatchObject({
+      status: "sent",
+      nextAttemptAt: undefined,
+      record: {
+        attemptCount: 1,
+        providerMessageId: "provider_message_1",
+        sentAt: TEST_NOW,
+      },
+    });
+  });
+
+  it("renders order-confirmation emails from the queued order reference", async () => {
+    const repositories = createTestBackendRepositories();
+    const sent: MikaEmailDeliveryMessage[] = [];
+    const order = createOrderDocument();
+    const email = createEmailDocument({
+      id: createTestMikaId("email", 1),
+      record: {
+        id: createTestMikaId("email", 1),
+        orderId: order.id,
+        kind: "order_confirmation",
+        toEmail: "subscriber@example.test",
+        templateKey: "order_confirmation",
+        attemptCount: 0,
+        nextAttemptAt: TEST_NOW,
+        metadata: { orderLineIds: [createTestMikaId("order_line", 1)] },
+      },
+    });
+    await repositories.ledger.put(order);
+    await repositories.ops.put(email);
+
+    const runner = createMikaEmailOutboxRunner({
+      repositories,
+      now: () => new Date(TEST_NOW),
+      createId: createIncrementingIdFactory("email_lease"),
+      accountUrl: ({ order: deliveredOrder }) => `/account/orders/${deliveredOrder.orderNumber}`,
+      sender: async (message) => {
+        sent.push(message);
+      },
+    });
+
+    await expect(runner.runOnce()).resolves.toMatchObject({
+      scanned: 1,
+      sent: 1,
+    });
+    expect(sent[0]).toMatchObject({
+      subject: "Order M-1001 confirmed",
+      text: expect.stringContaining("Test download"),
+      html: expect.stringContaining("/account/orders/M-1001"),
+    });
+  });
+
+  it("retries failed email delivery and then records terminal failure", async () => {
+    const clock = createTestClock();
+    const repositories = createTestBackendRepositories();
+    const email = createEmailDocument({
+      id: createTestMikaId("email", 1),
+      record: {
+        id: createTestMikaId("email", 1),
+        kind: "magic_link",
+        templateKey: "magic_link",
+        attemptCount: 0,
+        maxAttempts: 2,
+        nextAttemptAt: TEST_NOW,
+        metadata: { link: "https://shop.example.test/sign-in" },
+      },
+    });
+    await repositories.ops.put(email);
+
+    const runner = createMikaEmailOutboxRunner({
+      repositories,
+      createId: createIncrementingIdFactory("email_lease"),
+      sender: async () => {
+        throw new Error("provider unavailable");
+      },
+    });
+
+    await expect(runner.runOnce({ now: TEST_NOW })).resolves.toMatchObject({
+      scanned: 1,
+      sent: 0,
+      failed: 1,
+      items: [
+        {
+          emailId: email.id,
+          status: "failed",
+          error: "provider unavailable",
+          nextAttemptAt: clock.isoAt(60_000),
+          terminal: false,
+        },
+      ],
+    });
+    await expect(repositories.ops.findEmail(email.id)).resolves.toMatchObject({
+      status: "failed",
+      nextAttemptAt: clock.isoAt(60_000),
+      record: { attemptCount: 1, lastError: "provider unavailable" },
+    });
+
+    await expect(runner.runOnce({ now: clock.isoAt(60_000) })).resolves.toMatchObject({
+      scanned: 1,
+      failed: 1,
+      items: [
+        {
+          emailId: email.id,
+          status: "failed",
+          terminal: true,
+          nextAttemptAt: undefined,
+        },
+      ],
+    });
+    await expect(repositories.ops.findEmail(email.id)).resolves.toMatchObject({
+      status: "failed",
+      nextAttemptAt: undefined,
+      record: { attemptCount: 2, lastError: "provider unavailable" },
+    });
+  });
+
+  it("skips queued email kinds without a Mika renderer", async () => {
+    const repositories = createTestBackendRepositories();
+    const email = createEmailDocument({
+      id: createTestMikaId("email", 1),
+      record: {
+        id: createTestMikaId("email", 1),
+        kind: "download",
+        templateKey: "download",
+        attemptCount: 0,
+        nextAttemptAt: TEST_NOW,
+      },
+    });
+    await repositories.ops.put(email);
+
+    const runner = createMikaEmailOutboxRunner({
+      repositories,
+      createId: createIncrementingIdFactory("email_lease"),
+      sender: async () => {
+        throw new Error("download email should not be sent");
+      },
+    });
+
+    await expect(runner.runOnce({ now: TEST_NOW })).resolves.toMatchObject({
+      scanned: 1,
+      skipped: 1,
+      failed: 0,
+      items: [{ emailId: email.id, status: "skipped" }],
+    });
+    await expect(repositories.ops.findEmail(email.id)).resolves.toMatchObject({
+      status: "skipped",
+      nextAttemptAt: undefined,
+      record: {
+        attemptCount: 1,
+        lastError: "Email kind 'download' has no Mika renderer.",
+      },
+    });
+  });
+
+  it("uses EmDash email delivery with system source by default", async () => {
+    const calls: Array<{ readonly message: unknown; readonly source: string }> = [];
+    const sender = createEmDashMikaEmailSender({
+      isAvailable: () => true,
+      send: async (message, source) => {
+        calls.push({ message, source });
+      },
+    });
+
+    await sender({
+      emailId: createTestMikaId("email", 1),
+      kind: "magic_link",
+      to: "subscriber@example.test",
+      subject: "Sign in",
+      text: "Use this link",
+      html: "<p>Use this link</p>",
+    });
+
+    expect(calls).toEqual([
+      {
+        source: "system",
+        message: {
+          to: "subscriber@example.test",
+          subject: "Sign in",
+          text: "Use this link",
+          html: "<p>Use this link</p>",
+        },
+      },
+    ]);
+  });
+
+  it("rejects plugin-scoped EmDash email adapters unless explicitly allowed", async () => {
+    const sender = createEmDashMikaEmailSender({
+      send: async () => undefined,
+    });
+
+    await expect(
+      sender({
+        emailId: createTestMikaId("email", 1),
+        kind: "magic_link",
+        to: "subscriber@example.test",
+        subject: "Sign in",
+        text: "Use this link",
+        html: "<p>Use this link</p>",
+      }),
+    ).rejects.toThrow("must accept a source argument");
   });
 
   it("does not overwrite an existing workflow when creating one atomically", async () => {
@@ -9385,6 +9717,20 @@ function createIncrementingBackendDependencies(
   });
 }
 
+function createIncrementingIdFactory(
+  namespacePrefix?: string,
+): CreateMikaBackendApiInput["createId"] {
+  const counts = new Map<string, number>();
+
+  return (namespace) => {
+    const resolvedNamespace = namespacePrefix ?? namespace;
+    const count = (counts.get(resolvedNamespace) ?? 0) + 1;
+    counts.set(resolvedNamespace, count);
+
+    return createTestMikaId(resolvedNamespace, count);
+  };
+}
+
 function createTestBackendRepositories(
   options: {
     readonly stockBySellableId?: ReadonlyMap<string, StockItemRecord>;
@@ -10074,7 +10420,11 @@ function createLicenseDocument(overrides: Partial<LicenseDocument> = {}): Licens
   };
 }
 
-function createEmailDocument(overrides: Partial<EmailDocument> = {}): EmailDocument {
+function createEmailDocument(
+  overrides: Partial<Omit<EmailDocument, "record">> & {
+    readonly record?: Partial<EmailDocument["record"]>;
+  } = {},
+): EmailDocument {
   const record = {
     id: overrides.id ?? createTestMikaId("email", 1),
     customerId: createTestMikaId("customer", 1),
@@ -10096,14 +10446,15 @@ function createEmailDocument(overrides: Partial<EmailDocument> = {}): EmailDocum
     id: record.id,
     type: "email",
     schemaVersion: 1,
+    ...overrides,
     status: record.status,
     nextAttemptAt: record.nextAttemptAt,
+    orderId: record.orderId,
     tokenId: record.tokenId,
     kind: record.kind,
     record,
     createdAt: TEST_NOW,
     updatedAt: TEST_NOW,
-    ...overrides,
   };
 }
 
