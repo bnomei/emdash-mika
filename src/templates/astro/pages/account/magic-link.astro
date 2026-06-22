@@ -3,6 +3,7 @@ import { actions, isInputError } from "astro:actions";
 import { Button, Text } from "@cloudflare/kumo";
 import MagicLinkForm from "../../components/MagicLinkForm.astro";
 import MikaKumoPage from "../../components/MikaKumoPage.astro";
+import { mikaTemplateCurrentCartItemCount } from "../../lib/cart";
 import { mikaHiddenInput, mikaReturnToInput } from "../../lib/form";
 import { mikaTemplateRoutes } from "../../lib/routes";
 
@@ -21,9 +22,11 @@ const token = Astro.url.searchParams.get("token");
 if (verifyResult?.data) {
   return Astro.redirect(mikaTemplateRoutes.account);
 }
+
+const cartItemCount = await mikaTemplateCurrentCartItemCount(Astro);
 ---
 
-<MikaKumoPage title="Account" pageSize="narrow" data-mika-magic-link-page>
+<MikaKumoPage title="Account" pageSize="narrow" cartItemCount={cartItemCount} data-mika-magic-link-page>
   <section class="mika-kumo-panel mika-kumo-stack">
   {requestResult?.data?.sent && <Text as="p" variant="success" role="status">Email sent.</Text>}
   {requestError && <Text as="p" variant="error" role="alert">{requestError}</Text>}

@@ -38,7 +38,7 @@ const lineCount = cart?.items.length ?? 0;
 const itemCount = mikaTemplateCartItemCount(cart);
 ---
 
-<MikaKumoPage title="Cart" pageSize="narrow" data-mika-cart-page>
+<MikaKumoPage title="Cart" pageSize="narrow" cartItemCount={itemCount} data-mika-cart-page>
   <section class="mika-kumo-panel mika-kumo-stack">
     <div class="mika-kumo-title-row">
       <div class="mika-kumo-kicker">

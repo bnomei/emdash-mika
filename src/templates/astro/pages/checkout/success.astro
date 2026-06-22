@@ -2,6 +2,7 @@
 import { Link, Text } from "@cloudflare/kumo";
 import { createMika } from "@bnomei/emdash-mika/astro";
 import MikaKumoPage from "../../components/MikaKumoPage.astro";
+import { mikaTemplateCurrentCartItemCount } from "../../lib/cart";
 import {
   mikaTemplateCheckoutSuccessHref,
   mikaTemplateRoutes
@@ -25,9 +26,10 @@ const messageByStatus: Record<string, string> = {
   failed: "Checkout failed.",
   binding_mismatch: "Checkout could not be verified."
 };
+const cartItemCount = await mikaTemplateCurrentCartItemCount(Astro);
 ---
 
-<MikaKumoPage title="Checkout" pageSize="narrow" data-mika-checkout-success>
+<MikaKumoPage title="Checkout" pageSize="narrow" cartItemCount={cartItemCount} data-mika-checkout-success>
   <section class="mika-kumo-panel mika-kumo-stack">
     <Text as="p" aria-live="polite">{messageByStatus[status] ?? "Checkout received."}</Text>
     <div class="mika-kumo-actions">

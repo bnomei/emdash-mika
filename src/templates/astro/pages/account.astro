@@ -4,6 +4,7 @@ import { Button, Text } from "@cloudflare/kumo";
 import { createMika } from "@bnomei/emdash-mika/astro";
 import AccountSignInPanel from "../components/AccountSignInPanel.astro";
 import MikaKumoPage from "../components/MikaKumoPage.astro";
+import { mikaTemplateCurrentCartItemCount } from "../lib/cart";
 import { mikaReturnToInput } from "../lib/form";
 import { mikaTemplateRoutes } from "../lib/routes";
 
@@ -34,9 +35,10 @@ const accountLoadError =
   !accountResult.ok && accountResult.error.code !== "AUTH_REQUIRED"
     ? accountResult.error.message
     : null;
+const cartItemCount = await mikaTemplateCurrentCartItemCount(Astro);
 ---
 
-<MikaKumoPage title="Account" pageSize="narrow" data-mika-account-page>
+<MikaKumoPage title="Account" pageSize="narrow" cartItemCount={cartItemCount} data-mika-account-page>
   {!account && (
     <AccountSignInPanel
       returnTo={mikaTemplateRoutes.account}

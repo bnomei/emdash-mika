@@ -7,7 +7,7 @@ import {
   type ActionClient,
   type ActionErrorCode,
   type SafeResult,
-} from "astro:actions";
+} from "astro/actions/runtime/entrypoints/server.js";
 import { createMikaRequestContext } from "./api/context";
 import {
   MikaActionInputError,

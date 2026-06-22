@@ -83,7 +83,7 @@
   },
   "scripts": {
     "build": "npm run build:pack -- --clean",
-    "build:pack": "vp pack src/index.ts src/agent.ts src/admin.ts src/astro.ts src/astro-actions.ts src/api/client.ts src/email.ts src/provider.ts src/react.ts src/server.ts src/types/index.ts --format esm --dts --tsconfig tsconfig.json --deps.never-bundle astro:actions --deps.never-bundle astro/zod --deps.never-bundle react",
+    "build:pack": "vp pack src/index.ts src/agent.ts src/admin.ts src/astro.ts src/astro-actions.ts src/api/client.ts src/email.ts src/provider.ts src/react.ts src/server.ts src/types/index.ts --format esm --dts --tsconfig tsconfig.json --deps.never-bundle astro/zod --deps.never-bundle react",
     "check": "vp check .",
     "pack:check": "npm run build:pack -- --clean --publint",
     "prepack": "npm run build",

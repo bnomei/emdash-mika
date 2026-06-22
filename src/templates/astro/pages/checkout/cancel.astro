@@ -1,14 +1,16 @@
 ---
 import { Link, Text } from "@cloudflare/kumo";
 import MikaKumoPage from "../../components/MikaKumoPage.astro";
+import { mikaTemplateCurrentCartItemCount } from "../../lib/cart";
 import { mikaTemplateRoutes } from "../../lib/routes";
 
 export const prerender = false;
 
 const cartHref = mikaTemplateRoutes.cart;
+const cartItemCount = await mikaTemplateCurrentCartItemCount(Astro);
 ---
 
-<MikaKumoPage title="Checkout cancelled" pageSize="narrow" data-mika-checkout-cancel>
+<MikaKumoPage title="Checkout cancelled" pageSize="narrow" cartItemCount={cartItemCount} data-mika-checkout-cancel>
   <section class="mika-kumo-panel mika-kumo-stack">
     <Text as="p" variant="secondary">No payment was completed.</Text>
     <Link href={cartHref}>Return to cart</Link>

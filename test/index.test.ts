@@ -3687,15 +3687,34 @@ describe("Mika Astro template contracts", () => {
       new URL("../src/templates/astro/styles/kumo.css", import.meta.url),
       "utf8",
     );
+    const cartHelper = readFileSync(
+      new URL("../src/templates/astro/lib/cart.ts", import.meta.url),
+      "utf8",
+    );
+    const cartPage = readFileSync(
+      new URL("../src/templates/astro/pages/cart.astro", import.meta.url),
+      "utf8",
+    );
+    const wishlistPage = readFileSync(
+      new URL("../src/templates/astro/pages/wishlist.astro", import.meta.url),
+      "utf8",
+    );
     const tsconfig = readFileSync(new URL("../tsconfig.json", import.meta.url), "utf8");
 
     expect(page).toContain('import MikaKumoAppFrame from "./MikaKumoAppFrame"');
+    expect(page).not.toContain('import { createMika } from "@bnomei/emdash-mika/astro"');
+    expect(page).toContain("cartItemCount?: number");
     expect(page).not.toContain("productNavItems?: readonly MikaKumoNavItem[]");
     expect(page).toContain("<MikaKumoAppFrame");
     expect(page).toContain("client:load");
+    expect(page).toContain("cartItemCount={cartItemCount}");
+    expect(page).toContain("{cartLabel}");
     expect(page).toContain('aria-label="Page shortcuts"');
 
     expect(frame).toContain("<Sidebar.Provider");
+    expect(frame).toContain("cartItemCount = 0");
+    expect(frame).toContain("Cart (${visibleCartItemCount})");
+    expect(frame).toContain("aria-label={cartAriaLabel}");
     expect(frame).toContain("mobileBreakpoint={900}");
     expect(frame).toContain('tooltip="Products"');
     expect(frame).toContain('href="/account/orders"');
@@ -3707,6 +3726,11 @@ describe("Mika Astro template contracts", () => {
     expect(frame).not.toContain("aria-controls={productMenuId}");
     expect(frame).not.toContain("All products");
     expect(frame).toContain("mika-kumo-mobile-topbar");
+
+    expect(cartHelper).toContain("mikaTemplateCurrentCartItemCount");
+    expect(cartHelper).toContain('import { createMika } from "@bnomei/emdash-mika/astro"');
+    expect(cartPage).toContain("cartItemCount={itemCount}");
+    expect(wishlistPage).toContain("mikaTemplateCurrentCartItemCount");
 
     expect(styles).toContain(".mika-kumo-app-frame");
     expect(styles).toContain(".mika-kumo-mobile-topbar");

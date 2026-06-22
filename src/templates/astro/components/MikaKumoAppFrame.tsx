@@ -28,6 +28,7 @@ interface MikaKumoResourceLink {
 interface AppFrameProps {
   readonly title: string;
   readonly currentPath: string;
+  readonly cartItemCount?: number;
   readonly children: ReactNode;
 }
 
@@ -38,8 +39,21 @@ const fixtureLinks: readonly (MikaKumoResourceLink & { readonly icon: Icon })[] 
   { label: "Admin action testbed", href: "/_emdash/admin", icon: WrenchIcon },
 ];
 
-export default function MikaKumoAppFrame({ title, currentPath, children }: AppFrameProps) {
+export default function MikaKumoAppFrame({
+  title,
+  currentPath,
+  cartItemCount = 0,
+  children,
+}: AppFrameProps) {
   const productsActive = currentPath === "/" || currentPath.startsWith("/products/");
+  const visibleCartItemCount = Math.max(0, cartItemCount);
+  const cartLabel = visibleCartItemCount > 0 ? `Cart (${visibleCartItemCount})` : "Cart";
+  const cartAriaLabel =
+    visibleCartItemCount === 1
+      ? "Cart, 1 item"
+      : visibleCartItemCount > 1
+        ? `Cart, ${visibleCartItemCount} items`
+        : "Cart";
 
   return (
     <Sidebar.Provider
@@ -87,7 +101,7 @@ export default function MikaKumoAppFrame({ title, currentPath, children }: AppFr
                 icon={ShoppingCartSimpleIcon}
                 tooltip="Cart"
               >
-                Cart
+                {cartLabel}
               </Sidebar.MenuButton>
               <Sidebar.MenuButton
                 active={isActive(currentPath, "/wishlist")}
@@ -194,8 +208,11 @@ export default function MikaKumoAppFrame({ title, currentPath, children }: AppFr
             <span>Buttonwood Lot</span>
           </a>
           <nav aria-label="Quick links" className="mika-kumo-mobile-actions">
-            <Link href="/cart" variant="plain" aria-label="Cart">
+            <Link href="/cart" variant="plain" aria-label={cartAriaLabel}>
               <ShoppingCartSimpleIcon size={18} aria-hidden="true" />
+              {visibleCartItemCount > 0 && (
+                <span className="mika-kumo-mobile-count">({visibleCartItemCount})</span>
+              )}
             </Link>
             <Link href="/account" variant="plain" aria-label="Account">
               <UserCircleIcon size={18} aria-hidden="true" />

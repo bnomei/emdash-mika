@@ -127,6 +127,19 @@ a {
   align-items: center;
 }
 
+.mika-kumo-mobile-actions a {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.mika-kumo-mobile-count {
+  color: var(--text-color-kumo-strong);
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
 .mika-kumo-mobile-trigger {
   color: var(--text-color-kumo-default);
 }

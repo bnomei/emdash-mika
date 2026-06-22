@@ -11,6 +11,7 @@ interface Props {
   backHref?: string;
   backLabel?: string;
   pageSize?: "default" | "narrow";
+  cartItemCount?: number;
   class?: string;
   [attribute: string]: unknown;
 }
@@ -23,11 +24,13 @@ const {
   backHref,
   backLabel = "Back",
   pageSize = "default",
+  cartItemCount = 0,
   class: className,
   ...attrs
 } = Astro.props;
 const hasHeaderSlot = Astro.slots.has("header");
 const currentPath = Astro.url.pathname;
+const cartLabel = cartItemCount > 0 ? `Cart (${cartItemCount})` : "Cart";
 ---
 
 <html lang="en" data-theme="kumo">
@@ -42,6 +45,7 @@ const currentPath = Astro.url.pathname;
       client:load
       title={title}
       currentPath={currentPath}
+      cartItemCount={cartItemCount}
     >
       <main
         {...attrs}
@@ -56,7 +60,7 @@ const currentPath = Astro.url.pathname;
               {eyebrow && <Badge variant="secondary">{eyebrow}</Badge>}
             </div>
             <nav class="mika-kumo-header-actions" aria-label="Page shortcuts">
-              <Link href="/cart" variant="plain">Cart</Link>
+              <Link href="/cart" variant="plain">{cartLabel}</Link>
               <Link href="/account" variant="plain">Account</Link>
             </nav>
           </div>

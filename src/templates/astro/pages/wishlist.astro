@@ -4,6 +4,7 @@ import { Link, Text } from "@cloudflare/kumo";
 import { createMika } from "@bnomei/emdash-mika/astro";
 import MikaKumoPage from "../components/MikaKumoPage.astro";
 import WishlistList from "../components/WishlistList.astro";
+import { mikaTemplateCurrentCartItemCount } from "../lib/cart";
 import { mikaTemplateRoutes } from "../lib/routes";
 
 export const prerender = false;
@@ -16,9 +17,10 @@ const actionError = removeResult?.error?.message ?? moveToCartResult?.error?.mes
 const wishlistResult = await Mika.wishlist.get();
 const wishlist = wishlistResult.ok ? wishlistResult.data : null;
 const error = actionError ?? (wishlistResult.ok ? null : wishlistResult.error.message);
+const cartItemCount = await mikaTemplateCurrentCartItemCount(Astro);
 ---
 
-<MikaKumoPage title="Wishlist" pageSize="narrow" data-mika-wishlist-page>
+<MikaKumoPage title="Wishlist" pageSize="narrow" cartItemCount={cartItemCount} data-mika-wishlist-page>
   <section class="mika-kumo-panel mika-kumo-stack">
     {error && <Text as="p" variant="error" role="alert">{error}</Text>}
     {moveToCartResult?.data && (
