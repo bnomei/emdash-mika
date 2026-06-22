@@ -12,14 +12,21 @@ interface Props {
 const { availability, labels = {}, class: className, ...attrs } = Astro.props;
 const status = availability?.status ?? "untracked";
 const labelByStatus: Record<string, string> = {
-  available: "Available",
+  available: "In stock",
   low_stock: "Low stock",
   out_of_stock: "Out of stock",
-  backorder: "Backorder",
-  untracked: "Available",
-  manual: "Available"
+  backorder: "Backorder available",
+  untracked: "In stock",
+  manual: "In stock"
 };
-const label = labels[status] ?? labelByStatus[status] ?? status;
+const baseLabel = labels[status] ?? labelByStatus[status] ?? status;
+const quantity = availability?.availableQuantity;
+const label =
+  quantity !== undefined && status === "available"
+    ? `${baseLabel} · ${quantity} available`
+    : quantity !== undefined && status === "low_stock"
+      ? `${baseLabel} · ${quantity} left`
+      : baseLabel;
 const variantByStatus: Record<string, "success" | "warning" | "error" | "secondary"> = {
   available: "success",
   low_stock: "warning",
@@ -35,11 +42,9 @@ const variant = variantByStatus[status] ?? "secondary";
   {...attrs}
   data-mika-stock={status}
   className={className}
+  appearance="dot"
   variant={variant}
   aria-live="polite"
 >
   {label}
-  {availability?.availableQuantity !== undefined && status !== "out_of_stock" && (
-    <span> ({availability.availableQuantity})</span>
-  )}
 </Badge>

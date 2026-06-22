@@ -34,7 +34,7 @@ const messageByStatus: Record<string, string> = {
       {status === "pending" && checkoutId && (
         <Link href={mikaTemplateCheckoutSuccessHref(checkoutId)}>Refresh status</Link>
       )}
-      {checkout?.orderId && <Link href={mikaTemplateRoutes.account}>View account</Link>}
+      {checkout?.orderId && <Link href={mikaTemplateRoutes.accountOrders}>View orders</Link>}
     </div>
   </section>
 </MikaKumoPage>

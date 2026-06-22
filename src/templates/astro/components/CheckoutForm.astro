@@ -1,6 +1,6 @@
 ---
 import { actions } from "astro:actions";
-import { Button } from "@cloudflare/kumo";
+import { Button, Input } from "@cloudflare/kumo";
 import type { CartDTO } from "@bnomei/emdash-mika/types";
 import { mikaReturnTo } from "@bnomei/emdash-mika/astro";
 import { mikaHiddenInput, mikaRedirectInputs } from "../lib/form";
@@ -35,13 +35,13 @@ const {
   name,
   company,
   vatId,
-  emailLabel = "Email",
-  nameLabel = "Name",
-  companyLabel = "Company",
-  vatIdLabel = "VAT ID",
+  emailLabel = "Email address",
+  nameLabel = "Full name",
+  companyLabel = "Company (optional)",
+  vatIdLabel = "VAT ID (optional)",
   customerLegend = "Customer details",
   showCustomerFields = true,
-  label = "Checkout",
+  label = "Proceed to checkout",
   class: className,
   ...attrs
 } = Astro.props;
@@ -64,33 +64,10 @@ const redirectInputs = mikaRedirectInputs({ successPath, cancelPath, returnTo })
   {showCustomerFields && (
     <fieldset data-mika-checkout-customer class="mika-kumo-fieldset">
       <legend class="mika-kumo-legend">{customerLegend}</legend>
-      <label class="mika-kumo-field">
-        <span>{emailLabel}</span>
-        <input
-          class="mika-kumo-input"
-          name="email"
-          type="email"
-          autocomplete="email"
-          value={email}
-        />
-      </label>
-      <label class="mika-kumo-field">
-        <span>{nameLabel}</span>
-        <input class="mika-kumo-input" name="name" autocomplete="name" value={name} />
-      </label>
-      <label class="mika-kumo-field">
-        <span>{companyLabel}</span>
-        <input
-          class="mika-kumo-input"
-          name="company"
-          autocomplete="organization"
-          value={company}
-        />
-      </label>
-      <label class="mika-kumo-field">
-        <span>{vatIdLabel}</span>
-        <input class="mika-kumo-input" name="vatId" value={vatId} />
-      </label>
+      <Input label={emailLabel} name="email" type="email" autoComplete="email" value={email} />
+      <Input label={nameLabel} name="name" autoComplete="name" value={name} />
+      <Input label={companyLabel} name="company" autoComplete="organization" value={company} />
+      <Input label={vatIdLabel} name="vatId" value={vatId} />
     </fieldset>
   )}
 

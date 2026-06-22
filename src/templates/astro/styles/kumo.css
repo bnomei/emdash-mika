@@ -131,15 +131,6 @@ a {
   color: var(--text-color-kumo-default);
 }
 
-.mika-kumo-products-caret {
-  flex: 0 0 auto;
-  transition: transform 160ms ease;
-}
-
-.mika-kumo-products-caret[data-open="true"] {
-  transform: rotate(90deg);
-}
-
 .mika-kumo-page {
   box-sizing: border-box;
   display: grid;
@@ -242,8 +233,23 @@ a {
   align-items: center;
 }
 
+.mika-kumo-table-scroll {
+  overflow-x: auto;
+}
+
+.mika-kumo-inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+
 .mika-kumo-form {
   margin: 0;
+}
+
+.mika-kumo-stack-tight {
+  gap: 4px;
 }
 
 .mika-kumo-field > span,
@@ -270,6 +276,10 @@ a {
 
 .mika-kumo-input {
   padding: 0 12px;
+}
+
+.mika-kumo-quantity-field {
+  width: 96px;
 }
 
 .mika-kumo-select {
@@ -350,6 +360,18 @@ a {
 
 .mika-kumo-status {
   color: var(--text-color-kumo-success);
+}
+
+.mika-kumo-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .mika-kumo-purchase {

@@ -22,6 +22,9 @@ interface Props {
   returnTo?: string;
   quantity?: number;
   buttonLabel?: string;
+  outOfStockLabel?: string;
+  unavailableLabel?: string;
+  chooseOptionLabel?: string;
   purchaseLabel?: string;
   quantityLabel?: string;
   class?: string;
@@ -35,6 +38,9 @@ const {
   returnTo = mikaReturnTo(Astro.url),
   quantity = 1,
   buttonLabel = "Add to cart",
+  outOfStockLabel = "Out of stock",
+  unavailableLabel = "Unavailable",
+  chooseOptionLabel = "Choose an available option",
   purchaseLabel = "Purchase",
   quantityLabel = "Quantity",
   class: className,
@@ -43,6 +49,15 @@ const {
 const purchase = purchaseInput ?? createMikaPurchaseModel(sellables);
 const syncAvailabilityPanels = !showPurchaseControls || purchase.useGroupedVariantControls;
 const needsAddToCartSync = showPurchaseControls && purchase.useGroupedVariantControls;
+const selectedAvailabilityStatus = purchase.selectedSellable?.availability.status;
+const disabledButtonLabel = purchase.missingActivePrice
+  ? unavailableLabel
+  : selectedAvailabilityStatus === "out_of_stock"
+    ? outOfStockLabel
+    : !purchase.selectedOption && purchase.options.length > 0
+      ? chooseOptionLabel
+      : unavailableLabel;
+const resolvedButtonLabel = purchase.unavailable ? disabledButtonLabel : buttonLabel;
 ---
 
 <form
@@ -176,8 +191,10 @@ const needsAddToCartSync = showPurchaseControls && purchase.useGroupedVariantCon
     disabled={purchase.unavailable}
     data-mika-purchase-submit
     data-mika-initial-disabled={purchase.unavailable ? "true" : "false"}
+    data-mika-enabled-label={buttonLabel}
+    data-mika-disabled-label={disabledButtonLabel}
   >
-    {buttonLabel}
+    {resolvedButtonLabel}
   </Button>
 </form>
 

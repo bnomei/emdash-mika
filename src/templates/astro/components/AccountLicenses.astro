@@ -1,25 +1,36 @@
 ---
-import { Badge, Text } from "@cloudflare/kumo";
+import { Badge, Empty, Link, Table, Text } from "@cloudflare/kumo";
+import { mikaTemplateStatusLabel, mikaTemplateStatusVariant } from "../lib/display";
 
 interface AccountLicenseDisplay {
   readonly id: string;
   readonly title: string;
   readonly status: string;
   readonly displayKeySuffix?: string;
+  readonly orderId?: string;
+  readonly downloadHref?: string;
 }
 
 interface Props {
   licenses: readonly AccountLicenseDisplay[];
+  orderHref?: (license: AccountLicenseDisplay) => string | undefined;
   headingLabel?: string;
   emptyLabel?: string;
+  licenseLabel?: string;
+  statusLabel?: string;
+  keyLabel?: string;
   class?: string;
   [attribute: string]: unknown;
 }
 
 const {
   licenses,
+  orderHref,
   headingLabel = "Licenses",
   emptyLabel = "No licenses.",
+  licenseLabel = "License",
+  statusLabel = "Status",
+  keyLabel = "Key",
   class: className,
   ...attrs
 } = Astro.props;
@@ -29,22 +40,50 @@ const hasEmptySlot = Astro.slots.has("empty");
 <section {...attrs} data-mika-account-licenses class:list={["mika-kumo-stack", className]}>
   <Text as="h2" variant="heading2"><slot name="heading">{headingLabel}</slot></Text>
   {licenses.length ? (
-    <ul class="mika-kumo-list">
-      {licenses.map((license) => (
-        <li class="mika-kumo-line-item">
-          <strong>{license.title}</strong>
-          <Badge variant={license.status === "active" ? "success" : "secondary"}>
-            {license.status}
-          </Badge>
-          {license.displayKeySuffix && (
-            <span class="mika-kumo-muted">Key ending {license.displayKeySuffix}</span>
-          )}
-        </li>
-      ))}
-    </ul>
+    <div class="mika-kumo-table-scroll">
+      <Table>
+        <Table.Header>
+          <Table.Row>
+            <Table.Head>{licenseLabel}</Table.Head>
+            <Table.Head>{statusLabel}</Table.Head>
+            <Table.Head>{keyLabel}</Table.Head>
+            <Table.Head>Actions</Table.Head>
+          </Table.Row>
+        </Table.Header>
+        <Table.Body>
+          {licenses.map((license) => {
+            const relatedOrderHref = orderHref?.(license);
+            return (
+              <Table.Row>
+                <Table.Cell><strong>{license.title}</strong></Table.Cell>
+                <Table.Cell>
+                  <Badge appearance="dot" variant={mikaTemplateStatusVariant(license.status)}>
+                    {mikaTemplateStatusLabel(license.status)}
+                  </Badge>
+                </Table.Cell>
+                <Table.Cell>
+                  {license.displayKeySuffix ? (
+                    <span class="mika-kumo-muted">Ending {license.displayKeySuffix}</span>
+                  ) : (
+                    <span class="mika-kumo-muted">Stored by host</span>
+                  )}
+                </Table.Cell>
+                <Table.Cell>
+                  <div class="mika-kumo-actions">
+                    {relatedOrderHref && <Link href={relatedOrderHref}>View order</Link>}
+                    {license.downloadHref && <Link href={license.downloadHref}>Download</Link>}
+                    {!relatedOrderHref && !license.downloadHref && <span class="mika-kumo-muted">No actions available</span>}
+                  </div>
+                </Table.Cell>
+              </Table.Row>
+            );
+          })}
+        </Table.Body>
+      </Table>
+    </div>
   ) : hasEmptySlot ? (
     <slot name="empty" />
   ) : (
-    <p class="mika-kumo-muted">{emptyLabel}</p>
+    <Empty size="sm" title={emptyLabel} description="License-key fulfillments will appear here without exposing raw keys." />
   )}
 </section>

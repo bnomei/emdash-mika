@@ -1,0 +1,44 @@
+---
+import { actions, isInputError } from "astro:actions";
+import { createMika } from "@bnomei/emdash-mika/astro";
+import AccountLicenses from "../../components/AccountLicenses.astro";
+import AccountSignInPanel from "../../components/AccountSignInPanel.astro";
+import MikaKumoPage from "../../components/MikaKumoPage.astro";
+import { mikaTemplateAccount } from "../../lib/account";
+import { mikaTemplateRoutes } from "../../lib/routes";
+
+export const prerender = false;
+
+const Mika = createMika(Astro);
+const magicLinkResult = Astro.getActionResult(actions.mika.magicLink.request);
+const magicLinkInputErrors = isInputError(magicLinkResult?.error)
+  ? magicLinkResult.error.fields
+  : {};
+const magicLinkError = isInputError(magicLinkResult?.error)
+  ? null
+  : magicLinkResult?.error?.message;
+const accountResult = await Mika.account.get();
+const account = accountResult.ok ? mikaTemplateAccount(accountResult.data) : null;
+const accountLoadError =
+  !accountResult.ok && accountResult.error.code !== "AUTH_REQUIRED"
+    ? accountResult.error.message
+    : null;
+const orderHref = (license: { readonly orderId?: string }) =>
+  license.orderId ? `${mikaTemplateRoutes.accountOrders}#order-${license.orderId}` : undefined;
+---
+
+<MikaKumoPage title="Licenses" pageSize="narrow" data-mika-account-licenses-page>
+  {!account ? (
+    <AccountSignInPanel
+      returnTo={mikaTemplateRoutes.accountLicenses}
+      accountLoadError={accountLoadError}
+      magicLinkSent={magicLinkResult?.data?.sent}
+      magicLinkError={magicLinkError}
+      emailError={magicLinkInputErrors.email?.join(", ")}
+    />
+  ) : (
+    <section class="mika-kumo-panel">
+      <AccountLicenses licenses={account.licenses ?? []} orderHref={orderHref} />
+    </section>
+  )}
+</MikaKumoPage>

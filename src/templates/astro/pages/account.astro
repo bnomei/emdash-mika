@@ -2,11 +2,7 @@
 import { actions, isInputError } from "astro:actions";
 import { Button, Text } from "@cloudflare/kumo";
 import { createMika } from "@bnomei/emdash-mika/astro";
-import AccountDownloads from "../components/AccountDownloads.astro";
-import AccountLicenses from "../components/AccountLicenses.astro";
-import AccountOrders from "../components/AccountOrders.astro";
-import AccountSubscriptions from "../components/AccountSubscriptions.astro";
-import MagicLinkForm from "../components/MagicLinkForm.astro";
+import AccountSignInPanel from "../components/AccountSignInPanel.astro";
 import MikaKumoPage from "../components/MikaKumoPage.astro";
 import { mikaReturnToInput } from "../lib/form";
 import { mikaTemplateRoutes } from "../lib/routes";
@@ -23,33 +19,17 @@ if (portalResult?.data?.redirectUrl) {
 const magicLinkResult = Astro.getActionResult(actions.mika.magicLink.request);
 const exportResult = Astro.getActionResult(actions.mika.account["export"]);
 const deleteResult = Astro.getActionResult(actions.mika.account["delete"]);
-const cancelResult = Astro.getActionResult(actions.mika.subscription.cancel);
-const renewResult = Astro.getActionResult(actions.mika.subscription.renew);
-const changeResult = Astro.getActionResult(actions.mika.subscription.change);
 const magicLinkInputErrors = isInputError(magicLinkResult?.error)
   ? magicLinkResult.error.fields
   : {};
 const magicLinkError = isInputError(magicLinkResult?.error)
   ? null
   : magicLinkResult?.error?.message;
-const subscriptionError =
-  cancelResult?.error?.message ??
-  renewResult?.error?.message ??
-  changeResult?.error?.message;
 const accountActionError = portalResult?.error?.message;
 const accountExportError = exportResult?.error?.message;
 const accountDeleteError = deleteResult?.error?.message;
 const accountResult = await Mika.account.get();
-type AccountLicenseDisplay = {
-  readonly id: string;
-  readonly title: string;
-  readonly status: string;
-  readonly displayKeySuffix?: string;
-};
-const subscriptionAccount = cancelResult?.data ?? renewResult?.data ?? changeResult?.data;
-const account = accountResult.ok
-  ? (subscriptionAccount ?? accountResult.data) as typeof accountResult.data & { readonly licenses?: readonly AccountLicenseDisplay[] }
-  : null;
+const account = accountResult.ok ? accountResult.data : null;
 const accountLoadError =
   !accountResult.ok && accountResult.error.code !== "AUTH_REQUIRED"
     ? accountResult.error.message
@@ -58,21 +38,18 @@ const accountLoadError =
 
 <MikaKumoPage title="Account" pageSize="narrow" data-mika-account-page>
   {!account && (
-    <section class="mika-kumo-panel mika-kumo-stack">
-      <Text as="h2" variant="heading2">Sign in</Text>
-      {accountLoadError && <Text as="p" variant="error" role="alert">{accountLoadError}</Text>}
-      {magicLinkResult?.data?.sent && <Text as="p" variant="success" role="status">Email sent.</Text>}
-      {magicLinkError && <Text as="p" variant="error" role="alert">{magicLinkError}</Text>}
-      <MagicLinkForm
-        id="mika-account-magic-link"
-        returnTo={mikaTemplateRoutes.account}
-        emailError={magicLinkInputErrors.email?.join(", ")}
-      />
-    </section>
+    <AccountSignInPanel
+      returnTo={mikaTemplateRoutes.account}
+      accountLoadError={accountLoadError}
+      magicLinkSent={magicLinkResult?.data?.sent}
+      magicLinkError={magicLinkError}
+      emailError={magicLinkInputErrors.email?.join(", ")}
+    />
   )}
 
   {account && (
     <section class="mika-kumo-panel mika-kumo-stack">
+      <Text as="h2" variant="heading2">Profile</Text>
       {account.customer?.email && <Text as="p" variant="secondary">{account.customer.email}</Text>}
       {(accountActionError || accountLoadError) && (
         <Text as="p" variant="error" role="alert">{accountActionError ?? accountLoadError}</Text>
@@ -85,18 +62,11 @@ const accountLoadError =
       {deleteResult?.data?.requested && (
         <Text as="p" variant="success" role="status">Account deletion requested.</Text>
       )}
-      <AccountOrders orders={account.orders} />
-      <AccountSubscriptions
-        subscriptions={account.subscriptions}
-        error={subscriptionError}
-      />
-      <AccountLicenses licenses={account.licenses ?? []} />
-      <AccountDownloads downloads={account.downloads} />
 
       <div class="mika-kumo-actions">
       <form class="mika-kumo-form" action={actions.mika.account.portal} method="post">
         <input type="hidden" {...mikaReturnToInput(mikaTemplateRoutes.account)} />
-        <Button type="submit" variant="secondary">Billing portal</Button>
+        <Button type="submit" variant="secondary">Manage billing in portal</Button>
       </form>
       <form class="mika-kumo-form" action={actions.mika.account["export"]} method="post">
         <input type="hidden" {...mikaReturnToInput(mikaTemplateRoutes.account)} />

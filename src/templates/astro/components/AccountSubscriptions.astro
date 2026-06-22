@@ -1,9 +1,14 @@
 ---
 import { actions } from "astro:actions";
-import { Badge, Button, Text } from "@cloudflare/kumo";
+import { Badge, Banner, Button, Empty, Table, Text } from "@cloudflare/kumo";
 import type { SubscriptionDTO } from "@bnomei/emdash-mika/types";
 import { mikaReturnTo } from "@bnomei/emdash-mika/astro";
 import { mikaReturnToInput } from "../lib/form";
+import {
+  mikaTemplateDateLabel,
+  mikaTemplateStatusLabel,
+  mikaTemplateStatusVariant
+} from "../lib/display";
 
 interface Props {
   subscriptions: readonly SubscriptionDTO[];
@@ -14,6 +19,9 @@ interface Props {
   cancelLabel?: string;
   renewLabel?: string;
   changeLabel?: string;
+  subscriptionLabel?: string;
+  periodEndLabel?: string;
+  statusLabel?: string;
   showChangeAction?: boolean;
   changePriceIds?: Readonly<Record<string, string>>;
   class?: string;
@@ -26,9 +34,12 @@ const {
   error,
   headingLabel = "Subscriptions",
   emptyLabel = "No subscriptions.",
-  cancelLabel = "Cancel",
-  renewLabel = "Renew",
-  changeLabel = "Change",
+  cancelLabel = "Cancel subscription",
+  renewLabel = "Renew subscription",
+  changeLabel = "Manage plan",
+  subscriptionLabel = "Subscription",
+  periodEndLabel = "Renews or ends",
+  statusLabel = "Status",
   showChangeAction = false,
   changePriceIds = {},
   class: className,
@@ -39,82 +50,77 @@ const hasEmptySlot = Astro.slots.has("empty");
 
 <section {...attrs} data-mika-account-subscriptions class:list={["mika-kumo-stack", className]}>
   <Text as="h2" variant="heading2"><slot name="heading">{headingLabel}</slot></Text>
-  {error && <Text as="p" variant="error" role="alert">{error}</Text>}
+  {error && <Banner variant="error" title="Subscription action failed" description={error} role="alert" />}
   {subscriptions.length ? (
-    <ul class="mika-kumo-list">
-      {subscriptions.map((subscription) => (
-        <li class="mika-kumo-line-item">
-          <strong>{subscription.title}</strong>
-          <Badge variant={subscription.status === "active" ? "success" : "secondary"}>
-            {subscription.status}
-          </Badge>
-          {subscription.currentPeriodEnd && (
-            <time class="mika-kumo-muted" datetime={subscription.currentPeriodEnd}>
-              {new Date(subscription.currentPeriodEnd).toLocaleDateString()}
-            </time>
-          )}
-          {subscription.providerActions?.includes("cancel") && (
-            <form class="mika-kumo-form" action={actions.mika.subscription.cancel} method="post">
-              <input
-                type="hidden"
-                name="subscriptionId"
-                value={subscription.id}
-              />
-              <input type="hidden" {...mikaReturnToInput(returnTo)} />
-              <Button
-                type="submit"
-                variant="secondary"
-                aria-label={`${cancelLabel} ${subscription.title}`}
-              >
-                {cancelLabel}
-              </Button>
-            </form>
-          )}
-          {subscription.providerActions?.includes("renew") && (
-            <form class="mika-kumo-form" action={actions.mika.subscription.renew} method="post">
-              <input
-                type="hidden"
-                name="subscriptionId"
-                value={subscription.id}
-              />
-              <input type="hidden" {...mikaReturnToInput(returnTo)} />
-              <Button
-                type="submit"
-                variant="secondary"
-                aria-label={`${renewLabel} ${subscription.title}`}
-              >
-                {renewLabel}
-              </Button>
-            </form>
-          )}
-          {showChangeAction && subscription.providerActions?.includes("change") && changePriceIds[subscription.id] && (
-            <form class="mika-kumo-form" action={actions.mika.subscription.change} method="post">
-              <input
-                type="hidden"
-                name="subscriptionId"
-                value={subscription.id}
-              />
-              <input
-                type="hidden"
-                name="priceId"
-                value={changePriceIds[subscription.id] ?? ""}
-              />
-              <input type="hidden" {...mikaReturnToInput(returnTo)} />
-              <Button
-                type="submit"
-                variant="secondary"
-                aria-label={`${changeLabel} ${subscription.title}`}
-              >
-                {changeLabel}
-              </Button>
-            </form>
-          )}
-        </li>
-      ))}
-    </ul>
+    <div class="mika-kumo-table-scroll">
+      <Table>
+        <Table.Header>
+          <Table.Row>
+            <Table.Head>{subscriptionLabel}</Table.Head>
+            <Table.Head>{statusLabel}</Table.Head>
+            <Table.Head>{periodEndLabel}</Table.Head>
+            <Table.Head>Actions</Table.Head>
+          </Table.Row>
+        </Table.Header>
+        <Table.Body>
+          {subscriptions.map((subscription) => (
+            <Table.Row>
+              <Table.Cell><strong>{subscription.title}</strong></Table.Cell>
+              <Table.Cell>
+                <Badge appearance="dot" variant={mikaTemplateStatusVariant(subscription.status)}>
+                  {mikaTemplateStatusLabel(subscription.status)}
+                </Badge>
+              </Table.Cell>
+              <Table.Cell>
+                {subscription.currentPeriodEnd ? (
+                  <time datetime={subscription.currentPeriodEnd}>
+                    {mikaTemplateDateLabel(subscription.currentPeriodEnd)}
+                  </time>
+                ) : (
+                  <span class="mika-kumo-muted">Not scheduled</span>
+                )}
+              </Table.Cell>
+              <Table.Cell>
+                <div class="mika-kumo-actions">
+                  {showChangeAction && subscription.providerActions?.includes("change") && changePriceIds[subscription.id] && (
+                    <form class="mika-kumo-form" action={actions.mika.subscription.change} method="post">
+                      <input type="hidden" name="subscriptionId" value={subscription.id} />
+                      <input type="hidden" name="priceId" value={changePriceIds[subscription.id] ?? ""} />
+                      <input type="hidden" {...mikaReturnToInput(returnTo)} />
+                      <Button type="submit" variant="secondary" aria-label={`${changeLabel} ${subscription.title}`}>
+                        {changeLabel}
+                      </Button>
+                    </form>
+                  )}
+                  {subscription.providerActions?.includes("renew") && (
+                    <form class="mika-kumo-form" action={actions.mika.subscription.renew} method="post">
+                      <input type="hidden" name="subscriptionId" value={subscription.id} />
+                      <input type="hidden" {...mikaReturnToInput(returnTo)} />
+                      <Button type="submit" variant="secondary" aria-label={`${renewLabel} ${subscription.title}`}>
+                        {renewLabel}
+                      </Button>
+                    </form>
+                  )}
+                  {subscription.providerActions?.includes("cancel") && (
+                    <form class="mika-kumo-form" action={actions.mika.subscription.cancel} method="post">
+                      <input type="hidden" name="subscriptionId" value={subscription.id} />
+                      <input type="hidden" {...mikaReturnToInput(returnTo)} />
+                      <Button type="submit" variant="secondary-destructive" aria-label={`${cancelLabel} ${subscription.title}`}>
+                        {cancelLabel}
+                      </Button>
+                    </form>
+                  )}
+                  {!subscription.providerActions?.length && <span class="mika-kumo-muted">No actions available</span>}
+                </div>
+              </Table.Cell>
+            </Table.Row>
+          ))}
+        </Table.Body>
+      </Table>
+    </div>
   ) : hasEmptySlot ? (
     <slot name="empty" />
   ) : (
-    <Text as="p" variant="secondary">{emptyLabel}</Text>
+    <Empty size="sm" title={emptyLabel} description="Active subscription products will appear here." />
   )}
 </section>

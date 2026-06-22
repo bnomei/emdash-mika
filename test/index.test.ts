@@ -497,12 +497,8 @@ describe("Mika Astro helpers", () => {
   it("normalizes safe return targets and rejects open redirects", () => {
     const options = { origin: "https://shop.test/products/ring?size=5", fallback: "/fallback" };
 
-    expect(mikaSafeReturnTo("/account?tab=orders#latest", options)).toBe(
-      "/account?tab=orders#latest",
-    );
-    expect(mikaSafeReturnTo("https://shop.test/account?tab=orders", options)).toBe(
-      "/account?tab=orders",
-    );
+    expect(mikaSafeReturnTo("/account/orders#latest", options)).toBe("/account/orders#latest");
+    expect(mikaSafeReturnTo("https://shop.test/account/orders", options)).toBe("/account/orders");
     expect(mikaSafeReturnTo("https://evil.test/account", options)).toBe("/fallback");
     expect(mikaSafeReturnTo("//evil.test/account", options)).toBe("/fallback");
     expect(mikaSafeReturnTo("javascript:alert(1)", options)).toBe("/fallback");
@@ -3659,9 +3655,14 @@ describe("Mika Astro template contracts", () => {
     expect(source).toContain("components/AddToCartForm.astro");
     expect(source).toContain("components/BuyNowForm.astro");
     expect(source).toContain("components/WishlistForm.astro");
+    expect(source).toContain("components/AccountSignInPanel.astro");
     expect(source).toContain("Contract examples such as `CouponForm`, `CheckoutForm`");
     expect(source).toContain("account export/delete");
-    expect(source).toContain("provider webhook endpoint");
+    expect(source).toContain("pages/account/orders.astro");
+    expect(source).toContain("pages/account/subscriptions.astro");
+    expect(source).toContain("pages/account/licenses.astro");
+    expect(source).toContain("pages/account/downloads.astro");
+    expect(source).toContain("webhook endpoint");
     expect(source).toContain("coordinates hidden");
     expect(source).toContain("grouped variant selection");
     expect(source).toContain("Agent-readable storefront flow:");
@@ -3689,23 +3690,29 @@ describe("Mika Astro template contracts", () => {
     const tsconfig = readFileSync(new URL("../tsconfig.json", import.meta.url), "utf8");
 
     expect(page).toContain('import MikaKumoAppFrame from "./MikaKumoAppFrame"');
-    expect(page).toContain("productNavItems?: readonly MikaKumoNavItem[]");
+    expect(page).not.toContain("productNavItems?: readonly MikaKumoNavItem[]");
     expect(page).toContain("<MikaKumoAppFrame");
     expect(page).toContain("client:load");
     expect(page).toContain('aria-label="Page shortcuts"');
 
     expect(frame).toContain("<Sidebar.Provider");
     expect(frame).toContain("mobileBreakpoint={900}");
-    expect(frame).toContain("function ProductsSidebarMenu");
-    expect(frame).toContain("const [productsOpen, setProductsOpen]");
-    expect(frame).toContain("aria-controls={productMenuId}");
-    expect(frame).toContain("All products");
+    expect(frame).toContain('tooltip="Products"');
+    expect(frame).toContain('href="/account/orders"');
+    expect(frame).toContain('href="/account/subscriptions"');
+    expect(frame).toContain('href="/account/licenses"');
+    expect(frame).toContain('href="/account/downloads"');
+    expect(frame).not.toContain("function ProductsSidebarMenu");
+    expect(frame).not.toContain("const [productsOpen, setProductsOpen]");
+    expect(frame).not.toContain("aria-controls={productMenuId}");
+    expect(frame).not.toContain("All products");
     expect(frame).toContain("mika-kumo-mobile-topbar");
 
     expect(styles).toContain(".mika-kumo-app-frame");
     expect(styles).toContain(".mika-kumo-mobile-topbar");
     expect(styles).toContain(".mika-kumo-footer");
-    expect(styles).toContain(".mika-kumo-products-caret");
+    expect(styles).toContain(".mika-kumo-table-scroll");
+    expect(styles).not.toContain(".mika-kumo-products-caret");
     expect(tsconfig).toContain('"src/**/*.tsx"');
   });
 
@@ -3810,17 +3817,52 @@ describe("Mika Astro template contracts", () => {
       new URL("../src/templates/astro/pages/account.astro", import.meta.url),
       "utf8",
     );
+    const accountOrders = readFileSync(
+      new URL("../src/templates/astro/pages/account/orders.astro", import.meta.url),
+      "utf8",
+    );
+    const accountSubscriptions = readFileSync(
+      new URL("../src/templates/astro/pages/account/subscriptions.astro", import.meta.url),
+      "utf8",
+    );
+    const accountLicenses = readFileSync(
+      new URL("../src/templates/astro/pages/account/licenses.astro", import.meta.url),
+      "utf8",
+    );
+    const accountDownloads = readFileSync(
+      new URL("../src/templates/astro/pages/account/downloads.astro", import.meta.url),
+      "utf8",
+    );
     const checkoutSuccess = readFileSync(
       new URL("../src/templates/astro/pages/checkout/success.astro", import.meta.url),
       "utf8",
     );
 
     expect(routeDefaults).toContain('account: "/account"');
+    expect(routeDefaults).toContain('accountOrders: "/account/orders"');
+    expect(routeDefaults).toContain('accountSubscriptions: "/account/subscriptions"');
+    expect(routeDefaults).toContain('accountLicenses: "/account/licenses"');
+    expect(routeDefaults).toContain('accountDownloads: "/account/downloads"');
+    expect(routeDefaults).toContain('wishlist: "/wishlist"');
+    expect(routeDefaults).toContain('products: "/"');
     expect(routeDefaults).toContain('checkoutSuccess: "/checkout/success"');
     expect(buyNow).toContain("mikaTemplateRoutes.checkoutSuccess");
     expect(checkout).toContain("mikaTemplateRoutes.checkoutCancel");
     expect(account).toContain("mikaTemplateRoutes.account");
+    expect(account).not.toContain("<AccountOrders");
+    expect(account).not.toContain("<AccountSubscriptions");
+    expect(account).not.toContain("<AccountLicenses");
+    expect(account).not.toContain("<AccountDownloads");
+    expect(accountOrders).toContain("mikaTemplateRoutes.accountOrders");
+    expect(accountOrders).toContain("<AccountOrders");
+    expect(accountSubscriptions).toContain("mikaTemplateRoutes.accountSubscriptions");
+    expect(accountSubscriptions).toContain("<AccountSubscriptions");
+    expect(accountLicenses).toContain("mikaTemplateRoutes.accountLicenses");
+    expect(accountLicenses).toContain("<AccountLicenses");
+    expect(accountDownloads).toContain("mikaTemplateRoutes.accountDownloads");
+    expect(accountDownloads).toContain("<AccountDownloads");
     expect(checkoutSuccess).toContain("mikaTemplateCheckoutSuccessHref");
+    expect(checkoutSuccess).toContain("mikaTemplateRoutes.accountOrders");
   });
 
   it("keeps form accessibility hooks wired in copied templates", () => {
@@ -3836,12 +3878,57 @@ describe("Mika Astro template contracts", () => {
       new URL("../src/templates/astro/pages/account.astro", import.meta.url),
       "utf8",
     );
+    const accountSignIn = readFileSync(
+      new URL("../src/templates/astro/components/AccountSignInPanel.astro", import.meta.url),
+      "utf8",
+    );
 
     expect(magicLink).toContain('"mika-magic-link-email"');
     expect(magicLink).toContain("aria-describedby={resolvedEmailErrorId}");
-    expect(account).toContain('id="mika-account-magic-link"');
+    expect(account).toContain("<AccountSignInPanel");
+    expect(accountSignIn).toContain('id="mika-account-magic-link"');
     expect(checkout).toContain("customerLegend");
     expect(checkout).toContain('<legend class="mika-kumo-legend">{customerLegend}</legend>');
+  });
+
+  it("ships clearer cart and wishlist customer tasks", () => {
+    const cartLines = readFileSync(
+      new URL("../src/templates/astro/components/CartLines.astro", import.meta.url),
+      "utf8",
+    );
+    const cartPage = readFileSync(
+      new URL("../src/templates/astro/pages/cart.astro", import.meta.url),
+      "utf8",
+    );
+    const wishlistForm = readFileSync(
+      new URL("../src/templates/astro/components/WishlistForm.astro", import.meta.url),
+      "utf8",
+    );
+    const wishlistList = readFileSync(
+      new URL("../src/templates/astro/components/WishlistList.astro", import.meta.url),
+      "utf8",
+    );
+    const checkout = readFileSync(
+      new URL("../src/templates/astro/components/CheckoutForm.astro", import.meta.url),
+      "utf8",
+    );
+
+    expect(cartLines).toContain("Update quantity");
+    expect(cartLines).toContain("Remove from cart");
+    expect(cartLines).toContain("Move to wishlist");
+    expect(cartLines).toContain("<Table>");
+    expect(cartLines).toContain("title={emptyLabel}");
+    expect(cartLines).not.toContain("Your cart is empty.");
+    expect(cartPage).toContain("lineCount > 0");
+    expect(cartPage).toContain("<CouponForm cart={cart} />");
+    expect(cartPage).toContain("Browse products");
+    expect(wishlistForm).toContain('label = "Save to wishlist"');
+    expect(wishlistList).toContain("Remove from wishlist");
+    expect(wishlistList).toContain("Save products here to compare or buy later.");
+    expect(wishlistList).toContain("<Table>");
+    expect(checkout).toContain('label = "Proceed to checkout"');
+    expect(checkout).toContain('emailLabel = "Email address"');
+    expect(checkout).toContain("<Input");
   });
 
   it("keeps grouped variant cross-form sync owned by ProductPurchase", () => {

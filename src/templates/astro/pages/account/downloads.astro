@@ -1,0 +1,41 @@
+---
+import { actions, isInputError } from "astro:actions";
+import { createMika } from "@bnomei/emdash-mika/astro";
+import AccountDownloads from "../../components/AccountDownloads.astro";
+import AccountSignInPanel from "../../components/AccountSignInPanel.astro";
+import MikaKumoPage from "../../components/MikaKumoPage.astro";
+import { mikaTemplateRoutes } from "../../lib/routes";
+
+export const prerender = false;
+
+const Mika = createMika(Astro);
+const magicLinkResult = Astro.getActionResult(actions.mika.magicLink.request);
+const magicLinkInputErrors = isInputError(magicLinkResult?.error)
+  ? magicLinkResult.error.fields
+  : {};
+const magicLinkError = isInputError(magicLinkResult?.error)
+  ? null
+  : magicLinkResult?.error?.message;
+const accountResult = await Mika.account.get();
+const account = accountResult.ok ? accountResult.data : null;
+const accountLoadError =
+  !accountResult.ok && accountResult.error.code !== "AUTH_REQUIRED"
+    ? accountResult.error.message
+    : null;
+---
+
+<MikaKumoPage title="Downloads" pageSize="narrow" data-mika-account-downloads-page>
+  {!account ? (
+    <AccountSignInPanel
+      returnTo={mikaTemplateRoutes.accountDownloads}
+      accountLoadError={accountLoadError}
+      magicLinkSent={magicLinkResult?.data?.sent}
+      magicLinkError={magicLinkError}
+      emailError={magicLinkInputErrors.email?.join(", ")}
+    />
+  ) : (
+    <section class="mika-kumo-panel">
+      <AccountDownloads downloads={account.downloads} />
+    </section>
+  )}
+</MikaKumoPage>

@@ -44,6 +44,7 @@ components/
   AccountLicenses.astro
   AccountDownloads.astro
   MagicLinkForm.astro
+  AccountSignInPanel.astro
   ProductStructuredData.astro
   StockBadge.astro
   LowStockNotice.astro
@@ -57,6 +58,10 @@ pages/
   cart.astro
   wishlist.astro
   account.astro
+  account/orders.astro
+  account/subscriptions.astro
+  account/licenses.astro
+  account/downloads.astro
   account/magic-link.astro
   checkout/success.astro
   checkout/cancel.astro
@@ -102,6 +107,7 @@ components/CouponForm.astro
 components/CheckoutForm.astro
 components/WishlistList.astro
 components/MagicLinkForm.astro
+components/AccountSignInPanel.astro
 components/AccountOrders.astro
 components/AccountSubscriptions.astro
 components/AccountLicenses.astro
@@ -109,6 +115,10 @@ components/AccountDownloads.astro
 pages/cart.astro
 pages/wishlist.astro
 pages/account.astro
+pages/account/orders.astro
+pages/account/subscriptions.astro
+pages/account/licenses.astro
+pages/account/downloads.astro
 pages/account/magic-link.astro
 pages/checkout/success.astro
 pages/checkout/cancel.astro
@@ -129,10 +139,11 @@ sellable/price fields, add-to-cart, buy-now, wishlist, quantity limits,
 availability panels, and grouped variant selection.
 
 Contract examples such as `CouponForm`, `CheckoutForm`, account export/delete
-forms, wishlist move/save-for-later forms, subscription actions, and the
-provider webhook endpoint depend on the same request-bound Mika API and
-provider adapters as the rest of the copied kit. Keep or delete them based on
-the storefront and provider integration.
+forms, wishlist move/save-for-later forms, focused account screens for orders,
+subscriptions, licenses, and downloads, subscription actions, and the provider
+webhook endpoint depend on the same request-bound Mika API and provider
+adapters as the rest of the copied kit. Keep or delete them based on the
+storefront and provider integration.
 
 ## Wiring
 

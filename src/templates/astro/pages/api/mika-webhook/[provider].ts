@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createMika } from "@bnomei/emdash-mika/astro";
 import { createProviderName } from "@bnomei/emdash-mika/types";
 import type { APIRoute } from "astro";
@@ -9,9 +10,24 @@ export const POST: APIRoute = async ({ params, request, url }) => {
   if (!provider) return new Response("Missing provider.", { status: 400 });
 
   const Mika = createMika({ request, url }, { includeWebhook: true });
-  const result = await Mika.webhook.receive({
+  const rawBody = await request.clone().arrayBuffer();
+  const payloadHash = "sha256:" + createHash("sha256").update(Buffer.from(rawBody)).digest("hex");
+  const signatureHeaderPresent =
+    request.headers.has("stripe-signature") ||
+    request.headers.has("paddle-signature") ||
+    request.headers.has("webhook-signature") ||
+    request.headers.has("x-mika-signature");
+  const eventType = request.headers.get("x-event-type");
+  const providerEventId = request.headers.get("x-provider-event-id");
+  const receiveInput = {
     provider: createProviderName(provider),
-  });
+    payloadHash,
+    rawBodyLength: rawBody.byteLength,
+    signatureHeaderPresent,
+    ...(eventType ? { eventType } : {}),
+    ...(providerEventId ? { providerEventId } : {}),
+  };
+  const result = await Mika.webhook.receive(receiveInput);
 
   return Response.json(result, { status: result.status });
 };

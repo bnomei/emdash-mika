@@ -1,11 +1,14 @@
 ---
-import { Link, Text } from "@cloudflare/kumo";
+import { Empty, Link, Table, Text } from "@cloudflare/kumo";
 import type { DownloadDTO } from "@bnomei/emdash-mika/types";
+import { mikaTemplateDateLabel } from "../lib/display";
 
 interface Props {
   downloads: readonly DownloadDTO[];
   headingLabel?: string;
   emptyLabel?: string;
+  downloadLabel?: string;
+  expiresLabel?: string;
   class?: string;
   [attribute: string]: unknown;
 }
@@ -14,6 +17,8 @@ const {
   downloads,
   headingLabel = "Downloads",
   emptyLabel = "No downloads.",
+  downloadLabel = "Download",
+  expiresLabel = "Expires",
   class: className,
   ...attrs
 } = Astro.props;
@@ -23,21 +28,35 @@ const hasEmptySlot = Astro.slots.has("empty");
 <section {...attrs} data-mika-account-downloads class:list={["mika-kumo-stack", className]}>
   <Text as="h2" variant="heading2"><slot name="heading">{headingLabel}</slot></Text>
   {downloads.length ? (
-    <ul class="mika-kumo-list">
-      {downloads.map((download) => (
-        <li class="mika-kumo-line-item">
-          <Link href={download.href}>{download.title}</Link>
-          {download.expiresAt && (
-            <time class="mika-kumo-muted" datetime={download.expiresAt}>
-              {new Date(download.expiresAt).toLocaleDateString()}
-            </time>
-          )}
-        </li>
-      ))}
-    </ul>
+    <div class="mika-kumo-table-scroll">
+      <Table>
+        <Table.Header>
+          <Table.Row>
+            <Table.Head>{downloadLabel}</Table.Head>
+            <Table.Head>{expiresLabel}</Table.Head>
+            <Table.Head>Actions</Table.Head>
+          </Table.Row>
+        </Table.Header>
+        <Table.Body>
+          {downloads.map((download) => (
+            <Table.Row>
+              <Table.Cell><strong>{download.title}</strong></Table.Cell>
+              <Table.Cell>
+                {download.expiresAt ? (
+                  <time datetime={download.expiresAt}>{mikaTemplateDateLabel(download.expiresAt)}</time>
+                ) : (
+                  <span class="mika-kumo-muted">No expiry</span>
+                )}
+              </Table.Cell>
+              <Table.Cell><Link href={download.href}>Download</Link></Table.Cell>
+            </Table.Row>
+          ))}
+        </Table.Body>
+      </Table>
+    </div>
   ) : hasEmptySlot ? (
     <slot name="empty" />
   ) : (
-    <Text as="p" variant="secondary">{emptyLabel}</Text>
+    <Empty size="sm" title={emptyLabel} description="Runnable download fulfillments will appear here." />
   )}
 </section>

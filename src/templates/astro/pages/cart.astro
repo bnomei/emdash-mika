@@ -1,12 +1,14 @@
 ---
 import { actions } from "astro:actions";
-import { Text } from "@cloudflare/kumo";
+import { Badge, Link, Text } from "@cloudflare/kumo";
 import { createMika } from "@bnomei/emdash-mika/astro";
 import CartLines from "../components/CartLines.astro";
 import CartSummary from "../components/CartSummary.astro";
 import CheckoutForm from "../components/CheckoutForm.astro";
 import CouponForm from "../components/CouponForm.astro";
 import MikaKumoPage from "../components/MikaKumoPage.astro";
+import { mikaTemplateCartItemCount, mikaTemplatePlural } from "../lib/display";
+import { mikaTemplateRoutes } from "../lib/routes";
 
 export const prerender = false;
 
@@ -32,14 +34,30 @@ const actionError =
 const cartResult = await Mika.cart.get();
 const cart = cartResult.ok ? cartResult.data : null;
 const error = actionError ?? (cartResult.ok ? null : cartResult.error.message);
+const lineCount = cart?.items.length ?? 0;
+const itemCount = mikaTemplateCartItemCount(cart);
 ---
 
 <MikaKumoPage title="Cart" pageSize="narrow" data-mika-cart-page>
   <section class="mika-kumo-panel mika-kumo-stack">
+    <div class="mika-kumo-title-row">
+      <div class="mika-kumo-kicker">
+        <Badge variant="secondary">{mikaTemplatePlural(lineCount, "line")}</Badge>
+        <Badge variant="secondary">{mikaTemplatePlural(itemCount, "item")}</Badge>
+      </div>
+    </div>
     {error && <Text as="p" variant="error" role="alert">{error}</Text>}
     <CartLines cart={cart} />
-    <CouponForm cart={cart} />
-    <CartSummary cart={cart} />
-    <CheckoutForm cart={cart} />
+    {lineCount > 0 ? (
+      <>
+        <CouponForm cart={cart} />
+        <CartSummary cart={cart} />
+        <CheckoutForm cart={cart} />
+      </>
+    ) : (
+      <div class="mika-kumo-actions">
+        <Link href={mikaTemplateRoutes.products}>Browse products</Link>
+      </div>
+    )}
   </section>
 </MikaKumoPage>

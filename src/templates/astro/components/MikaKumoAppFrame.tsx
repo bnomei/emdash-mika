@@ -1,15 +1,13 @@
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Badge, Button, Link, Sidebar, Text, useSidebar } from "@cloudflare/kumo";
 import type { Icon } from "@phosphor-icons/react";
 import {
   BagIcon,
   BookOpenIcon,
-  CaretRightIcon,
   CompassIcon,
   FileTextIcon,
   GithubLogoIcon,
   HeartIcon,
-  HouseIcon,
   KeyIcon,
   ListIcon,
   PackageIcon,
@@ -21,7 +19,7 @@ import {
   WrenchIcon,
 } from "@phosphor-icons/react";
 
-export interface MikaKumoNavItem {
+interface MikaKumoResourceLink {
   readonly label: string;
   readonly href: string;
   readonly badge?: string;
@@ -30,23 +28,17 @@ export interface MikaKumoNavItem {
 interface AppFrameProps {
   readonly title: string;
   readonly currentPath: string;
-  readonly productNavItems: readonly MikaKumoNavItem[];
   readonly children: ReactNode;
 }
 
-const fixtureLinks: readonly (MikaKumoNavItem & { readonly icon: Icon })[] = [
+const fixtureLinks: readonly (MikaKumoResourceLink & { readonly icon: Icon })[] = [
   { label: "Agent manifest", href: "/.well-known/mika-agent.json", icon: RobotIcon },
   { label: "llms.txt", href: "/llms.txt", icon: FileTextIcon },
   { label: "Action contract", href: "/api/mika-action-contract.json", icon: ReceiptIcon },
   { label: "Admin action testbed", href: "/_emdash/admin", icon: WrenchIcon },
 ];
 
-export default function MikaKumoAppFrame({
-  title,
-  currentPath,
-  productNavItems,
-  children,
-}: AppFrameProps) {
+export default function MikaKumoAppFrame({ title, currentPath, children }: AppFrameProps) {
   const productsActive = currentPath === "/" || currentPath.startsWith("/products/");
 
   return (
@@ -82,18 +74,13 @@ export default function MikaKumoAppFrame({
             <Sidebar.GroupLabel>Storefront</Sidebar.GroupLabel>
             <Sidebar.Menu>
               <Sidebar.MenuButton
-                active={isActive(currentPath, "/")}
+                active={productsActive}
                 href="/"
-                icon={HouseIcon}
-                tooltip="Home"
+                icon={PackageIcon}
+                tooltip="Products"
               >
-                Home
+                Products
               </Sidebar.MenuButton>
-              <ProductsSidebarMenu
-                currentPath={currentPath}
-                productNavItems={productNavItems}
-                productsActive={productsActive}
-              />
               <Sidebar.MenuButton
                 active={isActive(currentPath, "/cart")}
                 href="/cart"
@@ -110,29 +97,51 @@ export default function MikaKumoAppFrame({
               >
                 Wishlist
               </Sidebar.MenuButton>
-              <Sidebar.MenuButton
-                active={isActive(currentPath, "/account")}
-                href="/account"
-                icon={UserCircleIcon}
-                tooltip="Account"
-              >
-                Account
-              </Sidebar.MenuButton>
             </Sidebar.Menu>
           </Sidebar.Group>
 
           <Sidebar.Group>
-            <Sidebar.GroupLabel>Fulfillment</Sidebar.GroupLabel>
+            <Sidebar.GroupLabel>Account</Sidebar.GroupLabel>
             <Sidebar.Menu>
-              <Sidebar.MenuButton href="/account" icon={KeyIcon} tooltip="Licenses">
-                Licenses
-                <Sidebar.MenuBadge>fixture</Sidebar.MenuBadge>
+              <Sidebar.MenuButton
+                active={currentPath === "/account"}
+                href="/account"
+                icon={UserCircleIcon}
+                tooltip="Profile"
+              >
+                Profile
               </Sidebar.MenuButton>
-              <Sidebar.MenuButton href="/account" icon={BagIcon} tooltip="Downloads">
-                Downloads
+              <Sidebar.MenuButton
+                active={isActive(currentPath, "/account/orders")}
+                href="/account/orders"
+                icon={ReceiptIcon}
+                tooltip="Orders"
+              >
+                Orders
               </Sidebar.MenuButton>
-              <Sidebar.MenuButton href="/account" icon={CompassIcon} tooltip="Subscriptions">
+              <Sidebar.MenuButton
+                active={isActive(currentPath, "/account/subscriptions")}
+                href="/account/subscriptions"
+                icon={CompassIcon}
+                tooltip="Subscriptions"
+              >
                 Subscriptions
+              </Sidebar.MenuButton>
+              <Sidebar.MenuButton
+                active={isActive(currentPath, "/account/licenses")}
+                href="/account/licenses"
+                icon={KeyIcon}
+                tooltip="Licenses"
+              >
+                Licenses
+              </Sidebar.MenuButton>
+              <Sidebar.MenuButton
+                active={isActive(currentPath, "/account/downloads")}
+                href="/account/downloads"
+                icon={BagIcon}
+                tooltip="Downloads"
+              >
+                Downloads
               </Sidebar.MenuButton>
             </Sidebar.Menu>
           </Sidebar.Group>
@@ -236,57 +245,6 @@ export default function MikaKumoAppFrame({
 function isActive(currentPath: string, href: string) {
   if (href === "/") return currentPath === "/";
   return currentPath === href || currentPath.startsWith(href + "/");
-}
-
-function ProductsSidebarMenu({
-  currentPath,
-  productNavItems,
-  productsActive,
-}: {
-  readonly currentPath: string;
-  readonly productNavItems: readonly MikaKumoNavItem[];
-  readonly productsActive: boolean;
-}) {
-  const [productsOpen, setProductsOpen] = useState(productsActive);
-  const productMenuId = "mika-kumo-products-menu";
-
-  return (
-    <Sidebar.MenuItem>
-      <Sidebar.MenuButton
-        active={productsActive}
-        aria-controls={productMenuId}
-        aria-expanded={productsOpen}
-        icon={PackageIcon}
-        onClick={() => setProductsOpen((open) => !open)}
-        tooltip="Products"
-      >
-        Products
-        <Sidebar.MenuBadge>{productNavItems.length}</Sidebar.MenuBadge>
-        <CaretRightIcon
-          aria-hidden="true"
-          className="mika-kumo-products-caret"
-          data-open={productsOpen ? "true" : undefined}
-          size={16}
-        />
-      </Sidebar.MenuButton>
-      <div hidden={!productsOpen} id={productMenuId}>
-        <Sidebar.MenuSub>
-          <Sidebar.MenuSubButton active={isActive(currentPath, "/")} href="/">
-            All products
-          </Sidebar.MenuSubButton>
-          {productNavItems.map((item) => (
-            <Sidebar.MenuSubButton
-              active={isActive(currentPath, item.href)}
-              href={item.href}
-              key={item.href}
-            >
-              {item.label}
-            </Sidebar.MenuSubButton>
-          ))}
-        </Sidebar.MenuSub>
-      </div>
-    </Sidebar.MenuItem>
-  );
 }
 
 function MobileSidebarTrigger() {

@@ -1,17 +1,21 @@
 ---
 import { actions } from "astro:actions";
-import { Button, Text } from "@cloudflare/kumo";
+import { Badge, Button, Empty, Table, Text } from "@cloudflare/kumo";
 import type { WishlistDTO } from "@bnomei/emdash-mika/types";
 import { mikaReturnTo } from "@bnomei/emdash-mika/astro";
 import { mikaHiddenInput, mikaReturnToInput } from "../lib/form";
+import { mikaTemplatePlural } from "../lib/display";
 
 interface Props {
   wishlist?: WishlistDTO | null;
   returnTo?: string;
   headingLabel?: string;
   emptyLabel?: string;
+  emptyDescription?: string;
   removeLabel?: string;
   moveToCartLabel?: string;
+  itemLabel?: string;
+  actionsLabel?: string;
   class?: string;
   [attribute: string]: unknown;
 }
@@ -20,50 +24,63 @@ const {
   wishlist,
   returnTo = mikaReturnTo(Astro.url),
   headingLabel = "Wishlist",
-  emptyLabel = "No saved items.",
-  removeLabel = "Remove",
+  emptyLabel = "No saved items",
+  emptyDescription = "Save products here to compare or buy later.",
+  removeLabel = "Remove from wishlist",
   moveToCartLabel = "Move to cart",
+  itemLabel = "Item",
+  actionsLabel = "Actions",
   class: className,
   ...attrs
 } = Astro.props;
 const hasEmptySlot = Astro.slots.has("empty");
+const savedCount = wishlist?.items.length ?? 0;
 ---
 
 <section {...attrs} data-mika-wishlist-list class:list={["mika-kumo-stack", className]}>
-  <Text as="h2" variant="heading2"><slot name="heading">{headingLabel}</slot></Text>
+  <div class="mika-kumo-title-row">
+    <Text as="h2" variant="heading2"><slot name="heading">{headingLabel}</slot></Text>
+    <Badge variant="secondary">{mikaTemplatePlural(savedCount, "saved item")}</Badge>
+  </div>
   {wishlist?.items.length ? (
-    <ul class="mika-kumo-list">
-      {wishlist.items.map((item) => (
-        <li class="mika-kumo-line-item">
-          <span>{item.title}</span>
-          <form class="mika-kumo-form" action={actions.mika.wishlist.remove} method="post">
-            <input type="hidden" {...mikaHiddenInput("itemId", item.id)} />
-            <input type="hidden" {...mikaReturnToInput(returnTo)} />
-            <Button
-              type="submit"
-              variant="secondary"
-              aria-label={`${removeLabel} ${item.title}`}
-            >
-              {removeLabel}
-            </Button>
-          </form>
-          <form class="mika-kumo-form" action={actions.mika.wishlist.moveToCart} method="post">
-            <input type="hidden" {...mikaHiddenInput("itemId", item.id)} />
-            <input type="hidden" {...mikaReturnToInput(returnTo)} />
-            <Button
-              type="submit"
-              variant="secondary"
-              aria-label={`${moveToCartLabel} ${item.title}`}
-            >
-              {moveToCartLabel}
-            </Button>
-          </form>
-        </li>
-      ))}
-    </ul>
+    <div class="mika-kumo-table-scroll">
+      <Table>
+        <Table.Header>
+          <Table.Row>
+            <Table.Head>{itemLabel}</Table.Head>
+            <Table.Head>{actionsLabel}</Table.Head>
+          </Table.Row>
+        </Table.Header>
+        <Table.Body>
+          {wishlist.items.map((item) => (
+            <Table.Row>
+              <Table.Cell><strong>{item.title}</strong></Table.Cell>
+              <Table.Cell>
+                <div class="mika-kumo-actions">
+                  <form class="mika-kumo-form" action={actions.mika.wishlist.moveToCart} method="post">
+                    <input type="hidden" {...mikaHiddenInput("itemId", item.id)} />
+                    <input type="hidden" {...mikaReturnToInput(returnTo)} />
+                    <Button type="submit" variant="secondary" aria-label={`${moveToCartLabel} ${item.title}`}>
+                      {moveToCartLabel}
+                    </Button>
+                  </form>
+                  <form class="mika-kumo-form" action={actions.mika.wishlist.remove} method="post">
+                    <input type="hidden" {...mikaHiddenInput("itemId", item.id)} />
+                    <input type="hidden" {...mikaReturnToInput(returnTo)} />
+                    <Button type="submit" variant="secondary-destructive" aria-label={`${removeLabel} ${item.title}`}>
+                      {removeLabel}
+                    </Button>
+                  </form>
+                </div>
+              </Table.Cell>
+            </Table.Row>
+          ))}
+        </Table.Body>
+      </Table>
+    </div>
   ) : hasEmptySlot ? (
     <slot name="empty" />
   ) : (
-    <Text as="p" variant="secondary">{emptyLabel}</Text>
+    <Empty size="sm" title={emptyLabel} description={emptyDescription} />
   )}
 </section>
