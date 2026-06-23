@@ -43,6 +43,8 @@ import {
   createMikaEmailOutboxRunner,
   createMikaMaintenanceRunner,
   type MikaEmailDeliveryMessage,
+  type MikaNotificationHook,
+  type MikaNotificationIntent,
 } from "../src/server";
 import type {
   MikaProviderAdapter,
@@ -2805,7 +2807,13 @@ describe("backend API composition", () => {
   });
 
   it("queues a pending token and email for magic link requests", async () => {
-    const harness = await createMagicLinkHarness({ ttlMs: 60_000 });
+    const notificationIntents: MikaNotificationIntent[] = [];
+    const harness = await createMagicLinkHarness({
+      ttlMs: 60_000,
+      notificationHook: (intent) => {
+        notificationIntents.push(intent);
+      },
+    });
 
     try {
       await expect(
@@ -2816,6 +2824,8 @@ describe("backend API composition", () => {
       ).resolves.toEqual({ ok: true, status: 200, data: { sent: true } });
 
       const tokenHash = createTestHash("magic-link-token:magic_link_token_1");
+      const expectedLink =
+        "https://shop.example.test/_emdash/api/plugins/mika/magic-link/verify?token=magic_link_token_1&returnTo=%2Faccount";
       await expect(harness.repositories.ephemeral.get(tokenHash)).resolves.toMatchObject({
         key: tokenHash,
         kind: "token",
@@ -2828,6 +2838,20 @@ describe("backend API composition", () => {
           tokenId: "magic_link_token_1",
           email: "Subscriber@Example.test",
           returnTo: "/account",
+        },
+      });
+      expect(notificationIntents).toHaveLength(1);
+      expect(notificationIntents[0]).toMatchObject({
+        kind: "magic_link.requested",
+        occurredAt: TEST_NOW,
+        context: {
+          toEmail: "Subscriber@Example.test",
+          emailHash: createTestHash("email:subscriber@example.test"),
+          link: expectedLink,
+          purpose: "sign_in",
+          expiresAt: "2026-01-01T00:01:00.000Z",
+          returnTo: "/account",
+          tokenId: "magic_link_token_1",
         },
       });
 
@@ -2855,16 +2879,20 @@ describe("backend API composition", () => {
           },
         },
       });
-      expect(queuedEmail.record.metadata?.["link"]).toBe(
-        "https://shop.example.test/_emdash/api/plugins/mika/magic-link/verify?token=magic_link_token_1&returnTo=%2Faccount",
-      );
+      expect(queuedEmail.record.metadata?.["link"]).toBe(expectedLink);
     } finally {
       await harness.destroy();
     }
   });
 
   it("normalizes unsafe magic link return targets before storing and emailing them", async () => {
-    const harness = await createMagicLinkHarness({ ttlMs: 60_000 });
+    const notificationIntents: MikaNotificationIntent[] = [];
+    const harness = await createMagicLinkHarness({
+      ttlMs: 60_000,
+      notificationHook: (intent) => {
+        notificationIntents.push(intent);
+      },
+    });
 
     try {
       await expect(
@@ -2880,6 +2908,14 @@ describe("backend API composition", () => {
           returnTo: "/products/test-product?ref=test",
         },
       });
+      expect(notificationIntents).toHaveLength(1);
+      expect(notificationIntents[0]).toMatchObject({
+        kind: "magic_link.requested",
+        context: {
+          returnTo: "/products/test-product?ref=test",
+          link: "https://shop.example.test/_emdash/api/plugins/mika/magic-link/verify?token=magic_link_token_1&returnTo=%2Fproducts%2Ftest-product%3Fref%3Dtest",
+        },
+      });
 
       const emails = await harness.opsCollection.query({ where: { type: "email" } });
       const queuedEmail = emails.items[0]?.data;
@@ -2890,6 +2926,62 @@ describe("backend API composition", () => {
       expect(queuedEmail.record.metadata?.["link"]).toBe(
         "https://shop.example.test/_emdash/api/plugins/mika/magic-link/verify?token=magic_link_token_1&returnTo=%2Fproducts%2Ftest-product%3Fref%3Dtest",
       );
+    } finally {
+      await harness.destroy();
+    }
+  });
+
+  it("does not queue Mika's default magic-link email when the hook handles it", async () => {
+    const notificationIntents: MikaNotificationIntent[] = [];
+    const harness = await createMagicLinkHarness({
+      ttlMs: 60_000,
+      notificationHook: (intent) => {
+        notificationIntents.push(intent);
+        return { handled: true };
+      },
+    });
+
+    try {
+      await expect(
+        harness.api.magicLink.request(
+          createTestRequestContext({ customerId: false, userId: false }),
+          { email: "Subscriber@Example.test", returnTo: "/account" },
+        ),
+      ).resolves.toEqual({ ok: true, status: 200, data: { sent: true } });
+
+      expect(notificationIntents).toHaveLength(1);
+      expect(notificationIntents[0]).toMatchObject({
+        kind: "magic_link.requested",
+        context: {
+          toEmail: "Subscriber@Example.test",
+          returnTo: "/account",
+        },
+      });
+      const emails = await harness.opsCollection.query({ where: { type: "email" } });
+      expect(emails.items).toHaveLength(0);
+    } finally {
+      await harness.destroy();
+    }
+  });
+
+  it("fails magic-link requests when the notification hook throws without queuing default email", async () => {
+    const harness = await createMagicLinkHarness({
+      ttlMs: 60_000,
+      notificationHook: () => {
+        throw new Error("notification unavailable");
+      },
+    });
+
+    try {
+      await expect(
+        harness.api.magicLink.request(
+          createTestRequestContext({ customerId: false, userId: false }),
+          { email: "Subscriber@Example.test", returnTo: "/account" },
+        ),
+      ).rejects.toThrow("notification unavailable");
+
+      const emails = await harness.opsCollection.query({ where: { type: "email" } });
+      expect(emails.items).toHaveLength(0);
     } finally {
       await harness.destroy();
     }
@@ -3168,7 +3260,13 @@ describe("backend API composition", () => {
   });
 
   it("creates, reports, and downloads an account export with a one-time token", async () => {
-    const harness = await createAccountServicesHarness({ exportTtlMs: 60_000 });
+    const notificationIntents: MikaNotificationIntent[] = [];
+    const harness = await createAccountServicesHarness({
+      exportTtlMs: 60_000,
+      notificationHook: (intent) => {
+        notificationIntents.push(intent);
+      },
+    });
 
     try {
       await harness.repositories.account.put(createCustomerDocument());
@@ -3202,6 +3300,26 @@ describe("backend API composition", () => {
           artifactRef: expect.stringContaining("data:application/json"),
         },
       });
+      expect(notificationIntents).toContainEqual(
+        expect.objectContaining({
+          kind: "account.export_ready",
+          occurredAt: TEST_NOW,
+          context: expect.objectContaining({
+            exportId: "account_export_1",
+            customerId: "customer_1",
+            userId: "user_1",
+            emailHash: createTestHash("email:subscriber@example.test"),
+            expiresAt: "2026-01-01T00:01:00.000Z",
+            downloadHref:
+              "https://shop.example.test/_emdash/api/plugins/mika/account/export/download?exportId=account_export_1&token=account_export_token_1",
+            tokenId: "account_export_token_1",
+          }),
+        }),
+      );
+      const exportIntent = notificationIntents.find(
+        (intent) => intent.kind === "account.export_ready",
+      );
+      expect(exportIntent?.context).not.toHaveProperty("artifactRef");
 
       await expect(
         harness.api.account.exportStatus(createTestRequestContext(), {
@@ -3564,7 +3682,12 @@ describe("backend API composition", () => {
   });
 
   it("stores account delete requests and returns requested status", async () => {
-    const harness = await createAccountServicesHarness();
+    const notificationIntents: MikaNotificationIntent[] = [];
+    const harness = await createAccountServicesHarness({
+      notificationHook: (intent) => {
+        notificationIntents.push(intent);
+      },
+    });
 
     try {
       await harness.repositories.account.put(createCustomerDocument());
@@ -3588,6 +3711,18 @@ describe("backend API composition", () => {
           requestedAt: TEST_NOW,
         },
       });
+      expect(notificationIntents).toEqual([
+        expect.objectContaining({
+          kind: "account.delete_requested",
+          occurredAt: TEST_NOW,
+          context: {
+            requestId: "account_delete_request_1",
+            customerId: "customer_1",
+            userId: "user_1",
+            emailHash: createTestHash("email:subscriber@example.test"),
+          },
+        }),
+      ]);
     } finally {
       await harness.destroy();
     }
@@ -5231,7 +5366,17 @@ describe("backend API composition", () => {
         lastError: "SMTP failed.",
       },
     });
-    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const notificationIntents: MikaNotificationIntent[] = [];
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        notifications: {
+          handle: (intent) => {
+            notificationIntents.push(intent);
+          },
+        },
+      }),
+    );
 
     await repositories.ledger.put(order);
     await repositories.account.put(entitlement);
@@ -5369,6 +5514,26 @@ describe("backend API composition", () => {
         adminAuditId: createTestMikaId("admin_audit", 2),
       },
     });
+    expect(notificationIntents).toEqual([
+      expect.objectContaining({
+        kind: "download.ready",
+        occurredAt: TEST_NOW,
+        context: {
+          toEmail: "Subscriber@Example.test",
+          customerId: "customer_1",
+          userId: "user_1",
+          emailHash: createTestHash("email:subscriber@example.test"),
+          downloadRef: "download:order_1:order_line_1",
+          orderId: order.id,
+          orderLineId: createTestMikaId("order_line", 1),
+          title: "Test download",
+          tokenId: "download_token_1",
+          expiresAt: "2026-01-01T00:15:00.000Z",
+          entitlementId: entitlement.id,
+          licenseId: license.id,
+        },
+      }),
+    ]);
 
     for (const [auditId, action] of [
       [createTestMikaId("admin_audit", 1), "entitlement.grant"],
@@ -5734,7 +5899,7 @@ describe("backend API composition", () => {
     });
   });
 
-  it("rejects malformed provider payment events before paid-order fulfillment", async () => {
+  it("rejects non-paid provider payment events before paid-order fulfillment", async () => {
     const sessionCollection = createStorageCollection("session");
     const ledgerCollection = createStorageCollection("ledger");
     const opsCollection = createStorageCollection("ops");
@@ -5758,24 +5923,25 @@ describe("backend API composition", () => {
             payloadHash: "malformed_payment_hash",
             parsed: { delivery: "event_payment_malformed" },
           }),
-        parseWebhookEvent: async (verified) => {
-          const event = createPaymentWebhookEvent(verified, {
+        parseWebhookEvent: async (verified) =>
+          createPaymentWebhookEvent(verified, {
             providerEventId: "event_payment_malformed",
             providerCheckoutId: "provider_checkout_malformed",
             providerPaymentId: "payment_malformed",
-          });
-          if (event.kind !== "payment") throw new Error("Expected payment event fixture.");
-
-          const { paymentStatus: _paymentStatus, ...malformedEvent } = event;
-
-          return malformedEvent as unknown as MikaProviderWebhookEvent;
-        },
+            paymentStatus: "failed",
+          }),
       },
     });
+    const notificationIntents: MikaNotificationIntent[] = [];
     const api = createMikaBackendApi(
       createIncrementingBackendDependencies({
         repositories,
         providers: createMikaProviderRegistry([fake.provider]),
+        notifications: {
+          handle: (intent) => {
+            notificationIntents.push(intent);
+          },
+        },
       }),
     );
 
@@ -5795,6 +5961,135 @@ describe("backend API composition", () => {
         },
       },
     });
+    expect(notificationIntents).toEqual([
+      expect.objectContaining({
+        kind: "ops.webhook_failed",
+        occurredAt: TEST_NOW,
+        context: {
+          webhookId: "webhook_1",
+          provider: TEST_PROVIDER,
+          eventType: "payment.completed",
+          providerEventId: "event_payment_malformed",
+          payloadHash: "malformed_payment_hash",
+          lastError: "Payment webhook is not in a paid state.",
+        },
+      }),
+      expect.objectContaining({
+        kind: "checkout.payment_failed",
+        occurredAt: TEST_NOW,
+        context: {
+          checkoutId: "checkout_1",
+          provider: TEST_PROVIDER,
+          providerCheckoutId: "provider_checkout_malformed",
+          providerPaymentId: "payment_malformed",
+          paymentStatus: "failed",
+          eventType: "payment.completed",
+          webhookId: "webhook_1",
+          error: "Payment webhook is not in a paid state.",
+        },
+      }),
+    ]);
+  });
+
+  it("replays failed payment notifications after the notification hook fails", async () => {
+    const sessionCollection = createStorageCollection("session");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      session: new SessionRepository(sessionCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+    };
+    await repositories.session.put(
+      createCheckoutDocument({
+        providerCheckoutId: "provider_checkout_failed_hook",
+      }),
+    );
+
+    const fake = createFakeMikaProvider({
+      id: TEST_PROVIDER,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "failed_hook_payment_hash",
+            parsed: { delivery: "event_payment_failed_hook" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createPaymentWebhookEvent(verified, {
+            providerEventId: "event_payment_failed_hook",
+            providerCheckoutId: "provider_checkout_failed_hook",
+            providerPaymentId: "payment_failed_hook",
+            paymentStatus: "failed",
+          }),
+      },
+    });
+    const notificationIntents: MikaNotificationIntent[] = [];
+    let failPaymentNotification = true;
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+        notifications: {
+          handle: (intent) => {
+            notificationIntents.push(intent);
+            if (intent.kind === "checkout.payment_failed" && failPaymentNotification) {
+              failPaymentNotification = false;
+              throw new Error("payment notification unavailable");
+            }
+          },
+        },
+      }),
+    );
+
+    await expect(receiveWebhook(api, "failed-payment-hook")).rejects.toThrow(
+      "payment notification unavailable",
+    );
+    await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(0);
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
+      status: "failed",
+      record: {
+        status: "failed",
+        lastError: "Payment webhook is not in a paid state.",
+      },
+    });
+
+    await expect(
+      api.admin.webhookReplay({ webhookId: createTestMikaId("webhook", 1) }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "webhook_1",
+        status: "failed",
+        affected: {
+          processed: 0,
+          failed: 1,
+        },
+      },
+    });
+    expect(notificationIntents.filter((intent) => intent.kind === "checkout.payment_failed")).toEqual([
+      expect.objectContaining({
+        kind: "checkout.payment_failed",
+        context: expect.objectContaining({
+          checkoutId: "checkout_1",
+          providerCheckoutId: "provider_checkout_failed_hook",
+          providerPaymentId: "payment_failed_hook",
+          paymentStatus: "failed",
+          webhookId: "webhook_1",
+        }),
+      }),
+      expect.objectContaining({
+        kind: "checkout.payment_failed",
+        context: expect.objectContaining({
+          checkoutId: "checkout_1",
+          providerCheckoutId: "provider_checkout_failed_hook",
+          providerPaymentId: "payment_failed_hook",
+          paymentStatus: "failed",
+          webhookId: "webhook_1",
+        }),
+      }),
+    ]);
   });
 
   it("creates one paid order from replayed payment webhook events", async () => {
@@ -5974,6 +6269,153 @@ describe("backend API composition", () => {
           { name: "fulfill_order", status: "completed" },
           { name: "mark_webhook", status: "completed" },
         ],
+      },
+    });
+  });
+
+  it("does not queue Mika's default order-confirmation email when the hook handles it", async () => {
+    const stripe = createProviderName("stripe");
+    const sessionCollection = createStorageCollection("session");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      session: new SessionRepository(sessionCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+    };
+    const sellable = createSellableDefinition({
+      prices: [
+        createPriceDefinition({
+          providerRefs: [{ provider: stripe, productId: "prod_payment", priceId: "price_payment" }],
+        }),
+      ],
+    });
+    const webhookDeliveries = [
+      { payloadHash: "payment_handled_hash_1", providerEventId: "event_payment_handled_1" },
+      { payloadHash: "payment_handled_hash_2", providerEventId: "event_payment_handled_2" },
+    ];
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) => {
+          const delivery = webhookDeliveries[0];
+          if (!delivery) throw new Error("Unexpected webhook verification call.");
+
+          return createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: delivery.payloadHash,
+            parsed: { delivery: delivery.providerEventId },
+          });
+        },
+        parseWebhookEvent: async (verified) => {
+          const delivery = webhookDeliveries.shift();
+          if (!delivery) throw new Error("Unexpected webhook parse call.");
+
+          return createPaymentWebhookEvent(verified, {
+            providerEventId: delivery.providerEventId,
+            providerCheckoutId: "provider_checkout_fake",
+            providerPaymentId: "payment_handled",
+            providerOrderId: "provider_order_handled",
+            customer: { email: "Shopper@Example.test", name: "Shopper One" },
+          });
+        },
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef: createTestContentRef(), sellables: [sellable] }),
+    );
+    const notificationIntents: MikaNotificationIntent[] = [];
+    let resolveNotificationStarted: () => void = () => {};
+    let releaseNotification: () => void = () => {};
+    const notificationStarted = new Promise<void>((resolve) => {
+      resolveNotificationStarted = resolve;
+    });
+    const notificationReleased = new Promise<void>((resolve) => {
+      releaseNotification = resolve;
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+        notifications: {
+          handle: async (intent) => {
+            notificationIntents.push(intent);
+            resolveNotificationStarted();
+            await notificationReleased;
+            return { handled: true };
+          },
+        },
+      }),
+    );
+    const shopperCtx = createTestRequestContext({
+      sessionId: "session_payment_handled",
+      customerId: createTestMikaId("customer", 1),
+      userId: "user_payment_handled",
+      idempotencyKey: "checkout_payment_handled",
+    });
+
+    const cart = await api.cart.add(shopperCtx, { sellableId: sellable.id, quantity: 1 });
+    if (!cart.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+    const checkout = await api.checkout.start(shopperCtx, {
+      cartId: cart.data.id,
+      provider: stripe,
+    });
+    if (!checkout.ok) {
+      throw new Error("Expected checkout.start to succeed.");
+    }
+
+    const firstWebhook = receiveWebhook(api, "payment-handled", stripe);
+    await notificationStarted;
+    const secondWebhook = receiveWebhook(api, "payment-handled-replay", stripe);
+    releaseNotification();
+
+    await expect(firstWebhook).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "webhook_1",
+        status: "received",
+        replayable: true,
+      },
+    });
+    await expect(secondWebhook).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "webhook_2",
+        status: "received",
+        replayable: true,
+      },
+    });
+
+    expect(notificationIntents).toHaveLength(1);
+    expect(notificationIntents[0]).toMatchObject({
+      kind: "order.confirmed",
+      context: {
+        toEmail: "Shopper@Example.test",
+        orderId: "order_1",
+        orderNumber: "order_1",
+        fulfillmentKinds: ["none"],
+      },
+    });
+    await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(1);
+    await expect(opsCollection.count({ type: "email" })).resolves.toBe(0);
+    await expect(opsCollection.get("workflow_order_1_notification_order_confirmed")).resolves.toMatchObject({
+      type: "workflow",
+      kind: "notification.order.confirmed",
+      status: "completed",
+      subjectType: "order",
+      subjectId: "order_1",
+      idempotencyKey: "order.confirmed:order_1",
+    });
+    await expect(opsCollection.get("workflow_webhook_1_payment")).resolves.toMatchObject({
+      status: "completed",
+      record: {
+        steps: expect.arrayContaining([
+          expect.objectContaining({ name: "fulfill_order", status: "completed" }),
+        ]),
       },
     });
   });
@@ -6483,10 +6925,16 @@ describe("backend API composition", () => {
         sellables: [entitlementSellable, licenseSellable, downloadSellable],
       }),
     );
+    const notificationIntents: MikaNotificationIntent[] = [];
     const api = createMikaBackendApi(
       createIncrementingBackendDependencies({
         repositories,
         providers: createMikaProviderRegistry([fake.provider]),
+        notifications: {
+          handle: (intent) => {
+            notificationIntents.push(intent);
+          },
+        },
       }),
     );
     const shopperCtx = createTestRequestContext({
@@ -6532,6 +6980,72 @@ describe("backend API composition", () => {
     await expect(accountCollection.count({ type: "entitlement" })).resolves.toBe(1);
     await expect(accountCollection.count({ type: "license" })).resolves.toBe(1);
     await expect(opsCollection.count({ type: "email" })).resolves.toBe(1);
+    expect(notificationIntents).toHaveLength(3);
+    expect(notificationIntents[0]).toMatchObject({
+      kind: "license.issued",
+      occurredAt: TEST_NOW,
+      context: {
+        toEmail: "Fulfillment@Example.test",
+        licenseId: "license_order_1_order_line_2",
+        orderId: "order_1",
+        orderLineId: "order_line_2",
+        customerId: "customer_1",
+        displayKeySuffix: expect.any(String),
+        sellableId: licenseSellable.id,
+        fulfillmentKind: "license",
+      },
+    });
+    expect(notificationIntents[1]).toMatchObject({
+      kind: "order.confirmed",
+      occurredAt: TEST_NOW,
+      context: {
+        toEmail: "Fulfillment@Example.test",
+        orderId: "order_1",
+        orderNumber: "order_1",
+        customerId: "customer_1",
+        provider: stripe,
+        providerPaymentId: "payment_fulfillment_1",
+        providerOrderId: "provider_order_fulfillment_1",
+        checkoutSessionId: "checkout_1",
+        total: { amount: 3600, currency: TEST_CURRENCY },
+        fulfillmentKinds: ["entitlement", "license", "download"],
+        fulfilledLines: [
+          {
+            lineId: "order_line_1",
+            quantity: 1,
+            fulfillmentKind: "entitlement",
+            entitlementId: "entitlement_order_1_order_line_1",
+            stockMovementId: "stock_event_1",
+          },
+          {
+            lineId: "order_line_2",
+            quantity: 1,
+            fulfillmentKind: "license",
+            licenseKeySuffix: expect.any(String),
+            stockMovementId: "stock_event_2",
+          },
+          {
+            lineId: "order_line_3",
+            quantity: 1,
+            fulfillmentKind: "download",
+            downloadRefs: ["download:order_1:order_line_3"],
+            stockMovementId: "stock_event_3",
+          },
+        ],
+      },
+    });
+    expect(notificationIntents[2]).toMatchObject({
+      kind: "download.ready",
+      occurredAt: TEST_NOW,
+      context: {
+        toEmail: "Fulfillment@Example.test",
+        downloadRef: "download:order_1:order_line_3",
+        orderId: "order_1",
+        orderLineId: "order_line_3",
+        customerId: "customer_1",
+        title: "Test sellable",
+      },
+    });
     await expect(accountCollection.get("entitlement_order_1_order_line_1")).resolves.toMatchObject({
       type: "entitlement",
       customerId: "customer_1",
@@ -6853,10 +7367,16 @@ describe("backend API composition", () => {
     );
     await repositories.account.put(createCustomerDocument());
     await repositories.account.put(createProviderAccountDocument({ provider: stripe }));
+    const notificationIntents: MikaNotificationIntent[] = [];
     const api = createMikaBackendApi(
       createIncrementingBackendDependencies({
         repositories,
         providers: createMikaProviderRegistry([fake.provider]),
+        notifications: {
+          handle: (intent) => {
+            notificationIntents.push(intent);
+          },
+        },
       }),
     );
 
@@ -6923,6 +7443,122 @@ describe("backend API composition", () => {
       },
     });
     await expect(opsCollection.count({ type: "webhook" })).resolves.toBe(2);
+    expect(notificationIntents).toEqual([
+      expect.objectContaining({
+        kind: "subscription.started",
+        occurredAt: TEST_NOW,
+        context: expect.objectContaining({
+          toEmail: "Subscriber@Example.test",
+          subscriptionId: "subscription_1",
+          status: "active",
+          provider: stripe,
+          providerCustomerId: "provider_customer_1",
+          providerSubscriptionId: "provider_subscription_1",
+          providerPriceId: "price_sub",
+          currentPeriodEnd: "2026-02-01T00:00:00.000Z",
+          sellableId: subscriptionSellable.id,
+          entitlementId: "entitlement_subscription_1_subscription",
+          eventType: "customer.subscription.updated",
+        }),
+      }),
+      expect.objectContaining({
+        kind: "subscription.updated",
+        occurredAt: TEST_NOW,
+        context: expect.objectContaining({
+          subscriptionId: "subscription_1",
+          status: "cancel_at_period_end",
+          previousStatus: "active",
+          provider: stripe,
+          currentPeriodEnd: "2026-03-01T00:00:00.000Z",
+          cancelAtPeriodEnd: true,
+        }),
+      }),
+    ]);
+  });
+
+  it("emits subscription renewal-failed notifications from past-due webhooks", async () => {
+    const stripe = createProviderName("stripe");
+    const accountCollection = createStorageCollection("account");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      ops: new OpsRepository(opsCollection),
+    };
+    const activeSubscription = createSubscriptionDocument({
+      provider: stripe,
+      providerCustomerId: "provider_customer_renewal",
+      providerSubscriptionId: "provider_subscription_renewal",
+      aggregate: {
+        ...createSubscriptionDocument().aggregate,
+        providerRef: {
+          provider: stripe,
+          customerId: "provider_customer_renewal",
+          subscriptionId: "provider_subscription_renewal",
+          priceId: "price_sub",
+        },
+      },
+    });
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "subscription_renewal_failed_hash",
+            parsed: { delivery: "event_subscription_renewal_failed" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createSubscriptionWebhookEvent(verified, {
+            providerEventId: "event_subscription_renewal_failed",
+            providerSubscriptionId: "provider_subscription_renewal",
+            providerCustomerId: "provider_customer_renewal",
+            providerPriceId: "price_sub",
+            status: "past_due",
+            currentPeriodEnd: createISODateTime("2026-02-01T00:00:00.000Z"),
+          }),
+      },
+    });
+    await repositories.account.put(activeSubscription);
+    const notificationIntents: MikaNotificationIntent[] = [];
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+        notifications: {
+          handle: (intent) => {
+            notificationIntents.push(intent);
+          },
+        },
+      }),
+    );
+
+    await expect(receiveWebhook(api, "subscription-renewal-failed", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "received" },
+    });
+
+    await expect(accountCollection.get("subscription_1")).resolves.toMatchObject({
+      status: "past_due",
+      currentPeriodEnd: "2026-02-01T00:00:00.000Z",
+    });
+    expect(notificationIntents).toEqual([
+      expect.objectContaining({
+        kind: "subscription.renewal_failed",
+        occurredAt: TEST_NOW,
+        context: expect.objectContaining({
+          toEmail: "Subscriber@Example.test",
+          subscriptionId: "subscription_1",
+          status: "past_due",
+          previousStatus: "active",
+          provider: stripe,
+          providerCustomerId: "provider_customer_renewal",
+          providerSubscriptionId: "provider_subscription_renewal",
+          providerPriceId: "price_sub",
+          currentPeriodEnd: "2026-02-01T00:00:00.000Z",
+        }),
+      }),
+    ]);
   });
 
   it("fails subscription webhook processing with a stable error for unknown targets", async () => {
@@ -8588,10 +9224,16 @@ describe("backend API composition", () => {
     await repositories.catalog.put(
       createCatalogItemDocument({ contentRef, sellables: [sellable] }),
     );
+    const notificationIntents: MikaNotificationIntent[] = [];
     const api = createMikaBackendApi(
       createIncrementingBackendDependencies({
         repositories,
         providers: createMikaProviderRegistry([fake.provider]),
+        notifications: {
+          handle: (intent) => {
+            notificationIntents.push(intent);
+          },
+        },
       }),
     );
     const ctx = createTestRequestContext({ customerId: false, userId: false });
@@ -8630,6 +9272,18 @@ describe("backend API composition", () => {
       checkoutId: createTestMikaId("checkout", 1),
       checkoutStatus: null,
     });
+    expect(notificationIntents).toEqual([
+      expect.objectContaining({
+        kind: "checkout.payment_failed",
+        occurredAt: TEST_NOW,
+        context: {
+          provider: TEST_PROVIDER,
+          status: "failed",
+          error: "Checkout provider failed to create a session.",
+          total: { amount: 2400, currency: TEST_CURRENCY },
+        },
+      }),
+    ]);
   });
 
   it("starts hosted checkout, persists binding, and returns the redirect URL", async () => {
@@ -10403,7 +11057,9 @@ class FailingTerminalWebhookOpsRepository extends OpsRepository {
   }
 }
 
-async function createMagicLinkHarness(options: { readonly ttlMs?: number } = {}): Promise<{
+async function createMagicLinkHarness(
+  options: { readonly ttlMs?: number; readonly notificationHook?: MikaNotificationHook } = {},
+): Promise<{
   readonly api: MikaApi;
   readonly repositories: MikaBackendRepositories;
   readonly accountCollection: StorageCollection<MikaStorageDocuments["account"]>;
@@ -10430,6 +11086,9 @@ async function createMagicLinkHarness(options: { readonly ttlMs?: number } = {})
           ttlMs: options.ttlMs,
         },
       },
+      ...(options.notificationHook
+        ? { notifications: { handle: options.notificationHook } }
+        : {}),
     }),
   );
 
@@ -10446,7 +11105,7 @@ async function createMagicLinkHarness(options: { readonly ttlMs?: number } = {})
 }
 
 async function createAccountServicesHarness(
-  options: { readonly exportTtlMs?: number } = {},
+  options: { readonly exportTtlMs?: number; readonly notificationHook?: MikaNotificationHook } = {},
 ): Promise<{
   readonly api: MikaApi;
   readonly repositories: MikaBackendRepositories;
@@ -10477,6 +11136,9 @@ async function createAccountServicesHarness(
           ttlMs: options.exportTtlMs,
         },
       },
+      ...(options.notificationHook
+        ? { notifications: { handle: options.notificationHook } }
+        : {}),
     }),
   );
 
@@ -11437,11 +12099,15 @@ function createPaymentWebhookEvent(
     readonly providerOrderId?: string;
     readonly invoiceUrl?: string;
     readonly customer?: Extract<MikaProviderWebhookEvent, { readonly kind: "payment" }>["customer"];
+    readonly paymentStatus?: Extract<
+      MikaProviderWebhookEvent,
+      { readonly kind: "payment" }
+    >["paymentStatus"];
   } = {},
 ): MikaProviderWebhookEvent {
   return {
     kind: "payment",
-    paymentStatus: "paid",
+    paymentStatus: overrides.paymentStatus ?? "paid",
     provider: verified.provider,
     providerEventId: overrides.providerEventId,
     type: overrides.type ?? "payment.completed",

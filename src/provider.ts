@@ -15,6 +15,7 @@ import type {
   ISODateTime,
   JsonObject,
   MikaId,
+  PaymentStatus,
   ProviderName,
   PurchaseMode,
   SubscriptionStatus,
@@ -149,7 +150,7 @@ export type MikaProviderWebhookEvent =
 
 export interface MikaProviderPaymentEvent {
   readonly kind: "payment";
-  readonly paymentStatus: "paid";
+  readonly paymentStatus: PaymentStatus | (string & {});
   readonly provider: ProviderName;
   readonly providerEventId?: string;
   readonly type: string;

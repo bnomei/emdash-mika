@@ -44,6 +44,9 @@ import type {
   createMikaServerClient as PackageCreateMikaServerClient,
   mikaApiMethodNames as PackageMikaApiMethodNames,
   MikaBackendDependencies as PackageMikaBackendDependencies,
+  MikaNotificationHook as PackageMikaNotificationHook,
+  MikaNotificationIntent as PackageMikaNotificationIntent,
+  MikaNotificationKind as PackageMikaNotificationKind,
   MikaOperationDescriptor as PackageServerMikaOperationDescriptor,
   MikaOperationPolicy as PackageServerMikaOperationPolicy,
 } from "@bnomei/emdash-mika/server";
@@ -107,6 +110,9 @@ import {
   type MikaBackendDependencies,
   type MikaApi,
   type MikaApiOverrides,
+  type MikaNotificationHook,
+  type MikaNotificationIntent,
+  type MikaNotificationKind,
   type MikaOperationDescriptor,
   type MikaOperationPolicy,
   type MikaServerClient,
@@ -3601,6 +3607,27 @@ describe("public types", () => {
     expectTypeOf<MikaEmailInput<"magic_link">>().toEqualTypeOf<
       Parameters<typeof renderMikaMagicLinkEmail>[0]
     >();
+    expectTypeOf<MikaNotificationKind>().toEqualTypeOf<
+      | "magic_link.requested"
+      | "order.confirmed"
+      | "checkout.payment_failed"
+      | "download.ready"
+      | "license.issued"
+      | "subscription.started"
+      | "subscription.updated"
+      | "subscription.renewal_failed"
+      | "account.export_ready"
+      | "account.delete_requested"
+      | "ops.webhook_failed"
+    >();
+    expectTypeOf<MikaNotificationIntent<"magic_link.requested">["context"]>().toMatchTypeOf<{
+      readonly toEmail: string;
+      readonly link: string;
+      readonly purpose: string;
+      readonly expiresAt: ISODateTime;
+      readonly tokenId: MikaId;
+      readonly returnTo?: string;
+    }>();
     expectTypeOf<(typeof mikaApiMethodNames)["admin"][number]>().toEqualTypeOf<
       keyof MikaApi["admin"]
     >();
@@ -3681,6 +3708,9 @@ describe("public types", () => {
       typeof createEmDashMikaEmailSender
     >();
     expectTypeOf<PackageMikaBackendDependencies>().toEqualTypeOf<MikaBackendDependencies>();
+    expectTypeOf<PackageMikaNotificationKind>().toEqualTypeOf<MikaNotificationKind>();
+    expectTypeOf<PackageMikaNotificationIntent>().toEqualTypeOf<MikaNotificationIntent>();
+    expectTypeOf<PackageMikaNotificationHook>().toEqualTypeOf<MikaNotificationHook>();
     expectTypeOf<typeof PackageMikaApiMethodNames>().toEqualTypeOf<typeof mikaApiMethodNames>();
     expectTypeOf<PackageMikaAstroClientOptions>().toEqualTypeOf<MikaAstroClientOptions>();
     expectTypeOf<PackageRootMikaOperationDescriptor>().toEqualTypeOf<MikaOperationDescriptor>();

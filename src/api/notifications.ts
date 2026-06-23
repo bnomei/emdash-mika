@@ -1,0 +1,201 @@
+import type {
+  CheckoutStatus,
+  FulfillmentKind,
+  ISODateTime,
+  JsonObject,
+  MikaId,
+  Money,
+  ProviderName,
+  SubscriptionStatus,
+} from "../types/primitives";
+
+export type MikaNotificationKind =
+  | "magic_link.requested"
+  | "order.confirmed"
+  | "checkout.payment_failed"
+  | "download.ready"
+  | "license.issued"
+  | "subscription.started"
+  | "subscription.updated"
+  | "subscription.renewal_failed"
+  | "account.export_ready"
+  | "account.delete_requested"
+  | "ops.webhook_failed";
+
+export interface MikaNotificationRecipientContext {
+  readonly toEmail?: string;
+  readonly customerId?: MikaId;
+  readonly userId?: string;
+  readonly emailHash?: string;
+}
+
+export type MikaMagicLinkNotificationPurpose =
+  | "sign_in"
+  | "checkout"
+  | "account_delete"
+  | (string & {});
+
+export interface MikaMagicLinkRequestedNotificationContext
+  extends MikaNotificationRecipientContext {
+  readonly toEmail: string;
+  readonly link: string;
+  readonly purpose: MikaMagicLinkNotificationPurpose;
+  readonly expiresAt: ISODateTime;
+  readonly returnTo?: string;
+  readonly tokenId: MikaId;
+}
+
+export interface MikaOrderConfirmedNotificationLine {
+  readonly lineId: MikaId;
+  readonly sellableId: MikaId;
+  readonly priceId?: MikaId;
+  readonly sku?: string;
+  readonly title: string;
+  readonly quantity: number;
+  readonly total: Money;
+  readonly fulfillmentKind: FulfillmentKind;
+  readonly entitlementId?: MikaId;
+  readonly downloadRefs?: readonly string[];
+  readonly licenseKeySuffix?: string;
+  readonly stockMovementId?: MikaId;
+  readonly metadata?: JsonObject;
+}
+
+export interface MikaOrderConfirmedNotificationContext
+  extends MikaNotificationRecipientContext {
+  readonly toEmail: string;
+  readonly orderId: MikaId;
+  readonly orderNumber: string;
+  readonly provider?: ProviderName;
+  readonly providerPaymentId?: string;
+  readonly providerOrderId?: string;
+  readonly checkoutSessionId?: MikaId;
+  readonly total: Money;
+  readonly fulfilledLines: readonly MikaOrderConfirmedNotificationLine[];
+  readonly fulfillmentKinds: readonly FulfillmentKind[];
+}
+
+export interface MikaCheckoutPaymentFailedNotificationContext
+  extends MikaNotificationRecipientContext {
+  readonly checkoutId?: MikaId;
+  readonly orderId?: MikaId;
+  readonly provider: ProviderName;
+  readonly providerCheckoutId?: string;
+  readonly providerPaymentId?: string;
+  readonly providerOrderId?: string;
+  readonly status?: CheckoutStatus | string;
+  readonly paymentStatus?: string;
+  readonly eventType?: string;
+  readonly webhookId?: MikaId;
+  readonly error?: string;
+  readonly total?: Money;
+}
+
+export interface MikaDownloadReadyNotificationContext extends MikaNotificationRecipientContext {
+  readonly downloadRef: string;
+  readonly orderId?: MikaId;
+  readonly orderLineId?: MikaId;
+  readonly title?: string;
+  readonly tokenId?: MikaId;
+  readonly expiresAt?: ISODateTime;
+  readonly entitlementId?: MikaId;
+  readonly licenseId?: MikaId;
+}
+
+export interface MikaLicenseIssuedNotificationContext extends MikaNotificationRecipientContext {
+  readonly licenseId: MikaId;
+  readonly orderId?: MikaId;
+  readonly orderLineId?: MikaId;
+  readonly entitlementId?: MikaId;
+  readonly displayKeySuffix: string;
+  readonly sellableId?: MikaId;
+  readonly fulfillmentKind?: FulfillmentKind;
+}
+
+export interface MikaSubscriptionNotificationContext extends MikaNotificationRecipientContext {
+  readonly subscriptionId: MikaId;
+  readonly status: SubscriptionStatus;
+  readonly previousStatus?: SubscriptionStatus;
+  readonly provider: ProviderName;
+  readonly providerCustomerId?: string;
+  readonly providerSubscriptionId?: string;
+  readonly providerPriceId?: string;
+  readonly currentPeriodEnd?: ISODateTime;
+  readonly cancelAtPeriodEnd?: boolean;
+  readonly sellableId?: MikaId;
+  readonly title?: string;
+  readonly entitlementId?: MikaId;
+  readonly eventType?: string;
+}
+
+export interface MikaAccountExportReadyNotificationContext
+  extends MikaNotificationRecipientContext {
+  readonly exportId: MikaId;
+  readonly expiresAt: ISODateTime;
+  readonly downloadHref?: string;
+  readonly tokenId?: MikaId;
+}
+
+export interface MikaAccountDeleteRequestedNotificationContext
+  extends MikaNotificationRecipientContext {
+  readonly requestId: MikaId;
+}
+
+export interface MikaOpsWebhookFailedNotificationContext {
+  readonly webhookId: MikaId;
+  readonly provider: ProviderName;
+  readonly eventType: string;
+  readonly providerEventId?: string;
+  readonly payloadHash: string;
+  readonly lastError: string;
+  readonly relatedCustomerId?: MikaId;
+  readonly relatedOrderId?: MikaId;
+  readonly relatedSubscriptionId?: MikaId;
+}
+
+export interface MikaGenericNotificationContext extends MikaNotificationRecipientContext {
+  readonly metadata?: JsonObject;
+}
+
+export interface MikaNotificationContextMap {
+  readonly "magic_link.requested": MikaMagicLinkRequestedNotificationContext;
+  readonly "order.confirmed": MikaOrderConfirmedNotificationContext;
+  readonly "checkout.payment_failed": MikaCheckoutPaymentFailedNotificationContext;
+  readonly "download.ready": MikaDownloadReadyNotificationContext;
+  readonly "license.issued": MikaLicenseIssuedNotificationContext;
+  readonly "subscription.started": MikaSubscriptionNotificationContext;
+  readonly "subscription.updated": MikaSubscriptionNotificationContext;
+  readonly "subscription.renewal_failed": MikaSubscriptionNotificationContext;
+  readonly "account.export_ready": MikaAccountExportReadyNotificationContext;
+  readonly "account.delete_requested": MikaAccountDeleteRequestedNotificationContext;
+  readonly "ops.webhook_failed": MikaOpsWebhookFailedNotificationContext;
+}
+
+export type MikaNotificationIntent<
+  TKind extends MikaNotificationKind = MikaNotificationKind,
+> = {
+  readonly [Kind in TKind]: {
+    readonly kind: Kind;
+    readonly occurredAt: ISODateTime;
+    readonly context: MikaNotificationContextMap[Kind];
+  };
+}[TKind];
+
+export interface MikaNotificationHookResult {
+  readonly handled: boolean;
+}
+
+export type MikaNotificationHook = (
+  intent: MikaNotificationIntent,
+) => MikaNotificationHookResult | void | Promise<MikaNotificationHookResult | void>;
+
+export async function emitMikaNotification(
+  hook: MikaNotificationHook | undefined,
+  intent: MikaNotificationIntent,
+  defaultHandler?: () => Promise<void> | void,
+): Promise<void> {
+  const result = await hook?.(intent);
+  if (result?.handled === true) return;
+
+  await defaultHandler?.();
+}

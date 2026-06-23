@@ -54,6 +54,7 @@ import {
   wishlistToDTO,
 } from "../model/builders";
 import { renderMikaEmail } from "../email";
+import { emitMikaNotification } from "./notifications";
 import { mikaPluginRoute } from "./routes";
 import { mikaSafeReturnPath } from "./redirect-policy";
 import { createMikaAdminBackend } from "./backend-admin";
@@ -113,6 +114,14 @@ import type {
 } from "../types/primitives";
 import type { EphemeralRecord, StockEventRecord, StockItemRecord } from "../types/operational";
 import type { MikaRequestContext } from "./context";
+import type {
+  MikaNotificationContextMap,
+  MikaNotificationHook,
+  MikaNotificationIntent,
+  MikaNotificationKind,
+  MikaNotificationRecipientContext,
+  MikaOrderConfirmedNotificationContext,
+} from "./notifications";
 import { createMikaApi, type MikaApi, type MikaApiOverrides } from "./server";
 import type {
   AddCartItemInput,
@@ -480,6 +489,9 @@ export interface MikaBackendDependencies {
   readonly hash: MikaBackendHashHelper;
   readonly isoNow?: MikaBackendISODateTime;
   readonly now: MikaBackendNow;
+  readonly notifications?: {
+    readonly handle?: MikaNotificationHook;
+  };
   readonly providers: MikaProviderRegistry;
   readonly repositories: MikaBackendRepositories;
 }
@@ -1313,7 +1325,20 @@ async function requestAccountExport(
 
   await input.repositories.ops.put(document);
 
-  return { ok: true, status: 202, data: accountExportDTO(document, ctx, token) };
+  const dto = accountExportDTO(document, ctx, token);
+  await emitBackendNotification(input, "account.export_ready", now, {
+    ...(record.customerId ? { customerId: record.customerId } : {}),
+    ...(record.userId ? { userId: record.userId } : {}),
+    ...(identity.customer?.emailHash ?? identity.emailHash
+      ? { emailHash: identity.customer?.emailHash ?? identity.emailHash }
+      : {}),
+    exportId,
+    expiresAt,
+    ...(dto.downloadHref ? { downloadHref: dto.downloadHref } : {}),
+    tokenId: token,
+  });
+
+  return { ok: true, status: 202, data: dto };
 }
 
 async function accountExportStatus(
@@ -1410,6 +1435,13 @@ async function requestAccountDelete(
   };
 
   await input.repositories.ops.put(document);
+
+  await emitBackendNotification(input, "account.delete_requested", now, {
+    ...(record.customerId ? { customerId: record.customerId } : {}),
+    ...(record.userId ? { userId: record.userId } : {}),
+    ...(record.emailHash ? { emailHash: record.emailHash } : {}),
+    requestId,
+  });
 
   return { ok: true, status: 202, data: { requested: true } };
 }
@@ -1602,7 +1634,12 @@ async function updateSubscriptionAfterAction(
   };
 
   await input.repositories.account.put(updated);
-  return updateSubscriptionEntitlement(input, ctx, updated);
+  const fulfilled = await updateSubscriptionEntitlement(input, ctx, updated);
+  await emitSubscriptionLifecycleNotification(input, ctx.now, fulfilled, {
+    previous: subscription,
+  });
+
+  return fulfilled;
 }
 
 async function providerHealth(
@@ -2153,6 +2190,18 @@ async function issueDownload(
         },
       });
 
+      await emitBackendNotification(input, "download.ready", now, {
+        ...orderNotificationRecipient(target.order),
+        downloadRef: target.downloadRef,
+        orderId: target.order.id,
+        orderLineId: target.line.id,
+        title: target.line.item.titleSnapshot,
+        tokenId: downloadToken,
+        expiresAt,
+        ...(issueInput.entitlementId ? { entitlementId: issueInput.entitlementId } : {}),
+        ...(target.license?.id ? { licenseId: target.license.id } : {}),
+      });
+
       return {
         id: createMikaId(target.downloadRef),
         status: "completed",
@@ -2483,6 +2532,45 @@ function adminActionFailed(message: string): MikaApiFailure {
   };
 }
 
+async function emitBackendNotification<TKind extends MikaNotificationKind>(
+  input: CreateMikaBackendApiInput,
+  kind: TKind,
+  occurredAt: ISODateTime,
+  context: MikaNotificationContextMap[TKind],
+): Promise<void> {
+  await emitMikaNotification(input.notifications?.handle, {
+    kind,
+    occurredAt,
+    context,
+  } as MikaNotificationIntent);
+}
+
+function orderNotificationRecipient(order: OrderDocument): MikaNotificationRecipientContext {
+  const customer = order.aggregate.customer;
+  const customerId = order.customerId ?? customer.customerId;
+
+  return {
+    ...(customer.email ? { toEmail: customer.email } : {}),
+    ...(customerId ? { customerId } : {}),
+    ...(customer.userId ? { userId: customer.userId } : {}),
+    ...(customer.emailHash ? { emailHash: customer.emailHash } : {}),
+  };
+}
+
+function subscriptionNotificationRecipient(
+  subscription: SubscriptionDocument,
+): MikaNotificationRecipientContext {
+  const customer = subscription.aggregate.customer;
+  const customerId = subscription.customerId ?? customer.customerId;
+
+  return {
+    ...(customer.email ? { toEmail: customer.email } : {}),
+    ...(customerId ? { customerId } : {}),
+    ...(customer.userId ? { userId: customer.userId } : {}),
+    ...(customer.emailHash ? { emailHash: customer.emailHash } : {}),
+  };
+}
+
 async function requestMagicLink(
   input: CreateMikaBackendApiInput,
   ctx: MikaRequestContext,
@@ -2523,19 +2611,49 @@ async function requestMagicLink(
   });
 
   const link = magicLinkUrl(ctx, token, safeReturnTo);
+  const intent: MikaNotificationIntent<"magic_link.requested"> = {
+    kind: "magic_link.requested",
+    occurredAt: now,
+    context: {
+      toEmail: email,
+      emailHash,
+      ...(customer?.customerId ? { customerId: customer.customerId } : {}),
+      ...(customer?.userId ? { userId: customer.userId } : {}),
+      link,
+      purpose: "sign_in",
+      expiresAt,
+      ...(safeReturnTo ? { returnTo: safeReturnTo } : {}),
+      tokenId,
+    },
+  };
+
+  await emitMikaNotification(input.notifications?.handle, intent, () =>
+    queueDefaultMagicLinkRequestedEmail(input, intent, tokenHash),
+  );
+
+  return { ok: true, status: 200, data: { sent: true } };
+}
+
+async function queueDefaultMagicLinkRequestedEmail(
+  input: CreateMikaBackendApiInput,
+  intent: MikaNotificationIntent<"magic_link.requested">,
+  tokenHash: string,
+): Promise<void> {
+  const { context } = intent;
+  const now = intent.occurredAt;
   const rendered = renderMikaEmail("magic_link", {
-    toEmail: email,
-    url: link,
-    purpose: "sign_in",
-    expiresAt,
+    toEmail: context.toEmail,
+    url: context.link,
+    purpose: context.purpose,
+    expiresAt: context.expiresAt,
   });
   const emailId = input.createId("email");
   const emailRecord = {
     id: emailId,
-    customerId: customer?.customerId,
-    tokenId,
+    customerId: context.customerId,
+    tokenId: context.tokenId,
     kind: "magic_link" as const,
-    toEmail: email,
+    toEmail: context.toEmail,
     subject: rendered.subject,
     status: "queued" as const,
     idempotencyKey: `magic-link:${tokenHash}`,
@@ -2546,10 +2664,10 @@ async function requestMagicLink(
     nextAttemptAt: now,
     createdAt: now,
     metadata: {
-      purpose: "sign_in",
-      expiresAt,
-      link,
-      ...(safeReturnTo ? { returnTo: safeReturnTo } : {}),
+      purpose: context.purpose,
+      expiresAt: context.expiresAt,
+      link: context.link,
+      ...(context.returnTo ? { returnTo: context.returnTo } : {}),
     },
   };
 
@@ -2565,8 +2683,6 @@ async function requestMagicLink(
     createdAt: now,
     updatedAt: now,
   });
-
-  return { ok: true, status: 200, data: { sent: true } };
 }
 
 async function verifyMagicLink(
@@ -3456,12 +3572,11 @@ function storedWebhookEvent(webhook: WebhookDocument): MikaProviderWebhookEvent 
   if (provider !== webhook.provider || !type) return null;
 
   switch (stringChild(eventPayload, "kind")) {
-    case "payment":
-      if (stringChild(eventPayload, "paymentStatus") !== "paid") return null;
-
+    case "payment": {
+      const paymentStatus = stringChild(eventPayload, "paymentStatus") ?? "failed";
       return {
         kind: "payment",
-        paymentStatus: "paid",
+        paymentStatus,
         provider: webhook.provider,
         providerEventId: stringChild(eventPayload, "providerEventId") ?? webhook.providerEventId,
         type,
@@ -3474,6 +3589,7 @@ function storedWebhookEvent(webhook: WebhookDocument): MikaProviderWebhookEvent 
         invoiceUrl: stringChild(eventPayload, "invoiceUrl"),
         raw: jsonChild(eventPayload, "raw"),
       };
+    }
     case "subscription": {
       const status = stringChild(eventPayload, "status");
       if (!isSubscriptionStatus(status)) return null;
@@ -3691,13 +3807,16 @@ async function processStoredWebhook(
   switch (event.kind) {
     case "payment":
       if (event.paymentStatus !== "paid") {
-        return markWebhookFailed(
+        const failed = await markWebhookFailed(
           input,
           webhook,
           ctx.now,
           "Payment webhook is not in a paid state.",
           { strict: true },
         );
+        await emitCheckoutPaymentFailedNotification(input, ctx.now, failed, event);
+
+        return failed;
       }
 
       try {
@@ -3727,6 +3846,36 @@ async function processStoredWebhook(
     case "unknown":
       return webhook;
   }
+}
+
+type PaymentFailureWebhookEvent = Omit<MikaProviderPaymentEvent, "paymentStatus"> & {
+  readonly paymentStatus?: string;
+};
+
+async function emitCheckoutPaymentFailedNotification(
+  input: CreateMikaBackendApiInput,
+  now: ISODateTime,
+  webhook: WebhookDocument,
+  event: PaymentFailureWebhookEvent,
+): Promise<void> {
+  const checkout = await findPaymentEventCheckout(input, event);
+
+  await emitBackendNotification(input, "checkout.payment_failed", now, {
+    ...(event.customer?.email ? { toEmail: event.customer.email } : {}),
+    ...(checkout?.customerId ? { customerId: checkout.customerId } : {}),
+    ...(checkout?.id ? { checkoutId: checkout.id } : {}),
+    provider: event.provider,
+    ...(event.providerCheckoutId ?? checkout?.providerCheckoutId
+      ? { providerCheckoutId: event.providerCheckoutId ?? checkout?.providerCheckoutId }
+      : {}),
+    ...(event.providerPaymentId ? { providerPaymentId: event.providerPaymentId } : {}),
+    ...(event.providerOrderId ? { providerOrderId: event.providerOrderId } : {}),
+    ...(event.paymentStatus ? { paymentStatus: event.paymentStatus } : {}),
+    eventType: event.type,
+    webhookId: webhook.id,
+    error: webhook.record.lastError ?? "Payment webhook is not in a paid state.",
+    ...(event.totals?.total ? { total: event.totals.total } : {}),
+  });
 }
 
 async function processPaymentWebhook(
@@ -4111,8 +4260,8 @@ async function processSubscriptionWebhook(
   webhook: WebhookDocument,
   event: MikaProviderSubscriptionEvent,
 ): Promise<WebhookDocument> {
-  const subscription = await findOrCreateSubscriptionFromEvent(input, ctx, event);
-  if (!subscription) {
+  const resolved = await findOrCreateSubscriptionFromEvent(input, ctx, event);
+  if (!resolved) {
     return markWebhookFailed(
       input,
       webhook,
@@ -4121,23 +4270,34 @@ async function processSubscriptionWebhook(
     );
   }
 
-  const updated = await updateSubscriptionFromEvent(input, ctx, subscription, event);
+  const previous = resolved.created ? undefined : resolved.subscription;
+  const updated = await updateSubscriptionFromEvent(input, ctx, resolved.subscription, event);
   const fulfilled = await updateSubscriptionEntitlement(input, ctx, updated);
+  await emitSubscriptionLifecycleNotification(input, ctx.now, fulfilled, {
+    event,
+    previous,
+    created: resolved.created,
+  });
 
   return markWebhookProcessedForSubscription(input, webhook, ctx.now, fulfilled);
 }
+
+type SubscriptionFromEventResult = {
+  readonly subscription: SubscriptionDocument;
+  readonly created: boolean;
+};
 
 async function findOrCreateSubscriptionFromEvent(
   input: CreateMikaBackendApiInput,
   ctx: MikaRequestContext,
   event: MikaProviderSubscriptionEvent,
-): Promise<SubscriptionDocument | null> {
+): Promise<SubscriptionFromEventResult | null> {
   if (event.providerSubscriptionId) {
     const existing = await input.repositories.account.findSubscriptionByProvider(
       event.provider,
       event.providerSubscriptionId,
     );
-    if (existing) return existing;
+    if (existing) return { subscription: existing, created: false };
   }
 
   if (!event.providerSubscriptionId || !event.providerCustomerId || !event.providerPriceId) {
@@ -4187,18 +4347,21 @@ async function findOrCreateSubscriptionFromEvent(
   });
 
   return {
-    id: subscriptionId,
-    type: "subscription",
-    schemaVersion: 1,
-    customerId: providerAccount.customerId,
-    provider: event.provider,
-    providerCustomerId: event.providerCustomerId,
-    providerSubscriptionId: event.providerSubscriptionId,
-    status: event.status,
-    currentPeriodEnd: event.currentPeriodEnd,
-    aggregate,
-    createdAt: ctx.now,
-    updatedAt: ctx.now,
+    subscription: {
+      id: subscriptionId,
+      type: "subscription",
+      schemaVersion: 1,
+      customerId: providerAccount.customerId,
+      provider: event.provider,
+      providerCustomerId: event.providerCustomerId,
+      providerSubscriptionId: event.providerSubscriptionId,
+      status: event.status,
+      currentPeriodEnd: event.currentPeriodEnd,
+      aggregate,
+      createdAt: ctx.now,
+      updatedAt: ctx.now,
+    },
+    created: true,
   };
 }
 
@@ -4309,6 +4472,50 @@ async function updateSubscriptionEntitlement(
   return updated;
 }
 
+async function emitSubscriptionLifecycleNotification(
+  input: CreateMikaBackendApiInput,
+  now: ISODateTime,
+  subscription: SubscriptionDocument,
+  options: {
+    readonly created?: boolean;
+    readonly previous?: SubscriptionDocument;
+    readonly event?: MikaProviderSubscriptionEvent;
+  } = {},
+): Promise<void> {
+  const kind =
+    subscription.status === "past_due"
+      ? "subscription.renewal_failed"
+      : options.created &&
+          (subscription.status === "active" || subscription.status === "trialing")
+        ? "subscription.started"
+        : "subscription.updated";
+
+  await emitBackendNotification(input, kind, now, {
+    ...subscriptionNotificationRecipient(subscription),
+    subscriptionId: subscription.id,
+    status: subscription.status,
+    ...(options.previous?.status && options.previous.status !== subscription.status
+      ? { previousStatus: options.previous.status }
+      : {}),
+    provider: subscription.provider,
+    ...(subscription.providerCustomerId ?? subscription.aggregate.providerRef.customerId
+      ? { providerCustomerId: subscription.providerCustomerId ?? subscription.aggregate.providerRef.customerId }
+      : {}),
+    ...(subscription.providerSubscriptionId ?? subscription.aggregate.providerRef.subscriptionId
+      ? { providerSubscriptionId: subscription.providerSubscriptionId ?? subscription.aggregate.providerRef.subscriptionId }
+      : {}),
+    ...(subscription.aggregate.providerRef.priceId ? { providerPriceId: subscription.aggregate.providerRef.priceId } : {}),
+    ...(subscription.currentPeriodEnd ?? subscription.aggregate.currentPeriodEnd
+      ? { currentPeriodEnd: subscription.currentPeriodEnd ?? subscription.aggregate.currentPeriodEnd }
+      : {}),
+    cancelAtPeriodEnd: subscription.aggregate.cancelAtPeriodEnd,
+    sellableId: subscription.aggregate.sellable.sellableId,
+    title: subscription.aggregate.sellable.titleSnapshot,
+    ...(subscription.aggregate.entitlementId ? { entitlementId: subscription.aggregate.entitlementId } : {}),
+    ...(options.event?.type ? { eventType: options.event.type } : {}),
+  });
+}
+
 function subscriptionEventMetadata(event: MikaProviderSubscriptionEvent): JsonObject {
   return {
     source: "webhook.subscription",
@@ -4396,7 +4603,7 @@ async function persistNewPaymentOrder(
 
 async function findPaymentEventCheckout(
   input: CreateMikaBackendApiInput,
-  event: MikaProviderPaymentEvent,
+  event: Pick<MikaProviderPaymentEvent, "provider" | "providerCheckoutId">,
 ): Promise<CheckoutDocument | null> {
   if (!event.providerCheckoutId) return null;
 
@@ -4618,9 +4825,10 @@ async function fulfillPaidOrder(
   order: OrderDocument,
 ): Promise<OrderDocument> {
   const fulfilledLines: OrderLine[] = [];
+  const originalLines = order.aggregate.lines;
   let changed = false;
 
-  for (const line of order.aggregate.lines) {
+  for (const line of originalLines) {
     const fulfilled = await fulfillPaidOrderLine(input, ctx, order, line);
     fulfilledLines.push(fulfilled);
     changed = changed || fulfilled !== line;
@@ -4644,6 +4852,7 @@ async function fulfillPaidOrder(
   };
 
   await input.repositories.ledger.put(fulfilledOrder);
+  await emitOrderDownloadReadyNotifications(input, ctx, fulfilledOrder, originalLines);
 
   return fulfilledOrder;
 }
@@ -4681,7 +4890,20 @@ async function fulfillPaidOrderLine(
     case "license": {
       const license = await createOrderLineLicenseDocument(input, order, line, ctx.now);
       const existing = await input.repositories.account.findLicenseById(license.id);
-      if (!existing) await input.repositories.account.put(license);
+      if (!existing) {
+        await input.repositories.account.put(license);
+        await emitBackendNotification(input, "license.issued", ctx.now, {
+          ...orderNotificationRecipient(order),
+          ...(license.customerId ? { customerId: license.customerId } : {}),
+          licenseId: license.id,
+          orderId: order.id,
+          orderLineId: line.id,
+          ...(license.record.entitlementId ? { entitlementId: license.record.entitlementId } : {}),
+          displayKeySuffix: license.record.displayKeySuffix,
+          sellableId: line.item.sellableId,
+          fulfillmentKind: line.item.fulfillmentKind,
+        });
+      }
       return fulfilledLine.licenseKeySuffix === license.record.displayKeySuffix
         ? fulfilledLine
         : { ...fulfilledLine, licenseKeySuffix: license.record.displayKeySuffix };
@@ -4802,41 +5024,122 @@ async function queueOrderConfirmationEmail(
   order: OrderDocument,
   lines: readonly OrderLine[],
 ): Promise<void> {
-  const toEmail = order.aggregate.customer.email?.trim();
+  const recipient = orderNotificationRecipient(order);
+  const toEmail = recipient.toEmail?.trim();
   if (!toEmail) return;
 
-  const id = fulfillmentDocumentId("email", order.id, "order_confirmation");
+  const notificationMarkerId = orderConfirmedNotificationMarkerId(order.id);
+  const defaultEmailId = fulfillmentDocumentId("email", order.id, "order_confirmation");
+  const markerLease = await acquireNotificationMarker(input, ctx, {
+    id: notificationMarkerId,
+    kind: "order.confirmed",
+    subjectType: "order",
+    subjectId: order.id,
+    idempotencyKey: `order.confirmed:${order.id}`,
+    metadata: {
+      defaultEmailId,
+    },
+  });
+  if (markerLease.status !== "acquired") return;
+
+  try {
+    const existingDefaultEmail = await input.repositories.ops.findEmail(defaultEmailId);
+    if (existingDefaultEmail) {
+      await markerLease.runner.complete({
+        notificationKind: "order.confirmed",
+        defaultEmailId,
+        defaultEmailAlreadyQueued: true,
+      });
+      return;
+    }
+
+    const fulfillmentKinds = [...new Set(lines.map((line) => line.item.fulfillmentKind))];
+    const context: MikaOrderConfirmedNotificationContext = {
+      ...recipient,
+      toEmail,
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      ...(order.provider ? { provider: order.provider } : {}),
+      ...(order.providerPaymentId ? { providerPaymentId: order.providerPaymentId } : {}),
+      ...(order.providerOrderId ? { providerOrderId: order.providerOrderId } : {}),
+      ...(order.checkoutSessionId ? { checkoutSessionId: order.checkoutSessionId } : {}),
+      total: order.aggregate.totals.total,
+      fulfilledLines: lines.map((line) => ({
+        lineId: line.id,
+        sellableId: line.item.sellableId,
+        ...(line.item.priceId ? { priceId: line.item.priceId } : {}),
+        ...(line.item.sku ? { sku: line.item.sku } : {}),
+        title: line.item.titleSnapshot,
+        quantity: line.quantity,
+        total: { amount: line.totalAmount, currency: line.item.currency },
+        fulfillmentKind: line.item.fulfillmentKind,
+        ...(line.entitlementId ? { entitlementId: line.entitlementId } : {}),
+        ...(line.downloadRefs ? { downloadRefs: line.downloadRefs } : {}),
+        ...(line.licenseKeySuffix ? { licenseKeySuffix: line.licenseKeySuffix } : {}),
+        ...(line.stockMovementId ? { stockMovementId: line.stockMovementId } : {}),
+        ...(line.metadata ? { metadata: line.metadata } : {}),
+      })),
+      fulfillmentKinds,
+    };
+    const intent: MikaNotificationIntent<"order.confirmed"> = {
+      kind: "order.confirmed",
+      occurredAt: ctx.now,
+      context,
+    };
+
+    await emitMikaNotification(input.notifications?.handle, intent, () =>
+      queueDefaultOrderConfirmedEmail(input, intent, defaultEmailId),
+    );
+    await markerLease.runner.complete({
+      notificationKind: "order.confirmed",
+      defaultEmailId,
+    });
+  } catch (error) {
+    await markerLease.runner.fail(
+      error instanceof Error ? error.message : "Order-confirmation notification failed.",
+    );
+    throw error;
+  }
+}
+
+async function queueDefaultOrderConfirmedEmail(
+  input: CreateMikaBackendApiInput,
+  intent: MikaNotificationIntent<"order.confirmed">,
+  emailId?: MikaId,
+): Promise<void> {
+  const { context } = intent;
+  const id = emailId ?? fulfillmentDocumentId("email", context.orderId, "order_confirmation");
   const existing = await input.repositories.ops.findEmail(id);
   if (existing) return;
 
   const rendered = renderMikaEmail("order_confirmation", {
-    toEmail,
-    orderNumber: order.orderNumber,
-    total: order.aggregate.totals.total,
-    lines: lines.map((line) => ({
-      title: line.item.titleSnapshot,
+    toEmail: context.toEmail,
+    orderNumber: context.orderNumber,
+    total: context.total,
+    lines: context.fulfilledLines.map((line) => ({
+      title: line.title,
       quantity: line.quantity,
-      total: { amount: line.totalAmount, currency: line.item.currency },
+      total: line.total,
     })),
   });
   const record = {
     id,
-    customerId: order.customerId ?? order.aggregate.customer.customerId,
-    orderId: order.id,
+    customerId: context.customerId,
+    orderId: context.orderId,
     kind: "order_confirmation" as const,
-    toEmail,
+    toEmail: context.toEmail,
     subject: rendered.subject,
     status: "queued" as const,
-    idempotencyKey: `order-confirmation:${order.id}`,
+    idempotencyKey: `order-confirmation:${context.orderId}`,
     templateKey: rendered.template,
     templateVersion: "1",
     attemptCount: 0,
     maxAttempts: 5,
-    nextAttemptAt: ctx.now,
-    createdAt: ctx.now,
+    nextAttemptAt: intent.occurredAt,
+    createdAt: intent.occurredAt,
     metadata: {
-      orderLineIds: lines.map((line) => line.id),
-      fulfillmentKinds: [...new Set(lines.map((line) => line.item.fulfillmentKind))],
+      orderLineIds: context.fulfilledLines.map((line) => line.lineId),
+      fulfillmentKinds: [...context.fulfillmentKinds],
     },
   };
   const document: EmailDocument = {
@@ -4848,15 +5151,122 @@ async function queueOrderConfirmationEmail(
     orderId: record.orderId,
     kind: record.kind,
     record,
-    createdAt: ctx.now,
-    updatedAt: ctx.now,
+    createdAt: intent.occurredAt,
+    updatedAt: intent.occurredAt,
   };
 
   await input.repositories.ops.put(document);
 }
 
+async function emitOrderDownloadReadyNotifications(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  order: OrderDocument,
+  originalLines: readonly OrderLine[],
+): Promise<void> {
+  const originalById = new Map(originalLines.map((line) => [line.id, line]));
+
+  for (const line of order.aggregate.lines) {
+    const originalRefs = new Set(originalById.get(line.id)?.downloadRefs ?? []);
+    const addedRefs = (line.downloadRefs ?? []).filter((downloadRef) => !originalRefs.has(downloadRef));
+
+    for (const downloadRef of addedRefs) {
+      await emitBackendNotification(input, "download.ready", ctx.now, {
+        ...orderNotificationRecipient(order),
+        downloadRef,
+        orderId: order.id,
+        orderLineId: line.id,
+        title: line.item.titleSnapshot,
+      });
+    }
+  }
+}
+
 function orderLineDownloadRef(order: OrderDocument, line: OrderLine): string {
   return `download:${order.id}:${line.id}`;
+}
+
+function orderConfirmedNotificationMarkerId(orderId: MikaId): MikaId {
+  return fulfillmentDocumentId("workflow", orderId, "notification_order_confirmed");
+}
+
+type NotificationMarkerLease =
+  | {
+      readonly status: "acquired";
+      readonly runner: WorkflowRunner<never>;
+    }
+  | {
+      readonly status: "active" | "completed";
+    };
+
+async function acquireNotificationMarker(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  marker: {
+    readonly id: MikaId;
+    readonly kind: MikaNotificationKind;
+    readonly subjectType: string;
+    readonly subjectId: MikaId;
+    readonly idempotencyKey: string;
+    readonly metadata?: JsonObject;
+  },
+): Promise<NotificationMarkerLease> {
+  const existing = await input.repositories.ops.findWorkflow(marker.id);
+  if (existing?.status === "completed") return { status: "completed" };
+
+  const workflowKind = `notification.${marker.kind}` as WorkflowDocument["kind"];
+  if (!existing) {
+    await input.repositories.ops.createWorkflow({
+      id: marker.id,
+      type: "workflow",
+      schemaVersion: 1,
+      kind: workflowKind,
+      status: "queued",
+      subjectType: marker.subjectType,
+      subjectId: marker.subjectId,
+      idempotencyKey: marker.idempotencyKey,
+      nextAttemptAt: ctx.now,
+      record: {
+        id: marker.id,
+        kind: workflowKind,
+        status: "queued",
+        subjectType: marker.subjectType,
+        subjectId: marker.subjectId,
+        idempotencyKey: marker.idempotencyKey,
+        attemptCount: 0,
+        maxAttempts: 5,
+        nextAttemptAt: ctx.now,
+        steps: [],
+        createdAt: ctx.now,
+        updatedAt: ctx.now,
+        metadata: {
+          notificationKind: marker.kind,
+          ...marker.metadata,
+        },
+      },
+      createdAt: ctx.now,
+      updatedAt: ctx.now,
+    });
+  }
+
+  const leased = await input.repositories.ops.tryLeaseWorkflow({
+    workflowId: marker.id,
+    leaseKey: `notification:${marker.id}:${ctx.now}`,
+    now: ctx.now,
+    leaseExpiresAt: addMilliseconds(ctx.now, 300_000),
+  });
+  if (!leased) return { status: "active" };
+
+  return {
+    status: "acquired",
+    runner: new WorkflowRunner<never>({
+      ops: input.repositories.ops,
+      workflow: leased,
+      now: () => ctx.now,
+      nextAttemptAt: (now) => now,
+      stepFailureMessage: "Notification hook failed.",
+    }),
+  };
 }
 
 function orderLineContentKey(line: OrderLine): string {
@@ -4952,7 +5362,20 @@ async function markWebhookFailed(
     updatedAt: now,
   };
 
-  return putWebhook(input, failed, options);
+  const persisted = await putWebhook(input, failed, options);
+  await emitBackendNotification(input, "ops.webhook_failed", now, {
+    webhookId: persisted.id,
+    provider: persisted.provider,
+    eventType: persisted.eventType,
+    ...(persisted.providerEventId ? { providerEventId: persisted.providerEventId } : {}),
+    payloadHash: persisted.payloadHash,
+    lastError,
+    ...(persisted.record.relatedCustomerId ? { relatedCustomerId: persisted.record.relatedCustomerId } : {}),
+    ...(persisted.record.relatedOrderId ? { relatedOrderId: persisted.record.relatedOrderId } : {}),
+    ...(persisted.record.relatedSubscriptionId ? { relatedSubscriptionId: persisted.record.relatedSubscriptionId } : {}),
+  });
+
+  return persisted;
 }
 
 async function putWebhook(
@@ -5294,6 +5717,22 @@ async function startCheckout(
     }
   })();
   if (!providerSession) {
+    await emitBackendNotification(input, "checkout.payment_failed", ctx.now, {
+      ...(checkoutInput.customer?.email ? { toEmail: checkoutInput.customer.email } : {}),
+      ...(ctx.customerId ? { customerId: ctx.customerId } : {}),
+      ...(ctx.userId ? { userId: ctx.userId } : {}),
+      provider: providerName,
+      status: "failed",
+      error: "Checkout provider failed to create a session.",
+      total: {
+        amount: reserved.lines.reduce(
+          (sum, line) => sum + line.item.unitAmount * line.quantity,
+          0,
+        ),
+        currency: resolved.currency,
+      },
+    });
+
     return providerFailed("Checkout provider failed to create a session.");
   }
 

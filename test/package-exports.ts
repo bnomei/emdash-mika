@@ -38,6 +38,19 @@ import type {
   MikaEmailOutboxRunner,
   MikaMaintenanceRunner,
   MikaApiOverrides,
+  MikaAccountDeleteRequestedNotificationContext,
+  MikaAccountExportReadyNotificationContext,
+  MikaCheckoutPaymentFailedNotificationContext,
+  MikaDownloadReadyNotificationContext,
+  MikaLicenseIssuedNotificationContext,
+  MikaMagicLinkRequestedNotificationContext,
+  MikaNotificationHook,
+  MikaNotificationHookResult,
+  MikaNotificationIntent,
+  MikaNotificationKind,
+  MikaOrderConfirmedNotificationContext,
+  MikaOpsWebhookFailedNotificationContext,
+  MikaSubscriptionNotificationContext,
   MikaOperationPolicy as MikaServerOperationPolicy,
   MikaOperationDescriptor as MikaServerOperationDescriptor,
   MikaServerClient,
@@ -104,6 +117,19 @@ export type PackageEntryContract = {
   readonly assertWired: typeof assertMikaApiWired;
   readonly backendInput: CreateMikaBackendApiInput;
   readonly backendDependencies: MikaBackendDependencies;
+  readonly notificationKind: MikaNotificationKind;
+  readonly notificationIntent: MikaNotificationIntent;
+  readonly notificationHook: MikaNotificationHook;
+  readonly notificationHookResult: MikaNotificationHookResult;
+  readonly magicLinkNotificationContext: MikaMagicLinkRequestedNotificationContext;
+  readonly orderConfirmedNotificationContext: MikaOrderConfirmedNotificationContext;
+  readonly checkoutPaymentFailedNotificationContext: MikaCheckoutPaymentFailedNotificationContext;
+  readonly downloadReadyNotificationContext: MikaDownloadReadyNotificationContext;
+  readonly licenseIssuedNotificationContext: MikaLicenseIssuedNotificationContext;
+  readonly subscriptionNotificationContext: MikaSubscriptionNotificationContext;
+  readonly accountExportReadyNotificationContext: MikaAccountExportReadyNotificationContext;
+  readonly accountDeleteRequestedNotificationContext: MikaAccountDeleteRequestedNotificationContext;
+  readonly opsWebhookFailedNotificationContext: MikaOpsWebhookFailedNotificationContext;
   readonly api: MikaApi;
   readonly apiOverrides: MikaApiOverrides;
   readonly serverOperationPolicy: MikaServerOperationPolicy;

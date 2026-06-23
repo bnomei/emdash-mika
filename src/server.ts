@@ -25,6 +25,26 @@ export {
   type MikaBackendNow,
   type MikaBackendRepositories,
 } from "./api/backend";
+export type {
+  MikaAccountDeleteRequestedNotificationContext,
+  MikaAccountExportReadyNotificationContext,
+  MikaCheckoutPaymentFailedNotificationContext,
+  MikaDownloadReadyNotificationContext,
+  MikaGenericNotificationContext,
+  MikaLicenseIssuedNotificationContext,
+  MikaMagicLinkNotificationPurpose,
+  MikaMagicLinkRequestedNotificationContext,
+  MikaNotificationContextMap,
+  MikaNotificationHook,
+  MikaNotificationHookResult,
+  MikaNotificationIntent,
+  MikaNotificationKind,
+  MikaNotificationRecipientContext,
+  MikaOrderConfirmedNotificationContext,
+  MikaOrderConfirmedNotificationLine,
+  MikaOpsWebhookFailedNotificationContext,
+  MikaSubscriptionNotificationContext,
+} from "./api/notifications";
 export {
   createMikaServerClient,
   type MikaServerClient,
