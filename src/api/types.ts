@@ -209,6 +209,7 @@ export interface CheckoutSessionDTO {
   readonly mode: PurchaseMode;
   readonly provider: ProviderName;
   readonly redirectUrl?: string;
+  readonly statusToken?: string;
   readonly expiresAt?: ISODateTime;
   readonly paymentPending?: boolean;
   readonly orderId?: MikaId;
@@ -312,6 +313,7 @@ export interface OrderSummaryDTO {
   readonly paymentStatus: PaymentStatus;
   readonly total: MoneyDTO;
   readonly createdAt: ISODateTime;
+  readonly invoiceHref?: string;
   readonly invoiceUrl?: string;
 }
 
@@ -497,8 +499,14 @@ export interface AccountExportDownloadInput {
   readonly token?: string;
 }
 
+export interface CheckoutStatusInput {
+  readonly checkoutId: MikaId;
+  readonly token?: string;
+}
+
 export interface OrderInvoiceInput {
   readonly orderId: MikaId;
+  readonly token?: string;
   readonly returnTo?: string;
 }
 

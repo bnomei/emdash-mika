@@ -67,23 +67,50 @@ export function isProviderName(value: unknown): value is ProviderName {
 }
 
 export function isJsonObject(value: unknown): value is JsonObject {
-  return isRecord(value) && Object.values(value).every(isJsonValue);
+  return isJsonValue(value) && isRecord(value);
 }
 
 export function isJsonValue(value: unknown): value is JsonValue {
-  if (value === null) return true;
+  const stack: Array<{ readonly value: unknown; readonly depth: number }> = [{ value, depth: 0 }];
+  const seen = new Set<object>();
+  let nodes = 0;
 
-  switch (typeof value) {
-    case "string":
-    case "boolean":
-      return true;
-    case "number":
-      return Number.isFinite(value);
-    case "object":
-      return Array.isArray(value) ? value.every(isJsonValue) : isJsonObject(value);
-    default:
-      return false;
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) continue;
+    nodes += 1;
+    if (nodes > 10_000 || current.depth > 32) return false;
+
+    const currentValue = current.value;
+    if (currentValue === null) continue;
+
+    switch (typeof currentValue) {
+      case "string":
+      case "boolean":
+        continue;
+      case "number":
+        if (!Number.isFinite(currentValue)) return false;
+        continue;
+      case "object": {
+        if (seen.has(currentValue)) return false;
+        seen.add(currentValue);
+        const children = Array.isArray(currentValue)
+          ? currentValue
+          : isRecord(currentValue)
+            ? Object.values(currentValue)
+            : null;
+        if (!children) return false;
+        for (const child of children) {
+          stack.push({ value: child, depth: current.depth + 1 });
+        }
+        continue;
+      }
+      default:
+        return false;
+    }
   }
+
+  return true;
 }
 
 function nonEmptyTrimmed(value: string, label: string): string {

@@ -963,7 +963,14 @@ async function acpTerminalStatus(
 ): Promise<MikaAcpCheckoutSessionStatus | undefined> {
   if (record.status === "completed" || record.status === "canceled") return record.status;
   if (!record.checkoutId) return undefined;
-  const checkout = await options.api.checkout.status({ checkoutId: record.checkoutId });
+  const checkout = await options.api.checkout.status(
+    createMikaRequestContext({
+      sessionId: record.sessionId,
+      session: createStaticSession(record.sessionId),
+      now: options.now?.(),
+    }),
+    { checkoutId: record.checkoutId },
+  );
   if (!checkout.ok) return undefined;
   if (checkout.data.status === "completed") return "completed";
   if (checkout.data.status === "cancelled") return "canceled";
@@ -1096,7 +1103,7 @@ async function recordToAcpSession(
   const ctx = acpContext(options, request, record.sessionId);
   const quote = await options.api.cart.quote(ctx, { cartId: record.cartId });
   const checkoutStatus = record.checkoutId
-    ? await options.api.checkout.status({ checkoutId: record.checkoutId })
+    ? await options.api.checkout.status(ctx, { checkoutId: record.checkoutId })
     : undefined;
 
   return acpCheckoutSessionFromState({
@@ -1290,13 +1297,21 @@ function acpContext(
 ): MikaRequestContext {
   return createMikaRequestContext({
     request,
-    url: options.baseUrl ? new URL(request.url, options.baseUrl) : request.url,
+    url: acpRequestUrl(options, request),
     sessionId,
     session: createStaticSession(sessionId),
     idempotencyKey: request.headers.get("Idempotency-Key") ?? undefined,
     locale: request.headers.get("Accept-Language") ?? undefined,
     now: options.now?.(),
   });
+}
+
+function acpRequestUrl(options: CreateMikaAcpCheckoutHandlersOptions, request: Request): URL {
+  const requestUrl = new URL(request.url);
+  if (!options.baseUrl) return requestUrl;
+
+  const baseUrl = new URL(options.baseUrl);
+  return new URL(`${requestUrl.pathname}${requestUrl.search}${requestUrl.hash}`, baseUrl);
 }
 
 function createStaticSession(sessionID: string): MikaSessionAccess {

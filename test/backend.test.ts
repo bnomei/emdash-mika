@@ -66,7 +66,7 @@ import type {
   SubscriptionDocument,
   WorkflowDocument,
 } from "../src/types/documents";
-import type { StockEventRecord, StockItemRecord } from "../src/types/operational";
+import type { EphemeralRecord, StockEventRecord, StockItemRecord } from "../src/types/operational";
 import {
   AccountRepository,
   CatalogRepository,
@@ -4685,10 +4685,12 @@ describe("backend API composition", () => {
         providers: createMikaProviderRegistry([fake.provider]),
       }),
     );
+    const ctx = createTestRequestContext();
 
+    await repositories.account.put(createCustomerDocument());
     await repositories.ledger.put(order);
 
-    await expect(api.order.invoice({ orderId: order.id })).resolves.toEqual({
+    await expect(api.order.invoice(ctx, { orderId: order.id })).resolves.toEqual({
       ok: true,
       status: 200,
       data: {
@@ -4715,11 +4717,13 @@ describe("backend API composition", () => {
         providers: createMikaProviderRegistry([fake.provider]),
       }),
     );
+    const ctx = createTestRequestContext();
 
+    await repositories.account.put(createCustomerDocument());
     await repositories.ledger.put(order);
 
     await expect(
-      api.order.invoice({ orderId: order.id, returnTo: "/account/orders" }),
+      api.order.invoice(ctx, { orderId: order.id, returnTo: "/account/orders" }),
     ).resolves.toEqual({
       ok: true,
       status: 200,
@@ -4759,10 +4763,12 @@ describe("backend API composition", () => {
         providers: createMikaProviderRegistry([fake.provider]),
       }),
     );
+    const ctx = createTestRequestContext();
 
+    await repositories.account.put(createCustomerDocument());
     await repositories.ledger.put(order);
 
-    await expect(api.order.invoice({ orderId: order.id })).resolves.toMatchObject({
+    await expect(api.order.invoice(ctx, { orderId: order.id })).resolves.toMatchObject({
       ok: false,
       status: 502,
       error: {
@@ -4778,6 +4784,83 @@ describe("backend API composition", () => {
         providerOrderId: "provider_order_1",
       },
     ]);
+  });
+
+  it("rejects order invoice lookups for other customers before provider calls", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      capabilities: ["hosted_checkout", "invoice_url"],
+      optionalMethods: ["getInvoiceUrl"],
+    });
+    const order = createOrderDocument();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const otherCustomerId = createTestMikaId("customer", 2);
+    const otherCtx = createTestRequestContext({ customerId: otherCustomerId, userId: "user_2" });
+
+    await repositories.account.put(
+      createCustomerDocument({
+        customerId: otherCustomerId,
+        userId: "user_2",
+        aggregate: {
+          ...createCustomerDocument().aggregate,
+          email: "Other@Example.test",
+        },
+      }),
+    );
+    await repositories.ledger.put(order);
+
+    await expect(api.order.invoice(otherCtx, { orderId: order.id })).resolves.toMatchObject({
+      ok: false,
+      status: 403,
+      error: { code: "FORBIDDEN" },
+    });
+    expect(fake.getCalls().getInvoiceUrl).toEqual([]);
+  });
+
+  it("allows order invoice tokens minted through account projections", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      capabilities: ["hosted_checkout", "invoice_url"],
+      optionalMethods: ["getInvoiceUrl"],
+    });
+    const order = createOrderDocument();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ownerCtx = createTestRequestContext();
+    const anonymousCtx = createTestRequestContext({
+      sessionId: false,
+      customerId: false,
+      userId: false,
+    });
+
+    await repositories.account.put(createCustomerDocument());
+    await repositories.ledger.put(order);
+    const account = await api.account.get(ownerCtx);
+    if (!account.ok) throw new Error("Expected account.get to succeed.");
+    const invoiceHref = account.data.orders[0]?.invoiceHref;
+    if (!invoiceHref) throw new Error("Expected invoiceHref.");
+    const token = new URL(invoiceHref, "https://shop.example.test").searchParams.get("token");
+    if (!token) throw new Error("Expected invoice token.");
+
+    await expect(
+      api.order.invoice(anonymousCtx, { orderId: order.id, token }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        orderId: order.id,
+        href: "https://invoice.example.test/order_1",
+      },
+    });
   });
 
   it("returns stable errors for missing orders without provider calls", async () => {
@@ -4813,7 +4896,7 @@ describe("backend API composition", () => {
       },
     });
     await expect(
-      api.order.invoice({ orderId: createTestMikaId("order", 404) }),
+      api.order.invoice(createTestRequestContext(), { orderId: createTestMikaId("order", 404) }),
     ).resolves.toMatchObject({
       ok: false,
       status: 404,
@@ -8539,8 +8622,10 @@ describe("backend API composition", () => {
       mode: "payment",
       provider: "stripe",
       customer: { email: "shopper@example.test" },
-      successUrl: "https://shop.example.test/success?checkoutId=checkout_1",
-      cancelUrl: "https://shop.example.test/cancel",
+      successUrl:
+        "https://shop.example.test/success?checkoutId=checkout_1&token=checkout_status_token_1",
+      cancelUrl:
+        "https://shop.example.test/cancel?checkoutId=checkout_1&token=checkout_status_token_1",
       lines: [
         {
           sellableId: sellable.id,
@@ -8624,8 +8709,10 @@ describe("backend API composition", () => {
 
     expect(fake.getCalls().createCheckoutSession).toHaveLength(1);
     expect(fake.getCalls().createCheckoutSession[0]).toMatchObject({
-      successUrl: "https://shop.example.test/checkout/success?checkoutId=checkout_1",
-      cancelUrl: "https://shop.example.test/checkout/cancel",
+      successUrl:
+        "https://shop.example.test/checkout/success?checkoutId=checkout_1&token=checkout_status_token_1",
+      cancelUrl:
+        "https://shop.example.test/checkout/cancel?checkoutId=checkout_1&token=checkout_status_token_1",
     });
     await expect(
       repositories.session.findById(createTestMikaId("checkout", 1)),
@@ -8935,6 +9022,7 @@ describe("backend API composition", () => {
     if (!started.ok) {
       throw new Error("Expected checkout.start to succeed.");
     }
+    expect(started.data.statusToken).toBe("checkout_status_token_1");
     await expect(repositories.session.findCheckoutById(started.data.id)).resolves.toMatchObject({
       id: "checkout_1",
       checkoutIdempotencyKey: "idem_1",
@@ -8942,7 +9030,7 @@ describe("backend API composition", () => {
       redirectUrl: "https://checkout.example.test/session/checkout_fake",
     });
 
-    await expect(api.checkout.status({ checkoutId: started.data.id })).resolves.toMatchObject({
+    await expect(api.checkout.status(ctx, { checkoutId: started.data.id })).resolves.toMatchObject({
       ok: true,
       status: 200,
       data: {
@@ -8955,6 +9043,30 @@ describe("backend API composition", () => {
       },
       effects: [{ type: "redirect", url: "https://checkout.example.test/session/checkout_fake" }],
     });
+    const otherCtx = createTestRequestContext({
+      sessionId: "session_2",
+      customerId: false,
+      userId: false,
+    });
+    await expect(
+      api.checkout.status(otherCtx, { checkoutId: started.data.id }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 401,
+      error: { code: "AUTH_REQUIRED" },
+    });
+    await expect(
+      api.checkout.status(otherCtx, {
+        checkoutId: started.data.id,
+        token: started.data.statusToken,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "checkout_1",
+      },
+    });
     expect(fake.getCalls().retrieveCheckoutSession).toEqual([]);
   });
 
@@ -8965,19 +9077,23 @@ describe("backend API composition", () => {
     await repositories.session.put(
       createCheckoutDocument({
         id: createTestMikaId("checkout", 1),
+        sessionId: "session_1",
         expiresAt: createTestClock().isoAt(-1),
       }),
     );
     await repositories.session.put(
       createCheckoutDocument({
         id: createTestMikaId("checkout", 2),
+        sessionId: "session_1",
         providerCheckoutId: "provider_checkout_actual",
         bindingProviderCheckoutId: "provider_checkout_stale",
       }),
     );
 
     await expect(
-      api.checkout.status({ checkoutId: createTestMikaId("checkout", 404) }),
+      api.checkout.status(createTestRequestContext(), {
+        checkoutId: createTestMikaId("checkout", 404),
+      }),
     ).resolves.toMatchObject({
       ok: false,
       status: 404,
@@ -8987,14 +9103,18 @@ describe("backend API composition", () => {
       },
     });
     await expect(
-      api.checkout.status({ checkoutId: createTestMikaId("checkout", 1) }),
+      api.checkout.status(createTestRequestContext(), {
+        checkoutId: createTestMikaId("checkout", 1),
+      }),
     ).resolves.toMatchObject({
       ok: false,
       status: 409,
       error: { code: "CHECKOUT_EXPIRED" },
     });
     await expect(
-      api.checkout.status({ checkoutId: createTestMikaId("checkout", 2) }),
+      api.checkout.status(createTestRequestContext(), {
+        checkoutId: createTestMikaId("checkout", 2),
+      }),
     ).resolves.toMatchObject({
       ok: false,
       status: 409,
@@ -9009,6 +9129,7 @@ describe("backend API composition", () => {
     await repositories.session.put(
       createCheckoutDocument({
         id: createTestMikaId("checkout", 1),
+        sessionId: "session_1",
         providerCheckoutId: "provider_checkout_1",
         status: "completed",
         providerStatus: "completed",
@@ -9025,6 +9146,7 @@ describe("backend API composition", () => {
     await repositories.session.put(
       createCheckoutDocument({
         id: createTestMikaId("checkout", 2),
+        sessionId: "session_1",
         providerCheckoutId: "provider_checkout_2",
         status: "failed",
         expiresAt: createTestClock().isoAt(-1),
@@ -9034,6 +9156,7 @@ describe("backend API composition", () => {
     await repositories.session.put(
       createCheckoutDocument({
         id: createTestMikaId("checkout", 3),
+        sessionId: "session_1",
         providerCheckoutId: "provider_checkout_3",
         status: "cancelled",
         expiresAt: createTestClock().isoAt(-1),
@@ -9042,7 +9165,9 @@ describe("backend API composition", () => {
     );
 
     await expect(
-      api.checkout.status({ checkoutId: createTestMikaId("checkout", 1) }),
+      api.checkout.status(createTestRequestContext(), {
+        checkoutId: createTestMikaId("checkout", 1),
+      }),
     ).resolves.toMatchObject({
       ok: true,
       status: 200,
@@ -9057,7 +9182,9 @@ describe("backend API composition", () => {
       effects: [{ type: "redirect", url: "https://checkout.example.test/complete" }],
     });
     await expect(
-      api.checkout.status({ checkoutId: createTestMikaId("checkout", 2) }),
+      api.checkout.status(createTestRequestContext(), {
+        checkoutId: createTestMikaId("checkout", 2),
+      }),
     ).resolves.toMatchObject({
       ok: true,
       status: 200,
@@ -9069,7 +9196,9 @@ describe("backend API composition", () => {
       },
     });
     await expect(
-      api.checkout.status({ checkoutId: createTestMikaId("checkout", 3) }),
+      api.checkout.status(createTestRequestContext(), {
+        checkoutId: createTestMikaId("checkout", 3),
+      }),
     ).resolves.toMatchObject({
       ok: true,
       status: 200,
@@ -9774,7 +9903,7 @@ describe("backend API composition", () => {
       routes[mikaPluginRoutes.checkoutStatus].handler({
         input: {},
         request: new Request(
-          "https://shop.example.test/_emdash/api/plugins/mika/checkout/status?checkoutId=checkout_1",
+          "https://shop.example.test/_emdash/api/plugins/mika/checkout/status?checkoutId=checkout_1&token=checkout_status_token_1",
         ),
         sessionId,
       }),
@@ -10109,8 +10238,6 @@ function createTestBackendRepositories(
     readonly stockBySellableId?: ReadonlyMap<string, StockItemRecord>;
   } = {},
 ): MikaBackendRepositories {
-  const db = createUnusedDbExecutor();
-
   return {
     catalog: new CatalogRepository(createStorageCollection("catalog")),
     session: new SessionRepository(createStorageCollection("session")),
@@ -10118,8 +10245,81 @@ function createTestBackendRepositories(
     ledger: new LedgerRepository(createStorageCollection("ledger")),
     ops: new OpsRepository(createStorageCollection("ops")),
     stock: createTestStockRepository(options.stockBySellableId),
-    ephemeral: new EphemeralRepository(db),
+    ephemeral: createTestEphemeralRepository(),
   } satisfies MikaBackendRepositories;
+}
+
+function createTestEphemeralRepository(): MikaEphemeralRepositoryPort {
+  const records = new Map<string, EphemeralRecord>();
+
+  return {
+    async get(key) {
+      return records.get(key) ?? null;
+    },
+    async put(record) {
+      records.set(record.key, record);
+    },
+    async incrementCounter(input) {
+      const existing = records.get(input.key);
+      const record: EphemeralRecord = {
+        key: input.key,
+        kind: input.kind,
+        subjectHash: input.subjectHash,
+        status: input.status ?? "active",
+        count: (existing?.count ?? 0) + 1,
+        expiresAt: input.expiresAt,
+        version: (existing?.version ?? 0) + 1,
+        createdAt: existing?.createdAt ?? input.now,
+        updatedAt: input.now,
+        data: input.data,
+      };
+      records.set(input.key, record);
+
+      return record;
+    },
+    async consumeToken(key, now) {
+      const record = records.get(key);
+      if (
+        !record ||
+        record.kind !== "token" ||
+        record.status !== "pending" ||
+        record.expiresAt <= now
+      ) {
+        return false;
+      }
+      records.set(key, {
+        ...record,
+        status: "consumed",
+        version: record.version + 1,
+        updatedAt: now,
+      });
+
+      return true;
+    },
+    async purgeExpired(now) {
+      let purged = 0;
+      for (const [key, record] of records) {
+        if (record.expiresAt <= now) {
+          records.delete(key);
+          purged += 1;
+        }
+      }
+
+      return purged;
+    },
+    async deleteTokensBySubjectHashes(subjectHashes) {
+      const subjects = new Set(subjectHashes);
+      let deleted = 0;
+      for (const [key, record] of records) {
+        if (record.kind === "token" && record.subjectHash && subjects.has(record.subjectHash)) {
+          records.delete(key);
+          deleted += 1;
+        }
+      }
+
+      return deleted;
+    },
+  };
 }
 
 class FailingTerminalWebhookOpsRepository extends OpsRepository {
@@ -10578,10 +10778,6 @@ function createStorageCollection<TName extends keyof MikaStorageDocuments>(
   );
 }
 
-function createUnusedDbExecutor(): MikaDbExecutor {
-  return {} as MikaDbExecutor;
-}
-
 function isCartRouteResult(
   result: unknown,
 ): result is { readonly ok: true; readonly data: CartDTO } {
@@ -10958,6 +11154,8 @@ function createStockRecord(overrides: Partial<StockItemRecord> = {}): StockItemR
 function createCheckoutDocument(
   overrides: {
     readonly id?: CheckoutDocument["id"];
+    readonly sessionId?: string;
+    readonly customerId?: MikaId;
     readonly status?: CheckoutDocument["status"];
     readonly providerCheckoutId?: string;
     readonly checkoutIdempotencyKey?: string;
@@ -10978,6 +11176,8 @@ function createCheckoutDocument(
     id,
     type: "checkout",
     schemaVersion: 1,
+    sessionId: overrides.sessionId,
+    customerId: overrides.customerId,
     provider: TEST_PROVIDER,
     providerCheckoutId,
     checkoutIdempotencyKey: overrides.checkoutIdempotencyKey,

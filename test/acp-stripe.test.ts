@@ -9,6 +9,7 @@ import {
   validateMikaAcpProductFeed,
   type MikaAcpSeller,
 } from "../src/acp";
+import type { MikaRequestContext } from "../src/api/context";
 import type { MikaApi } from "../src/api/server";
 import type {
   CartDTO,
@@ -202,6 +203,51 @@ describe("Mika ACP projection", () => {
       status: "completed",
     });
     expect(checkoutStartCount).toBe(1);
+  });
+
+  it("pins ACP checkout context URLs to the configured baseUrl", async () => {
+    let cart = createCart([]);
+    let checkoutContextUrl = "";
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+        onCheckoutStart: (_metadata, ctx) => {
+          checkoutContextUrl = ctx.url?.toString() ?? "";
+        },
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: {
+        name: "Mika Studio",
+        links: [{ type: "terms_of_use", url: "https://shop.example.test/terms" }],
+      },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      baseUrl: "https://shop.example.test",
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      createSessionId: () => "checkout_session_acp_origin",
+    });
+
+    await handlers.create(
+      acpRequest("https://evil.example.test/checkout_sessions", "idem_origin_create", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+      }),
+    );
+    const completed = await handlers.complete(
+      acpRequest(
+        "https://evil.example.test/checkout_sessions/checkout_session_acp_origin/complete?attempt=1",
+        "idem_origin_complete",
+        { payment_data: { provider: "stripe", token: "spt_test_123" } },
+      ),
+      "checkout_session_acp_origin",
+    );
+
+    expect(completed.status).toBe(200);
+    expect(checkoutContextUrl).toBe(
+      "https://shop.example.test/checkout_sessions/checkout_session_acp_origin/complete?attempt=1",
+    );
   });
 
   it("rejects unsafe ACP terminal transitions", async () => {
@@ -618,6 +664,7 @@ describe("Mika Stripe provider", () => {
           payment_intent: "pi_test_123",
           customer: "cus_test_123",
           customer_email: "ada@example.test",
+          payment_status: "paid",
           amount_total: 2400,
           currency: "eur",
         },
@@ -661,6 +708,117 @@ describe("Mika Stripe provider", () => {
       totals: { total: { amount: 2400, currency: "EUR" } },
     });
   });
+
+  it("normalizes explicitly paid Stripe invoice webhooks", async () => {
+    const payload = {
+      id: "evt_invoice_paid",
+      type: "invoice.paid",
+      data: {
+        object: {
+          id: "in_paid",
+          payment_intent: "pi_paid",
+          customer_email: "ada@example.test",
+          paid: true,
+          status: "paid",
+          amount_paid: 2400,
+          currency: "eur",
+        },
+      },
+    };
+    const stripe: MikaStripeClient = {
+      webhooks: {
+        constructEvent: (body) => JSON.parse(body) as JsonObject,
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe, webhookSecret: "whsec_test" });
+    const rawBody = new TextEncoder().encode(JSON.stringify(payload));
+    const verified = await provider.verifyWebhook?.({
+      provider: createProviderName("stripe"),
+      request: new Request("https://shop.example.test/api/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig_test" },
+        body: rawBody,
+      }),
+      rawBody,
+    });
+
+    await expect(provider.parseWebhookEvent?.(verified!)).resolves.toMatchObject({
+      kind: "payment",
+      provider: "stripe",
+      providerEventId: "evt_invoice_paid",
+      type: "invoice.paid",
+      providerPaymentId: "pi_paid",
+      providerOrderId: "in_paid",
+      customer: { email: "ada@example.test" },
+      totals: { total: { amount: 2400, currency: "EUR" } },
+    });
+  });
+
+  it("does not normalize non-success Stripe webhooks as payments", async () => {
+    const stripe: MikaStripeClient = {
+      webhooks: {
+        constructEvent: (body) => JSON.parse(body) as JsonObject,
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe, webhookSecret: "whsec_test" });
+    const cases: readonly JsonObject[] = [
+      {
+        id: "evt_expired",
+        type: "checkout.session.expired",
+        data: { object: { id: "cs_expired", payment_intent: "pi_expired" } },
+      },
+      {
+        id: "evt_async_failed",
+        type: "checkout.session.async_payment_failed",
+        data: { object: { id: "cs_async_failed", payment_status: "unpaid" } },
+      },
+      {
+        id: "evt_payment_failed",
+        type: "payment_intent.payment_failed",
+        data: { object: { id: "pi_failed", status: "requires_payment_method" } },
+      },
+      {
+        id: "evt_payment_canceled",
+        type: "payment_intent.canceled",
+        data: { object: { id: "pi_canceled", status: "canceled" } },
+      },
+      {
+        id: "evt_invoice_failed",
+        type: "invoice.payment_failed",
+        data: { object: { id: "in_failed", paid: false, amount_paid: 0 } },
+      },
+      {
+        id: "evt_invoice_unpaid",
+        type: "invoice.paid",
+        data: { object: { id: "in_unpaid", paid: false, amount_paid: 0 } },
+      },
+      {
+        id: "evt_invoice_partial",
+        type: "invoice.payment_succeeded",
+        data: { object: { id: "in_partial", paid: false, status: "open", amount_paid: 100 } },
+      },
+    ];
+
+    for (const payload of cases) {
+      const rawBody = new TextEncoder().encode(JSON.stringify(payload));
+      const verified = await provider.verifyWebhook?.({
+        provider: createProviderName("stripe"),
+        request: new Request("https://shop.example.test/api/stripe", {
+          method: "POST",
+          headers: { "stripe-signature": "sig_test" },
+          body: rawBody,
+        }),
+        rawBody,
+      });
+
+      await expect(provider.parseWebhookEvent?.(verified!)).resolves.toMatchObject({
+        kind: "unknown",
+        provider: "stripe",
+        providerEventId: payload["id"],
+        type: payload["type"],
+      });
+    }
+  });
 });
 
 function acpRequest(url: string, idempotencyKey: string, body: JsonObject): Request {
@@ -685,7 +843,10 @@ function createAcpTestApi(input: {
     readonly priceId?: MikaIdLike;
     readonly quantity?: number;
   }) => MikaApiResult<CartDTO> | undefined;
-  readonly onCheckoutStart?: (metadata: JsonObject | undefined) => void | Promise<void>;
+  readonly onCheckoutStart?: (
+    metadata: JsonObject | undefined,
+    ctx: MikaRequestContext,
+  ) => void | Promise<void>;
 }): MikaApi {
   const api = {
     cart: {
@@ -735,8 +896,11 @@ function createAcpTestApi(input: {
           ],
           inputHash: "hash_quote_1",
         }),
-      start: async (_ctx: unknown, checkoutInput: { readonly customFields?: JsonObject }) => {
-        await input.onCheckoutStart?.(checkoutInput.customFields);
+      start: async (
+        ctx: MikaRequestContext,
+        checkoutInput: { readonly customFields?: JsonObject },
+      ) => {
+        await input.onCheckoutStart?.(checkoutInput.customFields, ctx);
 
         return ok<CheckoutSessionDTO>({
           id: createMikaId("checkout_1"),

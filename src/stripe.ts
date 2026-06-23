@@ -640,6 +640,10 @@ function parseStripeWebhookEvent(
   }
 
   if (type.startsWith("invoice.")) {
+    if (!stripeInvoiceEventIsPaid(type, object)) {
+      return unknownStripeWebhookEvent(provider, providerEventId, type, input.parsed);
+    }
+
     return {
       kind: "payment",
       provider,
@@ -657,7 +661,7 @@ function parseStripeWebhookEvent(
     };
   }
 
-  if (type.startsWith("payment_intent.")) {
+  if (type === "payment_intent.succeeded" && stringChild(object, "status") === "succeeded") {
     return {
       kind: "payment",
       provider,
@@ -672,7 +676,7 @@ function parseStripeWebhookEvent(
     };
   }
 
-  if (type.startsWith("checkout.session.")) {
+  if (type === "checkout.session.completed" && stripeCheckoutSessionIsPaid(object)) {
     return {
       kind: "payment",
       provider,
@@ -690,13 +694,31 @@ function parseStripeWebhookEvent(
     };
   }
 
+  return unknownStripeWebhookEvent(provider, providerEventId, type, input.parsed);
+}
+
+function unknownStripeWebhookEvent(
+  provider: ProviderName,
+  providerEventId: string | undefined,
+  type: string,
+  raw: JsonObject | undefined,
+): MikaProviderWebhookEvent {
   return {
     kind: "unknown",
     provider,
     providerEventId,
     type,
-    raw: input.parsed,
+    raw,
   };
+}
+
+function stripeInvoiceEventIsPaid(type: string, object: JsonObject): boolean {
+  if (type !== "invoice.paid" && type !== "invoice.payment_succeeded") return false;
+  return booleanChild(object, "paid") === true || stringChild(object, "status") === "paid";
+}
+
+function stripeCheckoutSessionIsPaid(object: JsonObject): boolean {
+  return stringChild(object, "payment_status") === "paid";
 }
 
 function moneyTotalsFromStripeAmount(

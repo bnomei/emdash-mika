@@ -11,6 +11,9 @@ export const mikaTemplateRoutes = {
   checkoutCancel: "/checkout/cancel",
 } as const;
 
-export function mikaTemplateCheckoutSuccessHref(checkoutId: string): string {
-  return `${mikaTemplateRoutes.checkoutSuccess}?checkoutId=${encodeURIComponent(checkoutId)}`;
+export function mikaTemplateCheckoutSuccessHref(checkoutId: string, token?: string): string {
+  const search = new URLSearchParams({ checkoutId });
+  if (token) search.set("token", token);
+
+  return `${mikaTemplateRoutes.checkoutSuccess}?${search.toString()}`;
 }

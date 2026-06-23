@@ -93,11 +93,34 @@ async function handleActionRunner(
     operation: resolved.data.operation,
     api,
     ctx: mikaContext,
-    input: resolved.data.input,
+    input: adminRunnerInputWithContext(
+      resolved.data.operation,
+      resolved.data.input,
+      mikaContext.idempotencyKey,
+    ),
     operationPolicy: options.operationPolicy,
   });
 
   return toMikaAdminActionRunResult(result, resolved.data.resultAdapter);
+}
+
+function adminRunnerInputWithContext(
+  operation: MikaRouteOperation,
+  input: unknown,
+  idempotencyKey: string | undefined,
+): unknown {
+  if (!idempotencyKey || operation.name !== "admin.stockAdjust" || !isRecord(input)) {
+    return input;
+  }
+
+  return {
+    ...input,
+    idempotencyKey,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function handleRouteOperation(

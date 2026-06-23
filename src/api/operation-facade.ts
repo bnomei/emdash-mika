@@ -2,7 +2,6 @@ import {
   normalizeAccountExportDownloadInput,
   normalizeAccountExportInput,
   normalizeMagicLinkVerifyInput,
-  normalizeOrderInvoiceInput,
 } from "./input-normalizers";
 import { mikaOperationDefinitions, type MikaApiOperationData } from "./operations";
 import type {
@@ -15,6 +14,7 @@ import type {
   ApplyCouponInput,
   CartQuoteInput,
   CheckoutPreviewInput,
+  CheckoutStatusInput,
   DownloadIssueInput,
   EmailResendInput,
   EntitlementGrantInput,
@@ -133,7 +133,7 @@ export interface MikaOperationFacade {
   readonly checkout: {
     start(input?: StartCheckoutInput): MikaFacadeResult<"checkout", "start">;
     preview(input?: CheckoutPreviewInput): MikaFacadeResult<"checkout", "preview">;
-    status(checkoutId: string): MikaFacadeResult<"checkout", "status">;
+    status(input: CheckoutStatusInput): MikaFacadeResult<"checkout", "status">;
   };
   readonly magicLink: {
     request(input: MagicLinkRequestInput): MikaFacadeResult<"magicLink", "request">;
@@ -160,7 +160,7 @@ export interface MikaOperationFacade {
     resolve(token: string): MikaFacadeResult<"download", "resolve">;
   };
   readonly order: {
-    invoice(input: OrderInvoiceInput | string): MikaFacadeResult<"order", "invoice">;
+    invoice(input: OrderInvoiceInput): MikaFacadeResult<"order", "invoice">;
   };
 }
 
@@ -255,8 +255,7 @@ export function createMikaOperationFacade<
     checkout: {
       start: (input = emptyInput()) => invoke(mikaOperationFacadeSpec.checkout.start, input),
       preview: (input = emptyInput()) => invoke(mikaOperationFacadeSpec.checkout.preview, input),
-      status: (checkoutId: string) =>
-        invoke(mikaOperationFacadeSpec.checkout.status, { checkoutId }),
+      status: (input) => invoke(mikaOperationFacadeSpec.checkout.status, input),
     },
     magicLink: {
       request: (input) => invoke(mikaOperationFacadeSpec.magicLink.request, input),
@@ -289,8 +288,7 @@ export function createMikaOperationFacade<
       resolve: (token: string) => invoke(mikaOperationFacadeSpec.download.resolve, { token }),
     },
     order: {
-      invoice: (input) =>
-        invoke(mikaOperationFacadeSpec.order.invoice, normalizeOrderInvoiceInput(input)),
+      invoice: (input) => invoke(mikaOperationFacadeSpec.order.invoice, input),
     },
   };
 

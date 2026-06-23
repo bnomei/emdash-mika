@@ -127,6 +127,7 @@ import type {
   CheckoutPreviewDTO,
   CheckoutPreviewInput,
   CheckoutSessionDTO,
+  CheckoutStatusInput,
   MikaError,
   MikaApiResult,
   MikaProviderCapability,
@@ -464,6 +465,9 @@ export interface MikaBackendConfig {
     readonly ttlMs?: number;
   };
   readonly metadata?: JsonObject;
+  readonly order?: {
+    readonly invoiceTokenTtlMs?: number;
+  };
   readonly wishlist?: {
     readonly ttlMs?: number;
   };
@@ -742,7 +746,7 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
     wishlist: createWishlistBackend(input),
     checkout: {
       start: async (ctx, checkoutInput) => startCheckout(input, ctx, checkoutInput),
-      status: async (statusInput) => checkoutStatus(input, createMikaId(statusInput.checkoutId)),
+      status: async (ctx, statusInput) => checkoutStatus(input, ctx, statusInput),
       preview: async (ctx, previewInput) => {
         const preview = await createCheckoutPreview(input, ctx, previewInput);
 
@@ -776,7 +780,7 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
       ...input.overrides?.download,
     },
     order: {
-      invoice: async (invoiceInput) => getOrderInvoice(input, invoiceInput),
+      invoice: async (ctx, invoiceInput) => getOrderInvoice(input, ctx, invoiceInput),
       ...input.overrides?.order,
     },
     webhook: {
@@ -1145,7 +1149,11 @@ async function getAccount(
   }
 
   if (identity.customer) {
-    return { ok: true, status: 200, data: await accountDTOForCustomer(input, identity.customer) };
+    return {
+      ok: true,
+      status: 200,
+      data: await accountDTOForCustomer(input, ctx, identity.customer),
+    };
   }
 
   return {
@@ -1253,7 +1261,7 @@ async function requestAccountExport(
   const tokenHash = await hashAccountExportDownloadToken(input, token);
   const expiresAt = addMilliseconds(now, input.config?.accountExport?.ttlMs ?? 24 * 60 * 60_000);
   const account = identity.customer
-    ? await accountDTOForCustomer(input, identity.customer)
+    ? await accountDTOForCustomer(input, ctx, identity.customer)
     : {
         orders: [],
         subscriptions: [],
@@ -1543,7 +1551,7 @@ async function runSubscriptionAction(
       await providerFeature.method.call(providerFeature.provider, providerInput);
       await updateSubscriptionAfterAction(input, ctx, subscription, action, priceMatch);
 
-      return accountDTOForCustomer(input, identity.customer);
+      return accountDTOForCustomer(input, ctx, identity.customer);
     },
     `Provider subscription ${action} failed.`,
   );
@@ -1777,10 +1785,14 @@ async function cancelOrder(
 
 async function getOrderInvoice(
   input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
   invoiceInput: OrderInvoiceInput,
 ): Promise<MikaApiResult<OrderInvoiceDTO>> {
   const order = await input.repositories.ledger.findOrderById(invoiceInput.orderId);
   if (!order) return orderNotFound(invoiceInput.orderId);
+
+  const accessError = await orderInvoiceAccessError(input, ctx, order, invoiceInput.token);
+  if (accessError) return accessError;
 
   if (order.aggregate.invoiceUrl) {
     return {
@@ -1822,6 +1834,30 @@ async function getOrderInvoice(
   } catch {
     return providerFailed("Provider invoice lookup failed.");
   }
+}
+
+async function orderInvoiceAccessError(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  order: OrderDocument,
+  token: string | undefined,
+): Promise<MikaApiFailure | null> {
+  const identity = await resolveAccountIdentity(input, ctx);
+  if (identity && orderBelongsToIdentity(order, identity)) return null;
+
+  if (token) return validateOrderInvoiceToken(input, ctx.now, token, order);
+
+  return identity
+    ? forbidden("Order invoice is not available for this identity.")
+    : authRequired("Order invoice requires an authenticated customer identity or invoice token.");
+}
+
+function orderBelongsToIdentity(
+  order: OrderDocument,
+  identity: NonNullable<Awaited<ReturnType<typeof resolveAccountIdentity>>>,
+): boolean {
+  const customerId = order.customerId ?? order.aggregate.customer.customerId;
+  return Boolean(identity.customer && customerId === identity.customer.customerId);
 }
 
 async function grantEntitlement(
@@ -2559,7 +2595,7 @@ async function verifyMagicLink(
     await ctx.session?.set("mika.customerId", customer.customerId);
     if (customer.userId) await ctx.session?.set("mika.userId", customer.userId);
 
-    return { ok: true, status: 200, data: await accountDTOForCustomer(input, customer) };
+    return { ok: true, status: 200, data: await accountDTOForCustomer(input, ctx, customer) };
   }
 
   const email = record?.data ? stringChild(record.data, "email") : undefined;
@@ -2580,6 +2616,7 @@ async function verifyMagicLink(
 
 async function accountDTOForCustomer(
   input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
   customer: CustomerDocument,
 ): Promise<AccountDTO> {
   const [orders, subscriptions, entitlements] = await Promise.all([
@@ -2592,7 +2629,9 @@ async function accountDTOForCustomer(
     input.repositories.account.listLicensesByCustomer(customer.customerId),
   ]);
 
-  const orderSummaries = orders.items.map((item) => orderSummaryDTO(item.data));
+  const orderSummaries = await Promise.all(
+    orders.items.map((item) => orderSummaryDTO(input, ctx, item.data)),
+  );
 
   return {
     customer: {
@@ -2608,7 +2647,13 @@ async function accountDTOForCustomer(
   };
 }
 
-function orderSummaryDTO(order: OrderDocument): OrderSummaryDTO {
+async function orderSummaryDTO(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  order: OrderDocument,
+): Promise<OrderSummaryDTO> {
+  const invoiceToken = await createOrderInvoiceToken(input, ctx, order);
+
   return {
     id: order.id,
     orderNumber: order.orderNumber,
@@ -2616,6 +2661,10 @@ function orderSummaryDTO(order: OrderDocument): OrderSummaryDTO {
     paymentStatus: order.paymentStatus,
     total: order.aggregate.totals.total,
     createdAt: order.createdAt,
+    invoiceHref: mikaPluginRoute("orderInvoice", {
+      origin: ctx.url,
+      search: { orderId: order.id, token: invoiceToken },
+    }),
     invoiceUrl: order.aggregate.invoiceUrl,
   };
 }
@@ -2807,6 +2856,123 @@ async function hashAccountExportDownloadToken(
 
 async function hashDownloadToken(input: CreateMikaBackendApiInput, token: string): Promise<string> {
   return input.hash(`download-token:${token}`);
+}
+
+async function hashCheckoutStatusToken(
+  input: CreateMikaBackendApiInput,
+  token: string,
+): Promise<string> {
+  return input.hash(`checkout-status-token:${token}`);
+}
+
+async function hashOrderInvoiceToken(
+  input: CreateMikaBackendApiInput,
+  token: string,
+): Promise<string> {
+  return input.hash(`order-invoice-token:${token}`);
+}
+
+async function createOrderInvoiceToken(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  order: OrderDocument,
+): Promise<string> {
+  const token = input.createId("order_invoice_token");
+  const customerId = order.customerId ?? order.aggregate.customer.customerId;
+  await input.repositories.ephemeral.put({
+    key: await hashOrderInvoiceToken(input, token),
+    kind: "token",
+    ...(customerId ? { subjectHash: `customer:${customerId}` } : {}),
+    status: "active",
+    count: 0,
+    expiresAt: addMilliseconds(ctx.now, input.config?.order?.invoiceTokenTtlMs ?? 15 * 60_000),
+    version: 1,
+    createdAt: ctx.now,
+    updatedAt: ctx.now,
+    data: {
+      purpose: "order_invoice",
+      orderId: order.id,
+      ...(customerId ? { customerId } : {}),
+    },
+  });
+
+  return token;
+}
+
+async function validateCheckoutStatusToken(
+  input: CreateMikaBackendApiInput,
+  now: ISODateTime,
+  token: string,
+  document: CheckoutDocument,
+): Promise<MikaApiFailure | null> {
+  const record = await input.repositories.ephemeral.get(
+    await hashCheckoutStatusToken(input, token.trim()),
+  );
+
+  return reusableCapabilityTokenError(record, {
+    now,
+    purpose: "checkout_status",
+    label: "Checkout status token",
+    target: {
+      checkoutId: document.id,
+      ...(document.customerId ? { customerId: document.customerId } : {}),
+      ...(document.sessionId ? { sessionId: document.sessionId } : {}),
+    },
+  });
+}
+
+async function validateOrderInvoiceToken(
+  input: CreateMikaBackendApiInput,
+  now: ISODateTime,
+  token: string,
+  order: OrderDocument,
+): Promise<MikaApiFailure | null> {
+  const record = await input.repositories.ephemeral.get(
+    await hashOrderInvoiceToken(input, token.trim()),
+  );
+  const customerId = order.customerId ?? order.aggregate.customer.customerId;
+
+  return reusableCapabilityTokenError(record, {
+    now,
+    purpose: "order_invoice",
+    label: "Order invoice token",
+    target: {
+      orderId: order.id,
+      ...(customerId ? { customerId } : {}),
+    },
+  });
+}
+
+function reusableCapabilityTokenError(
+  record: Awaited<ReturnType<MikaBackendRepositories["ephemeral"]["get"]>>,
+  options: {
+    readonly now: ISODateTime;
+    readonly purpose: string;
+    readonly label: string;
+    readonly target: Record<string, string | undefined>;
+  },
+): MikaApiFailure | null {
+  const data = record?.data ?? {};
+  if (
+    !record ||
+    record.kind !== "token" ||
+    record.status !== "active" ||
+    stringChild(data, "purpose") !== options.purpose
+  ) {
+    return tokenResult("TOKEN_INVALID", `${options.label} is invalid.`);
+  }
+
+  for (const [key, value] of Object.entries(options.target)) {
+    if (value && stringChild(data, key) !== value) {
+      return tokenResult("TOKEN_INVALID", `${options.label} is invalid.`);
+    }
+  }
+
+  if (record.expiresAt <= options.now) {
+    return tokenResult("TOKEN_EXPIRED", `${options.label} has expired.`);
+  }
+
+  return null;
 }
 
 function accountExportDownloadTokenError(
@@ -5089,9 +5255,11 @@ async function startCheckout(
     unsupportedMessage: (provider) => `Provider '${provider}' does not support hosted checkout.`,
   });
   if (!providerFeature.ok) return providerFeature;
+  if (!ctx.url) return validationFailed("url", "Checkout requires a request URL.");
 
   const checkoutId = input.createId("checkout");
   const expiresAt = checkoutExpiresAt(input, ctx);
+  const statusToken = input.createId("checkout_status_token");
   const reserved = await reserveCheckoutLines(input, ctx, checkoutId, resolved, expiresAt);
   if (!reserved.ok) return reserved;
 
@@ -5103,8 +5271,8 @@ async function startCheckout(
         provider: providerName,
         customer: checkoutInput.customer,
         lines: reserved.lines.map((line) => checkoutLineToProviderLine(providerName, line)),
-        successUrl: checkoutSuccessUrl(input, ctx, checkoutInput, checkoutId),
-        cancelUrl: checkoutCancelUrl(input, ctx, checkoutInput),
+        successUrl: checkoutSuccessUrl(input, ctx, checkoutInput, checkoutId, statusToken),
+        cancelUrl: checkoutCancelUrl(input, ctx, checkoutInput, checkoutId, statusToken),
         metadata: checkoutInput.customFields,
       });
     } catch {
@@ -5175,6 +5343,7 @@ async function startCheckout(
     input,
     ctx,
     checkoutDocument,
+    statusToken,
     resolved.cart,
     checkoutId,
     reserved.lines,
@@ -5191,6 +5360,7 @@ async function startCheckout(
       mode: providerSession.mode,
       provider: providerSession.provider,
       redirectUrl: providerSession.redirectUrl,
+      statusToken,
       expiresAt: providerSession.expiresAt ?? checkoutDocument.expiresAt,
       paymentPending: providerSession.status === "pending" ? true : undefined,
     },
@@ -5409,6 +5579,7 @@ async function persistCheckoutStart(
   input: CreateMikaBackendApiInput,
   ctx: MikaRequestContext,
   checkoutDocument: CheckoutDocument,
+  statusToken: string,
   cart: CartDocument | null,
   checkoutId: MikaId,
   lines: readonly CheckoutLine[],
@@ -5419,6 +5590,7 @@ async function persistCheckoutStart(
   try {
     await input.repositories.session.put(checkoutDocument);
     checkoutPersisted = true;
+    await putCheckoutStatusToken(input, ctx, checkoutDocument, statusToken);
     if (cart) {
       await input.repositories.session.put(
         cartWithCheckoutReservations(cart, checkoutId, lines, ctx.now),
@@ -5434,6 +5606,47 @@ async function persistCheckoutStart(
   }
 
   return { ok: true };
+}
+
+async function putCheckoutStatusToken(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  checkoutDocument: CheckoutDocument,
+  token: string,
+): Promise<void> {
+  const tokenHash = await hashCheckoutStatusToken(input, token);
+  const subjectHash = checkoutAccessSubjectHash(checkoutDocument);
+  await input.repositories.ephemeral.put({
+    key: tokenHash,
+    kind: "token",
+    ...(subjectHash ? { subjectHash } : {}),
+    status: "active",
+    count: 0,
+    expiresAt: requiredCheckoutExpiry(checkoutDocument),
+    version: 1,
+    createdAt: ctx.now,
+    updatedAt: ctx.now,
+    data: {
+      purpose: "checkout_status",
+      checkoutId: checkoutDocument.id,
+      provider: checkoutDocument.provider,
+      ...(checkoutDocument.customerId ? { customerId: checkoutDocument.customerId } : {}),
+      ...(checkoutDocument.sessionId ? { sessionId: checkoutDocument.sessionId } : {}),
+    },
+  });
+}
+
+function requiredCheckoutExpiry(document: CheckoutDocument): ISODateTime {
+  if (!document.expiresAt) {
+    throw new Error("Checkout status token requires checkout expiry.");
+  }
+
+  return document.expiresAt;
+}
+
+function checkoutAccessSubjectHash(document: CheckoutDocument): string | undefined {
+  if (document.customerId) return `customer:${document.customerId}`;
+  return document.sessionId ? `session:${document.sessionId}` : undefined;
 }
 
 async function markCheckoutPersistenceFailed(
@@ -5553,10 +5766,15 @@ function checkoutDocumentResult(document: CheckoutDocument): MikaApiResult<Check
 
 async function checkoutStatus(
   input: CreateMikaBackendApiInput,
-  checkoutId: MikaId,
+  ctx: MikaRequestContext,
+  statusInput: CheckoutStatusInput,
 ): Promise<MikaApiResult<CheckoutSessionDTO>> {
+  const checkoutId = createMikaId(statusInput.checkoutId);
   const document = await input.repositories.session.findCheckoutById(checkoutId);
   if (!document) return invalidCheckout("checkoutId", checkoutId);
+
+  const accessError = await checkoutStatusAccessError(input, ctx, document, statusInput.token);
+  if (accessError) return accessError;
 
   const bindingError = checkoutBindingError(document);
   if (bindingError) return bindingError;
@@ -5564,6 +5782,31 @@ async function checkoutStatus(
   if (checkoutIsExpired(input, document)) return checkoutStatusExpired(document);
 
   return checkoutDocumentSuccessResult(document);
+}
+
+async function checkoutStatusAccessError(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  document: CheckoutDocument,
+  token: string | undefined,
+): Promise<MikaApiFailure | null> {
+  if (await checkoutBelongsToContext(document, ctx)) return null;
+  if (token) return validateCheckoutStatusToken(input, ctx.now, token, document);
+
+  return authRequired(
+    "Checkout status requires the matching session, customer identity, or checkout status token.",
+  );
+}
+
+async function checkoutBelongsToContext(
+  document: CheckoutDocument,
+  ctx: MikaRequestContext,
+): Promise<boolean> {
+  const sessionCustomerId = await ctx.session?.get<MikaId>("mika.customerId");
+  const customerId = ctx.customerId ?? sessionCustomerId;
+  if (document.customerId) return document.customerId === customerId;
+
+  return Boolean(document.sessionId && ctx.sessionId && document.sessionId === ctx.sessionId);
 }
 
 function checkoutDocumentSuccessResult(
@@ -5740,12 +5983,11 @@ function checkoutSuccessUrl(
   ctx: MikaRequestContext,
   checkoutInput: StartCheckoutInput,
   checkoutId: MikaId,
+  statusToken: string,
 ): string {
-  const url = new URL(
-    checkoutSuccessTarget(input, ctx, checkoutInput),
-    ctx.url ?? "http://mika.local",
-  );
+  const url = new URL(checkoutSuccessTarget(input, ctx, checkoutInput), ctx.url);
   url.searchParams.set("checkoutId", checkoutId);
+  url.searchParams.set("token", statusToken);
 
   return url.toString();
 }
@@ -5754,11 +5996,14 @@ function checkoutCancelUrl(
   input: CreateMikaBackendApiInput,
   ctx: MikaRequestContext,
   checkoutInput: StartCheckoutInput,
+  checkoutId: MikaId,
+  statusToken: string,
 ): string {
-  return new URL(
-    checkoutCancelTarget(input, ctx, checkoutInput),
-    ctx.url ?? "http://mika.local",
-  ).toString();
+  const url = new URL(checkoutCancelTarget(input, ctx, checkoutInput), ctx.url);
+  url.searchParams.set("checkoutId", checkoutId);
+  url.searchParams.set("token", statusToken);
+
+  return url.toString();
 }
 
 function checkoutSuccessTarget(

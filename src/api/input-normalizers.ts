@@ -2,7 +2,6 @@ import type {
   AccountExportDownloadInput,
   AccountExportStatusInput,
   MagicLinkVerifyInput,
-  OrderInvoiceInput,
 } from "./types";
 import { createMikaId } from "../types/primitives";
 
@@ -20,8 +19,4 @@ export function normalizeAccountExportDownloadInput(input: AccountExportDownload
   return typeof input === "string"
     ? { exportId: createMikaId(input) }
     : { exportId: input.exportId, token: input.token };
-}
-
-export function normalizeOrderInvoiceInput(input: OrderInvoiceInput | string) {
-  return typeof input === "string" ? { orderId: createMikaId(input) } : input;
 }

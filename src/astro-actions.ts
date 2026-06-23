@@ -102,7 +102,10 @@ export interface MikaActions {
   };
   readonly checkout: {
     readonly start: MikaFormActionClient<CheckoutSessionDTO>;
-    readonly status: MikaJsonActionClient<{ readonly checkoutId: string }, CheckoutSessionDTO>;
+    readonly status: MikaJsonActionClient<
+      { readonly checkoutId: string; readonly token?: string },
+      CheckoutSessionDTO
+    >;
   };
   readonly magicLink: {
     readonly request: MikaFormActionClient<{ readonly sent: boolean }>;

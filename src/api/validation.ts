@@ -10,6 +10,7 @@ import type {
   ApplyCouponInput,
   CartQuoteInput,
   CheckoutPreviewInput,
+  CheckoutStatusInput,
   ContentRefDTO,
   DownloadIssueInput,
   EmailResendInput,
@@ -131,7 +132,8 @@ export const stockAvailabilityInputSchema = z.object({
 
 export const checkoutStatusInputSchema = z.object({
   checkoutId: mikaIdSchema,
-}) satisfies z.ZodType<{ readonly checkoutId: MikaId }>;
+  token: optionalStringSchema,
+}) satisfies z.ZodType<CheckoutStatusInput>;
 
 export const accountExportStatusInputSchema = z.object({
   exportId: mikaIdSchema,
@@ -148,6 +150,7 @@ export const downloadResolveInputSchema = z.object({
 
 export const orderInvoiceInputSchema = z.object({
   orderId: mikaIdSchema,
+  token: optionalStringSchema,
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<OrderInvoiceInput>;
 

@@ -17,6 +17,7 @@ import type {
   CheckoutPreviewDTO,
   CheckoutPreviewInput,
   CheckoutSessionDTO,
+  CheckoutStatusInput,
   ContentRefDTO,
   DownloadResolutionDTO,
   DownloadIssueInput,
@@ -104,7 +105,10 @@ export interface MikaApi {
       ctx: MikaRequestContext,
       input: CheckoutPreviewInput,
     ): Promise<MikaApiResult<CheckoutPreviewDTO>>;
-    status(input: { readonly checkoutId: string }): Promise<MikaApiResult<CheckoutSessionDTO>>;
+    status(
+      ctx: MikaRequestContext,
+      input: CheckoutStatusInput,
+    ): Promise<MikaApiResult<CheckoutSessionDTO>>;
   };
   readonly magicLink: {
     request(
@@ -157,7 +161,10 @@ export interface MikaApi {
     resolve(input: { readonly token: string }): Promise<MikaApiResult<DownloadResolutionDTO>>;
   };
   readonly order: {
-    invoice(input: OrderInvoiceInput): Promise<MikaApiResult<OrderInvoiceDTO>>;
+    invoice(
+      ctx: MikaRequestContext,
+      input: OrderInvoiceInput,
+    ): Promise<MikaApiResult<OrderInvoiceDTO>>;
   };
   readonly webhook: {
     receive(

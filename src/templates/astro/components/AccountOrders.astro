@@ -76,7 +76,7 @@ const hasEmptySlot = Astro.slots.has("empty");
                   <span class="mika-kumo-strong">{formatMikaMoney(order.total)}</span>
                 </Table.Cell>
                 <Table.Cell>
-                  {order.invoiceUrl ? <Link href={order.invoiceUrl}>{invoiceLabel}</Link> : <span class="mika-kumo-muted">No invoice</span>}
+                  {order.invoiceHref ? <Link href={order.invoiceHref}>{invoiceLabel}</Link> : <span class="mika-kumo-muted">No invoice</span>}
                 </Table.Cell>
               </Table.Row>
             );

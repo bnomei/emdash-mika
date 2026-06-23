@@ -146,6 +146,7 @@ import {
   mikaRoutedOperationDefinitions,
   mikaRouteOnlyDefinitions,
 } from "../src/api/operations";
+import { startCheckoutInputSchema } from "../src/api/validation";
 import {
   adminActionOperation,
   mikaAdminActionRuntimeDefinitions,
@@ -1275,7 +1276,7 @@ describe("Mika client", () => {
       "wishlistMerge|wishlist.merge|wishlist.merge|wishlistMerge|POST|body|trusted|ctx||form",
       "checkoutStart|checkout.start|checkout.start|checkout|POST|body|trusted|ctx||form",
       "checkoutPreview|checkout.preview|checkout.preview|checkoutPreview|POST|body|trusted|ctx||",
-      "checkoutStatus|checkout.status|checkout.status|checkoutStatus|GET|search|trusted|noctx|checkoutId|json",
+      "checkoutStatus|checkout.status|checkout.status|checkoutStatus|GET|search|trusted|ctx|checkoutId,token|json",
       "magicLinkRequest|magicLink.request|magicLink.request|magicLink|POST|body|trusted|ctx||form",
       "magicLinkVerify|magicLink.verify|magicLink.verify|magicLinkVerify|POST|body|trusted|ctx||form",
       "accountGet|account.get|account.get|account|GET|none|trusted|ctx||",
@@ -1288,7 +1289,7 @@ describe("Mika client", () => {
       "subscriptionChange|subscription.change|subscription.change|subscriptionChange|POST|body|trusted|ctx||form",
       "subscriptionRenew|subscription.renew|subscription.renew|subscriptionRenew|POST|body|trusted|ctx||form",
       "downloadResolve|download.resolve|download.resolve|download|GET|search|trusted|noctx|token|",
-      "orderInvoice|order.invoice|order.invoice|orderInvoice|GET|search|trusted|noctx|orderId,returnTo|",
+      "orderInvoice|order.invoice|order.invoice|orderInvoice|GET|search|trusted|ctx|orderId,token,returnTo|",
       "webhookReceive|webhook.receive|webhook.receive|webhook|POST|body|trusted|ctx||",
       "adminProviderHealth|admin.providerHealth|admin.providerHealth|adminProviderHealth|POST|body|trusted|noctx||",
       "adminProviderSync|admin.providerSync|admin.providerSync|adminProviderSync|POST|body|trusted|noctx||",
@@ -1411,7 +1412,10 @@ describe("Mika client", () => {
     expect("call" in checkout).toBe(false);
     expect(Object.isFrozen(checkout)).toBe(true);
     expect(Object.isFrozen(checkout.agent.resources)).toBe(true);
-    expect(mikaOperationDescriptors.checkoutStatus.route.searchKeys).toEqual(["checkoutId"]);
+    expect(mikaOperationDescriptors.checkoutStatus.route.searchKeys).toEqual([
+      "checkoutId",
+      "token",
+    ]);
     expect(Object.isFrozen(mikaOperationDescriptors.checkoutStatus.route.searchKeys)).toBe(true);
     expect(Object.keys(mikaOperationDescriptors).sort()).toEqual(
       Object.keys(mikaOperationDefinitions).sort(),
@@ -1727,10 +1731,11 @@ describe("Mika client", () => {
         expectedBody: JSON.stringify({ sellableId: "sellable_1", quantity: 2 }),
       },
       {
-        run: () => client.checkout.status("checkout_1"),
+        run: () =>
+          client.checkout.status({ checkoutId: id("checkout_1"), token: "status_token_1" }),
         operation: mikaOperationDefinitions.checkoutStatus,
         expectedUrl:
-          "https://shop.test/_emdash/api/plugins/mika/checkout/status?checkoutId=checkout_1",
+          "https://shop.test/_emdash/api/plugins/mika/checkout/status?checkoutId=checkout_1&token=status_token_1",
       },
     ];
 
@@ -2022,6 +2027,29 @@ describe("Mika client", () => {
     });
   });
 
+  it("rejects deeply nested checkout customFields without throwing", () => {
+    const customFields: Record<string, unknown> = {};
+    let cursor = customFields;
+    for (let depth = 0; depth < 40; depth += 1) {
+      const next: Record<string, unknown> = {};
+      cursor["next"] = next;
+      cursor = next;
+    }
+
+    expect(() =>
+      startCheckoutInputSchema.safeParse({
+        sellableId: "sellable_1",
+        customFields,
+      }),
+    ).not.toThrow();
+    expect(
+      startCheckoutInputSchema.safeParse({
+        sellableId: "sellable_1",
+        customFields,
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects unsupported JSON route methods without invoking fallback mutators", async () => {
     let updateCalled = false;
     let applyCouponCalled = false;
@@ -2267,6 +2295,7 @@ describe("Mika client", () => {
     const expectedInput = {
       stockItemId: id("stock_1"),
       quantityDelta: 4,
+      idempotencyKey: "stock_adjust_invocation_1",
     };
     expect(apiInput).toEqual(expectedInput);
     expect(policyCalls).toEqual([
@@ -2362,14 +2391,19 @@ describe("Mika client", () => {
 
   it("accepts admin runner idempotency from request headers", async () => {
     const policyCalls: Array<{ readonly idempotencyKey?: string }> = [];
+    const apiInputs: Array<{ readonly idempotencyKey?: string }> = [];
     const routes = createMikaPluginRoutes(
       createMikaApi({
         admin: {
-          stockAdjust: async () => ({
-            ok: true,
-            status: 200,
-            data: { status: "completed" },
-          }),
+          stockAdjust: async (input) => {
+            apiInputs.push({ idempotencyKey: input.idempotencyKey });
+
+            return {
+              ok: true,
+              status: 200,
+              data: { status: "completed" },
+            };
+          },
         },
       } satisfies MikaApiOverrides),
       {
@@ -2399,6 +2433,7 @@ describe("Mika client", () => {
       status: 200,
     });
     expect(policyCalls).toEqual([{ idempotencyKey: "admin_action_header_1" }]);
+    expect(apiInputs).toEqual([{ idempotencyKey: "admin_action_header_1" }]);
   });
 
   it("validates action runner target and input before policy or API dispatch", async () => {
@@ -2526,6 +2561,7 @@ describe("Mika client", () => {
     expect(apiInput).toEqual({
       stockItemId: id("stock_primitive_1"),
       quantityDelta: 2,
+      idempotencyKey: "stock_adjust_invocation_primitive",
     });
   });
 
@@ -2803,11 +2839,12 @@ describe("Mika client", () => {
 
     await client.order.invoice({
       orderId: id("order_1"),
+      token: "invoice_token_1",
       returnTo: "/account/orders",
     });
 
     expect(requestedUrl).toBe(
-      "https://shop.test/_emdash/api/plugins/mika/orders/invoice?orderId=order_1&returnTo=%2Faccount%2Forders",
+      "https://shop.test/_emdash/api/plugins/mika/orders/invoice?orderId=order_1&token=invoice_token_1&returnTo=%2Faccount%2Forders",
     );
   });
 
@@ -2879,7 +2916,7 @@ describe("Mika client", () => {
     });
 
     await client.cart.get();
-    await client.checkout.status("checkout_1");
+    await client.checkout.status({ checkoutId: id("checkout_1"), token: "status_token_1" });
     await client.cart.update({ lineId: id("cart_line_1"), quantity: 2 });
     await client.cart.remove({ lineId: id("cart_line_1") });
     await client.cart.applyCoupon({ code: "SAVE10" });
@@ -2892,7 +2929,7 @@ describe("Mika client", () => {
         body: "",
       },
       {
-        url: "https://shop.test/_emdash/api/plugins/mika/checkout/status?checkoutId=checkout_1",
+        url: "https://shop.test/_emdash/api/plugins/mika/checkout/status?checkoutId=checkout_1&token=status_token_1",
         method: "GET",
         body: "",
       },
