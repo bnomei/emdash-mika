@@ -104,10 +104,25 @@ Good first protected projections are read or preview flows:
 Keep final payment authorization and provider checkout handoff behind explicit
 host confirmation.
 
-For the first production-facing protocol path, prioritize ACP feed and checkout
-fixtures around Stripe-backed hosted checkout. Keep ACP field names in the
-projection layer and keep Mika's catalog, cart, checkout, order, provider, and
-proof-ref types protocol-neutral.
+For the first production-facing protocol path, use ACP feed serializers and
+checkout handlers from `@bnomei/emdash-mika/acp`, preferably backed by the
+optional Stripe provider adapter from `@bnomei/emdash-mika/stripe`. Keep ACP
+field names in the projection layer and keep Mika's catalog, cart, checkout,
+order, provider, and proof-ref types protocol-neutral.
+
+```ts
+import { createMikaAcpCheckoutHandlers, createMikaAcpProductFeed } from "@bnomei/emdash-mika/acp";
+
+export const acpFeed = createMikaAcpProductFeed({
+  products: [
+    /* host content plus Mika sellables */
+  ],
+});
+```
+
+Host Astro endpoints should call the ACP handlers for the five checkout
+session routes and provide durable ACP session storage, OpenAI request auth,
+signature verification, idempotency, and order webhook delivery.
 
 ## Boundary Checklist
 

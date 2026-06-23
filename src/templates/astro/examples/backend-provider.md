@@ -3,11 +3,11 @@
 Mika does not ship payment credentials or storage. A host project wires those
 pieces and passes the resulting API to `mikaPlugin()`.
 
-The first real provider path should be Stripe because it covers hosted
-checkout, subscriptions, portal sessions, invoices, refunds, webhooks, product
-and price sync, and the likely ACP payment path. Keep fake/local providers for
-tests and demos. Keep provider-specific SDK objects and secrets outside Mika's
-core commerce types.
+The first real provider path is Stripe because it covers hosted checkout,
+subscriptions, portal sessions, invoices, refunds, signed webhooks, product and
+price sync hooks, and the likely ACP delegated payment path. Keep fake/local
+providers for tests and demos. Keep provider-specific SDK objects and secrets
+outside Mika's core commerce types.
 
 ## Backend API
 
@@ -85,81 +85,27 @@ customers, the host should own that delivery policy and storage boundary.
 ## Provider Adapter
 
 Provider adapters translate Mika's provider contract into a real service such
-as Stripe, Paddle, Lemon Squeezy, or a custom checkout backend. Stripe should be
-the first real adapter; other adapters should wait until Stripe proves the
-contract.
+as Stripe, Paddle, Lemon Squeezy, or a custom checkout backend. Mika ships an
+optional Stripe adapter surface; other adapters should follow that shape after
+Stripe proves the contract.
 
 ```ts
-import { defineMikaProvider } from "@bnomei/emdash-mika/provider";
-import { createISODateTime, createMikaId, createProviderName } from "@bnomei/emdash-mika/types";
+import Stripe from "stripe";
+import { createMikaStripeProvider } from "@bnomei/emdash-mika/stripe";
 
-export const stripeProvider = defineMikaProvider({
-  id: createProviderName("stripe"),
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
-  capabilities: () => [
-    "hosted_checkout",
-    "payments",
-    "subscriptions",
-    "portal",
-    "invoice_url",
-    "refunds",
-    "webhook_signatures",
-  ],
-
-  health: async () => ({
-    provider: createProviderName("stripe"),
-    ok: true,
-    capabilities: ["hosted_checkout", "payments", "webhook_signatures"],
-    checkedAt: createISODateTime(new Date().toISOString()),
-  }),
-
-  createCheckoutSession: async (input) => {
-    // Create the provider checkout session here.
-    return {
-      id: createMikaId(input.idempotencyKey ?? crypto.randomUUID()),
-      status: "redirected",
-      mode: input.mode,
-      provider: input.provider,
-      redirectUrl: "https://checkout.example/session",
-      providerCheckoutId: "provider_checkout_id",
-    };
-  },
-
-  retrieveCheckoutSession: async (id) => {
-    // Read the provider checkout session here.
-    return {
-      id: createMikaId(id),
-      status: "completed",
-      mode: "payment",
-      provider: createProviderName("stripe"),
-      providerCheckoutId: id,
-    };
-  },
-
-  verifyWebhook: async ({ provider, rawBody, request }) => {
-    // Verify the provider signature with the raw body and request headers.
-    return {
-      provider,
-      rawBody,
-      payloadHash: "verified_payload_hash",
-      headers: Object.fromEntries(request.headers),
-    };
-  },
-
-  parseWebhookEvent: async (verified) => {
-    // Convert the provider payload into a Mika payment/subscription event.
-    return {
-      kind: "unknown",
-      provider: verified.provider,
-      type: "provider.event",
-      raw: {},
-    };
-  },
+export const stripeProvider = createMikaStripeProvider({
+  stripe,
+  webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
 });
 ```
 
-Keep SDK clients, secrets, webhook signing keys, retries, tax/shipping
-configuration, and compliance rules in the host application.
+The adapter accepts a Stripe-shaped client without making Stripe a required
+dependency for every Mika install. Hosts that use the adapter should install
+`stripe`, supply product/price provider refs on sellables/prices, and keep SDK
+clients, secrets, webhook signing keys, retries, tax/shipping configuration,
+and compliance rules in the host application.
 
 ## Maintenance
 

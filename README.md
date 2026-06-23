@@ -55,8 +55,10 @@ Agent-ready commerce flows:
 - Public operation descriptors under `@bnomei/emdash-mika/agent`.
 - Copyable JSON-LD `Product`/`ProductGroup`/`Offer` metadata.
 - Copyable root `llms.txt` and `.well-known/mika-agent.json` examples.
-- Source material for host-owned UCP, ACP, MCP, OpenAPI, AP2, MPP, x402, or
-  other protocol projections.
+- ACP product-feed serializers and checkout endpoint handlers under
+  `@bnomei/emdash-mika/acp`.
+- Source material for host-owned UCP, MCP, OpenAPI, AP2, MPP, x402, or other
+  protocol projections.
 
 Mika is not a catalog manager, page builder, tax engine, shipping-rate engine,
 marketplace platform, hosted OAuth provider, MCP server, or bundled payment
@@ -185,9 +187,23 @@ commerce semantics. ACP, UCP, MCP, OpenAPI, AP2, MPP, x402, and other agent or
 payment protocols should be generated as host-owned projections from those
 contracts rather than becoming the core product model.
 
+ACP and Stripe are optional edge surfaces:
+
+```ts
+import { createMikaAcpCheckoutHandlers, createMikaAcpProductFeed } from "@bnomei/emdash-mika/acp";
+import { createMikaStripeProvider } from "@bnomei/emdash-mika/stripe";
+```
+
+The ACP helpers serialize Mika catalog/sellable facts into OpenAI-compatible
+product-feed shapes and expose checkout session handlers for host Astro
+endpoints. The Stripe helper adapts a host-owned Stripe SDK client to Mika's
+provider contract, including hosted Checkout Sessions, signed webhooks, and
+delegated checkout metadata for Stripe Shared Payment Tokens.
+
 ## Package Surface
 
 - ESM entry: `@bnomei/emdash-mika` for plugin registration.
+- ACP feed and checkout projection helpers: `@bnomei/emdash-mika/acp`.
 - Agent descriptors: `@bnomei/emdash-mika/agent`.
 - Admin action helpers: `@bnomei/emdash-mika/admin`.
 - Astro helpers: `@bnomei/emdash-mika/astro`.
@@ -197,6 +213,7 @@ contracts rather than becoming the core product model.
 - Provider contracts: `@bnomei/emdash-mika/provider`.
 - React headless helpers: `@bnomei/emdash-mika/react`.
 - Server contracts and trusted JSON client: `@bnomei/emdash-mika/server`.
+- Optional Stripe provider adapter: `@bnomei/emdash-mika/stripe`.
 - DTO and input/result types: `@bnomei/emdash-mika/types`.
 - Copyable files: `@bnomei/emdash-mika/templates/astro/*`.
 

@@ -1,5 +1,10 @@
 import type { mikaPlugin, MikaOperationDescriptor, MikaOperationPolicy } from "@bnomei/emdash-mika";
 import type {
+  createMikaAcpCheckoutHandlers,
+  createMikaAcpProductFeed,
+  MikaAcpCheckoutSession,
+} from "@bnomei/emdash-mika/acp";
+import type {
   createMikaAgentManifest,
   mikaAgentManifestJsonSchema,
   MikaAgentActionDescriptor,
@@ -37,6 +42,7 @@ import type {
   MikaOperationDescriptor as MikaServerOperationDescriptor,
   MikaServerClient,
 } from "@bnomei/emdash-mika/server";
+import type { createMikaStripeProvider, MikaStripeClient } from "@bnomei/emdash-mika/stripe";
 import type {
   CartDTO,
   CartQuoteDTO,
@@ -59,6 +65,9 @@ import type {
 
 export type PackageEntryContract = {
   readonly root: typeof mikaPlugin;
+  readonly acpFeed: typeof createMikaAcpProductFeed;
+  readonly acpCheckoutHandlers: typeof createMikaAcpCheckoutHandlers;
+  readonly acpCheckoutSession: MikaAcpCheckoutSession;
   readonly agent: typeof createMikaAgentManifest;
   readonly agentManifestSchema: typeof mikaAgentManifestJsonSchema;
   readonly agentManifestSchemaType: MikaAgentManifestJsonSchema;
@@ -99,6 +108,8 @@ export type PackageEntryContract = {
   readonly apiOverrides: MikaApiOverrides;
   readonly serverOperationPolicy: MikaServerOperationPolicy;
   readonly serverOperationDescriptor: MikaServerOperationDescriptor;
+  readonly stripeProvider: typeof createMikaStripeProvider;
+  readonly stripeClient: MikaStripeClient;
   readonly result: MikaApiResult<CartDTO | CartQuoteDTO | CheckoutPreviewDTO | ProviderHealthDTO>;
   readonly errorCodes: typeof MIKA_ERROR_CODES;
   readonly providerCapabilities: typeof MIKA_PROVIDER_CAPABILITIES;

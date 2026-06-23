@@ -16,6 +16,10 @@ import type {
   MikaOperationPolicy as PackageRootMikaOperationPolicy,
 } from "@bnomei/emdash-mika";
 import type {
+  createMikaAcpCheckoutHandlers as PackageCreateMikaAcpCheckoutHandlers,
+  createMikaAcpProductFeed as PackageCreateMikaAcpProductFeed,
+} from "@bnomei/emdash-mika/acp";
+import type {
   createMikaAgentManifest as PackageCreateMikaAgentManifest,
   mikaAgentManifestJsonSchema as PackageMikaAgentManifestJsonSchema,
   MikaAgentActionDescriptor as PackageMikaAgentActionDescriptor,
@@ -49,6 +53,13 @@ import type {
   MikaPaymentAuthorizationRef as PackageMikaPaymentAuthorizationRef,
   createMikaId as PackageCreateMikaId,
 } from "@bnomei/emdash-mika/types";
+import type { createMikaStripeProvider as PackageCreateMikaStripeProvider } from "@bnomei/emdash-mika/stripe";
+import {
+  createMikaAcpCheckoutHandlers,
+  createMikaAcpProductFeed,
+  createMemoryMikaAcpSessionStore,
+  type MikaAcpProduct,
+} from "../src/acp";
 import {
   createMikaAgentManifest,
   mikaAgentManifestJsonSchema,
@@ -120,6 +131,7 @@ import {
   type MikaProviderAdapter,
   type MikaProviderCheckoutSession,
 } from "../src/provider";
+import { createMikaStripeProvider, type MikaStripeClient } from "../src/stripe";
 import {
   createMikaPluginRouteBuilder,
   mikaPluginRoutes,
@@ -3432,6 +3444,7 @@ describe("public types", () => {
     expect(Object.keys(exportsMap).sort()).toEqual(
       [
         ".",
+        "./acp",
         "./agent",
         "./admin",
         "./astro",
@@ -3441,6 +3454,7 @@ describe("public types", () => {
         "./provider",
         "./react",
         "./server",
+        "./stripe",
         "./templates/astro/*",
         "./types",
       ].sort(),
@@ -3510,6 +3524,17 @@ describe("public types", () => {
       readonly expiresAt?: ISODateTime;
     }>();
     expectTypeOf<ReturnType<typeof defineMikaProvider>>().toMatchTypeOf<MikaProviderAdapter>();
+    expectTypeOf<ReturnType<typeof createMikaAcpProductFeed>["products"]>().toEqualTypeOf<
+      readonly MikaAcpProduct[]
+    >();
+    expectTypeOf<ReturnType<typeof createMikaAcpCheckoutHandlers>["create"]>().toBeFunction();
+    expectTypeOf<ReturnType<typeof createMemoryMikaAcpSessionStore>["get"]>().toBeFunction();
+    expectTypeOf<
+      ReturnType<typeof createMikaStripeProvider>
+    >().toMatchTypeOf<MikaProviderAdapter>();
+    expectTypeOf<NonNullable<MikaStripeClient["checkout"]>>().toMatchTypeOf<{
+      readonly sessions: unknown;
+    }>();
     expectTypeOf<keyof MikaProviderCheckoutSession>().toEqualTypeOf<
       | "id"
       | "status"
@@ -3592,6 +3617,12 @@ describe("public types", () => {
     expectTypeOf<typeof PackageCreateMikaAgentManifest>().toEqualTypeOf<
       typeof createMikaAgentManifest
     >();
+    expectTypeOf<typeof PackageCreateMikaAcpProductFeed>().toEqualTypeOf<
+      typeof createMikaAcpProductFeed
+    >();
+    expectTypeOf<typeof PackageCreateMikaAcpCheckoutHandlers>().toEqualTypeOf<
+      typeof createMikaAcpCheckoutHandlers
+    >();
     expectTypeOf<typeof PackageCreateMikaAdminActionsManifest>().toBeFunction();
     expectTypeOf<typeof PackageCreateMika>().toBeFunction();
     expectTypeOf<typeof PackageMikaSafeReturnTo>().toEqualTypeOf<typeof mikaSafeReturnTo>();
@@ -3621,6 +3652,9 @@ describe("public types", () => {
     expectTypeOf<PackageServerMikaOperationPolicy>().toEqualTypeOf<MikaOperationPolicy>();
     expectTypeOf<typeof PACKAGE_MIKA_ERROR_CODES>().toEqualTypeOf<typeof MIKA_ERROR_CODES>();
     expectTypeOf<typeof PackageCreateMikaId>().toEqualTypeOf<typeof createMikaId>();
+    expectTypeOf<typeof PackageCreateMikaStripeProvider>().toEqualTypeOf<
+      typeof createMikaStripeProvider
+    >();
   });
 });
 

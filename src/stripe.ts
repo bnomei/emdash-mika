@@ -1,0 +1,833 @@
+import { createHash } from "node:crypto";
+
+import type {
+  AdminActionResultDTO,
+  CheckoutStatusDTO,
+  MoneyDTO,
+  MikaProviderCapability,
+  OrderInvoiceDTO,
+  ProviderHealthDTO,
+} from "./api/types";
+import {
+  defineMikaProvider,
+  type MikaProviderAdapter,
+  type MikaProviderCheckoutInput,
+  type MikaProviderCheckoutSession,
+  type MikaProviderLineItem,
+  type MikaProviderOrderCancelInput,
+  type MikaProviderRefundInput,
+  type MikaProviderSubscriptionActionInput,
+  type MikaProviderSyncInput,
+  type MikaProviderWebhookEvent,
+  type MikaProviderWebhookVerificationInput,
+  type MikaVerifiedWebhookPayload,
+} from "./provider";
+import {
+  createISODateTime,
+  createMikaId,
+  createProviderName,
+  type JsonObject,
+  type ProviderName,
+  type SubscriptionStatus,
+} from "./types/primitives";
+
+export const MIKA_STRIPE_PROVIDER_ID = createProviderName("stripe");
+export const MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY = "acpPaymentToken";
+export const MIKA_STRIPE_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY = "acpPaymentProvider";
+export const MIKA_STRIPE_PAYMENT_AUTHORIZATION_METADATA_KEY = "acpPaymentAuthorizationId";
+
+export interface MikaStripeClient {
+  readonly checkout?: {
+    readonly sessions: {
+      create(
+        params: MikaStripeCheckoutSessionCreateParams,
+        options?: MikaStripeRequestOptions,
+      ): Promise<MikaStripeCheckoutSession>;
+      retrieve(
+        id: string,
+        params?: JsonObject,
+        options?: MikaStripeRequestOptions,
+      ): Promise<MikaStripeCheckoutSession>;
+    };
+  };
+  readonly paymentIntents?: {
+    create(
+      params: MikaStripePaymentIntentCreateParams,
+      options?: MikaStripeRequestOptions,
+    ): Promise<MikaStripePaymentIntent>;
+    retrieve?(
+      id: string,
+      params?: JsonObject,
+      options?: MikaStripeRequestOptions,
+    ): Promise<MikaStripePaymentIntent>;
+    cancel?(
+      id: string,
+      params?: JsonObject,
+      options?: MikaStripeRequestOptions,
+    ): Promise<MikaStripePaymentIntent>;
+  };
+  readonly billingPortal?: {
+    readonly sessions: {
+      create(
+        params: MikaStripePortalSessionCreateParams,
+        options?: MikaStripeRequestOptions,
+      ): Promise<MikaStripePortalSession>;
+    };
+  };
+  readonly invoices?: {
+    retrieve(
+      id: string,
+      params?: JsonObject,
+      options?: MikaStripeRequestOptions,
+    ): Promise<MikaStripeInvoice>;
+  };
+  readonly refunds?: {
+    create(
+      params: MikaStripeRefundCreateParams,
+      options?: MikaStripeRequestOptions,
+    ): Promise<{
+      readonly id: string;
+      readonly status?: string | null;
+    }>;
+  };
+  readonly subscriptions?: {
+    cancel(
+      id: string,
+      params?: JsonObject,
+      options?: MikaStripeRequestOptions,
+    ): Promise<MikaStripeSubscription>;
+    update(
+      id: string,
+      params: JsonObject,
+      options?: MikaStripeRequestOptions,
+    ): Promise<MikaStripeSubscription>;
+    resume?(
+      id: string,
+      params?: JsonObject,
+      options?: MikaStripeRequestOptions,
+    ): Promise<MikaStripeSubscription>;
+  };
+  readonly webhooks?: {
+    constructEvent(payload: string, signature: string, secret: string): unknown;
+  };
+}
+
+export interface CreateMikaStripeProviderOptions {
+  readonly stripe: MikaStripeClient;
+  readonly id?: ProviderName;
+  readonly webhookSecret?: string;
+  readonly capabilities?: readonly MikaProviderCapability[];
+  readonly catalogSync?: (input: MikaProviderSyncInput) => Promise<AdminActionResultDTO>;
+  readonly now?: () => Date;
+}
+
+export interface MikaStripeRequestOptions {
+  readonly idempotencyKey?: string;
+}
+
+export interface MikaStripeCheckoutSessionCreateParams {
+  readonly mode: string;
+  readonly line_items: readonly MikaStripeJsonObject[];
+  readonly success_url: string;
+  readonly cancel_url: string;
+  readonly customer_email?: string;
+  readonly client_reference_id?: string;
+  readonly metadata?: Record<string, string>;
+}
+
+export interface MikaStripeCheckoutSession {
+  readonly id: string;
+  readonly object?: string;
+  readonly status?: string | null;
+  readonly payment_status?: string | null;
+  readonly mode?: string | null;
+  readonly url?: string | null;
+  readonly expires_at?: number | null;
+  readonly customer?: string | null | { readonly id?: string };
+  readonly payment_intent?: string | null | { readonly id?: string };
+  readonly subscription?: string | null | { readonly id?: string };
+  readonly metadata?: Record<string, string> | null;
+  readonly [key: string]: unknown;
+}
+
+export interface MikaStripePaymentIntentCreateParams {
+  readonly amount: number;
+  readonly currency: string;
+  readonly confirm: boolean;
+  readonly payment_method_data: MikaStripeJsonObject;
+  readonly metadata?: Record<string, string>;
+}
+
+export interface MikaStripePaymentIntent {
+  readonly id: string;
+  readonly object?: string;
+  readonly status?: string | null;
+  readonly amount?: number | null;
+  readonly currency?: string | null;
+  readonly customer?: string | null | { readonly id?: string };
+  readonly latest_charge?: string | null | { readonly id?: string };
+  readonly next_action?: JsonObject | null;
+  readonly metadata?: Record<string, string> | null;
+  readonly [key: string]: unknown;
+}
+
+export interface MikaStripePortalSessionCreateParams {
+  readonly customer: string;
+  readonly return_url: string;
+}
+
+export interface MikaStripePortalSession {
+  readonly url?: string | null;
+  readonly expires_at?: number | null;
+  readonly [key: string]: unknown;
+}
+
+export interface MikaStripeInvoice {
+  readonly id: string;
+  readonly hosted_invoice_url?: string | null;
+  readonly status?: string | null;
+  readonly [key: string]: unknown;
+}
+
+export interface MikaStripeRefundCreateParams {
+  readonly payment_intent?: string;
+  readonly charge?: string;
+  readonly amount?: number;
+  readonly reason?: string;
+}
+
+export interface MikaStripeSubscription {
+  readonly id: string;
+  readonly status?: string | null;
+  readonly customer?: string | null | { readonly id?: string };
+  readonly current_period_start?: number | null;
+  readonly current_period_end?: number | null;
+  readonly cancel_at_period_end?: boolean | null;
+  readonly items?: {
+    readonly data?: readonly {
+      readonly price?: { readonly id?: string | null };
+    }[];
+  };
+  readonly [key: string]: unknown;
+}
+
+export type MikaStripeJsonObject = Record<string, unknown>;
+
+export function createMikaStripeProvider(
+  options: CreateMikaStripeProviderOptions,
+): MikaProviderAdapter {
+  const id = options.id ?? MIKA_STRIPE_PROVIDER_ID;
+
+  return defineMikaProvider({
+    id,
+    capabilities: () => stripeCapabilities(options),
+    health: async () => stripeHealth(id, options),
+    createCheckoutSession: async (input) => createStripeCheckoutSession(id, options, input),
+    retrieveCheckoutSession: async (checkoutSessionId) =>
+      retrieveStripeCheckoutSession(id, options, checkoutSessionId),
+    createPortalSession: async (input) => {
+      if (!options.stripe.billingPortal?.sessions) {
+        throw new Error("Stripe billing portal sessions are not available.");
+      }
+
+      const session = await options.stripe.billingPortal.sessions.create({
+        customer: input.providerCustomerId,
+        return_url: input.returnUrl,
+      });
+
+      return {
+        redirectUrl: requiredString(session.url, "Stripe portal session URL"),
+        expiresAt: stripeTimestamp(session.expires_at),
+      };
+    },
+    getInvoiceUrl: async (input): Promise<OrderInvoiceDTO> => {
+      if (!options.stripe.invoices || !input.providerPaymentId) {
+        return { orderId: input.orderId };
+      }
+
+      const invoice = await options.stripe.invoices.retrieve(input.providerPaymentId);
+
+      return {
+        orderId: input.orderId,
+        ...(invoice.hosted_invoice_url ? { href: invoice.hosted_invoice_url } : {}),
+      };
+    },
+    cancelSubscription: async (input) => {
+      if (!options.stripe.subscriptions || !input.providerSubscriptionId) {
+        return unsupportedAction("subscription_cancel", "Stripe subscription id is required.");
+      }
+
+      const subscription = await options.stripe.subscriptions.cancel(input.providerSubscriptionId);
+
+      return completedAction(
+        "subscription_cancel",
+        `Stripe subscription ${subscription.id} canceled.`,
+      );
+    },
+    changeSubscription: async (input) => changeStripeSubscription(options, input),
+    renewSubscription: async (input) => renewStripeSubscription(options, input),
+    refundPayment: async (input) => refundStripePayment(options, input),
+    cancelOrder: async (input) => cancelStripeOrder(options, input),
+    syncCatalog: options.catalogSync
+      ? async (input) => options.catalogSync?.(input) ?? unsupportedAction("catalog_sync")
+      : async () => unsupportedAction("catalog_sync", "Stripe catalog sync is not configured."),
+    verifyWebhook: async (input) => verifyStripeWebhook(id, options, input),
+    parseWebhookEvent: async (input) => parseStripeWebhookEvent(id, input),
+  });
+}
+
+function stripeCapabilities(
+  options: CreateMikaStripeProviderOptions,
+): readonly MikaProviderCapability[] {
+  return (
+    options.capabilities ?? [
+      "hosted_checkout",
+      "payments",
+      "subscriptions",
+      "subscription_renew",
+      "subscription_change",
+      "subscription_cancel",
+      "portal",
+      "invoice_url",
+      "refunds",
+      "webhook_signatures",
+      ...(options.catalogSync ? (["product_sync", "variant_sync", "stock_sync"] as const) : []),
+    ]
+  );
+}
+
+async function stripeHealth(
+  provider: ProviderName,
+  options: CreateMikaStripeProviderOptions,
+): Promise<ProviderHealthDTO> {
+  const capabilities = stripeCapabilities(options);
+
+  return {
+    provider,
+    ok: Boolean(options.stripe.checkout?.sessions || options.stripe.paymentIntents),
+    capabilities,
+    checkedAt: createISODateTime((options.now?.() ?? new Date()).toISOString()),
+    warnings: options.webhookSecret ? undefined : ["Stripe webhook secret is not configured."],
+  };
+}
+
+async function createStripeCheckoutSession(
+  provider: ProviderName,
+  options: CreateMikaStripeProviderOptions,
+  input: MikaProviderCheckoutInput,
+): Promise<MikaProviderCheckoutSession> {
+  const delegatedToken = readMetadataString(
+    input.metadata,
+    MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY,
+  );
+  if (delegatedToken) {
+    return createStripeDelegatedPayment(provider, options, input, delegatedToken);
+  }
+
+  if (!options.stripe.checkout?.sessions) {
+    throw new Error("Stripe checkout sessions are not available.");
+  }
+
+  const session = await options.stripe.checkout.sessions.create(
+    {
+      mode: input.mode === "subscription" ? "subscription" : "payment",
+      line_items: input.lines.map(stripeCheckoutLineItem),
+      success_url: input.successUrl,
+      cancel_url: input.cancelUrl,
+      ...(input.customer?.email ? { customer_email: input.customer.email } : {}),
+      ...(input.idempotencyKey ? { client_reference_id: input.idempotencyKey } : {}),
+      metadata: stripeMetadata({
+        ...input.metadata,
+        mikaProvider: provider,
+        mikaMode: input.mode,
+      }),
+    },
+    requestOptions(input.idempotencyKey),
+  );
+
+  return stripeCheckoutSessionToMika(provider, session);
+}
+
+async function createStripeDelegatedPayment(
+  provider: ProviderName,
+  options: CreateMikaStripeProviderOptions,
+  input: MikaProviderCheckoutInput,
+  delegatedToken: string,
+): Promise<MikaProviderCheckoutSession> {
+  if (!options.stripe.paymentIntents?.create) {
+    throw new Error("Stripe payment intents are required for delegated payments.");
+  }
+
+  const total = input.lines.reduce((amount, line) => amount + line.unitAmount * line.quantity, 0);
+  const currency = input.lines[0]?.currency;
+  if (!currency) {
+    throw new Error("Delegated Stripe checkout requires at least one line item.");
+  }
+
+  const intent = await options.stripe.paymentIntents.create(
+    {
+      amount: total,
+      currency: currency.toLowerCase(),
+      confirm: true,
+      payment_method_data: {
+        shared_payment_granted_token: delegatedToken,
+      },
+      metadata: stripeMetadata({
+        ...input.metadata,
+        mikaProvider: provider,
+        mikaMode: input.mode,
+        mikaCheckoutKind: "delegated_payment",
+      }),
+    },
+    requestOptions(input.idempotencyKey),
+  );
+
+  return stripePaymentIntentToMika(provider, input.mode, intent);
+}
+
+async function retrieveStripeCheckoutSession(
+  provider: ProviderName,
+  options: CreateMikaStripeProviderOptions,
+  id: string,
+): Promise<MikaProviderCheckoutSession> {
+  if (id.startsWith("pi_") && options.stripe.paymentIntents?.retrieve) {
+    const intent = await options.stripe.paymentIntents.retrieve(id);
+
+    return stripePaymentIntentToMika(provider, "payment", intent);
+  }
+
+  if (!options.stripe.checkout?.sessions) {
+    throw new Error("Stripe checkout sessions are not available.");
+  }
+
+  const session = await options.stripe.checkout.sessions.retrieve(id);
+
+  return stripeCheckoutSessionToMika(provider, session);
+}
+
+function stripeCheckoutLineItem(line: MikaProviderLineItem): JsonObject {
+  if (line.providerPriceId) {
+    return {
+      price: line.providerPriceId,
+      quantity: line.quantity,
+    };
+  }
+
+  return {
+    quantity: line.quantity,
+    price_data: {
+      currency: line.currency.toLowerCase(),
+      unit_amount: line.unitAmount,
+      product_data: {
+        name: line.title,
+        ...(line.sku ? { metadata: { sku: line.sku } } : {}),
+      },
+      ...(line.mode === "subscription" ? { recurring: { interval: "month" } } : {}),
+    },
+  };
+}
+
+function stripeCheckoutSessionToMika(
+  provider: ProviderName,
+  session: MikaStripeCheckoutSession,
+): MikaProviderCheckoutSession {
+  return {
+    id: createMikaId(session.id),
+    status: stripeCheckoutStatus(session),
+    mode: session.mode === "subscription" ? "subscription" : "payment",
+    provider,
+    ...(session.url ? { redirectUrl: session.url } : {}),
+    expiresAt: stripeTimestamp(session.expires_at),
+    providerCheckoutId: session.id,
+    providerCustomerId: stripeObjectId(session.customer),
+    raw: stripeRaw(session),
+  };
+}
+
+function stripePaymentIntentToMika(
+  provider: ProviderName,
+  mode: MikaProviderCheckoutInput["mode"],
+  intent: MikaStripePaymentIntent,
+): MikaProviderCheckoutSession {
+  return {
+    id: createMikaId(intent.id),
+    status: stripePaymentIntentStatus(intent.status),
+    mode,
+    provider,
+    redirectUrl: stripeNextActionUrl(intent.next_action),
+    providerCheckoutId: intent.id,
+    providerCustomerId: stripeObjectId(intent.customer),
+    raw: stripeRaw(intent),
+  };
+}
+
+function stripeCheckoutStatus(session: MikaStripeCheckoutSession): CheckoutStatusDTO {
+  if (session.payment_status === "paid" || session.status === "complete") return "completed";
+  if (session.status === "expired") return "expired";
+  if (session.status === "open" && session.url) return "redirected";
+  if (session.status === "open") return "created";
+
+  return "pending";
+}
+
+function stripePaymentIntentStatus(status: string | null | undefined): CheckoutStatusDTO {
+  switch (status) {
+    case "succeeded":
+      return "completed";
+    case "canceled":
+      return "cancelled";
+    case "requires_payment_method":
+      return "failed";
+    case "requires_action":
+    case "processing":
+    case "requires_confirmation":
+    case "requires_capture":
+      return "pending";
+    default:
+      return "pending";
+  }
+}
+
+function stripeNextActionUrl(nextAction: JsonObject | null | undefined): string | undefined {
+  const redirect = jsonObjectChild(nextAction, "redirect_to_url");
+
+  return stringChild(redirect, "url");
+}
+
+async function changeStripeSubscription(
+  options: CreateMikaStripeProviderOptions,
+  input: MikaProviderSubscriptionActionInput,
+): Promise<AdminActionResultDTO> {
+  if (!options.stripe.subscriptions || !input.providerSubscriptionId || !input.providerPriceId) {
+    return unsupportedAction(
+      "subscription_change",
+      "Stripe subscription id and price id are required.",
+    );
+  }
+
+  const metadata = stripeMetadata(input.metadata);
+  const subscription = await options.stripe.subscriptions.update(
+    input.providerSubscriptionId,
+    {
+      cancel_at_period_end: false,
+      items: [{ price: input.providerPriceId }],
+      ...(metadata ? { metadata } : {}),
+    },
+    requestOptions(input.metadata ? stringChild(input.metadata, "idempotencyKey") : undefined),
+  );
+
+  return completedAction("subscription_change", `Stripe subscription ${subscription.id} updated.`);
+}
+
+async function renewStripeSubscription(
+  options: CreateMikaStripeProviderOptions,
+  input: MikaProviderSubscriptionActionInput,
+): Promise<AdminActionResultDTO> {
+  if (!options.stripe.subscriptions || !input.providerSubscriptionId) {
+    return unsupportedAction("subscription_renew", "Stripe subscription id is required.");
+  }
+
+  const subscription = options.stripe.subscriptions.resume
+    ? await options.stripe.subscriptions.resume(input.providerSubscriptionId)
+    : await options.stripe.subscriptions.update(input.providerSubscriptionId, {
+        cancel_at_period_end: false,
+      });
+
+  return completedAction("subscription_renew", `Stripe subscription ${subscription.id} renewed.`);
+}
+
+async function refundStripePayment(
+  options: CreateMikaStripeProviderOptions,
+  input: MikaProviderRefundInput,
+): Promise<AdminActionResultDTO> {
+  if (!options.stripe.refunds || !input.providerPaymentId) {
+    return unsupportedAction("refund", "Stripe payment intent id is required.");
+  }
+
+  const refund = await options.stripe.refunds.create({
+    payment_intent: input.providerPaymentId,
+    ...(input.amount !== undefined ? { amount: input.amount } : {}),
+    ...(input.reason ? { reason: input.reason } : {}),
+  });
+
+  return {
+    id: createMikaId(refund.id),
+    status: refund.status === "failed" ? "failed" : "completed",
+  };
+}
+
+async function cancelStripeOrder(
+  options: CreateMikaStripeProviderOptions,
+  input: MikaProviderOrderCancelInput,
+): Promise<AdminActionResultDTO> {
+  const paymentIntentId = input.providerOrderId;
+  if (!options.stripe.paymentIntents?.cancel || !paymentIntentId) {
+    return unsupportedAction(
+      "order_cancel",
+      "Stripe payment intent cancellation is not available.",
+    );
+  }
+
+  const intent = await options.stripe.paymentIntents.cancel(
+    paymentIntentId,
+    input.reason ? { cancellation_reason: input.reason } : {},
+  );
+
+  return {
+    id: createMikaId(intent.id),
+    status: intent.status === "canceled" ? "completed" : "running",
+  };
+}
+
+async function verifyStripeWebhook(
+  provider: ProviderName,
+  options: CreateMikaStripeProviderOptions,
+  input: MikaProviderWebhookVerificationInput,
+): Promise<MikaVerifiedWebhookPayload> {
+  const signature = input.request.headers.get("stripe-signature");
+  if (!signature) {
+    throw new Error("Missing Stripe webhook signature.");
+  }
+  if (!options.webhookSecret || !options.stripe.webhooks?.constructEvent) {
+    throw new Error("Stripe webhook verification is not configured.");
+  }
+
+  const body = new TextDecoder().decode(input.rawBody);
+  const event = options.stripe.webhooks.constructEvent(body, signature, options.webhookSecret);
+
+  return {
+    provider,
+    rawBody: input.rawBody,
+    payloadHash: `sha256:${createHash("sha256").update(input.rawBody).digest("hex")}`,
+    headers: Object.fromEntries(input.request.headers.entries()),
+    parsed: isJsonObjectLike(event) ? event : { event: JSON.stringify(event) },
+  };
+}
+
+function parseStripeWebhookEvent(
+  provider: ProviderName,
+  input: MikaVerifiedWebhookPayload,
+): MikaProviderWebhookEvent {
+  const event = input.parsed;
+  const type = stringChild(event, "type") ?? "stripe.unknown";
+  const object = jsonObjectChild(jsonObjectChild(event, "data"), "object") ?? {};
+  const providerEventId = stringChild(event, "id");
+
+  if (type.startsWith("customer.subscription.")) {
+    return {
+      kind: "subscription",
+      provider,
+      providerEventId,
+      type,
+      providerSubscriptionId: stringChild(object, "id"),
+      providerCustomerId: stripeObjectId(object["customer"]),
+      providerPriceId: firstSubscriptionPriceId(object),
+      status: stripeSubscriptionStatus(stringChild(object, "status")),
+      currentPeriodStart: stripeTimestamp(numberChild(object, "current_period_start")),
+      currentPeriodEnd: stripeTimestamp(numberChild(object, "current_period_end")),
+      cancelAtPeriodEnd: booleanChild(object, "cancel_at_period_end"),
+      raw: input.parsed,
+    };
+  }
+
+  if (type.startsWith("invoice.")) {
+    return {
+      kind: "payment",
+      provider,
+      providerEventId,
+      type,
+      providerPaymentId: stringChild(object, "payment_intent") ?? stringChild(object, "id"),
+      providerOrderId: stringChild(object, "id"),
+      customer: {
+        email: stringChild(object, "customer_email"),
+      },
+      lines: [],
+      totals: moneyTotalsFromStripeAmount(object),
+      invoiceUrl: stringChild(object, "hosted_invoice_url"),
+      raw: input.parsed,
+    };
+  }
+
+  if (type.startsWith("payment_intent.")) {
+    return {
+      kind: "payment",
+      provider,
+      providerEventId,
+      type,
+      providerPaymentId: stringChild(object, "id"),
+      providerOrderId: stringChild(object, "id"),
+      customer: undefined,
+      lines: [],
+      totals: moneyTotalsFromStripeAmount(object),
+      raw: input.parsed,
+    };
+  }
+
+  if (type.startsWith("checkout.session.")) {
+    return {
+      kind: "payment",
+      provider,
+      providerEventId,
+      type,
+      providerCheckoutId: stringChild(object, "id"),
+      providerPaymentId: stripeObjectId(object["payment_intent"]),
+      providerOrderId: stripeObjectId(object["payment_intent"]) ?? stringChild(object, "id"),
+      customer: {
+        email: stringChild(object, "customer_email"),
+      },
+      lines: [],
+      totals: moneyTotalsFromStripeAmount(object),
+      raw: input.parsed,
+    };
+  }
+
+  return {
+    kind: "unknown",
+    provider,
+    providerEventId,
+    type,
+    raw: input.parsed,
+  };
+}
+
+function moneyTotalsFromStripeAmount(
+  object: JsonObject,
+): { readonly total?: MoneyDTO } | undefined {
+  const amount = numberChild(object, "amount_total") ?? numberChild(object, "amount_paid");
+  const currency = stringChild(object, "currency")?.toUpperCase();
+  if (amount === undefined || !currency) return undefined;
+
+  return {
+    total: {
+      amount,
+      currency: currency as MoneyDTO["currency"],
+    },
+  };
+}
+
+function stripeSubscriptionStatus(status: string | undefined): SubscriptionStatus {
+  switch (status) {
+    case "active":
+      return "active";
+    case "trialing":
+      return "trialing";
+    case "past_due":
+      return "past_due";
+    case "canceled":
+    case "cancelled":
+      return "cancelled";
+    case "unpaid":
+      return "past_due";
+    default:
+      return "incomplete";
+  }
+}
+
+function firstSubscriptionPriceId(object: JsonObject): string | undefined {
+  const items = jsonObjectChild(object, "items");
+  const data = items?.["data"];
+  if (!Array.isArray(data)) return undefined;
+  const first = data.find(isJsonObjectLike);
+  const price = jsonObjectChild(first, "price");
+
+  return stringChild(price, "id");
+}
+
+function requestOptions(idempotencyKey: string | undefined): MikaStripeRequestOptions | undefined {
+  return idempotencyKey ? { idempotencyKey } : undefined;
+}
+
+function stripeMetadata(input: JsonObject | undefined): Record<string, string> | undefined {
+  const metadata = Object.fromEntries(
+    Object.entries(input ?? {}).flatMap(([key, value]) => {
+      if (value === undefined || value === null) return [];
+      if (typeof value === "string") return [[key, value]];
+      if (typeof value === "number" || typeof value === "boolean") return [[key, String(value)]];
+
+      return [[key, JSON.stringify(value)]];
+    }),
+  );
+
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
+function readMetadataString(metadata: JsonObject | undefined, key: string): string | undefined {
+  const value = metadata?.[key];
+
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function stripeTimestamp(
+  value: number | null | undefined,
+): ReturnType<typeof createISODateTime> | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+
+  return createISODateTime(new Date(value * 1000).toISOString());
+}
+
+function stripeObjectId(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (isJsonObjectLike(value)) return stringChild(value, "id");
+
+  return undefined;
+}
+
+function stripeRaw(input: Record<string, unknown>): JsonObject {
+  return JSON.parse(JSON.stringify(input)) as JsonObject;
+}
+
+function requiredString(value: string | null | undefined, label: string): string {
+  if (!value) throw new Error(`${label} is missing.`);
+
+  return value;
+}
+
+function completedAction(id: string, message?: string): AdminActionResultDTO {
+  return {
+    id: createMikaId(id),
+    status: "completed",
+    ...(message ? { message } : {}),
+  };
+}
+
+function unsupportedAction(
+  id: string,
+  message = "Stripe action is not supported.",
+): AdminActionResultDTO {
+  return {
+    id: createMikaId(id),
+    status: "unsupported",
+    message,
+  };
+}
+
+function stringChild(input: JsonObject | undefined, key: string): string | undefined {
+  const value = input?.[key];
+
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function numberChild(input: JsonObject | undefined, key: string): number | undefined {
+  const value = input?.[key];
+
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function booleanChild(input: JsonObject | undefined, key: string): boolean | undefined {
+  const value = input?.[key];
+
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function jsonObjectChild(
+  input: JsonObject | undefined | null,
+  key: string,
+): JsonObject | undefined {
+  const value = input?.[key];
+
+  return isJsonObjectLike(value) ? value : undefined;
+}
+
+function isJsonObjectLike(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}

@@ -26,11 +26,12 @@ storefronts without turning the package into a full storefront platform.
   `.well-known/mika-agent.json`.
 - Operation manifest descriptors under `@bnomei/emdash-mika/agent` as source
   material for host-owned UCP, ACP, MCP, OpenAPI, or other adapters.
-- A clear first-provider path. The first real provider adapter should be
-  Stripe, with fake/local adapters retained for tests and template demos.
-- A clear first-protocol path. ACP should be the first commerce projection
-  validated against real feed and checkout fixtures, while UCP remains a
-  broader follow-on projection.
+- A clear first-provider path. The optional Stripe adapter is the first real
+  provider surface, with fake/local adapters retained for tests and template
+  demos.
+- A clear first-protocol path. ACP feed serializers and checkout handlers are
+  the first commerce projection surface, while UCP remains a broader follow-on
+  projection.
 - Clear docs for route boundaries, security posture, idempotency expectations,
   and what Mika deliberately does not own.
 
@@ -39,9 +40,9 @@ storefronts without turning the package into a full storefront platform.
 - A bundled storefront theme or page builder.
 - Product catalog editing UI inside Mika.
 - Tax, shipping-rate, marketplace, or fulfillment engines.
-- Provider-specific SDK implementations inside Mika core types. A Stripe
-  adapter may exist as an optional adapter surface, but Mika's core contracts
-  should stay provider-neutral.
+- Provider-specific SDK implementations inside Mika core types. The Stripe
+  adapter stays an optional adapter surface, and Mika's core contracts remain
+  provider-neutral.
 - Public browser JSON mutation routes for carts, checkout, accounts, webhooks,
   admin actions, or subscriptions.
 - Built-in OAuth issuer, MCP server, AP2 verifier, MPP/x402 rail, or OpenAPI

@@ -219,7 +219,10 @@ Use the small public subpaths in copied code:
   `formatMikaMoney()`, `mikaReturnTo()`, `mikaSafeReturnTo()`, and purchase
   option selection.
 - `@bnomei/emdash-mika/astro-actions` from `src/actions/mika.ts`.
+- `@bnomei/emdash-mika/acp` for host-owned ACP product-feed and checkout
+  endpoint projections.
 - `@bnomei/emdash-mika/agent` for optional agent-readable manifest examples.
+- `@bnomei/emdash-mika/stripe` for the optional Stripe provider adapter.
 - `@bnomei/emdash-mika/types` for DTOs and action/client input types.
 - `@bnomei/emdash-mika/client` only when a framework island needs public
   catalog or stock JSON reads directly.
@@ -332,6 +335,14 @@ endpoints or explicitly supported EmDash raw-body public routes, not generic
 plugin JSON routes by default. The copied webhook endpoint is a host Astro
 endpoint that forwards the raw request to `Mika.webhook.receive`; it requires a
 provider adapter with `verifyWebhook()` and `parseWebhookEvent()`.
+
+ACP checkout endpoints should follow the same host-owned endpoint pattern. Use
+`createMikaAcpCheckoutHandlers()` from `@bnomei/emdash-mika/acp` inside Astro
+server endpoints for `POST /checkout_sessions`, `POST
+/checkout_sessions/[id]`, `POST /checkout_sessions/[id]/complete`, `POST
+/checkout_sessions/[id]/cancel`, and `GET /checkout_sessions/[id]`. Back the
+ACP session store with durable host storage in production; the memory store is
+only for tests and local demos.
 
 ## Security Boundary
 
