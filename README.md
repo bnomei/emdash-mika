@@ -201,6 +201,36 @@ provider contract, including hosted Checkout Sessions, paid-state webhook
 normalization, signed webhooks, protected invoice lookup, and delegated
 checkout metadata for Stripe Shared Payment Tokens.
 
+## Notifications And Email
+
+Trusted backends can pass a notification hook to `createMikaBackendApi()`:
+
+```ts
+import type { MikaNotificationHook } from "@bnomei/emdash-mika/server";
+
+const handleNotification: MikaNotificationHook = async (intent) => {
+  if (intent.kind === "order.confirmed") {
+    await queueHostEmail(intent);
+    return { handled: true };
+  }
+};
+```
+
+The hook receives typed `MikaNotificationIntent` objects for commerce events
+such as `magic_link.requested`, `order.confirmed`,
+`checkout.payment_failed`, `download.ready`, `license.issued`,
+subscription lifecycle events, account export/delete events, and webhook
+failures. `undefined` or `{ handled: false }` lets Mika continue default
+handling when one exists. `{ handled: true }` suppresses Mika's built-in email
+for that intent. Hook exceptions fail the backend operation, so hosts should
+queue their own notification/email work durably.
+
+Mika currently ships default email rows and renderers for magic links and order
+confirmations only. Other notification kinds are host hooks; they do not create
+Mika email outbox rows until a default renderer is intentionally added. The
+existing email outbox runner remains compatible with Mika's queued
+`magic_link` and `order_confirmation` email documents.
+
 ## Package Surface
 
 - ESM entry: `@bnomei/emdash-mika` for plugin registration.

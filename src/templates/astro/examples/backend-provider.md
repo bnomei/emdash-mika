@@ -17,12 +17,16 @@ Create a host module such as `src/lib/mika-api.ts`:
 import { createMikaBackendApi } from "@bnomei/emdash-mika/server";
 import { createMikaProviderRegistry } from "@bnomei/emdash-mika/provider";
 import { createCurrencyCode, createMikaId, createProviderName } from "@bnomei/emdash-mika/types";
+import { handleMikaNotification } from "./mika-notifications";
 import { repositories } from "./mika-repositories";
 import { stripeProvider } from "./providers/stripe";
 
 export const api = createMikaBackendApi({
   repositories,
   providers: createMikaProviderRegistry([stripeProvider]),
+  notifications: {
+    handle: handleMikaNotification,
+  },
   defaults: {
     currency: createCurrencyCode("EUR"),
     provider: createProviderName("stripe"),
@@ -81,6 +85,46 @@ line according to the purchased price's `fulfillmentKind`:
 License fulfillment is automatic backend behavior, not a separate public
 `license.generate` action. If the storefront must reveal full license keys to
 customers, the host should own that delivery policy and storage boundary.
+
+## Notifications And Email
+
+Mika emits typed notification intents before its built-in email handling. A host
+can queue its own transactional emails, support alerts, or marketing handoffs in
+`src/lib/mika-notifications.ts`:
+
+```ts
+import type { MikaNotificationHook } from "@bnomei/emdash-mika/server";
+
+export const handleMikaNotification: MikaNotificationHook = async (intent) => {
+  switch (intent.kind) {
+    case "magic_link.requested":
+      await queueTransactionalEmail({
+        template: "magic-link",
+        to: intent.context.toEmail,
+        data: intent.context,
+      });
+      return { handled: true };
+
+    case "order.confirmed":
+      await queueTransactionalEmail({
+        template: "order-confirmed",
+        to: intent.context.toEmail,
+        data: intent.context,
+      });
+      return { handled: true };
+
+    default:
+      await queueHostNotification(intent);
+      return undefined;
+  }
+};
+```
+
+Returning `{ handled: true }` suppresses Mika's default email for magic links
+and order confirmations. Returning nothing lets Mika queue its default email
+when one exists. Other notification kinds are hook-only for now; Mika does not
+ship default `download`, `license`, subscription, account, or ops email
+renderers.
 
 ## Provider Adapter
 
