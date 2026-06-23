@@ -646,6 +646,7 @@ function parseStripeWebhookEvent(
 
     return {
       kind: "payment",
+      paymentStatus: "paid",
       provider,
       providerEventId,
       type,
@@ -664,6 +665,7 @@ function parseStripeWebhookEvent(
   if (type === "payment_intent.succeeded" && stringChild(object, "status") === "succeeded") {
     return {
       kind: "payment",
+      paymentStatus: "paid",
       provider,
       providerEventId,
       type,
@@ -679,6 +681,7 @@ function parseStripeWebhookEvent(
   if (type === "checkout.session.completed" && stripeCheckoutSessionIsPaid(object)) {
     return {
       kind: "payment",
+      paymentStatus: "paid",
       provider,
       providerEventId,
       type,

@@ -33,6 +33,11 @@ import {
   type JsonObject,
 } from "../src/types/primitives";
 import { createTestSellableDTO } from "./helpers/backend";
+import {
+  expectMethodBackedProviderCapabilities,
+  expectNonFulfillingProviderEvent,
+  expectPaidProviderPaymentEvent,
+} from "./helpers/provider-contract";
 
 describe("Mika ACP projection", () => {
   it("builds API product feeds and file-upload rows from Mika sellables", () => {
@@ -646,6 +651,7 @@ describe("Mika Stripe provider", () => {
     };
     const provider = createMikaStripeProvider({ stripe });
 
+    await expectMethodBackedProviderCapabilities(provider);
     expect(await Promise.resolve(provider.capabilities())).toEqual(["hosted_checkout", "payments"]);
     await expect(provider.health?.()).resolves.toMatchObject({
       ok: true,
@@ -696,8 +702,13 @@ describe("Mika Stripe provider", () => {
       provider: "stripe",
       payloadHash: expect.stringContaining("sha256:"),
     });
-    await expect(provider.parseWebhookEvent?.(verified!)).resolves.toMatchObject({
+    const event = await provider.parseWebhookEvent?.(verified!);
+    if (!event) throw new Error("Expected Stripe checkout webhook event.");
+
+    expectPaidProviderPaymentEvent(event);
+    expect(event).toMatchObject({
       kind: "payment",
+      paymentStatus: "paid",
       provider: "stripe",
       providerEventId: "evt_test_123",
       type: "checkout.session.completed",
@@ -742,8 +753,13 @@ describe("Mika Stripe provider", () => {
       rawBody,
     });
 
-    await expect(provider.parseWebhookEvent?.(verified!)).resolves.toMatchObject({
+    const event = await provider.parseWebhookEvent?.(verified!);
+    if (!event) throw new Error("Expected Stripe invoice webhook event.");
+
+    expectPaidProviderPaymentEvent(event);
+    expect(event).toMatchObject({
       kind: "payment",
+      paymentStatus: "paid",
       provider: "stripe",
       providerEventId: "evt_invoice_paid",
       type: "invoice.paid",
@@ -811,7 +827,11 @@ describe("Mika Stripe provider", () => {
         rawBody,
       });
 
-      await expect(provider.parseWebhookEvent?.(verified!)).resolves.toMatchObject({
+      const event = await provider.parseWebhookEvent?.(verified!);
+      if (!event) throw new Error("Expected Stripe webhook event.");
+
+      expectNonFulfillingProviderEvent(event);
+      expect(event).toMatchObject({
         kind: "unknown",
         provider: "stripe",
         providerEventId: payload["id"],

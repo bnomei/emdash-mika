@@ -134,6 +134,10 @@ maintenance.
 - Repository methods are backed by durable storage and transactions where stock,
   checkout, orders, and webhooks require atomicity.
 - Provider webhook verification uses the raw request body.
+- Provider payment events are emitted only for settled paid states and carry
+  `paymentStatus: "paid"`.
+- Account order projections expose Mika `invoiceHref` links, not raw provider
+  invoice URLs.
 - Checkout success/cancel URLs are trusted deployment config or sanitized local
   return paths.
 - Action guards or middleware enforce rate limits and account policy.

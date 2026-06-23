@@ -3743,6 +3743,8 @@ describe("Mika Astro template contracts", () => {
     expect(source).toContain("@cloudflare/kumo/styles/standalone");
     expect(source).toContain("@cloudflare/kumo/styles/tailwind");
     expect(source).toContain("Mika.webhook.receive");
+    expect(source).toContain("order.invoiceHref");
+    expect(source).toContain("protected `order.invoice` route");
   });
 
   it("ships the Kumo app shell around copied pages", () => {
@@ -3932,6 +3934,14 @@ describe("Mika Astro template contracts", () => {
       new URL("../src/templates/astro/pages/checkout/success.astro", import.meta.url),
       "utf8",
     );
+    const checkoutCancel = readFileSync(
+      new URL("../src/templates/astro/pages/checkout/cancel.astro", import.meta.url),
+      "utf8",
+    );
+    const accountOrdersComponent = readFileSync(
+      new URL("../src/templates/astro/components/AccountOrders.astro", import.meta.url),
+      "utf8",
+    );
 
     expect(routeDefaults).toContain('account: "/account"');
     expect(routeDefaults).toContain('accountOrders: "/account/orders"');
@@ -3958,6 +3968,20 @@ describe("Mika Astro template contracts", () => {
     expect(accountDownloads).toContain("<AccountDownloads");
     expect(checkoutSuccess).toContain("mikaTemplateCheckoutSuccessHref");
     expect(checkoutSuccess).toContain("mikaTemplateRoutes.accountOrders");
+    expect(checkoutSuccess).toContain('Astro.url.searchParams.get("checkoutId")');
+    expect(checkoutSuccess).toContain('Astro.url.searchParams.get("token")');
+    expect(checkoutSuccess).toContain("Checkout status link is missing.");
+    expect(checkoutSuccess).toContain("refreshHref");
+    expect(checkoutSuccess).not.toContain("checkout_id");
+    expect(checkoutSuccess).not.toContain("session_id");
+    expect(checkoutSuccess).toContain('import { Link, Text } from "@cloudflare/kumo"');
+    expect(checkoutCancel).toContain("No payment was confirmed by this return page.");
+    expect(checkoutCancel).toContain('import { Link, Text } from "@cloudflare/kumo"');
+    expect(accountOrdersComponent).toContain("order.invoiceHref");
+    expect(accountOrdersComponent).not.toContain("order.invoiceUrl");
+    expect(accountOrdersComponent).toContain(
+      'import { Badge, Empty, Link, Table, Text } from "@cloudflare/kumo"',
+    );
   });
 
   it("keeps form accessibility hooks wired in copied templates", () => {

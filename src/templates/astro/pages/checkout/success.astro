@@ -24,16 +24,23 @@ const messageByStatus: Record<string, string> = {
   failed: "Checkout failed.",
   binding_mismatch: "Checkout could not be verified."
 };
+const statusMessage = !checkoutId
+  ? "Checkout status link is missing."
+  : result && !result.ok
+    ? result.error.message
+    : messageByStatus[status] ?? "Checkout received.";
+const refreshHref =
+  status === "pending" && checkoutId && token
+    ? mikaTemplateCheckoutSuccessHref(checkoutId, token)
+    : undefined;
 const cartItemCount = await mikaTemplateCurrentCartItemCount(Astro);
 ---
 
 <MikaKumoPage title="Checkout" pageSize="narrow" cartItemCount={cartItemCount} data-mika-checkout-success>
-  <section class="mika-kumo-panel mika-kumo-stack">
-    <Text as="p" aria-live="polite">{messageByStatus[status] ?? "Checkout received."}</Text>
+  <section class="mika-kumo-panel mika-kumo-stack" data-mika-checkout-status={status}>
+    <Text as="p" aria-live="polite">{statusMessage}</Text>
     <div class="mika-kumo-actions">
-      {status === "pending" && checkoutId && (
-        <Link href={mikaTemplateCheckoutSuccessHref(checkoutId, token)}>Refresh status</Link>
-      )}
+      {refreshHref && <Link href={refreshHref}>Refresh status</Link>}
       {checkout?.orderId && <Link href={mikaTemplateRoutes.accountOrders}>View orders</Link>}
     </div>
   </section>

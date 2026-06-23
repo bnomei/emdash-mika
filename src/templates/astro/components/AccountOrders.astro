@@ -14,10 +14,12 @@ interface Props {
   headingLabel?: string;
   emptyLabel?: string;
   invoiceLabel?: string;
+  noInvoiceLabel?: string;
   orderLabel?: string;
   dateLabel?: string;
   statusLabel?: string;
   totalLabel?: string;
+  actionsLabel?: string;
   class?: string;
   [attribute: string]: unknown;
 }
@@ -28,10 +30,12 @@ const {
   headingLabel = "Orders",
   emptyLabel = "No orders yet.",
   invoiceLabel = "Invoice",
+  noInvoiceLabel = "No invoice",
   orderLabel = "Order",
   dateLabel = "Date",
   statusLabel = "Status",
   totalLabel = "Total",
+  actionsLabel = "Actions",
   class: className,
   ...attrs
 } = Astro.props;
@@ -49,7 +53,7 @@ const hasEmptySlot = Astro.slots.has("empty");
             <Table.Head>{dateLabel}</Table.Head>
             <Table.Head>{statusLabel}</Table.Head>
             <Table.Head>{totalLabel}</Table.Head>
-            <Table.Head>Actions</Table.Head>
+            <Table.Head>{actionsLabel}</Table.Head>
           </Table.Row>
         </Table.Header>
         <Table.Body>
@@ -76,7 +80,11 @@ const hasEmptySlot = Astro.slots.has("empty");
                   <span class="mika-kumo-strong">{formatMikaMoney(order.total)}</span>
                 </Table.Cell>
                 <Table.Cell>
-                  {order.invoiceHref ? <Link href={order.invoiceHref}>{invoiceLabel}</Link> : <span class="mika-kumo-muted">No invoice</span>}
+                  {order.invoiceHref ? (
+                    <Link href={order.invoiceHref}>{invoiceLabel}</Link>
+                  ) : (
+                    <span class="mika-kumo-muted" aria-label={noInvoiceLabel}>{noInvoiceLabel}</span>
+                  )}
                 </Table.Cell>
               </Table.Row>
             );

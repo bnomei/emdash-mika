@@ -314,7 +314,6 @@ export interface OrderSummaryDTO {
   readonly total: MoneyDTO;
   readonly createdAt: ISODateTime;
   readonly invoiceHref?: string;
-  readonly invoiceUrl?: string;
 }
 
 export interface SubscriptionDTO {

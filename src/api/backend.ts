@@ -2665,7 +2665,6 @@ async function orderSummaryDTO(
       origin: ctx.url,
       search: { orderId: order.id, token: invoiceToken },
     }),
-    invoiceUrl: order.aggregate.invoiceUrl,
   };
 }
 
@@ -3334,6 +3333,7 @@ function webhookEventToJson(event: MikaProviderWebhookEvent): JsonObject {
     case "payment":
       return jsonObject({
         kind: event.kind,
+        paymentStatus: event.paymentStatus,
         provider: event.provider,
         providerEventId: event.providerEventId,
         type: event.type,
@@ -3457,8 +3457,11 @@ function storedWebhookEvent(webhook: WebhookDocument): MikaProviderWebhookEvent 
 
   switch (stringChild(eventPayload, "kind")) {
     case "payment":
+      if (stringChild(eventPayload, "paymentStatus") !== "paid") return null;
+
       return {
         kind: "payment",
+        paymentStatus: "paid",
         provider: webhook.provider,
         providerEventId: stringChild(eventPayload, "providerEventId") ?? webhook.providerEventId,
         type,
@@ -3687,6 +3690,16 @@ async function processStoredWebhook(
 ): Promise<WebhookDocument> {
   switch (event.kind) {
     case "payment":
+      if (event.paymentStatus !== "paid") {
+        return markWebhookFailed(
+          input,
+          webhook,
+          ctx.now,
+          "Payment webhook is not in a paid state.",
+          { strict: true },
+        );
+      }
+
       try {
         return await processPaymentWebhook(input, ctx, webhook, event);
       } catch (error) {

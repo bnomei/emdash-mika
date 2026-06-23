@@ -41,8 +41,8 @@ Backend flows:
 
 - Host-owned `MikaApi` composition through explicit method overrides or
   `createMikaBackendApi()`.
-- Provider contracts for hosted checkout, portal sessions, customer-scoped
-  invoice URLs, subscriptions, refunds, catalog sync, and signed webhooks.
+- Provider contracts for hosted checkout, portal sessions, protected invoice
+  lookup, subscriptions, refunds, catalog sync, and signed webhooks.
 - Paid-order fulfillment side effects for entitlement documents, download refs,
   and hashed license-key records.
 - Stock reservation lifecycle, email outbox delivery, account-delete cleanup,
@@ -197,9 +197,9 @@ import { createMikaStripeProvider } from "@bnomei/emdash-mika/stripe";
 The ACP helpers serialize Mika catalog/sellable facts into OpenAI-compatible
 product-feed shapes and expose checkout session handlers for host Astro
 endpoints. The Stripe helper adapts a host-owned Stripe SDK client to Mika's
-provider contract, including hosted Checkout Sessions, success-state webhook
-normalization, signed webhooks, and delegated checkout metadata for Stripe
-Shared Payment Tokens.
+provider contract, including hosted Checkout Sessions, paid-state webhook
+normalization, signed webhooks, protected invoice lookup, and delegated
+checkout metadata for Stripe Shared Payment Tokens.
 
 ## Package Surface
 

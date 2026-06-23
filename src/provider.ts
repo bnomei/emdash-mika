@@ -149,6 +149,7 @@ export type MikaProviderWebhookEvent =
 
 export interface MikaProviderPaymentEvent {
   readonly kind: "payment";
+  readonly paymentStatus: "paid";
   readonly provider: ProviderName;
   readonly providerEventId?: string;
   readonly type: string;

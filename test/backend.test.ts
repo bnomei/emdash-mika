@@ -104,6 +104,7 @@ import {
   createTestSellableDTO,
 } from "./helpers/backend";
 import { createFakeMikaProvider } from "./helpers/provider";
+import { expectMethodBackedProviderCapabilities } from "./helpers/provider-contract";
 import {
   createMemoryStorageCollection,
   createMemoryStorageCollectionWithConfig,
@@ -2510,6 +2511,7 @@ describe("backend test provider helpers", () => {
     await expect(Promise.resolve(fake.provider.capabilities())).resolves.toEqual([
       "hosted_checkout",
     ]);
+    await expectMethodBackedProviderCapabilities(fake.provider);
     await expect(fake.provider.createCheckoutSession(input)).resolves.toMatchObject({
       id: "checkout_fake",
       status: "created",
@@ -2555,6 +2557,7 @@ describe("backend test provider helpers", () => {
     const syncInput = { mode: "dry_run" } as const;
     const webhookInput = createWebhookInput(createProviderName("stripe"));
 
+    await expectMethodBackedProviderCapabilities(fake.provider);
     await fake.provider.createCheckoutSession(checkoutInput);
     await fake.provider.retrieveCheckoutSession("checkout_fake");
     await fake.provider.createPortalSession?.(portalInput);
@@ -2961,9 +2964,11 @@ describe("backend API composition", () => {
 
     const api = createMikaBackendApi(createTestBackendDependencies({ repositories }));
 
-    await expect(
-      api.account.get(createTestRequestContext({ customerId: customer.customerId })),
-    ).resolves.toMatchObject({
+    const account = await api.account.get(
+      createTestRequestContext({ customerId: customer.customerId }),
+    );
+
+    expect(account).toMatchObject({
       ok: true,
       status: 200,
       data: {
@@ -2980,7 +2985,8 @@ describe("backend API composition", () => {
             status: "paid",
             paymentStatus: "paid",
             total: { amount: 1200, currency: TEST_CURRENCY },
-            invoiceUrl: "https://invoice.example.test/order_1",
+            invoiceHref:
+              "https://shop.example.test/_emdash/api/plugins/mika/orders/invoice?orderId=order_1&token=order_invoice_token_1",
           },
         ],
         subscriptions: [
@@ -3009,6 +3015,8 @@ describe("backend API composition", () => {
         ],
       },
     });
+    if (!account.ok) throw new Error("Expected account.get to succeed.");
+    expect(account.data.orders[0]).not.toHaveProperty("invoiceUrl");
   });
 
   it("does not return account data for conflicting customer and user identity", async () => {
@@ -5723,6 +5731,69 @@ describe("backend API composition", () => {
     await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
       status: "processed",
       record: { status: "processed" },
+    });
+  });
+
+  it("rejects malformed provider payment events before paid-order fulfillment", async () => {
+    const sessionCollection = createStorageCollection("session");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      session: new SessionRepository(sessionCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+    };
+    await repositories.session.put(
+      createCheckoutDocument({
+        providerCheckoutId: "provider_checkout_malformed",
+      }),
+    );
+
+    const fake = createFakeMikaProvider({
+      id: TEST_PROVIDER,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "malformed_payment_hash",
+            parsed: { delivery: "event_payment_malformed" },
+          }),
+        parseWebhookEvent: async (verified) => {
+          const event = createPaymentWebhookEvent(verified, {
+            providerEventId: "event_payment_malformed",
+            providerCheckoutId: "provider_checkout_malformed",
+            providerPaymentId: "payment_malformed",
+          });
+          if (event.kind !== "payment") throw new Error("Expected payment event fixture.");
+
+          const { paymentStatus: _paymentStatus, ...malformedEvent } = event;
+
+          return malformedEvent as unknown as MikaProviderWebhookEvent;
+        },
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(receiveWebhook(api, "malformed-payment")).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "failed", replayable: true },
+    });
+    await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(0);
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
+      status: "failed",
+      record: {
+        status: "failed",
+        lastError: "Payment webhook is not in a paid state.",
+        rawPayloadJson: {
+          normalizedEvent: expect.not.objectContaining({ paymentStatus: "paid" }),
+        },
+      },
     });
   });
 
@@ -11370,6 +11441,7 @@ function createPaymentWebhookEvent(
 ): MikaProviderWebhookEvent {
   return {
     kind: "payment",
+    paymentStatus: "paid",
     provider: verified.provider,
     providerEventId: overrides.providerEventId,
     type: overrides.type ?? "payment.completed",

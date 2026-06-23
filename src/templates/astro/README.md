@@ -150,6 +150,10 @@ webhook endpoint depend on the same request-bound Mika API and provider
 adapters as the rest of the copied kit. Keep or delete them based on the
 storefront and provider integration.
 
+Account order screens should link invoices through `order.invoiceHref`. Do not
+project raw provider invoice URLs into copied account templates; provider
+invoice URLs belong behind Mika's protected `order.invoice` route.
+
 ## Wiring
 
 Register the native plugin in `astro.config.mjs`:
