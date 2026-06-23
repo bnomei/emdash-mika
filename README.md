@@ -6,19 +6,24 @@
 [![types](https://img.shields.io/badge/types-included-blue.svg)](./package.json)
 [![source](https://img.shields.io/badge/source-GitHub-181717.svg?logo=github)](https://github.com/bnomei/emdash-mika)
 
-Lightweight commerce primitives for EmDash and Astro.
+Agent-ready commerce primitives for content-led storefronts.
 
-Mika is a native EmDash plugin shell for small storefronts that need carts,
-wishlists, checkout handoff, account links, subscriptions, downloads,
-license-key fulfillment, stock-aware product variants, provider webhooks, and
-agent-readable commerce metadata without adopting a full WooCommerce-style
-system.
+Mika is a native EmDash plugin shell for content-led Astro storefronts that
+need carts, wishlists, checkout handoff, account links, subscriptions,
+downloads, license-key fulfillment, stock-aware product variants, provider
+webhooks, and agent-readable commerce metadata without adopting a full
+commerce platform.
 
-It is intentionally narrow. Mika provides typed primitives, route contracts,
-provider interfaces, Astro Actions, server helpers, operation descriptors, and
-copyable Kumo-backed Astro templates. The host project still owns product content,
-frontend layout, payment-provider wiring, auth/session policy, rate limits,
-tax/shipping rules, and final backend behavior.
+EmDash and Astro are the first implementation surface. The larger job is making
+headless and content-managed storefronts understandable to agents, search
+crawlers, and checkout surfaces while keeping the merchant in control of the
+site, payment provider, fulfillment, support, and customer relationship.
+
+It is intentionally narrow. Mika provides typed commerce primitives, route
+contracts, provider interfaces, Astro Actions, server helpers, operation
+descriptors, and copyable Kumo-backed Astro templates. The host project still
+owns product content, frontend layout, payment-provider wiring, auth/session
+policy, rate limits, tax/shipping rules, and final backend behavior.
 
 ## What It Can Do
 
@@ -45,7 +50,7 @@ Backend flows:
   EmDash plugin lifecycle.
 - Admin operation descriptors and runner helpers for EmDash action UIs.
 
-Agent-ready flows:
+Agent-ready commerce flows:
 
 - Public operation descriptors under `@bnomei/emdash-mika/agent`.
 - Copyable JSON-LD `Product`/`ProductGroup`/`Offer` metadata.
@@ -55,7 +60,9 @@ Agent-ready flows:
 
 Mika is not a catalog manager, page builder, tax engine, shipping-rate engine,
 marketplace platform, hosted OAuth provider, MCP server, or bundled payment
-provider SDK.
+provider SDK. Provider adapters and protocol projections should preserve
+Mika's semantic core instead of leaking a single platform's field names into the
+package.
 
 ## Install
 
@@ -167,11 +174,16 @@ export const schema = mikaAgentManifestJsonSchema;
 
 The manifest describes operation names, capabilities, side effects, risk,
 required actor shape, scopes, confirmation policy, idempotency expectations,
-proof refs, resources, and public route hints. Public storefront examples expose
-safe catalog and stock reads. Protected cart, checkout, account, order,
+proof refs, resources, and public route hints. Public storefront examples
+expose safe catalog and stock reads. Protected cart, checkout, account, order,
 payment, admin, and agent-tool flows still require host-owned OAuth or session
 policy, confirmation, replay storage, rate limits, provider wiring, and payment
 rail verification.
+
+Mika's agent-ready path starts with accurate storefront metadata and stable
+commerce semantics. ACP, UCP, MCP, OpenAPI, AP2, MPP, x402, and other agent or
+payment protocols should be generated as host-owned projections from those
+contracts rather than becoming the core product model.
 
 ## Package Surface
 

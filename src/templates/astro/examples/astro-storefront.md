@@ -1,7 +1,12 @@
 # Astro Storefront Example
 
-This is the default copy path for an Astro storefront that uses EmDash content
-for products and Mika for commerce state.
+This is the default copy path for an agent-ready Astro storefront that uses
+EmDash content for products and Mika for commerce state.
+
+The point of the example is a working content-led storefront: visible product
+pages, stock-aware purchase forms, cart and checkout handoff, account/download
+flows, provider webhooks, and public agent-readable metadata that all describe
+the same commerce state.
 
 ## 1. Register Mika
 

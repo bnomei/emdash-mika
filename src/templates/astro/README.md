@@ -1,11 +1,16 @@
 # Mika Astro Templates
 
-These files are copyable Kumo UI examples for an Astro + EmDash project. They
-are not hidden routes owned by Mika.
+These files are copyable Kumo UI examples for an agent-ready Astro + EmDash
+storefront. They are not hidden routes owned by Mika.
 
 Copy only the pieces the host storefront needs. Keep final product routing,
 localization, auth policy, provider credentials, tax/shipping rules, and
 deployment behavior in the host app.
+
+The template should prove Mika's public position: content-led storefronts can
+add carts, wishlists, checkout handoff, accounts, downloads, stock-aware
+variants, and agent-readable commerce metadata without adopting a full commerce
+platform.
 
 ## Examples
 
@@ -278,6 +283,23 @@ Mika's plugin route keys use EmDash's exact shape under:
 ```txt
 /_emdash/api/plugins/mika/<route>
 ```
+
+## Template Position
+
+The template should stay product-led and operational, not marketing-led. It
+should help a host project demonstrate:
+
+- visible product content backed by EmDash;
+- Mika sellables, prices, variants, stock, cart, wishlist, checkout, account,
+  subscription, license, and download flows;
+- JSON-LD, `llms.txt`, and `.well-known/mika-agent.json` that match the visible
+  catalog and availability;
+- protected checkout, payment, account, admin, and agent-tool boundaries owned
+  by the host app.
+
+Do not turn these templates into a page builder, bundled storefront theme,
+payment-provider SDK, OAuth issuer, MCP server, tax engine, shipping engine, or
+marketplace layer.
 
 Agent manifest `route.path` values are relative to that plugin base path. IDs
 are passed in query strings or JSON bodies rather than dynamic route segments.

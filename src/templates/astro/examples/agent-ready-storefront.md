@@ -5,6 +5,9 @@ can project into agent protocols. It is not itself an OAuth issuer, MCP server,
 payment rail, or protected tool runtime.
 
 Start with public storefront metadata. Protected agent tools can come later.
+The first useful proof is not a chat bot. It is a storefront whose visible
+product content, JSON-LD, availability, checkout affordances, `llms.txt`, and
+public manifest all agree.
 
 ## 1. Product JSON-LD
 
@@ -100,6 +103,11 @@ Good first protected projections are read or preview flows:
 
 Keep final payment authorization and provider checkout handoff behind explicit
 host confirmation.
+
+For the first production-facing protocol path, prioritize ACP feed and checkout
+fixtures around Stripe-backed hosted checkout. Keep ACP field names in the
+projection layer and keep Mika's catalog, cart, checkout, order, provider, and
+proof-ref types protocol-neutral.
 
 ## Boundary Checklist
 

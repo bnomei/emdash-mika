@@ -1,8 +1,8 @@
 # First Release Slice
 
 Use this slice when deciding what belongs in the first public Mika release. The
-goal is to show Mika as a real, agent-ready commerce layer without turning the
-package into a full storefront platform.
+goal is to show Mika as a real, agent-ready commerce layer for content-led
+storefronts without turning the package into a full storefront platform.
 
 ## Ship
 
@@ -26,6 +26,11 @@ package into a full storefront platform.
   `.well-known/mika-agent.json`.
 - Operation manifest descriptors under `@bnomei/emdash-mika/agent` as source
   material for host-owned UCP, ACP, MCP, OpenAPI, or other adapters.
+- A clear first-provider path. The first real provider adapter should be
+  Stripe, with fake/local adapters retained for tests and template demos.
+- A clear first-protocol path. ACP should be the first commerce projection
+  validated against real feed and checkout fixtures, while UCP remains a
+  broader follow-on projection.
 - Clear docs for route boundaries, security posture, idempotency expectations,
   and what Mika deliberately does not own.
 
@@ -34,7 +39,9 @@ package into a full storefront platform.
 - A bundled storefront theme or page builder.
 - Product catalog editing UI inside Mika.
 - Tax, shipping-rate, marketplace, or fulfillment engines.
-- Provider-specific SDK implementations inside the core package.
+- Provider-specific SDK implementations inside Mika core types. A Stripe
+  adapter may exist as an optional adapter surface, but Mika's core contracts
+  should stay provider-neutral.
 - Public browser JSON mutation routes for carts, checkout, accounts, webhooks,
   admin actions, or subscriptions.
 - Built-in OAuth issuer, MCP server, AP2 verifier, MPP/x402 rail, or OpenAPI
@@ -54,6 +61,8 @@ The release should make these stories easy to understand:
   before I build a protected agent-tool server."
 - "I want semantic operation metadata I can project into my own agent protocol
   adapter later."
+- "I want a Stripe-backed path first, without losing the option to add other
+  providers or agent protocols later."
 
 ## Manual Acceptance
 

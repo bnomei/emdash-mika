@@ -1,8 +1,9 @@
 {
   "name": "@bnomei/emdash-mika",
   "version": "0.0.0",
-  "description": "Lightweight commerce primitives for EmDash and Astro.",
+  "description": "Agent-ready commerce primitives for content-led storefronts.",
   "keywords": [
+    "agentic-commerce",
     "astro",
     "cart",
     "cms",
@@ -10,6 +11,7 @@
     "ecommerce",
     "emdash",
     "emdash-plugin",
+    "headless-commerce",
     "subscription",
     "typescript"
   ],
@@ -99,8 +101,8 @@
     "@phosphor-icons/react": "^2.1.10",
     "@types/react": "^19.2.7",
     "ajv": "^8.20.0",
-    "astro": "^6.4.4",
-    "emdash": "^0.21.0",
+    "astro": "^7.0.0",
+    "emdash": "^0.22.0",
     "kysely": "^0.28.0",
     "publint": "^0.3.21",
     "react": "^19.2.3",
@@ -111,8 +113,8 @@
   "peerDependencies": {
     "@cloudflare/kumo": "^2.5.2",
     "@phosphor-icons/react": "^2.1.10",
-    "astro": "^5.0.0 || ^6.0.0",
-    "emdash": ">=0.19.0",
+    "astro": "^6.0.0 || ^7.0.0",
+    "emdash": ">=0.22.0 <0.23.0",
     "react": "^18.3.0 || ^19.0.0",
     "react-dom": "^18.3.0 || ^19.0.0"
   },

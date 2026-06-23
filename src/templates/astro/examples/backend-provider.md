@@ -1,7 +1,13 @@
 # Backend And Provider Wiring Example
 
-Mika does not ship payment credentials, storage, or provider SDK adapters. A
-host project wires those pieces and passes the resulting API to `mikaPlugin()`.
+Mika does not ship payment credentials or storage. A host project wires those
+pieces and passes the resulting API to `mikaPlugin()`.
+
+The first real provider path should be Stripe because it covers hosted
+checkout, subscriptions, portal sessions, invoices, refunds, webhooks, product
+and price sync, and the likely ACP payment path. Keep fake/local providers for
+tests and demos. Keep provider-specific SDK objects and secrets outside Mika's
+core commerce types.
 
 ## Backend API
 
@@ -79,7 +85,9 @@ customers, the host should own that delivery policy and storage boundary.
 ## Provider Adapter
 
 Provider adapters translate Mika's provider contract into a real service such
-as Stripe, Paddle, Lemon Squeezy, or a custom checkout backend.
+as Stripe, Paddle, Lemon Squeezy, or a custom checkout backend. Stripe should be
+the first real adapter; other adapters should wait until Stripe proves the
+contract.
 
 ```ts
 import { defineMikaProvider } from "@bnomei/emdash-mika/provider";

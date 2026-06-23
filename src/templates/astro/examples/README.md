@@ -1,8 +1,8 @@
 # Mika Astro Examples
 
-These examples are the practical setup layer for Mika in an Astro + EmDash
-storefront. They are documentation, not generated routes. Copy the code and
-template files that fit the host project, then keep the final layout, auth,
+These examples are the practical setup layer for Mika in an agent-ready Astro +
+EmDash storefront. They are documentation, not generated routes. Copy the code
+and template files that fit the host project, then keep the final layout, auth,
 provider integration, and product content in the host app.
 
 Start here:
@@ -28,6 +28,8 @@ Each example follows the same split:
 - Agent-facing work starts with accurate public storefront metadata. Protected
   tool flows should be built later from the same contracts, behind host-owned
   OAuth, policy, confirmation, and idempotency storage.
+- Provider and agent-protocol work should be adapters or projections around
+  Mika semantics, not fields baked into product, cart, or checkout core types.
 
 That shape is intentional. These files should be readable by humans today and
 specific enough to become future agent skill/reference material without first
