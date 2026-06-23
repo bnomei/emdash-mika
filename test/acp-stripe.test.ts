@@ -203,6 +203,265 @@ describe("Mika ACP projection", () => {
     });
     expect(checkoutStartCount).toBe(1);
   });
+
+  it("rejects unsafe ACP terminal transitions", async () => {
+    let canceledCart = createCart([]);
+    let canceledCheckoutStarts = 0;
+    const canceledHandlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => canceledCart,
+        setCart: (next) => {
+          canceledCart = next;
+        },
+        onCheckoutStart: () => {
+          canceledCheckoutStarts += 1;
+        },
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      createSessionId: () => "checkout_session_acp_canceled",
+    });
+    await canceledHandlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_canceled", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+      }),
+    );
+    const canceled = await canceledHandlers.cancel(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_canceled/cancel",
+        "idem_cancel_first",
+        {},
+      ),
+      "checkout_session_acp_canceled",
+    );
+
+    expect(canceled.status).toBe(200);
+    await expect(canceled.json()).resolves.toMatchObject({ status: "canceled" });
+
+    const completeCanceled = await canceledHandlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_canceled/complete",
+        "idem_complete_canceled",
+        { payment_data: { provider: "stripe", token: "spt_test_123" } },
+      ),
+      "checkout_session_acp_canceled",
+    );
+
+    expect(completeCanceled.status).toBe(409);
+    await expect(completeCanceled.json()).resolves.toMatchObject({
+      code: "invalid_request",
+      message: "Checkout session is canceled and cannot be completed.",
+    });
+    expect(canceledCheckoutStarts).toBe(0);
+
+    let completedCart = createCart([]);
+    const completedHandlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => completedCart,
+        setCart: (next) => {
+          completedCart = next;
+        },
+        onCheckoutStart: () => {},
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      createSessionId: () => "checkout_session_acp_completed",
+    });
+    await completedHandlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_completed", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+      }),
+    );
+    const completed = await completedHandlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_completed/complete",
+        "idem_complete_first",
+        { payment_data: { provider: "stripe", token: "spt_test_123" } },
+      ),
+      "checkout_session_acp_completed",
+    );
+
+    expect(completed.status).toBe(200);
+    await expect(completed.json()).resolves.toMatchObject({ status: "completed" });
+
+    const cancelCompleted = await completedHandlers.cancel(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_completed/cancel",
+        "idem_cancel_completed",
+        {},
+      ),
+      "checkout_session_acp_completed",
+    );
+
+    expect(cancelCompleted.status).toBe(409);
+    await expect(cancelCompleted.json()).resolves.toMatchObject({
+      code: "invalid_request",
+      message: "Checkout session is completed and cannot be canceled.",
+    });
+  });
+
+  it("restores the previous ACP cart when reconciliation fails after mutation", async () => {
+    let cart = createCart([]);
+    let failSellableId: string | undefined;
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+        onCartAdd: (item) =>
+          String(item.sellableId) === failSellableId
+            ? fail<CartDTO>(409, "OUT_OF_STOCK", "Requested item is out of stock.")
+            : undefined,
+        onCheckoutStart: () => {},
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      createSessionId: () => "checkout_session_acp_rollback",
+    });
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_rollback", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+      }),
+    );
+    expect(cart.items).toHaveLength(1);
+    failSellableId = "sellable_fail";
+
+    const updated = await handlers.update(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_rollback",
+        "idem_update_rollback",
+        {
+          items: [
+            { id: "sellable_2:price_2", quantity: 1 },
+            { id: "sellable_fail:price_fail", quantity: 1 },
+          ],
+        },
+      ),
+      "checkout_session_acp_rollback",
+    );
+
+    expect(updated.status).toBe(400);
+    await expect(updated.json()).resolves.toMatchObject({
+      code: "invalid_request",
+      message: "Requested item is out of stock.",
+    });
+    expect(cart.items).toMatchObject([
+      { sellableId: "sellable_1", priceId: "price_1", quantity: 1 },
+    ]);
+  });
+
+  it("requires ACP payment data to match the configured Stripe provider", async () => {
+    let cart = createCart([]);
+    let checkoutStartCount = 0;
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+        onCheckoutStart: () => {
+          checkoutStartCount += 1;
+        },
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      createSessionId: () => "checkout_session_acp_provider_mismatch",
+    });
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_provider", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+      }),
+    );
+
+    const completed = await handlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_provider_mismatch/complete",
+        "idem_complete_provider_mismatch",
+        { payment_data: { provider: "adyen", token: "adyen_token_123" } },
+      ),
+      "checkout_session_acp_provider_mismatch",
+    );
+
+    expect(completed.status).toBe(400);
+    await expect(completed.json()).resolves.toMatchObject({
+      code: "invalid_request",
+      message: "payment_data.provider must be 'stripe' for this checkout session.",
+      param: "$.payment_data.provider",
+    });
+    expect(checkoutStartCount).toBe(0);
+  });
+
+  it("rejects concurrent ACP idempotency replays while the first request is in progress", async () => {
+    let cart = createCart([]);
+    let releaseCheckoutStart!: () => void;
+    let enteredCheckoutStart!: () => void;
+    const checkoutStartEntered = new Promise<void>((resolve) => {
+      enteredCheckoutStart = resolve;
+    });
+    const checkoutStartRelease = new Promise<void>((resolve) => {
+      releaseCheckoutStart = resolve;
+    });
+    let checkoutStartCount = 0;
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+        onCheckoutStart: async () => {
+          checkoutStartCount += 1;
+          enteredCheckoutStart();
+          await checkoutStartRelease;
+        },
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      createSessionId: () => "checkout_session_acp_idempotency",
+    });
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_idempotency", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+      }),
+    );
+
+    const first = handlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_idempotency/complete",
+        "idem_complete_shared",
+        { payment_data: { provider: "stripe", token: "spt_test_123" } },
+      ),
+      "checkout_session_acp_idempotency",
+    );
+    await checkoutStartEntered;
+    const second = await handlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_idempotency/complete",
+        "idem_complete_shared",
+        { payment_data: { provider: "stripe", token: "spt_test_123" } },
+      ),
+      "checkout_session_acp_idempotency",
+    );
+
+    expect(second.status).toBe(409);
+    await expect(second.json()).resolves.toMatchObject({
+      code: "request_not_idempotent",
+      message: "Idempotency-Key replay is already in progress.",
+    });
+    releaseCheckoutStart();
+    await expect(first).resolves.toMatchObject({ status: 200 });
+    expect(checkoutStartCount).toBe(1);
+  });
 });
 
 describe("Mika Stripe provider", () => {
@@ -325,6 +584,30 @@ describe("Mika Stripe provider", () => {
     });
   });
 
+  it("derives Stripe capabilities from the configured client by default", async () => {
+    const stripe: MikaStripeClient = {
+      checkout: {
+        sessions: {
+          create: async () => ({
+            id: "cs_test_123",
+            status: "open",
+            mode: "payment",
+            url: "https://checkout.stripe.test/cs_test_123",
+          }),
+          retrieve: async () => ({ id: "cs_test_123", status: "complete", mode: "payment" }),
+        },
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe });
+
+    expect(await Promise.resolve(provider.capabilities())).toEqual(["hosted_checkout", "payments"]);
+    await expect(provider.health?.()).resolves.toMatchObject({
+      ok: true,
+      capabilities: ["hosted_checkout", "payments"],
+      warnings: ["Stripe webhook secret is not configured."],
+    });
+  });
+
   it("verifies and normalizes Stripe checkout webhooks", async () => {
     const payload = {
       id: "evt_test_123",
@@ -397,7 +680,12 @@ function acpRequest(url: string, idempotencyKey: string, body: JsonObject): Requ
 function createAcpTestApi(input: {
   readonly getCart: () => CartDTO;
   readonly setCart: (cart: CartDTO) => void;
-  readonly onCheckoutStart: (metadata: JsonObject | undefined) => void;
+  readonly onCartAdd?: (item: {
+    readonly sellableId: MikaIdLike;
+    readonly priceId?: MikaIdLike;
+    readonly quantity?: number;
+  }) => MikaApiResult<CartDTO> | undefined;
+  readonly onCheckoutStart?: (metadata: JsonObject | undefined) => void | Promise<void>;
 }): MikaApi {
   const api = {
     cart: {
@@ -411,19 +699,15 @@ function createAcpTestApi(input: {
           readonly quantity?: number;
         },
       ) => {
-        const line = {
-          id: createMikaId(`cart_line_${input.getCart().items.length + 1}`),
-          sellableId: createMikaId(String(item.sellableId)),
-          priceId: item.priceId ? createMikaId(String(item.priceId)) : undefined,
-          title: "Limited print",
-          sku: "PRINT-A3",
-          variantOptions: [],
+        const failure = input.onCartAdd?.(item);
+        if (failure) return failure;
+        const line = createCartLine({
+          id: `cart_line_${input.getCart().items.length + 1}`,
+          sellableId: String(item.sellableId),
+          priceId: item.priceId ? String(item.priceId) : undefined,
           quantity: item.quantity ?? 1,
-          unitAmount: { amount: 1200, currency: createCurrencyCode("EUR") },
-          subtotal: { amount: 1200 * (item.quantity ?? 1), currency: createCurrencyCode("EUR") },
-          total: { amount: 1200 * (item.quantity ?? 1), currency: createCurrencyCode("EUR") },
-        };
-        input.setCart(createCart([line]));
+        });
+        input.setCart(createCart([...input.getCart().items, line]));
 
         return ok(input.getCart());
       },
@@ -452,7 +736,7 @@ function createAcpTestApi(input: {
           inputHash: "hash_quote_1",
         }),
       start: async (_ctx: unknown, checkoutInput: { readonly customFields?: JsonObject }) => {
-        input.onCheckoutStart(checkoutInput.customFields);
+        await input.onCheckoutStart?.(checkoutInput.customFields);
 
         return ok<CheckoutSessionDTO>({
           id: createMikaId("checkout_1"),
@@ -477,6 +761,26 @@ function createAcpTestApi(input: {
 }
 
 type MikaIdLike = string;
+
+function createCartLine(input: {
+  readonly id: string;
+  readonly sellableId: string;
+  readonly priceId?: string;
+  readonly quantity: number;
+}): CartDTO["items"][number] {
+  return {
+    id: createMikaId(input.id),
+    sellableId: createMikaId(input.sellableId),
+    priceId: input.priceId ? createMikaId(input.priceId) : undefined,
+    title: "Limited print",
+    sku: "PRINT-A3",
+    variantOptions: [],
+    quantity: input.quantity,
+    unitAmount: { amount: 1200, currency: createCurrencyCode("EUR") },
+    subtotal: { amount: 1200 * input.quantity, currency: createCurrencyCode("EUR") },
+    total: { amount: 1200 * input.quantity, currency: createCurrencyCode("EUR") },
+  };
+}
 
 function createCart(items: CartDTO["items"]): CartDTO {
   const total = items.reduce((sum, item) => sum + item.total.amount, 0);
@@ -518,4 +822,12 @@ function cartToQuote(cart: CartDTO): CartQuoteDTO {
 
 function ok<T>(data: T): MikaApiResult<T> {
   return { ok: true, status: 200, data };
+}
+
+function fail<T>(
+  status: number,
+  code: Extract<MikaApiResult<T>, { readonly ok: false }>["error"]["code"],
+  message: string,
+): MikaApiResult<T> {
+  return { ok: false, status, error: { code, message } };
 }

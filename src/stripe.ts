@@ -211,7 +211,7 @@ export interface MikaStripeSubscription {
   readonly [key: string]: unknown;
 }
 
-export type MikaStripeJsonObject = Record<string, unknown>;
+export type MikaStripeJsonObject = JsonObject;
 
 export function createMikaStripeProvider(
   options: CreateMikaStripeProviderOptions,
@@ -279,21 +279,30 @@ export function createMikaStripeProvider(
 function stripeCapabilities(
   options: CreateMikaStripeProviderOptions,
 ): readonly MikaProviderCapability[] {
-  return (
-    options.capabilities ?? [
-      "hosted_checkout",
-      "payments",
+  if (options.capabilities) return options.capabilities;
+
+  const capabilities: MikaProviderCapability[] = [];
+  if (options.stripe.checkout?.sessions) capabilities.push("hosted_checkout");
+  if (options.stripe.paymentIntents?.create || options.stripe.checkout?.sessions) {
+    capabilities.push("payments");
+  }
+  if (options.stripe.subscriptions) {
+    capabilities.push(
       "subscriptions",
       "subscription_renew",
       "subscription_change",
       "subscription_cancel",
-      "portal",
-      "invoice_url",
-      "refunds",
-      "webhook_signatures",
-      ...(options.catalogSync ? (["product_sync", "variant_sync", "stock_sync"] as const) : []),
-    ]
-  );
+    );
+  }
+  if (options.stripe.billingPortal?.sessions) capabilities.push("portal");
+  if (options.stripe.invoices) capabilities.push("invoice_url");
+  if (options.stripe.refunds) capabilities.push("refunds");
+  if (options.webhookSecret && options.stripe.webhooks?.constructEvent) {
+    capabilities.push("webhook_signatures");
+  }
+  if (options.catalogSync) capabilities.push("product_sync", "variant_sync", "stock_sync");
+
+  return capabilities;
 }
 
 async function stripeHealth(

@@ -181,9 +181,17 @@ export interface MikaAcpSessionRecord {
 export interface MikaAcpSessionStore {
   get(id: string): Promise<MikaAcpSessionRecord | undefined>;
   put(record: MikaAcpSessionRecord): Promise<void>;
+  claimIdempotencyKey?(key: string, id: string): Promise<MikaAcpIdempotencyClaim>;
   getByIdempotencyKey?(key: string): Promise<MikaAcpSessionRecord | undefined>;
   bindIdempotencyKey?(key: string, id: string): Promise<void>;
+  releaseIdempotencyKey?(key: string, id: string): Promise<void>;
 }
+
+export type MikaAcpIdempotencyClaim =
+  | { readonly status: "claimed" }
+  | { readonly status: "replayed"; readonly record: MikaAcpSessionRecord }
+  | { readonly status: "conflict"; readonly id: string }
+  | { readonly status: "in_progress"; readonly id: string };
 
 export interface CreateMikaAcpCheckoutHandlersOptions {
   readonly api: MikaApi;
@@ -525,7 +533,7 @@ export function serializeMikaAcpProductFeed(feed: MikaAcpProductFeed): string {
 
 export function createMemoryMikaAcpSessionStore(): MikaAcpSessionStore {
   const sessions = new Map<string, MikaAcpSessionRecord>();
-  const idempotencyKeys = new Map<string, string>();
+  const idempotencyKeys = new Map<string, { readonly id: string; readonly pending: boolean }>();
 
   return {
     async get(id) {
@@ -534,13 +542,33 @@ export function createMemoryMikaAcpSessionStore(): MikaAcpSessionStore {
     async put(record) {
       sessions.set(record.id, record);
     },
-    async getByIdempotencyKey(key) {
-      const id = idempotencyKeys.get(key);
+    async claimIdempotencyKey(key, id) {
+      const existing = idempotencyKeys.get(key);
+      if (existing) {
+        if (existing.id !== id) return { status: "conflict", id: existing.id };
+        const record = sessions.get(existing.id);
 
-      return id ? sessions.get(id) : undefined;
+        return record && !existing.pending
+          ? { status: "replayed", record }
+          : { status: "in_progress", id: existing.id };
+      }
+
+      idempotencyKeys.set(key, { id, pending: true });
+
+      return { status: "claimed" };
+    },
+    async getByIdempotencyKey(key) {
+      const binding = idempotencyKeys.get(key);
+      if (!binding || binding.pending) return undefined;
+
+      return sessions.get(binding.id);
     },
     async bindIdempotencyKey(key, id) {
-      idempotencyKeys.set(key, id);
+      idempotencyKeys.set(key, { id, pending: false });
+    },
+    async releaseIdempotencyKey(key, id) {
+      const binding = idempotencyKeys.get(key);
+      if (binding?.id === id && binding.pending) idempotencyKeys.delete(key);
     },
   };
 }
@@ -599,14 +627,6 @@ async function handleAcpCreate(
   const preflight = await verifyAcpRequest(options, request, true);
   if (preflight) return preflight;
 
-  const idempotencyKey = acpIdempotencyStoreKey(request);
-  const replayed = idempotencyKey
-    ? await options.store.getByIdempotencyKey?.(idempotencyKey)
-    : undefined;
-  if (replayed) {
-    return acpJson(request, await recordToAcpSession(options, request, replayed), 201);
-  }
-
   const body = await readJson<MikaAcpCheckoutCreateRequest>(request);
   if (!body.ok) return acpError(request, 400, "invalid_request", body.message);
   if (!Array.isArray(body.data.items) || body.data.items.length === 0) {
@@ -625,10 +645,17 @@ async function handleAcpCreate(
     createdAt: now,
     updatedAt: now,
   };
+  const idempotency = await beginAcpIdempotency(options, request, session.id, 201);
+  if (!idempotency.ok) return idempotency.response;
+
   const reconciled = await reconcileAcpCart(options, request, session, body.data.items);
-  if (!reconciled.ok) return acpError(request, 400, "invalid_request", reconciled.message);
+  if (!reconciled.ok) {
+    await releaseAcpIdempotency(options, idempotency.lease);
+
+    return acpError(request, 400, "invalid_request", reconciled.message);
+  }
   await options.store.put(reconciled.record);
-  await bindAcpIdempotency(options, request, session.id);
+  await commitAcpIdempotency(options, idempotency.lease);
 
   return acpJson(request, await recordToAcpSession(options, request, reconciled.record), 201);
 }
@@ -643,11 +670,21 @@ async function handleAcpUpdate(
 
   const record = await options.store.get(checkoutSessionId);
   if (!record) return acpError(request, 404, "invalid_request", "Checkout session was not found.");
-  const replayed = await replayAcpIdempotency(options, request, checkoutSessionId);
-  if (replayed) return replayed;
+  const idempotency = await beginAcpIdempotency(options, request, checkoutSessionId, 200);
+  if (!idempotency.ok) return idempotency.response;
+  const terminalStatus = await acpTerminalStatus(options, record);
+  if (terminalStatus) {
+    await releaseAcpIdempotency(options, idempotency.lease);
+
+    return acpTerminalError(request, terminalStatus, "updated");
+  }
 
   const body = await readJson<MikaAcpCheckoutUpdateRequest>(request);
-  if (!body.ok) return acpError(request, 400, "invalid_request", body.message);
+  if (!body.ok) {
+    await releaseAcpIdempotency(options, idempotency.lease);
+
+    return acpError(request, 400, "invalid_request", body.message);
+  }
 
   const next: MikaAcpSessionRecord = {
     ...record,
@@ -660,9 +697,13 @@ async function handleAcpUpdate(
   const reconciled = body.data.items
     ? await reconcileAcpCart(options, request, next, body.data.items)
     : { ok: true as const, record: next };
-  if (!reconciled.ok) return acpError(request, 400, "invalid_request", reconciled.message);
+  if (!reconciled.ok) {
+    await releaseAcpIdempotency(options, idempotency.lease);
+
+    return acpError(request, 400, "invalid_request", reconciled.message);
+  }
   await options.store.put(reconciled.record);
-  await bindAcpIdempotency(options, request, checkoutSessionId);
+  await commitAcpIdempotency(options, idempotency.lease);
 
   return acpJson(request, await recordToAcpSession(options, request, reconciled.record), 200);
 }
@@ -677,12 +718,29 @@ async function handleAcpComplete(
 
   const record = await options.store.get(checkoutSessionId);
   if (!record) return acpError(request, 404, "invalid_request", "Checkout session was not found.");
-  const replayed = await replayAcpIdempotency(options, request, checkoutSessionId);
-  if (replayed) return replayed;
+  const idempotency = await beginAcpIdempotency(options, request, checkoutSessionId, 200);
+  if (!idempotency.ok) return idempotency.response;
+  const terminalStatus = await acpTerminalStatus(options, record);
+  if (terminalStatus === "completed") {
+    await commitAcpIdempotency(options, idempotency.lease);
+
+    return acpJson(request, await recordToAcpSession(options, request, record), 200);
+  }
+  if (terminalStatus === "canceled") {
+    await releaseAcpIdempotency(options, idempotency.lease);
+
+    return acpTerminalError(request, terminalStatus, "completed");
+  }
 
   const body = await readJson<MikaAcpCheckoutCompleteRequest>(request);
-  if (!body.ok) return acpError(request, 400, "invalid_request", body.message);
+  if (!body.ok) {
+    await releaseAcpIdempotency(options, idempotency.lease);
+
+    return acpError(request, 400, "invalid_request", body.message);
+  }
   if (!body.data.payment_data?.token || !body.data.payment_data.provider) {
+    await releaseAcpIdempotency(options, idempotency.lease);
+
     return acpError(
       request,
       400,
@@ -691,11 +749,39 @@ async function handleAcpComplete(
       "$.payment_data",
     );
   }
+  const expectedProvider = providerToAcp(record.provider);
+  if (body.data.payment_data.provider !== expectedProvider) {
+    await releaseAcpIdempotency(options, idempotency.lease);
+
+    return acpError(
+      request,
+      400,
+      "invalid_request",
+      `payment_data.provider must be '${expectedProvider}' for this checkout session.`,
+      "$.payment_data.provider",
+    );
+  }
+  if (body.data.payment_data.provider !== "stripe") {
+    await releaseAcpIdempotency(options, idempotency.lease);
+
+    return acpError(
+      request,
+      400,
+      "invalid_request",
+      "ACP delegated checkout currently supports Stripe shared payment tokens only.",
+      "$.payment_data.provider",
+    );
+  }
 
   const preview = await previewAcpCheckout(options, request, record);
-  if (!preview.ok)
+  if (!preview.ok) {
+    await releaseAcpIdempotency(options, idempotency.lease);
+
     return acpError(request, preview.status, "invalid_request", resultMessage(preview));
+  }
   if (!preview.data.inputHash || preview.data.status !== "requires_payment_authorization") {
+    await releaseAcpIdempotency(options, idempotency.lease);
+
     return acpError(request, 409, "invalid_request", "Checkout session is not ready for payment.");
   }
 
@@ -713,8 +799,11 @@ async function handleAcpComplete(
       acpPaymentAuthorizationInputHash: preview.data.inputHash,
     },
   });
-  if (!checkout.ok)
+  if (!checkout.ok) {
+    await releaseAcpIdempotency(options, idempotency.lease);
+
     return acpError(request, checkout.status, "invalid_request", resultMessage(checkout));
+  }
 
   const completed: MikaAcpSessionRecord = {
     ...record,
@@ -726,7 +815,7 @@ async function handleAcpComplete(
     updatedAt: nowIso(options),
   };
   await options.store.put(completed);
-  await bindAcpIdempotency(options, request, checkoutSessionId);
+  await commitAcpIdempotency(options, idempotency.lease);
 
   return acpJson(request, await recordToAcpSession(options, request, completed), 200);
 }
@@ -755,48 +844,110 @@ async function handleAcpCancel(
 
   const record = await options.store.get(checkoutSessionId);
   if (!record) return acpError(request, 404, "invalid_request", "Checkout session was not found.");
-  const replayed = await replayAcpIdempotency(options, request, checkoutSessionId);
-  if (replayed) return replayed;
+  const idempotency = await beginAcpIdempotency(options, request, checkoutSessionId, 200);
+  if (!idempotency.ok) return idempotency.response;
+  const terminalStatus = await acpTerminalStatus(options, record);
+  if (terminalStatus === "completed") {
+    await releaseAcpIdempotency(options, idempotency.lease);
+
+    return acpTerminalError(request, terminalStatus, "canceled");
+  }
+  if (terminalStatus === "canceled") {
+    await commitAcpIdempotency(options, idempotency.lease);
+
+    return acpJson(request, await recordToAcpSession(options, request, record), 200);
+  }
   const canceled: MikaAcpSessionRecord = {
     ...record,
     status: "canceled",
     updatedAt: nowIso(options),
   };
   await options.store.put(canceled);
-  await bindAcpIdempotency(options, request, checkoutSessionId);
+  await commitAcpIdempotency(options, idempotency.lease);
 
   return acpJson(request, await recordToAcpSession(options, request, canceled), 200);
 }
 
-async function replayAcpIdempotency(
-  options: CreateMikaAcpCheckoutHandlersOptions,
-  request: Request,
-  checkoutSessionId: string,
-): Promise<Response | undefined> {
-  const key = acpIdempotencyStoreKey(request);
-  if (!key) return undefined;
-
-  const replayed = await options.store.getByIdempotencyKey?.(key);
-  if (!replayed) return undefined;
-  if (replayed.id !== checkoutSessionId) {
-    return acpError(
-      request,
-      409,
-      "request_not_idempotent",
-      "Idempotency-Key is already bound to another checkout session.",
-    );
-  }
-
-  return acpJson(request, await recordToAcpSession(options, request, replayed), 200);
+interface MikaAcpIdempotencyLease {
+  readonly key: string;
+  readonly id: string;
+  readonly claimed: boolean;
 }
 
-async function bindAcpIdempotency(
+type MikaAcpIdempotencyBegin =
+  | { readonly ok: true; readonly lease?: MikaAcpIdempotencyLease }
+  | { readonly ok: false; readonly response: Response };
+
+async function beginAcpIdempotency(
   options: CreateMikaAcpCheckoutHandlersOptions,
   request: Request,
   checkoutSessionId: string,
-): Promise<void> {
+  replayStatus: number,
+): Promise<MikaAcpIdempotencyBegin> {
   const key = acpIdempotencyStoreKey(request);
-  if (key) await options.store.bindIdempotencyKey?.(key, checkoutSessionId);
+  if (!key) return { ok: true };
+
+  if (options.store.claimIdempotencyKey) {
+    const claim = await options.store.claimIdempotencyKey(key, checkoutSessionId);
+    if (claim.status === "claimed") {
+      return { ok: true, lease: { key, id: checkoutSessionId, claimed: true } };
+    }
+    if (claim.status === "replayed") {
+      return {
+        ok: false,
+        response: acpJson(
+          request,
+          await recordToAcpSession(options, request, claim.record),
+          replayStatus,
+        ),
+      };
+    }
+
+    return {
+      ok: false,
+      response: acpError(
+        request,
+        409,
+        "request_not_idempotent",
+        claim.status === "conflict"
+          ? "Idempotency-Key is already bound to another checkout session."
+          : "Idempotency-Key replay is already in progress.",
+      ),
+    };
+  }
+
+  const replayed = await options.store.getByIdempotencyKey?.(key);
+  if (!replayed) return { ok: true, lease: { key, id: checkoutSessionId, claimed: false } };
+  if (replayed.id !== checkoutSessionId) {
+    return {
+      ok: false,
+      response: acpError(
+        request,
+        409,
+        "request_not_idempotent",
+        "Idempotency-Key is already bound to another checkout session.",
+      ),
+    };
+  }
+
+  return {
+    ok: false,
+    response: acpJson(request, await recordToAcpSession(options, request, replayed), replayStatus),
+  };
+}
+
+async function commitAcpIdempotency(
+  options: CreateMikaAcpCheckoutHandlersOptions,
+  lease: MikaAcpIdempotencyLease | undefined,
+): Promise<void> {
+  if (lease) await options.store.bindIdempotencyKey?.(lease.key, lease.id);
+}
+
+async function releaseAcpIdempotency(
+  options: CreateMikaAcpCheckoutHandlersOptions,
+  lease: MikaAcpIdempotencyLease | undefined,
+): Promise<void> {
+  if (lease?.claimed) await options.store.releaseIdempotencyKey?.(lease.key, lease.id);
 }
 
 function acpIdempotencyStoreKey(request: Request): string | undefined {
@@ -804,6 +955,33 @@ function acpIdempotencyStoreKey(request: Request): string | undefined {
   if (!key) return undefined;
 
   return `${request.method}:${new URL(request.url).pathname}:${key}`;
+}
+
+async function acpTerminalStatus(
+  options: CreateMikaAcpCheckoutHandlersOptions,
+  record: MikaAcpSessionRecord,
+): Promise<MikaAcpCheckoutSessionStatus | undefined> {
+  if (record.status === "completed" || record.status === "canceled") return record.status;
+  if (!record.checkoutId) return undefined;
+  const checkout = await options.api.checkout.status({ checkoutId: record.checkoutId });
+  if (!checkout.ok) return undefined;
+  if (checkout.data.status === "completed") return "completed";
+  if (checkout.data.status === "cancelled") return "canceled";
+
+  return undefined;
+}
+
+function acpTerminalError(
+  request: Request,
+  status: MikaAcpCheckoutSessionStatus,
+  action: "updated" | "completed" | "canceled",
+): Response {
+  return acpError(
+    request,
+    409,
+    "invalid_request",
+    `Checkout session is ${status} and cannot be ${action}.`,
+  );
 }
 
 async function reconcileAcpCart(
@@ -819,29 +997,54 @@ async function reconcileAcpCart(
   const cartResult = await options.api.cart.get(ctx);
   if (!cartResult.ok) return { ok: false, message: resultMessage(cartResult) };
 
-  let cart = cartResult.data;
-  for (const line of cart.items) {
-    const removed = await options.api.cart.remove(ctx, { lineId: line.id });
-    if (!removed.ok) return { ok: false, message: resultMessage(removed) };
-    cart = removed.data;
-  }
-
+  const parsedItems: {
+    readonly item: MikaAcpItem;
+    readonly ids: ReturnType<typeof parseAcpItemId>;
+  }[] = [];
   for (const item of items) {
-    let ids: ReturnType<typeof parseAcpItemId>;
     try {
-      ids = parseAcpItemId(item.id);
+      parsedItems.push({ item, ids: parseAcpItemId(item.id) });
     } catch (error) {
       return {
         ok: false,
         message: error instanceof Error ? error.message : "ACP item id is invalid.",
       };
     }
+  }
+
+  const originalCart = cartResult.data;
+  let cart = cartResult.data;
+  for (const line of cart.items) {
+    const removed = await options.api.cart.remove(ctx, { lineId: line.id });
+    if (!removed.ok) {
+      const rollbackMessage = await restoreAcpCart(options, ctx, originalCart);
+
+      return {
+        ok: false,
+        message: rollbackMessage
+          ? `${resultMessage(removed)} Cart rollback failed: ${rollbackMessage}`
+          : resultMessage(removed),
+      };
+    }
+    cart = removed.data;
+  }
+
+  for (const { item, ids } of parsedItems) {
     const added = await options.api.cart.add(ctx, {
       sellableId: ids.sellableId,
       priceId: ids.priceId,
       quantity: item.quantity,
     });
-    if (!added.ok) return { ok: false, message: resultMessage(added) };
+    if (!added.ok) {
+      const rollbackMessage = await restoreAcpCart(options, ctx, originalCart);
+
+      return {
+        ok: false,
+        message: rollbackMessage
+          ? `${resultMessage(added)} Cart rollback failed: ${rollbackMessage}`
+          : resultMessage(added),
+      };
+    }
     cart = added.data;
   }
 
@@ -856,6 +1059,33 @@ async function reconcileAcpCart(
       updatedAt: nowIso(options),
     },
   };
+}
+
+async function restoreAcpCart(
+  options: CreateMikaAcpCheckoutHandlersOptions,
+  ctx: MikaRequestContext,
+  originalCart: CartDTO,
+): Promise<string | undefined> {
+  const currentResult = await options.api.cart.get(ctx);
+  if (!currentResult.ok) return resultMessage(currentResult);
+
+  let cart = currentResult.data;
+  for (const line of cart.items) {
+    const removed = await options.api.cart.remove(ctx, { lineId: line.id });
+    if (!removed.ok) return resultMessage(removed);
+    cart = removed.data;
+  }
+
+  for (const line of originalCart.items) {
+    const restored = await options.api.cart.add(ctx, {
+      sellableId: line.sellableId,
+      priceId: line.priceId,
+      quantity: line.quantity,
+    });
+    if (!restored.ok) return resultMessage(restored);
+  }
+
+  return undefined;
 }
 
 async function recordToAcpSession(
@@ -886,10 +1116,10 @@ export function acpCheckoutSessionFromState(input: {
   readonly orderUrl?: string;
 }): MikaAcpCheckoutSession {
   const status =
-    input.record.status === "canceled"
-      ? "canceled"
-      : input.checkout?.status === "completed"
-        ? "completed"
+    input.checkout?.status === "completed" || input.record.status === "completed"
+      ? "completed"
+      : input.checkout?.status === "cancelled" || input.record.status === "canceled"
+        ? "canceled"
         : input.quote.status === "valid" || input.quote.status === "changed"
           ? "ready_for_payment"
           : "not_ready_for_payment";
