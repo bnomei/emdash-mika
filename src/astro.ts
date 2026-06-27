@@ -144,10 +144,16 @@ export function mikaSafeReturnTo(
 export function formatMikaMoney(value?: MoneyDTO | null, options: MikaFormatOptions = {}): string {
   if (!value) return "";
 
-  return new Intl.NumberFormat(options.locales, {
+  const formatter = new Intl.NumberFormat(options.locales, {
     style: "currency",
     currency: value.currency,
-  }).format(value.amount / 100);
+  });
+  // Amounts are stored in the currency's minor units. Scale by the currency's
+  // own fraction digits (0 for JPY/KRW, 2 for USD/EUR, 3 for BHD/KWD) instead of
+  // a hard /100, which would understate zero-decimal currencies 100x.
+  const fractionDigits = formatter.resolvedOptions().maximumFractionDigits ?? 2;
+
+  return formatter.format(value.amount / 10 ** fractionDigits);
 }
 
 export function formatMikaPrice(price: PriceDTO, options: MikaFormatOptions = {}): string {

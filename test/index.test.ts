@@ -125,6 +125,7 @@ import {
   createMika,
   createMikaPurchaseModel,
   createMikaPurchaseOptions,
+  formatMikaMoney,
   isMikaPurchasable,
   type MikaAstroClientOptions,
   mikaMaxPurchaseQuantity,
@@ -577,6 +578,20 @@ describe("Mika native plugin package", () => {
 });
 
 describe("Mika Astro helpers", () => {
+  it("scales money by the currency's own fraction digits, not a fixed /100", () => {
+    // Intl uses non-breaking spaces around some currency codes; normalize them.
+    const fmt = (amount: number, currency: string) =>
+      formatMikaMoney({ amount, currency }, { locales: "en-US" }).replace(/[  ]/g, " ");
+
+    // 2-decimal currency: minor units divided by 100.
+    expect(fmt(1200, "USD")).toBe("$12.00");
+    // Zero-decimal currency: the minor unit IS the major unit, so no /100.
+    // A stored 1000 (¥1,000 charged) must render ¥1,000, not ¥10.
+    expect(fmt(1000, "JPY")).toBe("¥1,000");
+    // Three-decimal currency: divide by 1000.
+    expect(fmt(1500, "BHD")).toBe("BHD 1.500");
+  });
+
   it("preserves query strings in return targets", () => {
     expect(mikaReturnTo(new URL("https://shop.test/products/ring?size=5"))).toBe(
       "/products/ring?size=5",

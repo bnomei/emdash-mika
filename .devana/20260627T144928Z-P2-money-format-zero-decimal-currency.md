@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P2 | high | security=no
+DEVANA-STATE: fixed | P2 | high | security=no
 DEVANA-KEY: src/astro.ts:150 | money-format-zero-decimal-currency
 
 # Money formatting hard-divides minor units by 100, understating zero-decimal currencies 100x
@@ -59,6 +59,7 @@ Preserve the original finding body. Update line 2 `DEVANA-STATE:` and the final 
 ## Status Notes
 
 - 2026-06-27: open by Devana. Verified astro.ts:150 and email.ts:164 hard /100; stripe.ts:430 passes minor units; isCurrencyCode accepts any 3-letter code.
+- 2026-06-27: fixed. Confirmed `formatMikaMoney` (astro.ts) and `formatMoney` (email.ts) both did `value.amount / 100`, so a zero-decimal currency (JPY/KRW) stored in minor units rendered 1/100 of the charged amount. Fix: both formatters now derive the scale from the currency itself via `Intl.NumberFormat(...).resolvedOptions().maximumFractionDigits` (0 for JPY/KRW, 2 for USD/EUR, 3 for BHD/KWD) and divide by `10 ** fractionDigits` (default 2 if unresolved). Intl already applies the correct fraction digits when formatting, so the displayed value now matches the charged minor-unit amount for every currency. Added regression test `scales money by the currency's own fraction digits, not a fixed /100` (USD 1200→$12.00, JPY 1000→¥1,000, BHD 1500→BHD 1.500). Typecheck + 326 tests pass.
 
 DEVANA-KEY: src/astro.ts:150 | money-format-zero-decimal-currency
-DEVANA-SUMMARY: open | P2 | high | formatMikaMoney/formatMoney hard-divide minor units by 100, so zero-decimal currencies (JPY/KRW) display 1/100 of the price actually charged, in storefront and confirmation emails.
+DEVANA-SUMMARY: fixed | P2 | high | formatMikaMoney/formatMoney hard-divided minor units by 100, understating zero-decimal currencies 100x. Fixed by scaling with the currency's own maximumFractionDigits in both the storefront and email formatters, with a regression test.
