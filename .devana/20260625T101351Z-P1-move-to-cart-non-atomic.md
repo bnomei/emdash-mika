@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-Priority: P1 | Confidence: medium | Security-sensitive: no | Status: open
+Priority: P1 | Confidence: medium | Security-sensitive: no | Status: invalid
 Location: src/api/backend.ts:1077-1078 | Slug: move-to-cart-non-atomic
 
 # moveToCart removes wishlist item before cart write succeeds
@@ -45,6 +45,7 @@ After working this report, preserve the original finding body. Update line 2 `St
 ## Status Notes
 
 - 2026-06-25: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: invalid. The finding's premise is incorrect for the actual code: `moveToCart` (backend.ts:1077-1078) writes `updatedCart` FIRST, then `updatedWishlist` — the reverse of the report's claim ("persists the updated wishlist ... before persisting the updated cart"). Git history (`27d381e`) shows it was always cart-first. With cart-first ordering the reported loss cannot occur: if the cart `put` fails, the wishlist is untouched and still holds the item; if the cart `put` succeeds but the wishlist `put` fails, the item exists in both collections (a benign duplicate, not a loss). The report's own "Suggested Next Step" ("write cart first and wishlist second") is already implemented, so the invariant "an item must not vanish from both collections" already holds. No code change made.
 
 DEVANA-KEY: src/api/backend.ts:1077-1078 | P1 | move-to-cart-non-atomic
-DEVANA-SUMMARY: Status=open | P1 medium src/api/backend.ts:1077-1078 - moveToCart writes wishlist before cart without rollback, so storage failure can lose the item from both.
+DEVANA-SUMMARY: Status=invalid | P1 medium src/api/backend.ts:1077-1078 - Finding premise is wrong: moveToCart already writes cart before wishlist (the report's own recommended fix), so the item can never vanish from both; worst case is a benign duplicate. No loss path exists.
