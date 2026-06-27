@@ -1,4 +1,4 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 import {
   createMikaRequestContext,
@@ -576,6 +576,16 @@ export function createMemoryMikaAcpSessionStore(): MikaAcpSessionStore {
 export function createMikaAcpCheckoutHandlers(
   options: CreateMikaAcpCheckoutHandlersOptions,
 ): MikaAcpCheckoutHandlers {
+  // Fail closed: without an `apiKey` or `signatureSecret`, `verifyAcpRequest`
+  // would authorize every caller, so knowing a checkout session id alone would
+  // be enough to read or mutate another buyer's cart and checkout. Refuse to
+  // build open handlers at all rather than silently exposing them.
+  if (!options.apiKey && !options.signatureSecret) {
+    throw new Error(
+      "createMikaAcpCheckoutHandlers requires an apiKey or signatureSecret; refusing to expose ACP checkout sessions without authentication.",
+    );
+  }
+
   return {
     create: async (request) => handleAcpCreate(options, request),
     update: async (request, checkoutSessionId) =>
@@ -1604,5 +1614,8 @@ function createDefaultAcpSessionId(): string {
 }
 
 function cryptoSafeId(): string {
-  return createHash("sha256").update(`${Date.now()}:${Math.random()}`).digest("hex").slice(0, 16);
+  // 128 bits of CSPRNG entropy. The previous SHA-256 of `Date.now():Math.random()`
+  // was guessable: both inputs are low-entropy and non-cryptographic, so session
+  // ids could be brute-forced and used to hijack a checkout session.
+  return randomBytes(16).toString("hex");
 }

@@ -346,7 +346,9 @@ server endpoints for `POST /checkout_sessions`, `POST
 /checkout_sessions/[id]`, `POST /checkout_sessions/[id]/complete`, `POST
 /checkout_sessions/[id]/cancel`, and `GET /checkout_sessions/[id]`. Back the
 ACP session store with durable host storage in production; the memory store is
-only for tests and local demos.
+only for tests and local demos. `createMikaAcpCheckoutHandlers()` requires an
+`apiKey` or `signatureSecret` and throws without one — knowing a checkout
+session id must never be enough to read or mutate another buyer's session.
 
 ## Security Boundary
 

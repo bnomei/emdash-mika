@@ -335,6 +335,33 @@ describe("Mika ACP projection", () => {
     expect(checkoutStartCount).toBe(1);
   });
 
+  it("refuses to build ACP handlers without an apiKey or signatureSecret", () => {
+    let cart = createCart([]);
+    const baseOptions = {
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next: CartDTO) => {
+          cart = next;
+        },
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      provider: createProviderName("stripe"),
+    };
+
+    // No credentials → open handlers → fail closed.
+    expect(() => createMikaAcpCheckoutHandlers(baseOptions)).toThrow(
+      "requires an apiKey or signatureSecret",
+    );
+    // Either credential alone is enough to build handlers.
+    expect(() =>
+      createMikaAcpCheckoutHandlers({ ...baseOptions, apiKey: "acp_test_key" }),
+    ).not.toThrow();
+    expect(() =>
+      createMikaAcpCheckoutHandlers({ ...baseOptions, signatureSecret: "shh" }),
+    ).not.toThrow();
+  });
+
   it("cancels the bound Mika checkout when an ACP session is canceled", async () => {
     let cart = createCart([]);
     const cancelCalls: Array<{ readonly checkoutId: string }> = [];
