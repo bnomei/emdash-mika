@@ -992,7 +992,7 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
     },
   } satisfies MikaApi["cart"];
 
-  return { ...cart, ...input.overrides?.cart };
+  return withHydratedCustomerContext({ ...cart, ...input.overrides?.cart });
 }
 
 function createWishlistBackend(input: MikaCartWishlistBackendInput): MikaApi["wishlist"] {
@@ -1148,7 +1148,7 @@ function createWishlistBackend(input: MikaCartWishlistBackendInput): MikaApi["wi
     },
   } satisfies MikaApi["wishlist"];
 
-  return { ...wishlist, ...input.overrides?.wishlist };
+  return withHydratedCustomerContext({ ...wishlist, ...input.overrides?.wishlist });
 }
 
 async function getAccount(
@@ -6323,11 +6323,52 @@ async function checkoutBelongsToContext(
   document: CheckoutDocument,
   ctx: MikaRequestContext,
 ): Promise<boolean> {
-  const sessionCustomerId = await ctx.session?.get<MikaId>("mika.customerId");
-  const customerId = ctx.customerId ?? sessionCustomerId;
+  const customerId = await effectiveCustomerId(ctx);
   if (document.customerId) return document.customerId === customerId;
 
   return Boolean(document.sessionId && ctx.sessionId && document.sessionId === ctx.sessionId);
+}
+
+/**
+ * The effective customer identity for a request: an explicitly injected
+ * `ctx.customerId` takes precedence, otherwise the customer stored on the
+ * session by magic-link verification (`mika.customerId`). This keeps cart,
+ * wishlist, checkout-status, and account paths resolving the same identity.
+ */
+async function effectiveCustomerId(ctx: MikaRequestContext): Promise<MikaId | undefined> {
+  if (ctx.customerId) return ctx.customerId;
+
+  return ctx.session?.get<MikaId>("mika.customerId");
+}
+
+/** Returns a context with `customerId` hydrated from the session when absent. */
+async function withEffectiveCustomer(ctx: MikaRequestContext): Promise<MikaRequestContext> {
+  if (ctx.customerId) return ctx;
+  const sessionCustomerId = await ctx.session?.get<MikaId>("mika.customerId");
+
+  return sessionCustomerId ? { ...ctx, customerId: sessionCustomerId } : ctx;
+}
+
+/**
+ * Wraps every method of a cart/wishlist API so its request context has the
+ * session-stored customer identity applied before resolution. Without this,
+ * cart and wishlist ownership would diverge from account and checkout-status
+ * paths after magic-link login.
+ */
+function withHydratedCustomerContext<TApi extends Record<string, unknown>>(api: TApi): TApi {
+  const wrapped: Record<string, unknown> = {};
+  for (const [key, method] of Object.entries(api)) {
+    if (typeof method !== "function") {
+      wrapped[key] = method;
+      continue;
+    }
+
+    const handler = method as (ctx: MikaRequestContext, ...rest: unknown[]) => unknown;
+    wrapped[key] = (ctx: MikaRequestContext, ...rest: unknown[]) =>
+      Promise.resolve(withEffectiveCustomer(ctx)).then((hydrated) => handler(hydrated, ...rest));
+  }
+
+  return wrapped as TApi;
 }
 
 function checkoutDocumentSuccessResult(

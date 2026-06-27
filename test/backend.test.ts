@@ -8945,6 +8945,44 @@ describe("backend API composition", () => {
     ).resolves.toMatchObject({ ok: false, status: 404 });
   });
 
+  it("resolves the customer-bound cart from a session-stored identity after login", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+
+    // The logged-in customer adds an item to their customer-bound cart.
+    const customerId = createMikaId("customer_login");
+    const customerCtx = createTestRequestContext({
+      sessionId: false,
+      customerId,
+      userId: false,
+    });
+    const added = await api.cart.add(customerCtx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) throw new Error("Expected cart.add to succeed.");
+
+    // A later request only carries the session (as magic-link verification left
+    // it) with the customer id stored on the session, not in ctx.customerId.
+    const sessionCtx = createTestRequestContext({
+      sessionId: "session_login",
+      customerId: false,
+      userId: false,
+    });
+    await sessionCtx.session?.set("mika.customerId", customerId);
+
+    const resolved = await api.cart.get(sessionCtx);
+    expect(resolved).toMatchObject({
+      ok: true,
+      data: {
+        id: added.data.id,
+        items: [{ sellableId: sellable.id, quantity: 2 }],
+      },
+    });
+  });
+
   it("returns a valid cart quote without provider or stock mutations", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();

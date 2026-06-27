@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-Priority: P1 | Confidence: high | Security-sensitive: no | Status: open
+Priority: P1 | Confidence: high | Security-sensitive: no | Status: fixed
 Location: src/api/backend.ts:5507-5517 | Slug: session-customer-cart-mismatch
 
 # Session-stored customer identity not applied to cart and wishlist resolution
@@ -48,6 +48,7 @@ After working this report, preserve the original finding body. Update line 2 `St
 ## Status Notes
 
 - 2026-06-25: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed cart/wishlist resolution (`findOpenCart`, `findOwnedCartById`, document creators, etc.) used only `ctx.customerId`, while account (`resolveAccountIdentity`) and checkout-status (`checkoutBelongsToContext`) read the session-stored `mika.customerId`. Centralized the identity: added `effectiveCustomerId(ctx)` = `ctx.customerId ?? session["mika.customerId"]` (now used by `checkoutBelongsToContext`) and a `withHydratedCustomerContext` wrapper applied to the cart and wishlist API objects so every method runs with `ctx.customerId` hydrated from the session before resolution. All downstream cart/wishlist helpers then see the same effective identity as account/checkout. Added regression test `resolves the customer-bound cart from a session-stored identity after login`. Typecheck + 311 tests pass.
 
 DEVANA-KEY: src/api/backend.ts:5507-5517 | P1 | session-customer-cart-mismatch
-DEVANA-SUMMARY: Status=open | P1 high src/api/backend.ts:5507-5517 - Cart and wishlist ignore session-stored customerId after magic-link login, diverging from account and checkout identity paths.
+DEVANA-SUMMARY: Status=fixed | P1 high src/api/backend.ts:5507-5517 - Cart/wishlist ignored the session-stored customerId after magic-link login. Fixed by hydrating ctx.customerId from the session for all cart/wishlist methods (effectiveCustomerId + withHydratedCustomerContext), with a regression test.
