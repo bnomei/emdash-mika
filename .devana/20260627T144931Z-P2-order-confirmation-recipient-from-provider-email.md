@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P2 | medium | security=no
+DEVANA-STATE: fixed | P2 | medium | security=no
 DEVANA-KEY: src/api/backend.ts:4770-4785 | order-confirmation-recipient-from-provider-email
 
 # Order-confirmation recipient/email-hash taken from the provider event while the identity label is the canonical checkout customer
@@ -59,6 +59,7 @@ Preserve the original finding body. Update line 2 `DEVANA-STATE:` and the final 
 ## Status Notes
 
 - 2026-06-27: open by Devana. Verified backend.ts:4770-4785 mixes checkout.customerId with event email; subscription path (4319-4324) loads canonical record as oracle.
+- 2026-06-27: fixed. Confirmed `paymentCustomerSnapshot` set `customerId = checkout.customerId` (canonical) but `email`/`emailHash` straight from `event.customer.email` with no reconciliation, so for an authenticated checkout the confirmation (order details + account link) and the bound emailHash could go to a non-account email typed at the hosted page while the system recorded the verified account as notified. Fix mirrors the subscription path: when `checkout.customerId` is set, load `findCustomerById` and prefer the canonical record's email (`customer.aggregate.email`) and emailHash (`customer.emailHash ?? customer.aggregate.emailHash`); guests / missing records fall back to the event email (hashing the canonical email when no stored hash exists). Buyer-typed billing fields (name/company/vatId) are still taken from the event. Added regression test `addresses the paid-order confirmation to the canonical account email, not the provider event email` (account email Subscriber@Example.test, event email Typed@Hosted.test → order customer + queued `order_confirmation` `toEmail` both resolve to the canonical email/emailHash). Existing guest-path tests (no seeded customer record) still use the event email via fallback. Typecheck + 328 tests pass.
 
 DEVANA-KEY: src/api/backend.ts:4770-4785 | order-confirmation-recipient-from-provider-email
-DEVANA-SUMMARY: open | P2 | medium | Paid-order confirmation recipient/emailHash come from the provider event while the customerId is the canonical checkout customer, so order details + account link can be delivered to a non-account email while attributed to the verified account.
+DEVANA-SUMMARY: fixed | P2 | medium | Paid-order confirmation recipient/emailHash came from the provider event while customerId was the canonical checkout customer. Fixed by preferring the canonical customer record's email/emailHash for authenticated checkouts (guests fall back to the event), with a regression test.

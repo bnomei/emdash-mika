@@ -6911,6 +6911,89 @@ describe("backend API composition", () => {
     });
   });
 
+  it("addresses the paid-order confirmation to the canonical account email, not the provider event email", async () => {
+    const stripe = createProviderName("stripe");
+    const sessionCollection = createStorageCollection("session");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const accountCollection = createStorageCollection("account");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      session: new SessionRepository(sessionCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+      account: new AccountRepository(accountCollection),
+    };
+    const sellable = createSellableDefinition({
+      prices: [
+        createPriceDefinition({
+          providerRefs: [{ provider: stripe, productId: "prod_payment", priceId: "price_payment" }],
+        }),
+      ],
+    });
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "payment_canonical_hash",
+            parsed: { delivery: "event_payment_canonical" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createPaymentWebhookEvent(verified, {
+            providerEventId: "event_payment_canonical",
+            providerCheckoutId: "provider_checkout_fake",
+            providerPaymentId: "payment_1",
+            providerOrderId: "provider_order_1",
+            // A DIFFERENT email typed at the provider's hosted page.
+            customer: { email: "Typed@Hosted.test", name: "Typed Buyer" },
+          }),
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef: createTestContentRef(), sellables: [sellable] }),
+    );
+    // Authenticated account whose verified email differs from the typed email.
+    await repositories.account.put(createCustomerDocument());
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const shopperCtx = createTestRequestContext({
+      sessionId: "session_payment",
+      customerId: createTestMikaId("customer", 1),
+      userId: "user_1",
+      idempotencyKey: "checkout_payment_canonical",
+    });
+
+    const cart = await api.cart.add(shopperCtx, { sellableId: sellable.id, quantity: 1 });
+    if (!cart.ok) throw new Error("Expected cart.add to succeed.");
+    const checkout = await api.checkout.start(shopperCtx, {
+      cartId: cart.data.id,
+      provider: stripe,
+    });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+
+    await receiveWebhook(api, "payment", stripe);
+
+    // The order (and thus the queued confirmation recipient) uses the canonical
+    // account email, not the email typed at the hosted page.
+    const order = await repositories.ledger.findOrderByProviderPayment(stripe, "payment_1");
+    expect(order?.aggregate.customer).toMatchObject({
+      customerId: "customer_1",
+      email: "Subscriber@Example.test",
+      emailHash: createTestHash("email:subscriber@example.test"),
+    });
+    const confirmationEmail = await opsCollection.get(
+      "email_order_1_order_confirmation",
+    );
+    expect(confirmationEmail).toMatchObject({
+      record: { toEmail: "Subscriber@Example.test" },
+    });
+  });
+
   it("does not run payment webhook side effects without the workflow lease", async () => {
     const stripe = createProviderName("stripe");
     const clock = createTestClock();

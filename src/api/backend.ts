@@ -5012,12 +5012,25 @@ async function paymentCustomerSnapshot(
   checkout: CheckoutDocument,
   event: MikaProviderPaymentEvent,
 ): Promise<CustomerSnapshot> {
-  const normalizedEmail = event.customer?.email?.trim().toLowerCase();
+  // For an authenticated checkout the confirmation recipient and the emailHash
+  // that binds entitlements / account links must refer to the verified account,
+  // not whatever email the buyer typed at the provider's hosted page. Prefer the
+  // canonical customer record's email (mirroring the subscription path); guest
+  // checkouts (no checkout.customerId / no record) fall back to the event email.
+  const customer = checkout.customerId
+    ? await input.repositories.account.findCustomerById(checkout.customerId)
+    : null;
+  const email = customer?.aggregate.email ?? event.customer?.email;
+  const normalizedEmail = email?.trim().toLowerCase();
+  const canonicalEmailHash = customer?.emailHash ?? customer?.aggregate.emailHash;
 
   return {
     customerId: checkout.customerId,
-    email: event.customer?.email,
-    emailHash: normalizedEmail ? await input.hash(`email:${normalizedEmail}`) : undefined,
+    ...(customer?.userId ? { userId: customer.userId } : {}),
+    email,
+    emailHash:
+      canonicalEmailHash ??
+      (normalizedEmail ? await input.hash(`email:${normalizedEmail}`) : undefined),
     name: event.customer?.name,
     company: event.customer?.company,
     vatId: event.customer?.vatId,
