@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-Priority: P1 | Confidence: high | Security-sensitive: no | Status: open
+Priority: P1 | Confidence: high | Security-sensitive: no | Status: fixed
 Location: src/api/backend.ts:3970-3971 | Slug: payment-webhook-lease-noop
 
 # Payment webhook workflow lease miss leaves webhook stuck in received
@@ -46,6 +46,7 @@ After working this report, preserve the original finding body. Update line 2 `St
 ## Status Notes
 
 - 2026-06-25: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Analysis: `runPaymentWebhookWorkflow` returns the webhook unchanged when the fulfillment workflow lease can't be acquired. `workflowIsDueForLease` only blocks the lease when another lease is currently active (`leaseExpiresAt > now`) or the workflow is completed — so in the common case a live concurrent processor holds the lease and will complete the work (the no-op is correct). The genuine gap is a crashed lease holder: the webhook stays `received`, the provider already got HTTP 200, and nothing auto-recovers it (`listDueWorkflows` exists but is called nowhere; the maintenance-cron reports cover stock/email/ephemeral/account-delete, not workflows). Fix: leverage provider at-least-once redelivery — extended `receiveWebhook` so a redelivered PAYMENT webhook that is still `received` (in addition to `failed`) re-enters processing. The fulfillment workflow lease is the real concurrency guard, so re-entry is safe: it no-ops while a live lease is held and resumes once a stale lease expires. Added a clarifying comment at the lease-miss return. Added regression test `recovers a payment webhook stuck in received once a lost workflow lease expires`. Typecheck + 310 tests pass.
 
 DEVANA-KEY: src/api/backend.ts:3970-3971 | P1 | payment-webhook-lease-noop
-DEVANA-SUMMARY: Status=open | P1 high src/api/backend.ts:3970-3971 - Payment webhook workflow silently no-ops on lease miss, leaving webhooks stuck in received with HTTP 200 to provider.
+DEVANA-SUMMARY: Status=fixed | P1 high src/api/backend.ts:3970-3971 - Payment webhook left stuck in received on a lost workflow lease with no auto-recovery. Fixed by letting provider redelivery re-enter processing for received payment webhooks (lease-guarded), with a regression test.

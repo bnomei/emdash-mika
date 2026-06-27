@@ -3272,14 +3272,23 @@ async function receiveWebhook(
     payloadHash: verified.payloadHash,
   });
   if (duplicate) {
-    // A successfully handled (or otherwise non-failed) duplicate is a genuine
-    // redelivery and is acknowledged without reprocessing. But a payment attempt
-    // that ended in `failed` must re-enter processing on provider retry: a prior
-    // transient failure must not leave a paid order unfulfilled until a manual
-    // admin replay. Reprocessing is restricted to payment events so that
-    // deterministically-failing webhooks (e.g. subscription events with an
-    // unknown target) are not re-run on every redelivery.
-    if (!(duplicate.status === "failed" && event.kind === "payment")) {
+    // A successfully handled (`processed`) duplicate is a genuine redelivery and
+    // is acknowledged without reprocessing. But a payment webhook that is still
+    // `received` or ended in `failed` must re-enter processing on provider
+    // retry: a prior attempt may have failed transiently, or its fulfillment
+    // workflow lease may have been lost (e.g. a crashed processor) leaving the
+    // webhook stuck while the provider already saw HTTP 200. The fulfillment
+    // workflow lease guards against double processing, so re-entry is safe; it
+    // resumes the workflow once any stale lease has expired. Reprocessing is
+    // restricted to payment events so that deterministically-failing webhooks
+    // (e.g. subscription events with an unknown target) are not re-run on every
+    // redelivery.
+    if (
+      !(
+        event.kind === "payment" &&
+        (duplicate.status === "failed" || duplicate.status === "received")
+      )
+    ) {
       return webhookDuplicateResult(duplicate);
     }
 
@@ -4005,6 +4014,12 @@ async function runPaymentWebhookWorkflow(
   run: (step: RunPaymentWebhookWorkflowStep) => Promise<WebhookDocument>,
 ): Promise<WebhookDocument> {
   const leasedWorkflow = await startPaymentWebhookWorkflow(input, ctx, webhook, event);
+  // The lease can only be missed when another processor currently holds it (the
+  // workflow is being run concurrently and that holder will complete it) or when
+  // the workflow is already completed. Returning the webhook unchanged is
+  // therefore safe; if a lease holder crashed, the webhook stays `received` and
+  // is recovered by provider redelivery (see receiveWebhook) or admin replay
+  // once the stale lease expires.
   if (!leasedWorkflow) return webhook;
 
   const runner = new WorkflowRunner<PaymentWebhookWorkflowStep>({

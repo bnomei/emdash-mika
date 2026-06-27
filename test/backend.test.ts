@@ -6999,6 +6999,92 @@ describe("backend API composition", () => {
     });
   });
 
+  it("recovers a payment webhook stuck in received once a lost workflow lease expires", async () => {
+    const stripe = TEST_PROVIDER;
+    const clock = createTestClock();
+    const sessionCollection = createStorageCollection("session");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      session: new SessionRepository(sessionCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+    };
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "payment_stuck_hash",
+            parsed: { delivery: "event_payment_stuck" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createPaymentWebhookEvent(verified, {
+            providerEventId: "event_payment_stuck",
+            providerCheckoutId: "provider_checkout_stuck",
+            providerPaymentId: "payment_stuck",
+            providerOrderId: "provider_order_stuck",
+          }),
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.session.put(
+      createCheckoutDocument({ providerCheckoutId: "provider_checkout_stuck" }),
+    );
+    // A prior processor leased the fulfillment workflow and then crashed; the
+    // lease is still held (not yet expired) when the first delivery arrives.
+    await repositories.ops.put(
+      createWorkflowDocument({
+        id: createMikaId("workflow_webhook_1_payment"),
+        subjectId: createMikaId("webhook_1"),
+        idempotencyKey: "event_payment_stuck",
+        status: "running",
+        nextAttemptAt: clock.isoAt(0),
+        leaseExpiresAt: clock.isoAt(300_000),
+        leaseKey: "crashed_worker",
+        leasedAt: clock.isoAt(0),
+      }),
+    );
+
+    // First delivery cannot acquire the lease, so the webhook is left received
+    // with no order created — the provider still receives HTTP 200.
+    await expect(receiveWebhook(api, "payment-stuck-first", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "received", replayable: true },
+    });
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({ status: "received" });
+    await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(0);
+
+    // The provider redelivers after the stale lease has expired; the received
+    // payment webhook re-enters processing and fulfills the order.
+    const redelivery = await api.webhook.receive(
+      createTestRequestContext({
+        request: createWebhookRequest(JSON.stringify({ marker: "payment-stuck-redelivery" })),
+        sessionId: false,
+        customerId: false,
+        userId: false,
+        idempotencyKey: false,
+        now: new Date(clock.isoAt(600_000)),
+      }),
+      { provider: stripe },
+    );
+    expect(redelivery).toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "received" },
+    });
+    await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(1);
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({ status: "processed" });
+  });
+
   it("does not regress refunded or cancelled orders to paid from late payment webhooks", async () => {
     const stripe = createProviderName("stripe");
     const cases = [
