@@ -5,6 +5,8 @@ import {
   type PluginStorageConfig,
 } from "emdash";
 
+import type { MikaBackendRepositories } from "./api/backend";
+import type { MikaEmailOutboxRunner } from "./api/email-outbox";
 import { createMikaMaintenanceRunner, type MikaMaintenanceRunResult } from "./api/maintenance";
 import { createMikaPluginRoutes } from "./api/route-handlers";
 import { setDefaultMikaApiOverrides, setDefaultMikaOperationPolicy } from "./api/runtime-api";
@@ -25,6 +27,19 @@ export interface MikaMaintenancePluginOptions {
   readonly schedule?: string;
 }
 
+/**
+ * Runtime maintenance options. The scheduled cron only releases expired stock
+ * reservations (via `api.admin`) unless the host also supplies `repositories`
+ * and `emailOutboxRunner` here — without them the email outbox, ephemeral
+ * purge, and account-delete batch tasks report `skipped`. These are live
+ * objects, so they can only be passed when calling `createPlugin` directly (not
+ * through the serializable plugin descriptor).
+ */
+export interface MikaMaintenanceRuntimeOptions extends MikaMaintenancePluginOptions {
+  readonly repositories?: Pick<MikaBackendRepositories, "ephemeral" | "ops" | "stock">;
+  readonly emailOutboxRunner?: MikaEmailOutboxRunner;
+}
+
 export interface MikaDescriptorOptions {
   readonly entrypoint?: string;
   readonly api?: MikaApiOverrides;
@@ -35,7 +50,7 @@ export interface MikaDescriptorOptions {
 export interface MikaCreatePluginOptions {
   readonly api?: MikaApiOverrides;
   readonly operationPolicy?: MikaOperationPolicy;
-  readonly maintenance?: MikaMaintenancePluginOptions;
+  readonly maintenance?: MikaMaintenanceRuntimeOptions;
 }
 
 type MikaCronEvent = {
@@ -100,7 +115,17 @@ export function createPlugin(options: MikaCreatePluginOptions = {}) {
       cron: async (event: MikaCronEvent, ctx: PluginContext) => {
         if (!maintenanceEnabled || event.name !== MIKA_MAINTENANCE_CRON_TASK) return;
 
-        const result = await createMikaMaintenanceRunner({ api }).runOnce({
+        const result = await createMikaMaintenanceRunner({
+          api,
+          // When the host wires these, the cron also drains the email outbox,
+          // purges expired ephemeral records, and processes account-delete
+          // batches. Without them only stock reservation release runs and the
+          // other tasks report `skipped`.
+          ...(maintenance.repositories ? { repositories: maintenance.repositories } : {}),
+          ...(maintenance.emailOutboxRunner
+            ? { emailOutboxRunner: maintenance.emailOutboxRunner }
+            : {}),
+        }).runOnce({
           now: createISODateTime(event.scheduledAt),
         });
         logMikaMaintenanceResult(ctx, result);

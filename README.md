@@ -46,8 +46,12 @@ Backend flows:
 - Paid-order fulfillment side effects for entitlement documents, download refs,
   and hashed license-key records.
 - Stock reservation lifecycle, email outbox delivery, account-delete cleanup,
-  and scheduled maintenance, including expired reservation release, through the
-  EmDash plugin lifecycle.
+  and scheduled maintenance through the EmDash plugin lifecycle. The default
+  maintenance cron releases expired stock reservations out of the box; to also
+  drain the email outbox, purge expired ephemeral records, and process
+  account-delete batches, pass `maintenance.repositories` and
+  `maintenance.emailOutboxRunner` to `createPlugin` (otherwise those tasks
+  report `skipped`).
 - Admin operation descriptors and runner helpers for EmDash action UIs.
 
 Agent-ready commerce flows:

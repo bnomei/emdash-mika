@@ -467,6 +467,76 @@ describe("Mika native plugin package", () => {
     ]);
   });
 
+  it("runs the email outbox, ephemeral purge, and account-delete tasks when the host wires them", async () => {
+    const logCalls: unknown[] = [];
+    const emailRunCalls: unknown[] = [];
+    const purgeCalls: unknown[] = [];
+    const plugin = createPlugin({
+      api: {
+        admin: {
+          releaseExpiredReservations: async () => ({
+            ok: true,
+            status: 200,
+            data: { status: "completed", affected: { reservationsReleased: 0 } },
+          }),
+        },
+      },
+      maintenance: {
+        emailOutboxRunner: {
+          runOnce: async (options) => {
+            emailRunCalls.push(options);
+            return {
+              scanned: 2,
+              leased: 2,
+              sent: 2,
+              failed: 0,
+              skipped: 0,
+              leaseMissed: 0,
+              leaseLost: 0,
+              hasMore: false,
+              items: [],
+            };
+          },
+        },
+        repositories: {
+          ephemeral: {
+            purgeExpired: async (now: string) => {
+              purgeCalls.push(now);
+              return 4;
+            },
+          },
+          ops: {
+            listQueuedAccountDeleteRequests: async () => ({ items: [], hasMore: false }),
+          },
+          stock: {},
+          // The runner only touches the methods exercised above; cast the
+          // minimal fake to the repository slice the maintenance runner needs.
+        } as never,
+      },
+    });
+
+    await plugin.hooks.cron?.handler(
+      { name: MIKA_MAINTENANCE_CRON_TASK, scheduledAt: "2026-06-21T10:00:00.000Z" },
+      createPluginCronContext([], logCalls),
+    );
+
+    expect(emailRunCalls).toEqual([{ now: "2026-06-21T10:00:00.000Z" }]);
+    expect(purgeCalls).toEqual(["2026-06-21T10:00:00.000Z"]);
+    expect(logCalls).toEqual([
+      [
+        "info",
+        "Mika maintenance completed",
+        expect.objectContaining({
+          tasks: expect.objectContaining({
+            emailOutbox: expect.objectContaining({ status: "completed", sent: 2 }),
+            ephemeralRecords: expect.objectContaining({ status: "completed", purged: 4 }),
+            accountDeleteRequests: expect.objectContaining({ status: "completed" }),
+          }),
+        }),
+      ],
+    ]);
+  });
+
   it("logs Mika maintenance failures before surfacing stock cleanup errors", async () => {
     const logCalls: unknown[] = [];
     const plugin = createPlugin({

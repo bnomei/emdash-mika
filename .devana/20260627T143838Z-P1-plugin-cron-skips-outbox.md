@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P1 | high | security=no
+DEVANA-STATE: fixed | P1 | high | security=no
 DEVANA-KEY: src/plugin.ts:103-105 | plugin-cron-skips-outbox
 
 # Default plugin cron maintenance skips email outbox and account-delete work
@@ -46,6 +46,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-27: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed the cron hook called `createMikaMaintenanceRunner({ api })` with only the API handle, so `createMikaMaintenanceRunner` returned `skipped` for the email outbox, ephemeral purge, and account-delete tasks (each needs `emailOutboxRunner`/`repositories`), leaving only stock reservation release running. Architectural note: the default plugin builds its API from host-provided `options.api` overrides and has no repositories of its own, and the serializable plugin descriptor cannot carry live objects. Fix: added a runtime-only `MikaMaintenanceRuntimeOptions` (extends `MikaMaintenancePluginOptions` with `repositories` and `emailOutboxRunner`) used by `MikaCreatePluginOptions.maintenance`; the cron now forwards those deps into `createMikaMaintenanceRunner`, so a host calling `createPlugin` directly gets the full maintenance sweep, while the descriptor path degrades to stock-only as before. Documented the wiring requirement in the README. Added regression test `runs the email outbox, ephemeral purge, and account-delete tasks when the host wires them` (cron with wired emailOutboxRunner + repositories → emailOutbox/ephemeralRecords/accountDeleteRequests all `completed`). The existing stock-only test still asserts `skipped` without the deps. Typecheck + 320 tests pass.
 
 DEVANA-KEY: src/plugin.ts:103-105 | plugin-cron-skips-outbox
-DEVANA-SUMMARY: open | P1 | high | Default plugin cron maintenance only releases stock reservations; email outbox, ephemeral purge, and account-delete batches are skipped.
+DEVANA-SUMMARY: fixed | P1 | high | Default plugin cron passed only { api } so email outbox, ephemeral purge, and account-delete were skipped. Fixed by threading host-provided maintenance.repositories + emailOutboxRunner into the cron runner (runtime options), documented in the README, with a regression test.
