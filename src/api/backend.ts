@@ -933,7 +933,16 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
       const source =
         (await input.repositories.session.findOpenCartBySession(sourceSessionId, currency)) ??
         (await findOpenCartBySessionAnyCurrency(input, sourceSessionId));
-      if (!source || source.id === targetResult.cart.id) {
+      // The source is loaded by a client-supplied session id with no auth, so we
+      // must verify the caller owns it before copying its lines — otherwise this
+      // is a cross-session cart-disclosure IDOR. An unowned (or missing) source
+      // is a silent no-op that returns the unchanged target, so the response
+      // never reveals whether another session's cart exists.
+      if (
+        !source ||
+        source.id === targetResult.cart.id ||
+        !callerOwnsMergeSource(ctx, source)
+      ) {
         return {
           ok: true,
           status: 200,
@@ -7080,6 +7089,26 @@ async function findOwnedOpenCartById(
   }
 
   return { ok: true, cart: document };
+}
+
+// A merge source must belong to the caller. The source document is loaded by a
+// client-supplied `sourceSessionId` with no auth, so without this gate any actor
+// could merge another session's open cart/wishlist into their own and read the
+// victim's line items (cross-session IDOR). Ownership mirrors
+// `findOwnedOpenCartById`: a customer-owned source must match `ctx.customerId`;
+// otherwise a session-owned source must match `ctx.sessionId`. An unbound source
+// (neither owner) is never a valid merge source.
+function callerOwnsMergeSource(
+  ctx: MikaRequestContext,
+  source: { readonly customerId?: MikaId; readonly sessionId?: string },
+): boolean {
+  if (source.customerId) {
+    return Boolean(ctx.customerId) && source.customerId === ctx.customerId;
+  }
+  if (source.sessionId) {
+    return Boolean(ctx.sessionId) && source.sessionId === ctx.sessionId;
+  }
+  return false;
 }
 
 async function mergeCartLines(

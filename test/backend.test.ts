@@ -8903,7 +8903,7 @@ describe("backend API composition", () => {
     });
   });
 
-  it("merges compatible cart lines from a source session into the current cart", async () => {
+  it("merges the caller's own guest cart into their cart on login handoff", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition({ maxPerOrder: 5 });
     const repositories = createTestBackendRepositories();
@@ -8911,30 +8911,43 @@ describe("backend API composition", () => {
       createCatalogItemDocument({ contentRef, sellables: [sellable] }),
     );
     const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
-    const sourceCtx = createTestRequestContext({
+    // Guest builds a cart in their browser session before logging in.
+    const guestCtx = createTestRequestContext({
       customerId: false,
       userId: false,
-      sessionId: "session_source",
+      sessionId: "session_handoff",
     });
-    const targetCtx = createTestRequestContext({
+    // The customer already has a cart from a prior, different session.
+    const priorCustomerCtx = createTestRequestContext({
       customerId: "customer_1",
       userId: "user_1",
-      sessionId: "session_target",
+      sessionId: "session_prior",
+    });
+    // After logging in the browser session is preserved, so the now-authenticated
+    // caller still holds `session_handoff` — proving ownership of the guest cart.
+    const callerCtx = createTestRequestContext({
+      customerId: "customer_1",
+      userId: "user_1",
+      sessionId: "session_handoff",
     });
 
-    await api.cart.add(sourceCtx, {
+    await api.cart.add(guestCtx, {
       sellableId: sellable.id,
       priceId: createTestMikaId("price", 1),
       quantity: 2,
     });
-    await api.cart.add(targetCtx, {
+    const customerCart = await api.cart.add(priorCustomerCtx, {
       sellableId: sellable.id,
       priceId: createTestMikaId("price", 1),
       quantity: 1,
     });
+    if (!customerCart.ok) throw new Error("expected customer cart");
 
     await expect(
-      api.cart.merge(targetCtx, { sourceSessionId: "session_source" }),
+      api.cart.merge(callerCtx, {
+        targetCartId: customerCart.data.id,
+        sourceSessionId: "session_handoff",
+      }),
     ).resolves.toMatchObject({
       ok: true,
       status: 200,
@@ -8945,8 +8958,57 @@ describe("backend API composition", () => {
       },
     });
     await expect(
-      repositories.session.findOpenCartBySession("session_source", TEST_CURRENCY),
+      repositories.session.findOpenCartBySession("session_handoff", TEST_CURRENCY),
     ).resolves.toBeNull();
+  });
+
+  it("refuses to merge a source cart the caller does not own (cross-session IDOR)", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition({ maxPerOrder: 5 });
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const victimCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_victim",
+    });
+    const attackerCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_attacker",
+    });
+
+    await api.cart.add(victimCtx, {
+      sellableId: sellable.id,
+      priceId: createTestMikaId("price", 1),
+      quantity: 2,
+    });
+    await api.cart.add(attackerCtx, {
+      sellableId: sellable.id,
+      priceId: createTestMikaId("price", 1),
+      quantity: 1,
+    });
+
+    // The attacker guesses the victim's session id. The merge must no-op (return
+    // the attacker's unchanged cart) without copying or disclosing victim lines.
+    const merged = await api.cart.merge(attackerCtx, { sourceSessionId: "session_victim" });
+    expect(merged).toMatchObject({
+      ok: true,
+      status: 200,
+      data: { items: [{ sellableId: sellable.id, quantity: 1 }] },
+    });
+
+    // The victim's cart is untouched (still open, still holds its items).
+    const victimCart = await repositories.session.findOpenCartBySession(
+      "session_victim",
+      TEST_CURRENCY,
+    );
+    expect(victimCart?.status).toBe("open");
+    expect(victimCart?.aggregate.items).toHaveLength(1);
+    expect(victimCart?.aggregate.items[0]?.quantity).toBe(2);
   });
 
   it("applies and removes coupon snapshots on cart totals", async () => {
@@ -10753,14 +10815,21 @@ describe("backend API composition", () => {
       userId: "user_1",
       sessionId: "session_target",
     });
+    // The source cart belongs to the same customer (a prior session, foreign
+    // currency) so the ownership gate passes and the merge reaches the
+    // currency-mismatch check.
     const sourceCtx = createTestRequestContext({
-      customerId: false,
-      userId: false,
-      sessionId: "session_usd_source",
+      customerId: "customer_1",
+      userId: "user_1",
+      sessionId: "session_gbp_source",
     });
     const usdApi = createMikaBackendApi({
       ...dependencies,
       defaults: { ...dependencies.defaults, currency: createTestCurrencyCode("USD") },
+    });
+    const gbpApi = createMikaBackendApi({
+      ...dependencies,
+      defaults: { ...dependencies.defaults, currency: createTestCurrencyCode("GBP") },
     });
 
     await expect(
@@ -10788,10 +10857,10 @@ describe("backend API composition", () => {
       },
     });
 
-    await usdApi.cart.get(sourceCtx);
+    await gbpApi.cart.get(sourceCtx);
 
     await expect(
-      api.cart.merge(ctx, { sourceSessionId: "session_usd_source" }),
+      api.cart.merge(ctx, { sourceSessionId: "session_gbp_source" }),
     ).resolves.toMatchObject({
       ok: false,
       status: 422,

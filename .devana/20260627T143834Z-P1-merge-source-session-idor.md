@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P1 | high | security=yes
+DEVANA-STATE: fixed | P1 | high | security=yes
 DEVANA-KEY: src/api/backend.ts:916-949 | merge-source-session-idor
 
 # Cart merge accepts arbitrary sourceSessionId without ownership check
@@ -46,6 +46,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-27: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed `cart.merge` loaded the source via `findOpenCartBySession(sourceSessionId)` (+ any-currency fallback) with no binding to the caller, so any actor could merge another session's open cart into their own and read its lines. Fix: new `callerOwnsMergeSource(ctx, source)` gate (ownership mirrors `findOwnedOpenCartById` — a customer-owned source must match `ctx.customerId`, otherwise a session-owned source must match `ctx.sessionId`; an unbound source is never valid). An unowned/missing source now follows the existing silent no-op path (returns the caller's unchanged cart, 200) so the response never discloses whether another session's cart exists. The legitimate guest→login handoff still works because the browser session cookie is preserved across login, so the now-authenticated caller still holds the guest `sessionId`. Updated the existing merge test to model that secure handoff (shared session id) and the currency-mismatch test to use a same-customer foreign-currency source; added regression test `refuses to merge a source cart the caller does not own (cross-session IDOR)`. The wishlist merge has the identical pattern and is tracked separately in `wishlist-merge-source-session-idor`; `callerOwnsMergeSource` is shared and ready for that fix. Typecheck + 316 tests pass.
 
 DEVANA-KEY: src/api/backend.ts:916-949 | merge-source-session-idor
-DEVANA-SUMMARY: open | P1 | high | cart.merge loads any sourceSessionId without binding to the caller session, enabling cross-session cart merge and item disclosure.
+DEVANA-SUMMARY: fixed | P1 | high | cart.merge loaded any sourceSessionId without caller binding (cross-session IDOR). Fixed with a callerOwnsMergeSource ownership gate that silently no-ops unowned sources; legitimate login handoff preserved. Regression test added.
