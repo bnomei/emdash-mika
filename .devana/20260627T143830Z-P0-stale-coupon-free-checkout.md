@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P0 | high | security=no
+DEVANA-STATE: fixed | P0 | high | security=no
 DEVANA-KEY: src/model/builders.ts:461-474 | stale-coupon-free-checkout
 
 # Stale coupon discount can zero out checkout after line changes
@@ -47,6 +47,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-27: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed `calculateTotals` and `createCartQuote` subtracted a frozen `coupon.discountAmount` from the recomputed subtotal, so shrinking the cart left an oversized discount (down to a $0 total). Fix: added a `rate` field to `CouponSnapshot` and a single `couponDiscountAmount(coupon, subtotal)` helper that recomputes a rate-based coupon against the current subtotal (capped at it) and clamps legacy amount-only coupons. Wired it through `calculateTotals` (covers cart + checkout via `calculateCheckoutTotals`), the persisted-coupon branch of `createCartQuote`, and the `cartToDTO` coupon display; `createCouponSnapshot` and the inline-quote coupon now store `rate` (`COUPON_DISCOUNT_RATE = 0.1`). Carts persist as generic JSON so the new field round-trips. Added regression test `recomputes a percentage coupon against the current subtotal after line changes`. Typecheck + 312 tests pass.
 
 DEVANA-KEY: src/model/builders.ts:461-474 | stale-coupon-free-checkout
-DEVANA-SUMMARY: open | P0 | high | Frozen coupon.discountAmount after line changes can exceed subtotal and produce a zero or underpriced checkout total.
+DEVANA-SUMMARY: fixed | P0 | high | Frozen coupon.discountAmount could exceed the subtotal after line changes and zero out the total. Fixed by storing a coupon rate and recomputing the discount from the current subtotal (couponDiscountAmount) at cart/quote/checkout, with a regression test.

@@ -8909,6 +8909,60 @@ describe("backend API composition", () => {
     });
   });
 
+  it("recomputes a percentage coupon against the current subtotal after line changes", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) throw new Error("Expected cart.add to succeed.");
+    const lineId = added.data.items[0]!.id;
+
+    await expect(api.cart.applyCoupon(ctx, { code: "SAVE10" })).resolves.toMatchObject({
+      ok: true,
+      data: {
+        subtotal: { amount: 2400 },
+        discount: { amount: 240 },
+        total: { amount: 2160 },
+      },
+    });
+
+    // Shrinking the cart must shrink the discount too — the frozen snapshot
+    // (240) must not survive and undercharge the smaller subtotal.
+    await expect(api.cart.update(ctx, { lineId, quantity: 1 })).resolves.toMatchObject({
+      ok: true,
+      data: {
+        subtotal: { amount: 1200 },
+        discount: { amount: 120 },
+        total: { amount: 1080 },
+      },
+    });
+    await expect(api.cart.get(ctx)).resolves.toMatchObject({
+      ok: true,
+      data: {
+        subtotal: { amount: 1200 },
+        discount: { amount: 120 },
+        total: { amount: 1080 },
+      },
+    });
+
+    // Checkout must see the recomputed discount, never the stale snapshot.
+    const quote = await api.cart.quote(ctx, { cartId: added.data.id });
+    expect(quote).toMatchObject({
+      ok: true,
+      data: {
+        subtotal: { amount: 1200 },
+        discount: { amount: 120 },
+        total: { amount: 1080 },
+      },
+    });
+  });
+
   it("rejects open-cart coupon access from an unbound request context", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();

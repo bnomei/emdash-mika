@@ -85,7 +85,9 @@ export function cartToDTO(input: {
   readonly availabilityBySellableId?: ReadonlyMap<MikaId, AvailabilityDTO>;
   readonly checkoutSessionId?: MikaId;
 }): CartDTO {
-  const totals = input.cart.totals ?? calculateTotals(input.cart.currency, input.cart.items);
+  const totals =
+    input.cart.totals ??
+    calculateTotals(input.cart.currency, input.cart.items, input.cart.coupon);
 
   return {
     id: input.id,
@@ -111,9 +113,9 @@ export function cartToDTO(input: {
     coupon: input.cart.coupon
       ? {
           label: input.cart.coupon.label,
-          discount: input.cart.coupon.discountAmount
-            ? money(input.cart.coupon.discountAmount, input.cart.currency)
-            : undefined,
+          // Reflect the effective discount applied to the current totals, not the
+          // (possibly stale) snapshot amount.
+          discount: totals.discount,
           providerCouponId: input.cart.coupon.providerRef?.priceId,
         }
       : undefined,
@@ -460,13 +462,32 @@ function calculateCheckoutTotals(
   return calculateTotals(currency, cartLines, coupon);
 }
 
+/**
+ * Effective coupon discount for a given subtotal. A rate-based coupon is
+ * recomputed from the current subtotal (and capped at it) so a stale snapshot
+ * cannot exceed the subtotal after line changes; a legacy amount-only coupon is
+ * clamped to the subtotal.
+ */
+export function couponDiscountAmount(
+  coupon: CouponSnapshot | undefined,
+  subtotalAmount: number,
+): number {
+  if (!coupon) return 0;
+  const cap = Math.max(0, subtotalAmount);
+  if (coupon.rate !== undefined) {
+    return Math.min(Math.floor(cap * coupon.rate), cap);
+  }
+
+  return Math.min(coupon.discountAmount ?? 0, cap);
+}
+
 function calculateTotals(
   currency: CurrencyCode,
   lines: readonly CartLine[],
   coupon?: CouponSnapshot,
 ): CartTotals {
   const subtotalAmount = lines.reduce((sum, line) => sum + line.item.unitAmount * line.quantity, 0);
-  const discountAmount = coupon?.discountAmount ?? 0;
+  const discountAmount = couponDiscountAmount(coupon, subtotalAmount);
   const totalAmount = Math.max(0, subtotalAmount - discountAmount);
 
   return {

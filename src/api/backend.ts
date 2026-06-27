@@ -43,6 +43,7 @@ import {
   cartWithCoupon,
   cartWithoutCoupon,
   catalogSellablesToDTO,
+  couponDiscountAmount,
   createCartAggregate,
   createCheckoutAggregate,
   createOrderAggregate,
@@ -5648,17 +5649,17 @@ async function createCartQuote(
   }
 
   const subtotalAmount = quoteLines.reduce((sum, line) => sum + (line.subtotal?.amount ?? 0), 0);
-  const discountAmount =
-    quotedCouponLabel !== undefined
-      ? Math.floor(subtotalAmount * 0.1)
-      : (coupon?.discountAmount ?? 0);
   if (quotedCouponLabel !== undefined) {
     coupon = {
       codeHash: quotedCouponCodeHash ?? "",
       label: quotedCouponLabel,
-      discountAmount,
+      rate: COUPON_DISCOUNT_RATE,
+      discountAmount: Math.floor(subtotalAmount * COUPON_DISCOUNT_RATE),
     };
   }
+  // Always derive the discount from the current subtotal so a persisted coupon's
+  // stale snapshot cannot exceed it after line changes.
+  const discountAmount = couponDiscountAmount(coupon, subtotalAmount);
   const totalAmount = Math.max(0, subtotalAmount - discountAmount);
   const status = cartResult.expired
     ? "expired"
@@ -7068,6 +7069,9 @@ async function validateExistingLineQuantity(
   return validateQuantityLimit(sellable, stock, quantity);
 }
 
+/** Fractional discount applied by the built-in flat-rate coupon (10%). */
+const COUPON_DISCOUNT_RATE = 0.1;
+
 async function createCouponSnapshot(
   input: MikaCartWishlistBackendInput,
   cart: CartDocument,
@@ -7082,7 +7086,8 @@ async function createCouponSnapshot(
   return {
     codeHash: await input.hash(`coupon:${normalizedCode}`),
     label: normalizedCode,
-    discountAmount: Math.floor(subtotalAmount * 0.1),
+    rate: COUPON_DISCOUNT_RATE,
+    discountAmount: Math.floor(subtotalAmount * COUPON_DISCOUNT_RATE),
   };
 }
 

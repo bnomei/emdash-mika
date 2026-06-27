@@ -115,6 +115,13 @@ export interface CouponSnapshot {
   readonly codeHash?: string;
   readonly label?: string;
   readonly providerRef?: ProviderProductRef;
+  /**
+   * Fractional discount rate (e.g. 0.1 for 10%). When present, the discount is
+   * recomputed from the current subtotal at quote/checkout time so line changes
+   * cannot leave a stale, oversized discount. `discountAmount` is retained as a
+   * snapshot/legacy fallback for coupons stored without a rate.
+   */
+  readonly rate?: number;
   readonly discountAmount?: number;
   readonly metadata?: JsonObject;
 }
