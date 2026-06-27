@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-Priority: P1 | Confidence: high | Security-sensitive: no | Status: open
+Priority: P1 | Confidence: high | Security-sensitive: no | Status: fixed
 Location: src/stripe.ts:243-253 | Slug: stripe-invoice-payment-intent-id
 
 # Stripe getInvoiceUrl retrieves invoice API with payment intent id
@@ -45,6 +45,7 @@ After working this report, preserve the original finding body. Update line 2 `St
 ## Status Notes
 
 - 2026-06-25: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed `getInvoiceUrl` called `invoices.retrieve(input.providerPaymentId)` with what is a payment-intent id (`pi_*`) on the hosted-checkout path. Fix: added `resolveStripeInvoiceId` — `in_*` ids retrieve directly; `pi_*` ids are resolved via `paymentIntents.retrieve(...).invoice` (the payment intent's attached invoice id), and one-off PIs with no invoice yield a defined empty result `{ orderId }`; unknown id kinds never reach `invoices.retrieve`. Added three stripe adapter regression tests (pi→invoice resolution, pi with no invoice, direct invoice id). Typecheck + 306 tests pass.
 
 DEVANA-KEY: src/stripe.ts:243-253 | P1 | stripe-invoice-payment-intent-id
-DEVANA-SUMMARY: Status=open | P1 high src/stripe.ts:243-253 - Stripe invoice lookup passes payment-intent ids to invoices.retrieve, breaking order.invoice for typical checkout flows.
+DEVANA-SUMMARY: Status=fixed | P1 high src/stripe.ts:243-253 - Stripe invoice lookup passed payment-intent ids to invoices.retrieve. Fixed by resolving the invoice id from the payment intent first (resolveStripeInvoiceId), with regression tests.

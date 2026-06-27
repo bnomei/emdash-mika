@@ -635,6 +635,81 @@ describe("Mika Stripe provider", () => {
     });
   });
 
+  it("resolves the invoice id from a payment-intent id before retrieving the invoice", async () => {
+    const invoiceCalls: string[] = [];
+    const intentCalls: string[] = [];
+    const stripe: MikaStripeClient = {
+      paymentIntents: {
+        create: async () => ({ id: "pi_unused" }),
+        retrieve: async (id) => {
+          intentCalls.push(id);
+          return { id, status: "succeeded", invoice: "in_456" };
+        },
+      },
+      invoices: {
+        retrieve: async (id) => {
+          invoiceCalls.push(id);
+          return { id, hosted_invoice_url: "https://invoice.stripe.test/in_456" };
+        },
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe });
+
+    await expect(
+      provider.getInvoiceUrl?.({ orderId: createMikaId("order_1"), providerPaymentId: "pi_123" }),
+    ).resolves.toEqual({
+      orderId: "order_1",
+      href: "https://invoice.stripe.test/in_456",
+    });
+    // The payment intent is resolved first; invoices.retrieve is called with the
+    // invoice id, never the payment-intent id.
+    expect(intentCalls).toEqual(["pi_123"]);
+    expect(invoiceCalls).toEqual(["in_456"]);
+  });
+
+  it("returns an empty invoice result when a payment intent has no invoice", async () => {
+    const invoiceCalls: string[] = [];
+    const stripe: MikaStripeClient = {
+      paymentIntents: {
+        create: async () => ({ id: "pi_unused" }),
+        retrieve: async (id) => ({ id, status: "succeeded" }),
+      },
+      invoices: {
+        retrieve: async (id) => {
+          invoiceCalls.push(id);
+          return { id, hosted_invoice_url: "https://invoice.stripe.test/unused" };
+        },
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe });
+
+    await expect(
+      provider.getInvoiceUrl?.({ orderId: createMikaId("order_1"), providerPaymentId: "pi_123" }),
+    ).resolves.toEqual({ orderId: "order_1" });
+    expect(invoiceCalls).toEqual([]);
+  });
+
+  it("retrieves the invoice directly when given a Stripe invoice id", async () => {
+    const invoiceCalls: string[] = [];
+    const stripe: MikaStripeClient = {
+      invoices: {
+        retrieve: async (id) => {
+          invoiceCalls.push(id);
+          return { id, hosted_invoice_url: "https://invoice.stripe.test/in_789" };
+        },
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe });
+
+    await expect(
+      provider.getInvoiceUrl?.({ orderId: createMikaId("order_1"), providerPaymentId: "in_789" }),
+    ).resolves.toEqual({
+      orderId: "order_1",
+      href: "https://invoice.stripe.test/in_789",
+    });
+    expect(invoiceCalls).toEqual(["in_789"]);
+  });
+
   it("derives Stripe capabilities from the configured client by default", async () => {
     const stripe: MikaStripeClient = {
       checkout: {
