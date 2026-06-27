@@ -7566,6 +7566,21 @@ describe("backend API composition", () => {
           },
         },
       });
+      // A payment-terminal order must skip checkout completion and fulfillment
+      // entirely — those steps never run, so no confirmation email is queued.
+      const workflow = await opsCollection.get("workflow_webhook_1_payment");
+      const steps = (
+        workflow as {
+          readonly record: { readonly steps: ReadonlyArray<{ name: string; status: string }> };
+        }
+      ).record.steps;
+      const stepStatus = (name: string): string | undefined =>
+        steps.find((step) => step.name === name)?.status;
+      // Checkout completion and fulfillment are skipped, not run, for a
+      // payment-terminal order, so no confirmation email is ever queued.
+      expect(stepStatus("complete_checkout")).toBe("skipped");
+      expect(stepStatus("fulfill_order")).toBe("skipped");
+      await expect(opsCollection.count({ type: "email" })).resolves.toBe(0);
     }
   });
 

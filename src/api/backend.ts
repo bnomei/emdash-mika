@@ -64,6 +64,7 @@ import {
   applyOrderCancel,
   applyOrderRefund,
   applyPaymentEventToOrder,
+  orderIsPaymentTerminal,
   subscriptionCancelAtPeriodEndAfterAction,
   subscriptionStatusAfterAction,
 } from "./lifecycle";
@@ -4099,12 +4100,13 @@ async function processPaymentWebhook(
       const order = await runWorkflowStep("persist_order", () =>
         updatePaymentOrderFromEvent(input, ctx, orderSource, event),
       );
-      await runWorkflowStep("complete_checkout", () =>
-        completeCheckoutForPaymentOrder(input, ctx, order, event),
-      );
-      const fulfilledOrder = await runWorkflowStep("fulfill_order", () =>
-        fulfillPaidOrder(input, ctx, order),
-      );
+      // A late payment webhook must not fulfill an order that was already
+      // cancelled or refunded: `updatePaymentOrderFromEvent` keeps the terminal
+      // status, but checkout completion and fulfillment would still issue
+      // entitlements, licenses, downloads, and confirmation emails.
+      const fulfilledOrder = orderIsPaymentTerminal(order)
+        ? order
+        : await fulfillCheckoutPaymentOrder(input, ctx, runWorkflowStep, order, event);
 
       return runWorkflowStep("mark_webhook", () =>
         markWebhookProcessedForOrder(input, webhook, ctx.now, fulfilledOrder),
@@ -4134,12 +4136,10 @@ async function processPaymentWebhook(
       const order = await runWorkflowStep("persist_order", () =>
         updatePaymentOrderFromEvent(input, ctx, orderSource, event),
       );
-      await runWorkflowStep("complete_checkout", () =>
-        completeCheckoutForPaymentOrder(input, ctx, order, event, checkout),
-      );
-      const fulfilledOrder = await runWorkflowStep("fulfill_order", () =>
-        fulfillPaidOrder(input, ctx, order),
-      );
+      // See the no-checkout branch above: never fulfill a payment-terminal order.
+      const fulfilledOrder = orderIsPaymentTerminal(order)
+        ? order
+        : await fulfillCheckoutPaymentOrder(input, ctx, runWorkflowStep, order, event, checkout);
 
       return runWorkflowStep("mark_webhook", () =>
         markWebhookProcessedForOrder(input, webhook, ctx.now, fulfilledOrder),
@@ -4166,6 +4166,24 @@ async function processPaymentWebhook(
       markWebhookProcessedForOrder(input, webhook, ctx.now, fulfilledOrder),
     );
   });
+}
+
+// Runs the `complete_checkout` and `fulfill_order` steps for a paid order. Kept
+// separate so the existing-order branches can skip it for payment-terminal
+// orders (cancelled/refunded) without duplicating the step wiring.
+async function fulfillCheckoutPaymentOrder(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  runWorkflowStep: RunPaymentWebhookWorkflowStep,
+  order: OrderDocument,
+  event: MikaProviderPaymentEvent,
+  checkout?: CheckoutDocument,
+): Promise<OrderDocument> {
+  await runWorkflowStep("complete_checkout", () =>
+    completeCheckoutForPaymentOrder(input, ctx, order, event, checkout),
+  );
+
+  return runWorkflowStep("fulfill_order", () => fulfillPaidOrder(input, ctx, order));
 }
 
 async function runPaymentWebhookWorkflow(

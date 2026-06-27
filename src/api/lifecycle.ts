@@ -14,6 +14,15 @@ const PAYMENT_TERMINAL_ORDER_STATUSES = new Set<OrderStatus>([
   "cancelled",
 ]);
 
+/**
+ * Whether an order has reached a terminal payment lifecycle state
+ * (`cancelled`, `refunded`, or `partially_refunded`). Late payment webhook
+ * retries must not promote such an order back to `paid` or re-run fulfillment.
+ */
+export function orderIsPaymentTerminal(order: OrderDocument): boolean {
+  return PAYMENT_TERMINAL_ORDER_STATUSES.has(order.status);
+}
+
 export function orderPaymentStatusAfterPaymentEvent(order: OrderDocument): {
   readonly status: OrderStatus;
   readonly paymentStatus: PaymentStatus;
