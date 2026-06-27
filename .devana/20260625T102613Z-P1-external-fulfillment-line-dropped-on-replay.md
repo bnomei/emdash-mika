@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-Priority: P1 | Confidence: high | Security-sensitive: no | Status: open
+Priority: P1 | Confidence: high | Security-sensitive: no | Status: fixed
 Location: src/api/backend.ts:3789-3798 | Slug: external-fulfillment-line-dropped-on-replay
 
 # Stored webhook replay silently drops "external" fulfillment lines
@@ -55,6 +55,7 @@ After working this report, preserve the original finding body. Update line 2 `St
 ## Status Notes
 
 - 2026-06-25: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed `isFulfillmentKind` accepted `"physical"` (not a member of `FulfillmentKind`) and rejected the valid `"external"`, so `providerLineChildren` dropped external lines when reconstructing a stored webhook event in `storedWebhookEvent`. Rather than just swapping the literal, derived the accept-set from a single source of truth: `FULFILLMENT_KINDS` (`satisfies readonly FulfillmentKind[]`) plus a compile-time exhaustiveness assertion (`AssertAllFulfillmentKinds`) that fails to typecheck if any `FulfillmentKind` member is missing — preventing future drift of this exact bug class. No runtime regression test was added: `event.lines` is only consumed by the serialize (`providerLineToJson`) / deserialize (`providerLineChildren`) round-trip and is not used in order creation (which is checkout-driven), so the reconstructed lines have no observable downstream behavior to assert; the fix is type-verified and guarded at compile time. Typecheck + 311 tests pass.
 
 DEVANA-KEY: src/api/backend.ts:3789-3798 | P1 | external-fulfillment-line-dropped-on-replay
-DEVANA-SUMMARY: Status=open | P1 high src/api/backend.ts:3789-3798 - isFulfillmentKind rejects valid "external" (and accepts non-type "physical"), so stored payment webhooks drop external-fulfillment lines on replay, losing paid order items.
+DEVANA-SUMMARY: Status=fixed | P1 high src/api/backend.ts:3789-3798 - isFulfillmentKind rejected valid "external" and accepted non-member "physical", dropping external lines on stored-webhook replay. Fixed by deriving the accept-set from FulfillmentKind with a compile-time exhaustiveness guard.

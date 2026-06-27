@@ -104,6 +104,7 @@ import type {
   CheckoutStatus,
   ContentRef,
   CurrencyCode,
+  FulfillmentKind,
   ISODateTime,
   JsonObject,
   JsonValue,
@@ -3832,16 +3833,28 @@ function isSubscriptionStatus(value: string | undefined): value is SubscriptionS
   );
 }
 
-function isFulfillmentKind(
-  value: string | undefined,
-): value is MikaProviderLineItem["fulfillmentKind"] {
-  return (
-    value === "none" ||
-    value === "download" ||
-    value === "license" ||
-    value === "entitlement" ||
-    value === "physical"
-  );
+// Single source of truth for the fulfillment kinds a stored webhook line can be
+// re-parsed into. Keeping the accept-set derived from `FulfillmentKind` (rather
+// than a hand-maintained literal list) prevents the producer/consumer drift that
+// previously rejected the valid `"external"` kind and accepted a non-member
+// `"physical"`, silently dropping externally-fulfilled lines on webhook replay.
+const FULFILLMENT_KINDS = [
+  "none",
+  "entitlement",
+  "download",
+  "license",
+  "external",
+] as const satisfies readonly FulfillmentKind[];
+
+// Compile-time guarantee that FULFILLMENT_KINDS lists every FulfillmentKind: if a
+// member is added to the type but not here, this assignment fails to typecheck.
+type AssertAllFulfillmentKinds =
+  Exclude<FulfillmentKind, (typeof FULFILLMENT_KINDS)[number]> extends never ? true : never;
+const _assertAllFulfillmentKinds: AssertAllFulfillmentKinds = true;
+void _assertAllFulfillmentKinds;
+
+function isFulfillmentKind(value: string | undefined): value is FulfillmentKind {
+  return value !== undefined && (FULFILLMENT_KINDS as readonly string[]).includes(value);
 }
 
 async function processStoredWebhook(
