@@ -71,14 +71,28 @@ export function isJsonObject(value: unknown): value is JsonObject {
 }
 
 export function isJsonValue(value: unknown): value is JsonValue {
-  const stack: Array<{ readonly value: unknown; readonly depth: number }> = [{ value, depth: 0 }];
-  const seen = new Set<object>();
+  // DFS frame: a value to inspect, or a "leave" marker that pops an object off
+  // the active path once its whole subtree has been traversed.
+  type JsonValueFrame =
+    | { readonly value: unknown; readonly depth: number }
+    | { readonly leave: object };
+  const stack: JsonValueFrame[] = [{ value, depth: 0 }];
+  // Objects on the CURRENT DFS path only. Tracking the path (not a monotonic
+  // global set) detects true cycles while still accepting a shared, non-cyclic
+  // reference (the same object under two keys/indices), which is valid JSON.
+  const path = new Set<object>();
   let nodes = 0;
 
   while (stack.length > 0) {
     const current = stack.pop();
     if (!current) continue;
+    if ("leave" in current) {
+      path.delete(current.leave);
+      continue;
+    }
     nodes += 1;
+    // Node/depth caps bound traversal for DoS protection, including the
+    // exponential expansion a deeply shared (diamond) DAG could otherwise cause.
     if (nodes > 10_000 || current.depth > 32) return false;
 
     const currentValue = current.value;
@@ -92,14 +106,17 @@ export function isJsonValue(value: unknown): value is JsonValue {
         if (!Number.isFinite(currentValue)) return false;
         continue;
       case "object": {
-        if (seen.has(currentValue)) return false;
-        seen.add(currentValue);
+        if (path.has(currentValue)) return false;
         const children = Array.isArray(currentValue)
           ? currentValue
           : isRecord(currentValue)
             ? Object.values(currentValue)
             : null;
         if (!children) return false;
+        path.add(currentValue);
+        // LIFO: the leave marker is processed after all children below, so the
+        // object stays on the path for the duration of its own subtree.
+        stack.push({ leave: currentValue });
         for (const child of children) {
           stack.push({ value: child, depth: current.depth + 1 });
         }

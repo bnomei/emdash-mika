@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P2 | high | security=no
+DEVANA-STATE: fixed | P2 | high | security=no
 DEVANA-KEY: src/types/primitives.ts:95-96 | isjsonvalue-rejects-shared-references
 
 # isJsonValue rejects valid JSON that reuses an object reference (shared subtree / diamond)
@@ -59,6 +59,7 @@ Preserve the original finding body. Update line 2 `DEVANA-STATE:` and the final 
 ## Status Notes
 
 - 2026-06-27: open by Devana. Verified primitives.ts:73-114; `seen` never cleared; reachable via validation.ts jsonObjectSchema.
+- 2026-06-27: fixed. Confirmed the monotonic global `seen` set rejected valid JSON with a shared, non-cyclic object reference (`{ a: ref, b: ref }`). Fix: replaced `seen` with a current-DFS-path set tracked via enter/leave markers — an object is added when entered and removed once its whole subtree is traversed, so a shared reference under two keys/indices passes while a true cycle (revisiting a node on the active path) still returns `false`. The 10,000-node and depth-32 caps are retained for DoS protection, which also bounds the exponential expansion a deeply shared (diamond) DAG could otherwise cause. Added regression tests (`isJsonValue / isJsonObject`): accepts diamond refs in objects and arrays, still rejects self-cycles and mutual cycles, and rejects non-JSON leaves (Infinity, function, undefined). Typecheck + 324 tests pass.
 
 DEVANA-KEY: src/types/primitives.ts:95-96 | isjsonvalue-rejects-shared-references
-DEVANA-SUMMARY: open | P2 | high | isJsonValue uses a monotonic seen-set and rejects valid JSON containing a shared (non-cyclic) object reference, causing spurious VALIDATION_FAILED on metadata/customFields object inputs.
+DEVANA-SUMMARY: fixed | P2 | high | isJsonValue's monotonic seen-set rejected valid JSON with a shared (non-cyclic) object reference. Fixed by tracking only the current DFS path (enter/leave markers) so shared refs pass while true cycles are still rejected; DoS caps retained. Regression tests added.

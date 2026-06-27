@@ -87,6 +87,8 @@ import {
   createISODateTime,
   createMikaId,
   createProviderName,
+  isJsonObject,
+  isJsonValue,
   type ISODateTime,
   type JsonObject,
   type MikaId,
@@ -120,6 +122,38 @@ type MemoryRecord = {
   readonly createdAt: string;
   readonly priority?: number;
 };
+
+describe("isJsonValue / isJsonObject", () => {
+  it("accepts valid JSON that reuses a non-cyclic object reference (diamond)", () => {
+    const ref = { v: 1 };
+    const value = { a: ref, b: ref };
+
+    // Serializes losslessly, so it is a legitimate JsonValue.
+    expect(() => JSON.stringify(value)).not.toThrow();
+    expect(isJsonValue(value)).toBe(true);
+    expect(isJsonObject(value)).toBe(true);
+
+    // Shared reference inside arrays too.
+    expect(isJsonValue([ref, ref, { nested: ref }])).toBe(true);
+  });
+
+  it("still rejects true cycles", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(isJsonValue(cyclic)).toBe(false);
+
+    const a: Record<string, unknown> = {};
+    const b: Record<string, unknown> = { a };
+    a.b = b;
+    expect(isJsonValue({ a, b })).toBe(false);
+  });
+
+  it("rejects non-JSON leaves", () => {
+    expect(isJsonValue(Number.POSITIVE_INFINITY)).toBe(false);
+    expect(isJsonValue({ fn: () => 1 })).toBe(false);
+    expect(isJsonValue(undefined)).toBe(false);
+  });
+});
 
 describe("backend test storage helpers", () => {
   it("satisfies the storage collection contract", () => {
