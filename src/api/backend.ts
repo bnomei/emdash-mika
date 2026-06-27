@@ -848,7 +848,15 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
       const currentItems = existing?.aggregate.items ?? [];
       const existingLine = currentItems.find((line) => isEquivalentCartLine(line, resolved.line));
       const nextQuantity = (existingLine?.quantity ?? 0) + resolved.line.quantity;
-      const quantityError = validateQuantityLimit(resolved.sellable, resolved.stock, nextQuantity);
+      // Validate the full per-sellable demand (this line plus any sibling lines
+      // split by priceId/variantKey), not just this line in isolation.
+      const sellableDemand =
+        nextQuantity + siblingSellableQuantity(currentItems, resolved.line);
+      const quantityError = validateQuantityLimit(
+        resolved.sellable,
+        resolved.stock,
+        sellableDemand,
+      );
       if (quantityError) return quantityError;
 
       const document = existing ?? createCartDocument(input, ctx, currency);
@@ -880,7 +888,12 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
       );
       const stock = await input.repositories.stock.findBySellableId(line.item.sellableId);
       if (sellable) {
-        const quantityError = validateQuantityLimit(sellable, stock, itemInput.quantity);
+        // Validate the new quantity together with sibling lines of the same
+        // sellable (split by priceId/variantKey) so the per-sellable total
+        // cannot exceed stock or maxPerOrder.
+        const sellableDemand =
+          itemInput.quantity + siblingSellableQuantity(document.aggregate.items, line);
+        const quantityError = validateQuantityLimit(sellable, stock, sellableDemand);
         if (quantityError) return quantityError;
       }
 
@@ -7197,7 +7210,11 @@ async function mergeCartLines(
 
     const existingLine = items.find((line) => isEquivalentCartLine(line, sourceLine));
     const nextQuantity = (existingLine?.quantity ?? 0) + sourceLine.quantity;
-    const quantityError = await validateExistingLineQuantity(input, sourceLine, nextQuantity);
+    const quantityError = await validateExistingLineQuantity(
+      input,
+      sourceLine,
+      nextQuantity + siblingSellableQuantity(items, sourceLine),
+    );
     if (quantityError) return quantityError;
 
     if (existingLine) {
@@ -7219,7 +7236,11 @@ async function mergeCartLine(
   const items = [...currentItems];
   const existingLine = items.find((line) => isEquivalentCartLine(line, nextLine));
   const nextQuantity = (existingLine?.quantity ?? 0) + nextLine.quantity;
-  const quantityError = await validateExistingLineQuantity(input, nextLine, nextQuantity);
+  const quantityError = await validateExistingLineQuantity(
+    input,
+    nextLine,
+    nextQuantity + siblingSellableQuantity(items, nextLine),
+  );
   if (quantityError) return quantityError;
 
   if (!existingLine) {
@@ -7579,6 +7600,24 @@ function isEquivalentCartLine(left: CartLine, right: CartLine): boolean {
     left.item.sellableId === right.item.sellableId &&
     left.item.priceId === right.item.priceId &&
     left.item.variantKey === right.item.variantKey
+  );
+}
+
+/**
+ * Quantity of a sellable already committed to the cart on lines OTHER than the
+ * one being added/updated. Stock and `maxPerOrder` limits are per sellable, but
+ * cart lines split by `priceId`/`variantKey`, so each line must be validated
+ * against the summed per-sellable demand. Validating a line in isolation lets
+ * two split lines each pass while their total exceeds available stock, which
+ * then only fails at the checkout reservation gate.
+ */
+function siblingSellableQuantity(items: readonly CartLine[], line: CartLine): number {
+  return items.reduce(
+    (sum, other) =>
+      other.item.sellableId === line.item.sellableId && !isEquivalentCartLine(other, line)
+        ? sum + other.quantity
+        : sum,
+    0,
   );
 }
 

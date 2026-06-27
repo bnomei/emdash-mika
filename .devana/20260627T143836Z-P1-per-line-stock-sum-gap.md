@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P1 | high | security=no
+DEVANA-STATE: fixed | P1 | high | security=no
 DEVANA-KEY: src/api/backend.ts:7211-7248 | per-line-stock-sum-gap
 
 # Cart stock validation checks each line in isolation, not per-sellable total
@@ -47,6 +47,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-27: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed cart mutation paths validated only the equivalent line's quantity (`sellableId`+`priceId`+`variantKey`) against `maxPerOrder`/`availableQuantity`, so two lines for the same sellable under different prices each passed while their sum exceeded stock, surfacing only at the checkout `reserve` gate. Stock is keyed per sellable (`findBySellableId`) and `maxPerOrder` is per sellable, so per-sellable summation is the correct invariant. Fix: new `siblingSellableQuantity(items, line)` helper sums quantity on all other cart lines with the same `sellableId` (excluding the equivalent line), and `cart.add`, `cart.update`, `mergeCartLines`, and `mergeCartLine` now validate `lineTotal + siblings` (the full per-sellable demand) — without inflating the stored line quantity. Added regression test `sums quantity across split price lines of the same sellable for stock checks` (availableQuantity 2: add 2@price_1 OK, then add 1@price_2 → 409 OUT_OF_STOCK). Quote/preview display still computes per-line availability (unchanged); the authoritative write gates now enforce the aggregate. Typecheck + 318 tests pass.
 
 DEVANA-KEY: src/api/backend.ts:7211-7248 | per-line-stock-sum-gap
-DEVANA-SUMMARY: open | P1 | high | Cart add validates stock per line not per sellable, so split price lines can exceed availableQuantity until checkout.start fails.
+DEVANA-SUMMARY: fixed | P1 | high | Cart add/update/merge validated stock per line, so split-price lines for one sellable could exceed availableQuantity until checkout. Fixed by validating the summed per-sellable demand (siblingSellableQuantity) at every write gate, with a regression test.

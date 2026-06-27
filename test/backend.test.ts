@@ -8582,6 +8582,63 @@ describe("backend API composition", () => {
     });
   });
 
+  it("sums quantity across split price lines of the same sellable for stock checks", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition({
+      prices: [
+        createPriceDefinition({ id: createTestMikaId("price", 1) }),
+        createPriceDefinition({ id: createTestMikaId("price", 2) }),
+      ],
+    });
+    // quantityOnHand 5 - quantityReserved 3 = availableQuantity 2.
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({
+            sellableId: sellable.id,
+            quantityOnHand: 5,
+            quantityReserved: 3,
+          }),
+        ],
+      ]),
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_split_stock",
+    });
+
+    // First line consumes the full available quantity (2).
+    await expect(
+      api.cart.add(ctx, {
+        sellableId: sellable.id,
+        priceId: createTestMikaId("price", 1),
+        quantity: 2,
+      }),
+    ).resolves.toMatchObject({ ok: true, status: 200 });
+
+    // A second line for the same sellable under a different price must be
+    // rejected: the per-sellable total (2 + 1) exceeds available stock. Before
+    // the fix each line was validated in isolation and this add succeeded, only
+    // to fail later at the checkout reservation gate.
+    await expect(
+      api.cart.add(ctx, {
+        sellableId: sellable.id,
+        priceId: createTestMikaId("price", 2),
+        quantity: 1,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "OUT_OF_STOCK" },
+    });
+  });
+
   it("returns active catalog sellables with stock availability", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition({ maxPerOrder: 3 });
