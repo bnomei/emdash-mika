@@ -1,3 +1,7 @@
+/**
+ * Agent manifest builder and JSON Schema for exposing Mika operation descriptors to autonomous
+ * agents with capability, risk, idempotency, and proof metadata.
+ */
 import { mikaOperationDefinitions } from "./api/operations";
 import {
   MIKA_AGENT_ACTOR_REQUIREMENTS,
@@ -18,6 +22,7 @@ import {
   type MikaAgentVisibility,
 } from "./api/agent-types";
 
+/** Recursive JSON value type used to build the agent manifest JSON Schema object. */
 export type MikaJsonSchemaValue =
   | string
   | number
@@ -26,12 +31,14 @@ export type MikaJsonSchemaValue =
   | readonly MikaJsonSchemaValue[]
   | { readonly [key: string]: MikaJsonSchemaValue };
 
+/** JSON Schema object describing the shape of a published Mika agent manifest. */
 export interface MikaAgentManifestJsonSchema {
   readonly [key: string]: MikaJsonSchemaValue;
 }
 
 const JSON_SCHEMA_THEN = "then" as const;
 
+/** Draft 2020-12 JSON Schema for validating agent manifests at integration boundaries. */
 export const mikaAgentManifestJsonSchema: MikaAgentManifestJsonSchema = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   $id: "https://bnomei.com/schemas/emdash-mika/agent-manifest.v1.json",
@@ -214,12 +221,14 @@ const DEFAULT_AGENT_VISIBILITIES = [
   "trusted",
 ] as const satisfies readonly MikaAgentVisibility[];
 
+/** Filters which agent-visible operations are included in the generated manifest. */
 export interface CreateMikaAgentManifestOptions {
   readonly include?: readonly MikaAgentVisibility[];
 }
 
 export type MikaAgentManifestOptions = CreateMikaAgentManifestOptions;
 
+/** Projects Mika operation descriptors into an agent manifest for autonomous commerce clients. */
 export function createMikaAgentManifest(
   options: CreateMikaAgentManifestOptions = {},
 ): MikaAgentManifest {

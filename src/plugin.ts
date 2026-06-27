@@ -1,3 +1,7 @@
+/**
+ * EmDash plugin descriptor and runtime registration for Mika commerce routes, storage collections,
+ * and scheduled maintenance (stock reservation release, email outbox, ephemeral purge).
+ */
 import {
   definePlugin,
   type PluginContext,
@@ -17,29 +21,32 @@ import { mikaStorageConfig } from "./storage/collections";
 import { createISODateTime } from "./types/primitives";
 
 export { MIKA_PLUGIN_ID } from "./api/routes";
+
+/** Published plugin semver wired into the EmDash descriptor and runtime. */
 export const MIKA_PLUGIN_VERSION = "0.1.0";
+
+/** npm package name used as the default plugin entrypoint. */
 export const MIKA_PACKAGE_NAME = "@bnomei/emdash-mika";
+
+/** Cron task name registered for Mika background maintenance. */
 export const MIKA_MAINTENANCE_CRON_TASK = "mika_maintenance";
+
+/** Default cron schedule for maintenance when the host does not override it. */
 export const MIKA_MAINTENANCE_CRON_SCHEDULE = "* * * * *";
 
+/** Descriptor-level toggles for the maintenance cron job. */
 export interface MikaMaintenancePluginOptions {
   readonly enabled?: boolean;
   readonly schedule?: string;
 }
 
-/**
- * Runtime maintenance options. The scheduled cron only releases expired stock
- * reservations (via `api.admin`) unless the host also supplies `repositories`
- * and `emailOutboxRunner` here — without them the email outbox, ephemeral
- * purge, and account-delete batch tasks report `skipped`. These are live
- * objects, so they can only be passed when calling `createPlugin` directly (not
- * through the serializable plugin descriptor).
- */
+/** Runtime dependencies injected when the maintenance cron handler executes. */
 export interface MikaMaintenanceRuntimeOptions extends MikaMaintenancePluginOptions {
   readonly repositories?: Pick<MikaBackendRepositories, "ephemeral" | "ops" | "stock">;
   readonly emailOutboxRunner?: MikaEmailOutboxRunner;
 }
 
+/** Options passed to the static plugin descriptor factory (`mikaPlugin`). */
 export interface MikaDescriptorOptions {
   readonly entrypoint?: string;
   readonly api?: MikaApiOverrides;
@@ -47,6 +54,7 @@ export interface MikaDescriptorOptions {
   readonly maintenance?: MikaMaintenancePluginOptions;
 }
 
+/** Options resolved at plugin activation for API overrides, policy, and maintenance wiring. */
 export interface MikaCreatePluginOptions {
   readonly api?: MikaApiOverrides;
   readonly operationPolicy?: MikaOperationPolicy;
@@ -58,6 +66,7 @@ type MikaCronEvent = {
   readonly scheduledAt: string;
 };
 
+/** Builds the EmDash plugin descriptor for Mika with storage, routes, and maintenance defaults. */
 export function mikaPlugin(
   options: MikaDescriptorOptions = {},
 ): PluginDescriptor<MikaCreatePluginOptions> {
@@ -80,6 +89,7 @@ export function mikaPlugin(
   };
 }
 
+/** Registers the live Mika plugin: HTTP routes, storage schema, cron maintenance, and hooks. */
 export function createPlugin(options: MikaCreatePluginOptions = {}) {
   setDefaultMikaApiOverrides(options.api);
   setDefaultMikaOperationPolicy(options.operationPolicy);
@@ -117,10 +127,6 @@ export function createPlugin(options: MikaCreatePluginOptions = {}) {
 
         const result = await createMikaMaintenanceRunner({
           api,
-          // When the host wires these, the cron also drains the email outbox,
-          // purges expired ephemeral records, and processes account-delete
-          // batches. Without them only stock reservation release runs and the
-          // other tasks report `skipped`.
           ...(maintenance.repositories ? { repositories: maintenance.repositories } : {}),
           ...(maintenance.emailOutboxRunner
             ? { emailOutboxRunner: maintenance.emailOutboxRunner }
@@ -214,5 +220,6 @@ function summarizeTask<TResult extends object>(
   };
 }
 
+/** Alias for `mikaPlugin` used in EmDash plugin manifests. */
 export const mika = mikaPlugin;
 export default mikaPlugin;

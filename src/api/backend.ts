@@ -1,3 +1,7 @@
+/**
+ * Default Mika backend: repository ports, stock lifecycle, and full {@link MikaApi} wiring.
+ * Implements cart, checkout, order, subscription, wishlist, webhook fulfillment, and admin flows.
+ */
 import type {
   MikaProviderAdapter,
   MikaProviderInvoiceInput,
@@ -229,6 +233,7 @@ type MikaDocumentList<TDocument> = PaginatedStorageResult<{
   readonly data: TDocument;
 }>;
 
+/** Catalog persistence boundary for sellables, prices, and content refs. */
 export interface MikaCatalogRepositoryPort {
   findItemByContent(content: ContentRef): Promise<CatalogItemDocument | null>;
   findItemBySellableId(sellableId: MikaId): Promise<CatalogItemDocument | null>;
@@ -240,6 +245,7 @@ export interface MikaCatalogRepositoryPort {
   put(document: CatalogDocument): Promise<void>;
 }
 
+/** Session-scoped cart, checkout, and wishlist persistence. */
 export interface MikaSessionRepositoryPort {
   findById(id: MikaId): Promise<SessionDocument | null>;
   findCheckoutById(id: MikaId): Promise<CheckoutDocument | null>;
@@ -263,6 +269,7 @@ export interface MikaSessionRepositoryPort {
   put(document: SessionDocument): Promise<void>;
 }
 
+/** Customer, entitlement, license, and subscription account data. */
 export interface MikaAccountRepositoryPort {
   findCustomerById(customerId: MikaId): Promise<CustomerDocument | null>;
   findCustomerByUserId(userId: string): Promise<CustomerDocument | null>;
@@ -305,6 +312,7 @@ export interface MikaAccountRepositoryPort {
   put(document: AccountDocument): Promise<void>;
 }
 
+/** Order ledger and payment correlation lookups. */
 export interface MikaLedgerRepositoryPort {
   findOrderById(orderId: MikaId): Promise<OrderDocument | null>;
   findOrderByNumber(orderNumber: string): Promise<OrderDocument | null>;
@@ -329,6 +337,7 @@ export interface MikaLedgerRepositoryPort {
   put(document: LedgerDocument): Promise<void>;
 }
 
+/** Operational store: webhooks, workflows, emails, audits, and account-delete jobs. */
 export interface MikaOpsRepositoryPort {
   findWebhookDuplicate(input: {
     readonly provider: string;
@@ -386,11 +395,6 @@ export interface MikaOpsRepositoryPort {
   listDueEmails(now: ISODateTime, limit?: number): Promise<MikaDocumentList<EmailDocument>>;
   tryLeaseEmail(input: EmailLeaseRepositoryInput): Promise<EmailDocument | null>;
   completeEmail(input: EmailCompleteRepositoryInput): Promise<EmailDocument | null>;
-  /**
-   * Lease-agnostic terminalization used only after the provider confirmed
-   * delivery but the lease was lost, so the row cannot be re-sent. Marks the
-   * email `sent` unless it is already terminal.
-   */
   markEmailDelivered(input: EmailDeliveredRepositoryInput): Promise<EmailDocument | null>;
   failEmail(input: EmailFailureRepositoryInput): Promise<EmailDocument | null>;
   skipEmail(input: EmailSkipRepositoryInput): Promise<EmailDocument | null>;
@@ -415,6 +419,7 @@ export interface MikaOpsRepositoryPort {
   put(document: OpsDocument): Promise<void>;
 }
 
+/** Stock items, reservation events, and quantity adjustments. */
 export interface MikaStockRepositoryPort {
   findItemById(stockItemId: MikaId): Promise<StockItemRecord | null>;
   findBySellableId(sellableId: MikaId): Promise<StockItemRecord | null>;
@@ -439,6 +444,7 @@ export interface MikaStockRepositoryPort {
   adjustStock(input: AdjustStockRepositoryInput): Promise<AdjustStockRepositoryResult>;
 }
 
+/** Short-lived tokens, counters, and rate-limit state. */
 export interface MikaEphemeralRepositoryPort {
   get(key: string): Promise<EphemeralRecord | null>;
   put(record: EphemeralRecord): Promise<void>;
@@ -456,6 +462,7 @@ export interface MikaEphemeralRepositoryPort {
   deleteTokensBySubjectHashes(subjectHashes: readonly string[]): Promise<number>;
 }
 
+/** Aggregate repository ports required by {@link createMikaBackendApi}. */
 export interface MikaBackendRepositories {
   readonly catalog: MikaCatalogRepositoryPort;
   readonly session: MikaSessionRepositoryPort;
@@ -466,18 +473,24 @@ export interface MikaBackendRepositories {
   readonly ephemeral: MikaEphemeralRepositoryPort;
 }
 
+/** Injectable clock for deterministic tests and jobs. */
 export type MikaBackendNow = () => Date;
+/** Injectable ISO timestamp source aligned with backend `now`. */
 export type MikaBackendISODateTime = () => ISODateTime;
+/** Namespaced id generator for documents and events. */
 export type MikaBackendIdFactory = (namespace: string) => MikaId;
 export type MikaBackendHashInput = string | Uint8Array;
+/** Hash helper for PII, tokens, and webhook payload deduplication. */
 export type MikaBackendHashHelper = (input: MikaBackendHashInput) => Promise<string> | string;
 
+/** Site-wide defaults applied when request context omits values. */
 export interface MikaBackendDefaults {
   readonly currency?: CurrencyCode;
   readonly locale?: string;
   readonly provider?: ProviderName;
 }
 
+/** TTLs, redirect URLs, and metadata knobs for backend-owned resources. */
 export interface MikaBackendConfig {
   readonly accountExport?: {
     readonly ttlMs?: number;
@@ -495,12 +508,6 @@ export interface MikaBackendConfig {
   };
   readonly magicLink?: {
     readonly ttlMs?: number;
-    /**
-     * Path of the host page that consumes the magic-link token when the
-     * recipient clicks the email (a GET-served page that then POSTs the token).
-     * Defaults to the bundled template route `/account/magic-link`. Must not be
-     * the plugin `magicLinkVerify` API route, which is POST-only.
-     */
     readonly verifyPath?: string;
   };
   readonly metadata?: JsonObject;
@@ -512,6 +519,7 @@ export interface MikaBackendConfig {
   };
 }
 
+/** Shared dependencies injected into backend services and handlers. */
 export interface MikaBackendDependencies {
   readonly config?: MikaBackendConfig;
   readonly createId: MikaBackendIdFactory;
@@ -526,6 +534,7 @@ export interface MikaBackendDependencies {
   readonly repositories: MikaBackendRepositories;
 }
 
+/** Input for constructing a fully wired {@link MikaApi} from repositories and providers. */
 export interface CreateMikaBackendApiInput extends MikaBackendDependencies {
   readonly overrides?: MikaApiOverrides;
 }
@@ -538,6 +547,7 @@ type MikaCartWishlistBackendInput = Omit<CreateMikaBackendApiInput, "repositorie
   readonly repositories: MikaCartWishlistBackendRepositories;
 };
 
+/** Input for creating a time-bounded stock reservation tied to cart or checkout. */
 export interface ReserveStockInput {
   readonly stockItemId: MikaId;
   readonly quantity: number;
@@ -553,6 +563,7 @@ export interface ReserveStockInput {
 
 export type ReserveStockResult = ReserveStockRepositoryResult;
 
+/** Input for releasing a prior stock reservation by event id. */
 export interface ReleaseReservedStockInput {
   readonly reservationEventId: MikaId;
   readonly now?: ISODateTime;
@@ -560,6 +571,7 @@ export interface ReleaseReservedStockInput {
 
 export type ReleaseReservedStockResult = ReleaseReservedStockRepositoryResult;
 
+/** Input for consuming a reservation at order fulfillment. */
 export interface ConsumeReservedStockInput {
   readonly reservationEventId: MikaId;
   readonly now?: ISODateTime;
@@ -569,18 +581,21 @@ export interface ConsumeReservedStockInput {
 
 export type ConsumeReservedStockResult = ConsumeReservedStockRepositoryResult;
 
+/** Input for maintenance sweep of expired stock reservations. */
 export interface ReleaseExpiredReservationsInput {
   readonly now?: ISODateTime;
 }
 
 export type ReleaseExpiredReservationsResult = ReleaseExpiredReservationsRepositoryResult;
 
+/** Admin stock adjustment with optional clock override. */
 export interface AdjustStockInput extends StockAdjustInput {
   readonly now?: ISODateTime;
 }
 
 export type AdjustStockResult = AdjustStockRepositoryResult;
 
+/** Stock reservation and adjustment API used by cart, checkout, and maintenance. */
 export interface MikaStockLifecycleService {
   reserve(input: ReserveStockInput): Promise<ReserveStockResult>;
   release(input: ReleaseReservedStockInput): Promise<ReleaseReservedStockResult>;
@@ -591,6 +606,7 @@ export interface MikaStockLifecycleService {
   adjust(input: AdjustStockInput): Promise<AdjustStockResult>;
 }
 
+/** Builds a stock lifecycle service bound to backend repositories and clocks. */
 export function createMikaStockLifecycleService(
   input: MikaBackendDependencies,
 ): MikaStockLifecycleService {
@@ -624,6 +640,7 @@ export function createMikaStockLifecycleService(
   };
 }
 
+/** Creates the production {@link MikaApi} implementation from storage and provider adapters. */
 export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi {
   return createMikaApi({
     ...input.overrides,
@@ -858,10 +875,7 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
       const currentItems = existing?.aggregate.items ?? [];
       const existingLine = currentItems.find((line) => isEquivalentCartLine(line, resolved.line));
       const nextQuantity = (existingLine?.quantity ?? 0) + resolved.line.quantity;
-      // Validate the full per-sellable demand (this line plus any sibling lines
-      // split by priceId/variantKey), not just this line in isolation.
-      const sellableDemand =
-        nextQuantity + siblingSellableQuantity(currentItems, resolved.line);
+      const sellableDemand = nextQuantity + siblingSellableQuantity(currentItems, resolved.line);
       const quantityError = validateQuantityLimit(
         resolved.sellable,
         resolved.stock,
@@ -898,9 +912,6 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
       );
       const stock = await input.repositories.stock.findBySellableId(line.item.sellableId);
       if (sellable) {
-        // Validate the new quantity together with sibling lines of the same
-        // sellable (split by priceId/variantKey) so the per-sellable total
-        // cannot exceed stock or maxPerOrder.
         const sellableDemand =
           itemInput.quantity + siblingSellableQuantity(document.aggregate.items, line);
         const quantityError = validateQuantityLimit(sellable, stock, sellableDemand);
@@ -960,16 +971,7 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
       const source =
         (await input.repositories.session.findOpenCartBySession(sourceSessionId, currency)) ??
         (await findOpenCartBySessionAnyCurrency(input, sourceSessionId));
-      // The source is loaded by a client-supplied session id with no auth, so we
-      // must verify the caller owns it before copying its lines — otherwise this
-      // is a cross-session cart-disclosure IDOR. An unowned (or missing) source
-      // is a silent no-op that returns the unchanged target, so the response
-      // never reveals whether another session's cart exists.
-      if (
-        !source ||
-        source.id === targetResult.cart.id ||
-        !callerOwnsMergeSource(ctx, source)
-      ) {
+      if (!source || source.id === targetResult.cart.id || !callerOwnsMergeSource(ctx, source)) {
         return {
           ok: true,
           status: 200,
@@ -1382,7 +1384,7 @@ async function requestAccountExport(
   await emitBackendNotification(input, "account.export_ready", now, {
     ...(record.customerId ? { customerId: record.customerId } : {}),
     ...(record.userId ? { userId: record.userId } : {}),
-    ...(identity.customer?.emailHash ?? identity.emailHash
+    ...((identity.customer?.emailHash ?? identity.emailHash)
       ? { emailHash: identity.customer?.emailHash ?? identity.emailHash }
       : {}),
     exportId,
@@ -1634,12 +1636,6 @@ async function runSubscriptionAction(
     },
     async () => {
       const result = await providerFeature.method.call(providerFeature.provider, providerInput);
-      // Only mutate local subscription state when the provider actually
-      // completed the action. Adapters can return a non-throwing
-      // failed/unsupported result (e.g. a subscription missing its provider id);
-      // treating that as success would leave the account/entitlements diverged
-      // from the billing provider. Surface it as a provider failure (recorded as
-      // a failed audit) instead of writing cancelled/changed state locally.
       if (result.status !== "completed") {
         throw new Error(
           result.message ??
@@ -1823,9 +1819,6 @@ async function refundOrder(
     },
     async () => {
       const result = await providerFeature.method.call(providerFeature.provider, providerInput);
-      // Only commit local refund state when the provider actually completed the
-      // refund. A non-throwing failed/running/unsupported result must not write
-      // a refunded order to the ledger; propagate the provider status instead.
       if (result.status !== "completed") {
         return { ...result, id: result.id ?? order.id };
       }
@@ -1882,10 +1875,6 @@ async function cancelOrder(
     },
     async () => {
       const result = await providerFeature.method.call(providerFeature.provider, providerInput);
-      // Only commit local cancellation when the provider completed it. A
-      // non-throwing failed/running/unsupported result (e.g. a payment intent
-      // still processing the cancel) must not write a cancelled order to the
-      // ledger; propagate the provider status instead.
       if (result.status !== "completed") {
         return { ...result, id: result.id ?? order.id };
       }
@@ -2125,10 +2114,6 @@ async function resendEmail(
           ...email.record,
           status: "queued",
           nextAttemptAt: now,
-          // Reset the retry budget and clear any stale lease so the outbox can
-          // lease the email again. Without this, a terminal-failure email
-          // (attemptCount >= maxAttempts) stays ineligible for delivery and the
-          // resend silently no-ops.
           attemptCount: 0,
           leaseKey: undefined,
           leasedAt: undefined,
@@ -2456,12 +2441,7 @@ async function completeAdminAudit(
   audit: AdminAuditDocument,
   result?: unknown,
 ): Promise<void> {
-  // Persist the action result so a later idempotent retry (same action +
-  // idempotency key) can replay it without repeating the side effect. Only a
-  // JSON object result (every admin action returns an AdminActionResultDTO) is
-  // snapshotted; anything else is simply not replayable.
-  const resultSnapshot =
-    audit.record.idempotencyKey && isJsonObject(result) ? result : undefined;
+  const resultSnapshot = audit.record.idempotencyKey && isJsonObject(result) ? result : undefined;
 
   await input.repositories.ops.writeAudit({
     ...audit,
@@ -2576,10 +2556,6 @@ async function runAdminAction<TData>(
   fallbackMessage: string,
   failure: (message: string) => MikaApiFailure,
 ): Promise<MikaApiResult<TData>> {
-  // Idempotency gate: a mutating admin action retried with the same
-  // `(action, idempotencyKey)` must not repeat its side effect. The runner
-  // requires an idempotency key for adminWrite operations, so without this a
-  // double-submit or network retry would, e.g., refund an order twice.
   if (record.idempotencyKey) {
     const prior = await input.repositories.ops.findAdminAuditByIdempotencyKey(
       record.action,
@@ -2591,9 +2567,6 @@ async function runAdminAction<TData>(
         return { ok: true, status: 200, data: replay };
       }
     } else if (prior?.record.status === "started") {
-      // A prior attempt is still in flight (or crashed after the side effect but
-      // before completion). Refuse rather than risk a duplicate; the operator
-      // can inspect the audit and retry once it settles.
       return {
         ok: false,
         status: 409,
@@ -2603,7 +2576,6 @@ async function runAdminAction<TData>(
         },
       };
     }
-    // A `failed` prior audit falls through so the action can be retried.
   }
 
   const audit = createAdminAuditDocument(input, {
@@ -3301,9 +3273,6 @@ async function hashMagicLinkToken(
   return input.hash(`magic-link-token:${token}`);
 }
 
-// The bundled magic-link template page lives here; it is GET-served and POSTs
-// the token to the (POST-only) magicLinkVerify action. The email link must
-// target this page, never the plugin API route.
 const DEFAULT_MAGIC_LINK_VERIFY_PATH = "/account/magic-link";
 
 function magicLinkUrl(
@@ -3423,17 +3392,6 @@ async function receiveWebhook(
     payloadHash: verified.payloadHash,
   });
   if (duplicate) {
-    // A successfully handled (`processed`) duplicate is a genuine redelivery and
-    // is acknowledged without reprocessing. But a payment webhook that is still
-    // `received` or ended in `failed` must re-enter processing on provider
-    // retry: a prior attempt may have failed transiently, or its fulfillment
-    // workflow lease may have been lost (e.g. a crashed processor) leaving the
-    // webhook stuck while the provider already saw HTTP 200. The fulfillment
-    // workflow lease guards against double processing, so re-entry is safe; it
-    // resumes the workflow once any stale lease has expired. Reprocessing is
-    // restricted to payment events so that deterministically-failing webhooks
-    // (e.g. subscription events with an unknown target) are not re-run on every
-    // redelivery.
     if (
       !(
         event.kind === "payment" &&
@@ -3983,11 +3941,6 @@ function isSubscriptionStatus(value: string | undefined): value is SubscriptionS
   );
 }
 
-// Single source of truth for the fulfillment kinds a stored webhook line can be
-// re-parsed into. Keeping the accept-set derived from `FulfillmentKind` (rather
-// than a hand-maintained literal list) prevents the producer/consumer drift that
-// previously rejected the valid `"external"` kind and accepted a non-member
-// `"physical"`, silently dropping externally-fulfilled lines on webhook replay.
 const FULFILLMENT_KINDS = [
   "none",
   "entitlement",
@@ -3996,8 +3949,6 @@ const FULFILLMENT_KINDS = [
   "external",
 ] as const satisfies readonly FulfillmentKind[];
 
-// Compile-time guarantee that FULFILLMENT_KINDS lists every FulfillmentKind: if a
-// member is added to the type but not here, this assignment fails to typecheck.
 type AssertAllFulfillmentKinds =
   Exclude<FulfillmentKind, (typeof FULFILLMENT_KINDS)[number]> extends never ? true : never;
 const _assertAllFulfillmentKinds: AssertAllFulfillmentKinds = true;
@@ -4074,7 +4025,7 @@ async function emitCheckoutPaymentFailedNotification(
     ...(checkout?.customerId ? { customerId: checkout.customerId } : {}),
     ...(checkout?.id ? { checkoutId: checkout.id } : {}),
     provider: event.provider,
-    ...(event.providerCheckoutId ?? checkout?.providerCheckoutId
+    ...((event.providerCheckoutId ?? checkout?.providerCheckoutId)
       ? { providerCheckoutId: event.providerCheckoutId ?? checkout?.providerCheckoutId }
       : {}),
     ...(event.providerPaymentId ? { providerPaymentId: event.providerPaymentId } : {}),
@@ -4100,10 +4051,6 @@ async function processPaymentWebhook(
       const order = await runWorkflowStep("persist_order", () =>
         updatePaymentOrderFromEvent(input, ctx, orderSource, event),
       );
-      // A late payment webhook must not fulfill an order that was already
-      // cancelled or refunded: `updatePaymentOrderFromEvent` keeps the terminal
-      // status, but checkout completion and fulfillment would still issue
-      // entitlements, licenses, downloads, and confirmation emails.
       const fulfilledOrder = orderIsPaymentTerminal(order)
         ? order
         : await fulfillCheckoutPaymentOrder(input, ctx, runWorkflowStep, order, event);
@@ -4136,7 +4083,6 @@ async function processPaymentWebhook(
       const order = await runWorkflowStep("persist_order", () =>
         updatePaymentOrderFromEvent(input, ctx, orderSource, event),
       );
-      // See the no-checkout branch above: never fulfill a payment-terminal order.
       const fulfilledOrder = orderIsPaymentTerminal(order)
         ? order
         : await fulfillCheckoutPaymentOrder(input, ctx, runWorkflowStep, order, event, checkout);
@@ -4168,9 +4114,6 @@ async function processPaymentWebhook(
   });
 }
 
-// Runs the `complete_checkout` and `fulfill_order` steps for a paid order. Kept
-// separate so the existing-order branches can skip it for payment-terminal
-// orders (cancelled/refunded) without duplicating the step wiring.
 async function fulfillCheckoutPaymentOrder(
   input: CreateMikaBackendApiInput,
   ctx: MikaRequestContext,
@@ -4194,12 +4137,6 @@ async function runPaymentWebhookWorkflow(
   run: (step: RunPaymentWebhookWorkflowStep) => Promise<WebhookDocument>,
 ): Promise<WebhookDocument> {
   const leasedWorkflow = await startPaymentWebhookWorkflow(input, ctx, webhook, event);
-  // The lease can only be missed when another processor currently holds it (the
-  // workflow is being run concurrently and that holder will complete it) or when
-  // the workflow is already completed. Returning the webhook unchanged is
-  // therefore safe; if a lease holder crashed, the webhook stays `received` and
-  // is recovered by provider redelivery (see receiveWebhook) or admin replay
-  // once the stale lease expires.
   if (!leasedWorkflow) return webhook;
 
   const runner = new WorkflowRunner<PaymentWebhookWorkflowStep>({
@@ -4597,15 +4534,6 @@ async function findOrCreateSubscriptionFromEvent(
   };
 }
 
-/**
- * True when a subscription event describes an older billing period than the
- * state already applied. Providers (e.g. Stripe) do not guarantee webhook
- * ordering and redeliver old events, so without this an out-of-order `active`
- * event for a prior period could overwrite a `cancelled` subscription and
- * re-grant its entitlement. `currentPeriodStart` is the only recency signal the
- * parsed event carries; if either side lacks it we cannot judge staleness and
- * apply the event as before.
- */
 function subscriptionEventIsStale(
   subscription: SubscriptionDocument,
   event: MikaProviderSubscriptionEvent,
@@ -4623,10 +4551,6 @@ async function updateSubscriptionFromEvent(
   subscription: SubscriptionDocument,
   event: MikaProviderSubscriptionEvent,
 ): Promise<SubscriptionDocument> {
-  // Reject stale/out-of-order events so they cannot regress subscription status
-  // (and re-grant entitlement) for an already-advanced period. The subscription
-  // is returned unchanged; the downstream entitlement derivation then runs on
-  // the current (non-regressed) status.
   if (subscriptionEventIsStale(subscription, event)) {
     return subscription;
   }
@@ -4745,8 +4669,7 @@ async function emitSubscriptionLifecycleNotification(
   const kind =
     subscription.status === "past_due"
       ? "subscription.renewal_failed"
-      : options.created &&
-          (subscription.status === "active" || subscription.status === "trialing")
+      : options.created && (subscription.status === "active" || subscription.status === "trialing")
         ? "subscription.started"
         : "subscription.updated";
 
@@ -4758,20 +4681,34 @@ async function emitSubscriptionLifecycleNotification(
       ? { previousStatus: options.previous.status }
       : {}),
     provider: subscription.provider,
-    ...(subscription.providerCustomerId ?? subscription.aggregate.providerRef.customerId
-      ? { providerCustomerId: subscription.providerCustomerId ?? subscription.aggregate.providerRef.customerId }
+    ...((subscription.providerCustomerId ?? subscription.aggregate.providerRef.customerId)
+      ? {
+          providerCustomerId:
+            subscription.providerCustomerId ?? subscription.aggregate.providerRef.customerId,
+        }
       : {}),
-    ...(subscription.providerSubscriptionId ?? subscription.aggregate.providerRef.subscriptionId
-      ? { providerSubscriptionId: subscription.providerSubscriptionId ?? subscription.aggregate.providerRef.subscriptionId }
+    ...((subscription.providerSubscriptionId ?? subscription.aggregate.providerRef.subscriptionId)
+      ? {
+          providerSubscriptionId:
+            subscription.providerSubscriptionId ??
+            subscription.aggregate.providerRef.subscriptionId,
+        }
       : {}),
-    ...(subscription.aggregate.providerRef.priceId ? { providerPriceId: subscription.aggregate.providerRef.priceId } : {}),
-    ...(subscription.currentPeriodEnd ?? subscription.aggregate.currentPeriodEnd
-      ? { currentPeriodEnd: subscription.currentPeriodEnd ?? subscription.aggregate.currentPeriodEnd }
+    ...(subscription.aggregate.providerRef.priceId
+      ? { providerPriceId: subscription.aggregate.providerRef.priceId }
+      : {}),
+    ...((subscription.currentPeriodEnd ?? subscription.aggregate.currentPeriodEnd)
+      ? {
+          currentPeriodEnd:
+            subscription.currentPeriodEnd ?? subscription.aggregate.currentPeriodEnd,
+        }
       : {}),
     cancelAtPeriodEnd: subscription.aggregate.cancelAtPeriodEnd,
     sellableId: subscription.aggregate.sellable.sellableId,
     title: subscription.aggregate.sellable.titleSnapshot,
-    ...(subscription.aggregate.entitlementId ? { entitlementId: subscription.aggregate.entitlementId } : {}),
+    ...(subscription.aggregate.entitlementId
+      ? { entitlementId: subscription.aggregate.entitlementId }
+      : {}),
     ...(options.event?.type ? { eventType: options.event.type } : {}),
   });
 }
@@ -5032,11 +4969,6 @@ async function paymentCustomerSnapshot(
   checkout: CheckoutDocument,
   event: MikaProviderPaymentEvent,
 ): Promise<CustomerSnapshot> {
-  // For an authenticated checkout the confirmation recipient and the emailHash
-  // that binds entitlements / account links must refer to the verified account,
-  // not whatever email the buyer typed at the provider's hosted page. Prefer the
-  // canonical customer record's email (mirroring the subscription path); guest
-  // checkouts (no checkout.customerId / no record) fall back to the event email.
   const customer = checkout.customerId
     ? await input.repositories.account.findCustomerById(checkout.customerId)
     : null;
@@ -5441,7 +5373,9 @@ async function emitOrderDownloadReadyNotifications(
 
   for (const line of order.aggregate.lines) {
     const originalRefs = new Set(originalById.get(line.id)?.downloadRefs ?? []);
-    const addedRefs = (line.downloadRefs ?? []).filter((downloadRef) => !originalRefs.has(downloadRef));
+    const addedRefs = (line.downloadRefs ?? []).filter(
+      (downloadRef) => !originalRefs.has(downloadRef),
+    );
 
     for (const downloadRef of addedRefs) {
       await emitBackendNotification(input, "download.ready", ctx.now, {
@@ -5643,9 +5577,13 @@ async function markWebhookFailed(
     ...(persisted.providerEventId ? { providerEventId: persisted.providerEventId } : {}),
     payloadHash: persisted.payloadHash,
     lastError,
-    ...(persisted.record.relatedCustomerId ? { relatedCustomerId: persisted.record.relatedCustomerId } : {}),
+    ...(persisted.record.relatedCustomerId
+      ? { relatedCustomerId: persisted.record.relatedCustomerId }
+      : {}),
     ...(persisted.record.relatedOrderId ? { relatedOrderId: persisted.record.relatedOrderId } : {}),
-    ...(persisted.record.relatedSubscriptionId ? { relatedSubscriptionId: persisted.record.relatedSubscriptionId } : {}),
+    ...(persisted.record.relatedSubscriptionId
+      ? { relatedSubscriptionId: persisted.record.relatedSubscriptionId }
+      : {}),
   });
 
   return persisted;
@@ -5712,9 +5650,6 @@ async function findOwnedActiveWishlistById(
     return invalidWishlist("targetWishlistId", wishlistId);
   }
 
-  // Ownership is derived from the document's owner, not the request context, so
-  // an unbound context (no customerId and no sessionId) cannot reach an owned
-  // wishlist by id. Mirrors findOwnedCartById.
   if (document.customerId) {
     if (document.customerId !== ctx.customerId) {
       return invalidWishlist("targetWishlistId", wishlistId);
@@ -5795,14 +5730,6 @@ async function findOpenCart(
   return reopenAbandonedCheckoutCart(input, ctx, currency);
 }
 
-/**
- * Recovers a cart left in `checkout_pending` after an abandoned/failed checkout.
- * Without this, the cart and its lines become unreachable (status reads gate on
- * `open`) and a subsequent add silently starts a fresh empty cart. The cart is
- * only reopened when its checkout is no longer convertible — never while a
- * checkout is still resumable (created/redirected within expiry) or has already
- * converted, so an in-flight payment is not duplicated.
- */
 async function reopenAbandonedCheckoutCart(
   input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
@@ -5829,7 +5756,6 @@ async function reopenAbandonedCheckoutCart(
   return reopened;
 }
 
-/** A checkout that can still be completed (and whose cart must stay pending). */
 function checkoutIsResumable(checkout: CheckoutDocument, now: ISODateTime): boolean {
   if (checkout.status !== "created" && checkout.status !== "redirected") return false;
   if (!checkout.expiresAt) return true;
@@ -5924,8 +5850,6 @@ async function createCartQuote(
       discountAmount: Math.floor(subtotalAmount * COUPON_DISCOUNT_RATE),
     };
   }
-  // Always derive the discount from the current subtotal so a persisted coupon's
-  // stale snapshot cannot exceed it after line changes.
   const discountAmount = couponDiscountAmount(coupon, subtotalAmount);
   const totalAmount = Math.max(0, subtotalAmount - discountAmount);
   const status = cartResult.expired
@@ -6003,10 +5927,6 @@ async function startCheckout(
     ? await input.repositories.session.findCheckoutByIdempotencyKey(ctx.idempotencyKey)
     : null;
   if (replayedCheckout) {
-    // Idempotency replay must not leak a checkout created by a different actor.
-    // Idempotency keys are client-generated and may collide across sessions or
-    // customers; a cross-actor collision is treated as a key conflict rather
-    // than returning the original actor's checkout handoff (redirect URL, id).
     if (!(await checkoutBelongsToContext(replayedCheckout, ctx))) {
       return checkoutIdempotencyInputMismatch();
     }
@@ -6069,10 +5989,7 @@ async function startCheckout(
       status: "failed",
       error: "Checkout provider failed to create a session.",
       total: {
-        amount: reserved.lines.reduce(
-          (sum, line) => sum + line.item.unitAmount * line.quantity,
-          0,
-        ),
+        amount: reserved.lines.reduce((sum, line) => sum + line.item.unitAmount * line.quantity, 0),
         currency: resolved.currency,
       },
     });
@@ -6172,10 +6089,8 @@ async function resolveCheckoutStart(
   checkoutInput: StartCheckoutInput,
 ): Promise<({ readonly ok: true } & CheckoutStartResolution) | MikaApiFailure> {
   const defaultCurrency = defaultBackendCurrency(input);
-  // Express buy-now (sellableId without cartId) is a single line and must not
-  // append to the caller's open session cart, which would double-charge any
-  // item already present in that cart.
-  const expressBuyNow = checkoutInput.sellableId !== undefined && checkoutInput.cartId === undefined;
+  const expressBuyNow =
+    checkoutInput.sellableId !== undefined && checkoutInput.cartId === undefined;
   const cartResult = expressBuyNow
     ? { ok: true as const, cart: null, expired: false }
     : await findCheckoutStartCart(input, ctx, checkoutInput.cartId, defaultCurrency);
@@ -6601,8 +6516,6 @@ async function cancelCheckout(
     );
   }
 
-  // Never cancel a checkout that already converted to an order, and treat an
-  // already-terminal checkout as an idempotent no-op.
   if (document.status === "completed" || document.orderId) {
     return checkoutDocumentSuccessResult(document);
   }
@@ -6614,8 +6527,6 @@ async function cancelCheckout(
     return checkoutDocumentSuccessResult(document);
   }
 
-  // Release the inventory the checkout reserved and return its cart to `open`
-  // so the items are not trapped until reservation expiry.
   const cartDocument = document.cartId
     ? await input.repositories.session.findById(document.cartId)
     : null;
@@ -6664,19 +6575,12 @@ async function checkoutBelongsToContext(
   return Boolean(document.sessionId && ctx.sessionId && document.sessionId === ctx.sessionId);
 }
 
-/**
- * The effective customer identity for a request: an explicitly injected
- * `ctx.customerId` takes precedence, otherwise the customer stored on the
- * session by magic-link verification (`mika.customerId`). This keeps cart,
- * wishlist, checkout-status, and account paths resolving the same identity.
- */
 async function effectiveCustomerId(ctx: MikaRequestContext): Promise<MikaId | undefined> {
   if (ctx.customerId) return ctx.customerId;
 
   return ctx.session?.get<MikaId>("mika.customerId");
 }
 
-/** Returns a context with `customerId` hydrated from the session when absent. */
 async function withEffectiveCustomer(ctx: MikaRequestContext): Promise<MikaRequestContext> {
   if (ctx.customerId) return ctx;
   const sessionCustomerId = await ctx.session?.get<MikaId>("mika.customerId");
@@ -6684,12 +6588,6 @@ async function withEffectiveCustomer(ctx: MikaRequestContext): Promise<MikaReque
   return sessionCustomerId ? { ...ctx, customerId: sessionCustomerId } : ctx;
 }
 
-/**
- * Wraps every method of a cart/wishlist API so its request context has the
- * session-stored customer identity applied before resolution. Without this,
- * cart and wishlist ownership would diverge from account and checkout-status
- * paths after magic-link login.
- */
 function withHydratedCustomerContext<TApi extends Record<string, unknown>>(api: TApi): TApi {
   const wrapped: Record<string, unknown> = {};
   for (const [key, method] of Object.entries(api)) {
@@ -7294,9 +7192,6 @@ async function findOwnedOpenCartById(
     return invalidCart(field, cartId);
   }
 
-  // Ownership is derived from the document's owner, not the request context, so
-  // that an unbound context (no customerId and no sessionId) cannot reach an
-  // owned cart by id. Mirrors findOwnedCartById.
   if (document.customerId) {
     if (document.customerId !== ctx.customerId) {
       return invalidCart(field, cartId);
@@ -7308,13 +7203,6 @@ async function findOwnedOpenCartById(
   return { ok: true, cart: document };
 }
 
-// A merge source must belong to the caller. The source document is loaded by a
-// client-supplied `sourceSessionId` with no auth, so without this gate any actor
-// could merge another session's open cart/wishlist into their own and read the
-// victim's line items (cross-session IDOR). Ownership mirrors
-// `findOwnedOpenCartById`: a customer-owned source must match `ctx.customerId`;
-// otherwise a session-owned source must match `ctx.sessionId`. An unbound source
-// (neither owner) is never a valid merge source.
 function callerOwnsMergeSource(
   ctx: MikaRequestContext,
   source: { readonly customerId?: MikaId; readonly sessionId?: string },
@@ -7418,7 +7306,6 @@ async function validateExistingLineQuantity(
   return validateQuantityLimit(sellable, stock, quantity);
 }
 
-/** Fractional discount applied by the built-in flat-rate coupon (10%). */
 const COUPON_DISCOUNT_RATE = 0.1;
 
 async function createCouponSnapshot(
@@ -7738,14 +7625,6 @@ function isEquivalentCartLine(left: CartLine, right: CartLine): boolean {
   );
 }
 
-/**
- * Quantity of a sellable already committed to the cart on lines OTHER than the
- * one being added/updated. Stock and `maxPerOrder` limits are per sellable, but
- * cart lines split by `priceId`/`variantKey`, so each line must be validated
- * against the summed per-sellable demand. Validating a line in isolation lets
- * two split lines each pass while their total exceeds available stock, which
- * then only fails at the checkout reservation gate.
- */
 function siblingSellableQuantity(items: readonly CartLine[], line: CartLine): number {
   return items.reduce(
     (sum, other) =>

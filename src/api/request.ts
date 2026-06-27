@@ -1,3 +1,6 @@
+/**
+ * Low-level HTTP client for Mika plugin routes: URL building, cookie forwarding, envelope parsing.
+ */
 import type { MikaClientOptions } from "./client";
 import { mikaPluginRoute, type MikaPluginRouteName } from "./routes";
 import {
@@ -14,6 +17,7 @@ interface MikaCookieForwardingOptions {
 
 type MikaRequestOptions = MikaClientOptions & MikaCookieForwardingOptions;
 
+/** Performs a JSON request to a plugin route and normalizes the {@link MikaApiResult} envelope. */
 export async function requestMika<TData>(
   route: MikaPluginRouteName,
   init: MikaRequestInit = {},
@@ -91,6 +95,7 @@ export async function requestMika<TData>(
   };
 }
 
+/** Fetch init subset used by Mika clients and operation transport helpers. */
 export interface MikaRequestInit {
   readonly method?: "GET" | "POST" | "PATCH" | "DELETE";
   readonly search?: Record<string, string | number | boolean | undefined>;

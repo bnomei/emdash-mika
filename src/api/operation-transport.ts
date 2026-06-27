@@ -1,7 +1,11 @@
+/**
+ * Maps operation transport metadata to HTTP request init and parses wire input via Zod schemas.
+ */
 import type { MikaRequestInit } from "./request";
 import type { MikaRouteOperation } from "./operations";
 import { parseMikaInput, searchParamsObject, type z } from "./validation";
 
+/** Builds fetch init (method, body, or search params) from an operation's transport mode. */
 export function mikaOperationRequestInit(
   operation: Pick<MikaRouteOperation, "httpMethod" | "transport">,
   input: unknown,
@@ -23,6 +27,7 @@ export function mikaOperationRequestInit(
   };
 }
 
+/** Extracts and validates operation input from body, search params, or empty transport. */
 export function parseMikaOperationInput(
   operation: MikaRouteOperation,
   input: unknown,

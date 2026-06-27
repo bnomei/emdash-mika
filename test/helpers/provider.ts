@@ -1,3 +1,7 @@
+/**
+ * Configurable fake payment provider adapter for backend and Stripe tests.
+ * Records method calls and returns deterministic checkout, portal, and webhook payloads.
+ */
 import type {
   AdminActionResultDTO,
   MikaProviderCapability,
@@ -88,6 +92,9 @@ export type FakeMikaProvider = {
   readonly resetCalls: () => void;
 };
 
+/**
+ * Creates a {@link MikaProviderAdapter} stub with optional methods and call logging.
+ */
 export function createFakeMikaProvider(
   options: CreateFakeMikaProviderOptions = {},
 ): FakeMikaProvider {

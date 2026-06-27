@@ -1,3 +1,7 @@
+/**
+ * Tokenized download route for the storefront template.
+ * Resolves a download grant and redirects to the provider or asset URL.
+ */
 import { createMika } from "@bnomei/emdash-mika/astro";
 import type { APIRoute } from "astro";
 

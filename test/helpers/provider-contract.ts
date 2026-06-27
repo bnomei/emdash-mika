@@ -1,3 +1,6 @@
+/**
+ * Shared provider contract assertions for capability and webhook normalization tests.
+ */
 import { expect } from "vite-plus/test";
 
 import type { MikaProviderCapability } from "../../src/api/types";
@@ -25,6 +28,7 @@ const METHOD_BACKED_CAPABILITIES = [
   readonly methods: readonly ProviderMethodName[];
 }[];
 
+/** Asserts advertised capabilities have the adapter methods that back them. */
 export async function expectMethodBackedProviderCapabilities(
   provider: MikaProviderAdapter,
 ): Promise<void> {
@@ -41,6 +45,7 @@ export async function expectMethodBackedProviderCapabilities(
   }
 }
 
+/** Asserts a webhook event normalized to a paid payment. */
 export function expectPaidProviderPaymentEvent(event: MikaProviderWebhookEvent): void {
   expect(event).toMatchObject({
     kind: "payment",
@@ -48,6 +53,7 @@ export function expectPaidProviderPaymentEvent(event: MikaProviderWebhookEvent):
   });
 }
 
+/** Asserts a webhook event does not represent a fulfilled paid payment. */
 export function expectNonFulfillingProviderEvent(event: MikaProviderWebhookEvent): void {
   expect(event).not.toMatchObject({
     kind: "payment",

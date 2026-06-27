@@ -1,3 +1,7 @@
+/**
+ * Canonical agent metadata presets keyed by operation class (cart write, checkout handoff, admin, etc.).
+ * Attached to operation descriptors and agent manifests.
+ */
 import {
   MIKA_AGENT_IDEMPOTENCY_KEY_HEADER,
   type MikaAgentIdempotencyMetadata,
@@ -37,6 +41,7 @@ function defineAgentOperationMetadata<
   ) as { readonly [TKey in keyof TDefinitions]: MikaAgentOperationMetadata };
 }
 
+/** Frozen agent policy presets referenced by {@link mikaOperationDefinitions}. */
 export const agentOperationMetadata = defineAgentOperationMetadata({
   catalogRead: {
     visible: "public",

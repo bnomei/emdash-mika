@@ -1,3 +1,6 @@
+/**
+ * ACP product projection and Stripe provider adapter tests.
+ */
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -122,7 +125,6 @@ describe("Mika ACP projection", () => {
     const sellable = createTestSellableDTO({
       id: createMikaId("sellable_backorder"),
       title: "Backorder poster",
-      // Sold out on-hand, but backorderable: the reserve path still accepts it.
       availability: {
         sellableId: createMikaId("sellable_backorder"),
         status: "backorder",
@@ -288,7 +290,6 @@ describe("Mika ACP projection", () => {
         onCheckoutStart: () => {
           checkoutStartCount += 1;
         },
-        // Provider checkout stays pending after the first complete.
         checkoutSessionStatus: "pending",
       }),
       store: createMemoryMikaAcpSessionStore(),
@@ -318,8 +319,6 @@ describe("Mika ACP projection", () => {
     await expect(first.json()).resolves.toMatchObject({ status: "ready_for_payment" });
     expect(checkoutStartCount).toBe(1);
 
-    // A second complete with a DIFFERENT idempotency key must resume the
-    // existing pending checkout, not start a second provider checkout.
     const second = await handlers.complete(
       acpRequest(
         "https://shop.example.test/checkout_sessions/checkout_session_acp_pending/complete",
@@ -350,11 +349,9 @@ describe("Mika ACP projection", () => {
       provider: createProviderName("stripe"),
     };
 
-    // No credentials → open handlers → fail closed.
     expect(() => createMikaAcpCheckoutHandlers(baseOptions)).toThrow(
       "requires an apiKey or signatureSecret",
     );
-    // Either credential alone is enough to build handlers.
     expect(() =>
       createMikaAcpCheckoutHandlers({ ...baseOptions, apiKey: "acp_test_key" }),
     ).not.toThrow();
@@ -378,7 +375,6 @@ describe("Mika ACP projection", () => {
 
           return undefined;
         },
-        // Provider checkout stays pending so the bound checkout is non-terminal.
         checkoutSessionStatus: "pending",
       }),
       store: createMemoryMikaAcpSessionStore(),
@@ -394,7 +390,6 @@ describe("Mika ACP projection", () => {
         buyer: { name: "Ada Buyer", email: "ada@example.test" },
       }),
     );
-    // Complete binds a non-terminal Mika checkout to the ACP session.
     await handlers.complete(
       acpRequest(
         "https://shop.example.test/checkout_sessions/checkout_session_acp_cancel_bound/complete",
@@ -415,7 +410,6 @@ describe("Mika ACP projection", () => {
 
     expect(canceled.status).toBe(200);
     await expect(canceled.json()).resolves.toMatchObject({ status: "canceled" });
-    // The bound Mika checkout must be released, not orphaned.
     expect(cancelCalls).toEqual([{ checkoutId: "checkout_1" }]);
   });
 
@@ -466,7 +460,6 @@ describe("Mika ACP projection", () => {
       "checkout_session_acp_cancel_fail",
     );
 
-    // A failed provider cancellation must NOT report the ACP session as canceled.
     expect(canceled.status).toBe(409);
     const session = await handlers.get(
       acpRequest(
@@ -487,7 +480,6 @@ describe("Mika ACP projection", () => {
         setCart: (next) => {
           cart = next;
         },
-        // The bound Mika checkout stays pending (non-terminal) after complete.
         checkoutSessionStatus: "pending",
       }),
       store: createMemoryMikaAcpSessionStore(),
@@ -516,9 +508,6 @@ describe("Mika ACP projection", () => {
     expect(completed.status).toBe(200);
     await expect(completed.json()).resolves.toMatchObject({ status: "ready_for_payment" });
 
-    // Changing the cart items after the checkout is bound (and non-terminal)
-    // would desync the delegated-payment total from the bound checkout, so it
-    // must be rejected.
     const updated = await handlers.update(
       acpRequest(
         "https://shop.example.test/checkout_sessions/checkout_session_acp_bound",
@@ -944,8 +933,6 @@ describe("Mika Stripe provider", () => {
       ],
     });
 
-    // The inline price_data must reflect the catalog cadence, not a hardcoded
-    // monthly interval.
     expect(createCalls[0]?.params.line_items[0]).toMatchObject({
       price_data: {
         recurring: { interval: "year", interval_count: 2 },
@@ -1037,8 +1024,6 @@ describe("Mika Stripe provider", () => {
       orderId: "order_1",
       href: "https://invoice.stripe.test/in_456",
     });
-    // The payment intent is resolved first; invoices.retrieve is called with the
-    // invoice id, never the payment-intent id.
     expect(intentCalls).toEqual(["pi_123"]);
     expect(invoiceCalls).toEqual(["in_456"]);
   });
@@ -1246,7 +1231,6 @@ describe("Mika Stripe provider", () => {
       return event;
     };
 
-    // Inert event types that carry no payment outcome stay `unknown` no-ops.
     const unknownCases: readonly JsonObject[] = [
       {
         id: "evt_expired",

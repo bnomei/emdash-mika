@@ -1,3 +1,7 @@
+/**
+ * Compile-time package export contract checks.
+ * Ensures subpath barrels expose expected types and block accidental internals.
+ */
 import type { mikaPlugin, MikaOperationDescriptor, MikaOperationPolicy } from "@bnomei/emdash-mika";
 import type {
   createMikaAcpCheckoutHandlers,

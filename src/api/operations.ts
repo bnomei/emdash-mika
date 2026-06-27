@@ -1,3 +1,7 @@
+/**
+ * Operation registry: descriptors, routes, agent metadata, schemas, and dispatch to {@link MikaApi}.
+ * Single source of truth for plugin routes, action definitions, and agent manifests.
+ */
 import type { MikaRequestContext } from "./context";
 import type { MikaApi } from "./server";
 import type { MikaApiResult } from "./types";
@@ -55,9 +59,12 @@ import {
 export { mikaOperationRequestInit, parseMikaOperationInput } from "./operation-transport";
 
 export type MikaOperationHttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
+/** Where validated input is read on the HTTP request. */
 export type MikaOperationTransport = "body" | "search" | "none";
+/** Accepted encoding for HTML action endpoints. */
 export type MikaActionAccept = "form" | "json";
 
+/** Serializable view of an operation for manifests, routing, and policy. */
 export interface MikaOperationDescriptor {
   readonly name: string;
   readonly namespace: string;
@@ -359,17 +366,20 @@ function jsonAction<const TOptions extends Omit<MikaOperationActionInputDefiniti
   return { accept: "json", ...options } as TOptions & { readonly accept: "json" };
 }
 
+/** Success payload type inferred from an operation's `call` binding. */
 export type MikaApiOperationData<TOperation extends { readonly call: (...args: any) => any }> =
   TOperation extends { readonly call: (...args: any) => Promise<MikaApiResult<infer TData>> }
     ? TData
     : never;
 
+/** Validated input type inferred from an operation's Zod schema. */
 export type MikaApiOperationInput<TOperation> = TOperation extends {
   readonly schema: z.ZodType<infer TInput>;
 }
   ? TInput
   : undefined;
 
+/** Thrown when an HTML action payload cannot be normalized to operation input. */
 export class MikaActionInputError extends Error {
   readonly code: "BAD_REQUEST";
 
@@ -389,6 +399,7 @@ function defineMikaRouteOnlyDefinitions<
   return definitions;
 }
 
+/** Routes without backing API operations (admin manifest and action runner). */
 export const mikaRouteOnlyDefinitions = defineMikaRouteOnlyDefinitions({
   actionsManifest: {
     routeKey: "actionsManifest",
@@ -453,6 +464,7 @@ function parsePurchaseMikaId(value: string | null | undefined, field: string) {
   }
 }
 
+/** Full catalog of Mika API operations with schemas, routes, and dispatch closures. */
 export const mikaOperationDefinitions = defineMikaOperations({
   catalogSellables: defineMikaOperation({
     namespace: "catalog",
@@ -708,8 +720,6 @@ export const mikaOperationDefinitions = defineMikaOperations({
   checkoutCancel: defineMikaOperation({
     namespace: "checkout",
     method: "cancel",
-    // Routed as `checkoutAbandon` so the `checkoutCancel` name stays reserved
-    // for the browser cancel-redirect URL (not a plugin API route).
     routeKey: "checkoutAbandon",
     routePath: "checkout/abandon",
     httpMethod: "POST",
@@ -1045,16 +1055,19 @@ export const mikaOperationDefinitions = defineMikaOperations({
   }),
 });
 
+/** One registered operation definition (schema, route, agent metadata, and call binding). */
 export type MikaApiOperation =
   (typeof mikaOperationDefinitions)[keyof typeof mikaOperationDefinitions];
 export type MikaRouteOperation = MikaApiOperation;
 export type MikaRouteOnlyDefinition =
   (typeof mikaRouteOnlyDefinitions)[keyof typeof mikaRouteOnlyDefinitions];
 
+/** All operations exposed as HTTP plugin routes. */
 export const mikaRoutedOperationDefinitions = Object.values(
   mikaOperationDefinitions,
 ) as readonly MikaRouteOperation[];
 
+/** Operations grouped by plugin route path for method-based dispatch. */
 export const mikaRouteOperationsByPath = collectMikaRouteOperationsByPath();
 
 type MikaOperationPluginRoutes = {
@@ -1063,6 +1076,7 @@ type MikaOperationPluginRoutes = {
   readonly [TRoute in MikaRouteOnlyDefinition as TRoute["routeKey"]]: TRoute["routePath"];
 };
 
+/** Route key to path segment map consumed by {@link mikaPluginRoute}. */
 export const mikaOperationPluginRoutes = collectMikaPluginRoutes() as MikaOperationPluginRoutes;
 
 export type MikaOperationPublicRouteName = Extract<
@@ -1070,6 +1084,7 @@ export type MikaOperationPublicRouteName = Extract<
   { readonly public: true }
 >["routeKey"];
 
+/** Route keys marked `public: true` (no session required). */
 export const mikaOperationPublicRouteNames = mikaRoutedOperationDefinitions
   .filter(
     (operation): operation is Extract<MikaRouteOperation, { readonly public: true }> =>
@@ -1084,6 +1099,7 @@ export type MikaOperationApiMethodNames = {
   >["method"][];
 };
 
+/** Namespace to method name list mirroring {@link MikaApi} shape. */
 export const mikaOperationApiMethodNames =
   collectMikaApiMethodNames() as MikaOperationApiMethodNames;
 
@@ -1101,8 +1117,10 @@ export type MikaActionDefinitions = {
 export type MikaActionName = MikaActionDefinitions[keyof MikaActionDefinitions]["name"];
 export type MikaActionDefinition = MikaActionDefinitions[keyof MikaActionDefinitions];
 
+/** HTML form actions keyed by stable action id with linked operations. */
 export const mikaActionDefinitions = collectMikaActionDefinitions() as MikaActionDefinitions;
 
+/** Frozen descriptor map keyed by internal operation definition keys. */
 export const mikaOperationDescriptors = Object.freeze(
   Object.fromEntries(
     Object.entries(mikaOperationDefinitions).map(([key, operation]) => [
@@ -1114,6 +1132,7 @@ export const mikaOperationDescriptors = Object.freeze(
   readonly [TOperation in keyof typeof mikaOperationDefinitions]: MikaOperationDescriptor;
 };
 
+/** Projects a live operation definition into a manifest-safe descriptor. */
 export function mikaOperationDescriptor(operation: MikaApiOperation): MikaOperationDescriptor {
   const descriptor: MikaOperationDescriptor = {
     name: operation.name,
@@ -1158,6 +1177,7 @@ function cloneMikaAgentOperationMetadata(
   });
 }
 
+/** Dispatches validated input to the operation's bound {@link MikaApi} handler. */
 export function callMikaOperation<TOperation extends MikaApiOperation>(
   operation: TOperation,
   api: MikaApi,

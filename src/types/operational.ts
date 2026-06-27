@@ -1,3 +1,7 @@
+/**
+ * Operational records stored in SQLite or embedded in record-backed documents.
+ * Covers stock, reservations, ephemeral state, workflows, and background processing.
+ */
 import type {
   EmailStatus,
   EntitlementStatus,
@@ -13,6 +17,7 @@ import type {
   WebhookStatus,
 } from "./primitives";
 
+/** Atomic stock item state keyed by sellable with policy and quantity counters. */
 export interface StockItemRecord {
   readonly id: MikaId;
   readonly sellableId: MikaId;
@@ -27,6 +32,7 @@ export interface StockItemRecord {
   readonly metadata?: JsonObject;
 }
 
+/** Legacy reservation record shape; active reservations use stock event records. */
 export interface StockReservationRecord {
   readonly id: MikaId;
   readonly stockItemId: MikaId;
@@ -43,6 +49,7 @@ export interface StockReservationRecord {
   readonly metadata?: JsonObject;
 }
 
+/** Legacy movement record shape; movements are recorded as stock event records. */
 export interface StockMovementRecord {
   readonly id: MikaId;
   readonly stockItemId: MikaId;
@@ -57,9 +64,12 @@ export interface StockMovementRecord {
   readonly metadata?: JsonObject;
 }
 
+/** Discriminator for reservation holds versus inventory movement events. */
 export type StockEventKind = "reservation" | "movement";
+/** Lifecycle status for a stock event from active hold through recorded movement. */
 export type StockEventStatus = "active" | "released" | "consumed" | "expired" | "recorded";
 
+/** Unified stock event record for reservations and movements with idempotency support. */
 export interface StockEventRecord {
   readonly id: MikaId;
   readonly stockItemId: MikaId;
@@ -82,6 +92,7 @@ export interface StockEventRecord {
   readonly metadata?: JsonObject;
 }
 
+/** TTL-bound ephemeral record for tokens, locks, rate limits, and cache markers. */
 export interface EphemeralRecord {
   readonly key: string;
   readonly kind: "token" | "rate_limit" | "lock" | "nonce" | "cache_marker";
@@ -95,6 +106,7 @@ export interface EphemeralRecord {
   readonly data?: JsonObject;
 }
 
+/** Provider customer linkage record for account documents. */
 export interface CustomerProviderAccountRecord {
   readonly id: MikaId;
   readonly customerId: MikaId;
@@ -106,6 +118,7 @@ export interface CustomerProviderAccountRecord {
   readonly metadata?: JsonObject;
 }
 
+/** Access grant record keyed by entitlement identity and subject references. */
 export interface EntitlementRecord {
   readonly id: MikaId;
   readonly customerId?: MikaId;
@@ -125,6 +138,7 @@ export interface EntitlementRecord {
   readonly metadata?: JsonObject;
 }
 
+/** Hashed one-time token record; may also be mirrored as an ephemeral record. */
 export interface TokenRecord {
   readonly id: MikaId;
   readonly purpose: TokenPurpose;
@@ -143,6 +157,7 @@ export interface TokenRecord {
   readonly metadata?: JsonObject;
 }
 
+/** Account data export job record with download token and artifact reference. */
 export interface AccountExportRecord {
   readonly id: MikaId;
   readonly customerId?: MikaId;
@@ -157,6 +172,7 @@ export interface AccountExportRecord {
   readonly metadata?: JsonObject;
 }
 
+/** Account deletion workflow record from request through completion. */
 export interface AccountDeleteRequestRecord {
   readonly id: MikaId;
   readonly customerId?: MikaId;
@@ -172,6 +188,7 @@ export interface AccountDeleteRequestRecord {
   readonly metadata?: JsonObject;
 }
 
+/** Outbound email job record with lease-backed retry scheduling. */
 export interface EmailMessageRecord {
   readonly id: MikaId;
   readonly customerId?: MikaId;
@@ -197,6 +214,7 @@ export interface EmailMessageRecord {
   readonly metadata?: JsonObject;
 }
 
+/** Sliding-window rate limit bucket keyed by scope and subject hash. */
 export interface RateLimitBucketRecord {
   readonly id: MikaId;
   readonly scope: string;
@@ -209,6 +227,7 @@ export interface RateLimitBucketRecord {
   readonly updatedAt: ISODateTime;
 }
 
+/** Inbound provider webhook event record with deduplication hashes. */
 export interface WebhookEventRecord {
   readonly id: MikaId;
   readonly provider: ProviderName;
@@ -228,6 +247,7 @@ export interface WebhookEventRecord {
   readonly relatedSubscriptionId?: MikaId;
 }
 
+/** Issued license key record with hashed secret and display suffix. */
 export interface LicenseKeyRecord {
   readonly id: MikaId;
   readonly orderId?: MikaId;
@@ -241,6 +261,7 @@ export interface LicenseKeyRecord {
   readonly metadata?: JsonObject;
 }
 
+/** Provider catalog synchronization run with optional lease exclusivity. */
 export interface ProviderSyncRunRecord {
   readonly id: MikaId;
   readonly provider: ProviderName;
@@ -253,9 +274,12 @@ export interface ProviderSyncRunRecord {
   readonly lastError?: string;
 }
 
+/** Top-level workflow record lifecycle with lease-backed execution. */
 export type WorkflowStatus = "queued" | "running" | "completed" | "failed";
+/** Per-step workflow execution status within a workflow record. */
 export type WorkflowStepStatus = "queued" | "running" | "completed" | "failed" | "skipped";
 
+/** Named step within a workflow with retry and resume state. */
 export interface WorkflowStepRecord {
   readonly name: string;
   readonly status: WorkflowStepStatus;
@@ -268,6 +292,7 @@ export interface WorkflowStepRecord {
   readonly state?: JsonObject;
 }
 
+/** Lease-backed multi-step workflow record for async fulfillment pipelines. */
 export interface WorkflowRecord {
   readonly id: MikaId;
   readonly kind: "payment_webhook_fulfillment" | (string & {});
@@ -290,6 +315,7 @@ export interface WorkflowRecord {
   readonly metadata?: JsonObject;
 }
 
+/** Admin action audit event record with idempotency and correlation metadata. */
 export interface AdminAuditEventRecord {
   readonly id: MikaId;
   readonly actorId?: string;
@@ -298,12 +324,6 @@ export interface AdminAuditEventRecord {
   readonly targetId?: MikaId;
   readonly status: "started" | "completed" | "failed";
   readonly correlationId?: string;
-  /**
-   * Idempotency key (admin action runner invocation id) used to make retries of
-   * a mutating admin action safe. When set, a second action with the same
-   * `(action, idempotencyKey)` replays the original result instead of repeating
-   * the side effect (e.g. a double refund).
-   */
   readonly idempotencyKey?: string;
   readonly createdAt: ISODateTime;
   readonly metadata?: JsonObject;

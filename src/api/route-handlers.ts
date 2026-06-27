@@ -1,3 +1,7 @@
+/**
+ * EmDash plugin route table: wires HTTP paths to operations, admin actions, and manifests.
+ * Builds {@link MikaRequestContext} from incoming requests before dispatch.
+ */
 import { createMikaAdminActionsManifest } from "../admin";
 import {
   resolveMikaAdminActionInvocation,
@@ -15,6 +19,7 @@ import type { MikaOperationPolicy } from "./operation-policy";
 import { mikaPluginRoutes, type MikaPluginRouteName } from "./routes";
 import { createMikaApi, type MikaApi } from "./server";
 
+/** Host framework context passed into each plugin route handler. */
 export interface MikaRouteContext<TInput = unknown> {
   readonly input: TInput;
   readonly request: Request;
@@ -23,18 +28,23 @@ export interface MikaRouteContext<TInput = unknown> {
   readonly currentLocale?: string;
 }
 
+/** Single plugin route entry with optional public access and async handler. */
 export interface MikaPluginRoute<TInput = unknown> {
   readonly public?: boolean;
   readonly handler: (ctx: MikaRouteContext<TInput>) => Promise<unknown>;
 }
 
+/** Options applied when constructing the plugin route table. */
 export interface MikaPluginRoutesOptions {
   readonly operationPolicy?: MikaOperationPolicy;
 }
 
 export type MikaPluginRoutePath = (typeof mikaPluginRoutes)[MikaPluginRouteName];
+
+/** Complete path-to-handler map for the Mika EmDash plugin. */
 export type MikaPluginRoutes = Record<MikaPluginRoutePath, MikaPluginRoute>;
 
+/** Registers operation routes, admin action runner, and actions manifest handlers. */
 export function createMikaPluginRoutes(
   api: MikaApi = createMikaApi(),
   options: MikaPluginRoutesOptions = {},
@@ -104,9 +114,6 @@ async function handleActionRunner(
   return toMikaAdminActionRunResult(result, resolved.data.resultAdapter);
 }
 
-// Admin operations whose input schema declares an `idempotencyKey` and whose
-// backend threads it into the admin-action audit for retry-safe deduplication.
-// Keep in sync with the schemas in validation.ts that expose `idempotencyKey`.
 const ADMIN_IDEMPOTENT_OPERATIONS: ReadonlySet<string> = new Set([
   "admin.stockAdjust",
   "admin.orderRefund",
@@ -123,10 +130,6 @@ function adminRunnerInputWithContext(
   input: unknown,
   idempotencyKey: string | undefined,
 ): unknown {
-  // Forward the runner-enforced idempotency key to every mutating admin
-  // operation that consumes it (not just stock adjust). The backend uses it to
-  // dedupe retries, replaying the original result instead of repeating the side
-  // effect (e.g. a double refund).
   if (
     !idempotencyKey ||
     !ADMIN_IDEMPOTENT_OPERATIONS.has(operation.name) ||

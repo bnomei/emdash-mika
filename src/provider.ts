@@ -1,3 +1,7 @@
+/**
+ * Provider adapter contract and registry for payment providers: checkout, portal, subscriptions,
+ * refunds, catalog sync, and webhook verification that feed Mika order fulfillment workflows.
+ */
 import type {
   AdminActionResultDTO,
   CheckoutCustomerInput,
@@ -21,6 +25,7 @@ import type {
   SubscriptionStatus,
 } from "./types/primitives";
 
+/** Contract implemented by payment providers (Stripe, etc.) for checkout and fulfillment hooks. */
 export interface MikaProviderAdapter {
   readonly id: ProviderName;
   capabilities(): Promise<readonly MikaProviderCapability[]> | readonly MikaProviderCapability[];
@@ -39,11 +44,13 @@ export interface MikaProviderAdapter {
   parseWebhookEvent?(input: MikaVerifiedWebhookPayload): Promise<MikaProviderWebhookEvent>;
 }
 
+/** Lookup table of registered provider adapters keyed by provider name. */
 export interface MikaProviderRegistry {
   get(provider: ProviderName): MikaProviderAdapter | undefined;
   list(): readonly MikaProviderAdapter[];
 }
 
+/** Input for creating a hosted or delegated provider checkout session from Mika cart lines. */
 export interface MikaProviderCheckoutInput {
   readonly idempotencyKey?: string;
   readonly mode: PurchaseMode;
@@ -55,6 +62,7 @@ export interface MikaProviderCheckoutInput {
   readonly metadata?: JsonObject;
 }
 
+/** Normalized checkout session returned by a provider adapter after create or retrieve. */
 export interface MikaProviderCheckoutSession {
   readonly id: MikaId;
   readonly status: CheckoutStatusDTO;
@@ -110,6 +118,7 @@ export interface MikaProviderSyncInput {
   readonly contentRef?: ContentRefDTO;
 }
 
+/** Sellable line passed to a provider when opening checkout or reconciling webhook payments. */
 export interface MikaProviderLineItem {
   readonly sellableId: MikaId;
   readonly priceId?: MikaId;
@@ -131,12 +140,14 @@ export interface MikaProviderLineItem {
   readonly metadata?: JsonObject;
 }
 
+/** Raw HTTP webhook request handed to a provider adapter for signature verification. */
 export interface MikaProviderWebhookVerificationInput {
   readonly provider: ProviderName;
   readonly request: Request;
   readonly rawBody: Uint8Array;
 }
 
+/** Verified webhook body and metadata produced after provider signature checks. */
 export interface MikaVerifiedWebhookPayload {
   readonly provider: ProviderName;
   readonly rawBody: Uint8Array;
@@ -145,11 +156,13 @@ export interface MikaVerifiedWebhookPayload {
   readonly parsed?: JsonObject;
 }
 
+/** Discriminated provider webhook events normalized for Mika order and subscription workflows. */
 export type MikaProviderWebhookEvent =
   | MikaProviderPaymentEvent
   | MikaProviderSubscriptionEvent
   | MikaProviderUnknownWebhookEvent;
 
+/** Normalized payment webhook event driving Mika order confirmation and fulfillment. */
 export interface MikaProviderPaymentEvent {
   readonly kind: "payment";
   readonly paymentStatus: PaymentStatus | (string & {});
@@ -171,6 +184,7 @@ export interface MikaProviderPaymentEvent {
   readonly raw?: JsonObject;
 }
 
+/** Normalized subscription webhook event for Mika subscription state reconciliation. */
 export interface MikaProviderSubscriptionEvent {
   readonly kind: "subscription";
   readonly provider: ProviderName;
@@ -194,10 +208,12 @@ export interface MikaProviderUnknownWebhookEvent {
   readonly raw?: JsonObject;
 }
 
+/** Identity helper for authoring provider adapters with full type inference. */
 export function defineMikaProvider(adapter: MikaProviderAdapter): MikaProviderAdapter {
   return adapter;
 }
 
+/** Builds a provider registry from one or more `MikaProviderAdapter` instances. */
 export function createMikaProviderRegistry(
   providers: readonly MikaProviderAdapter[] = [],
 ): MikaProviderRegistry {

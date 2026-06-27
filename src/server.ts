@@ -1,3 +1,7 @@
+/**
+ * Server-side entry for wiring Mika commerce: MikaApi, backend repositories, request context,
+ * email outbox runners, maintenance jobs, notification hooks, and the typed server client.
+ */
 export {
   createMikaRequestContext,
   type CreateMikaRequestContextInput,

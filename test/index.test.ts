@@ -1,3 +1,7 @@
+/**
+ * Integration harness for the published Mika package surface.
+ * Covers plugin wiring, subpath exports, agent manifests, and template contracts.
+ */
 import { readdirSync, readFileSync } from "node:fs";
 import Ajv2020 from "ajv/dist/2020";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
@@ -511,8 +515,6 @@ describe("Mika native plugin package", () => {
             listQueuedAccountDeleteRequests: async () => ({ items: [], hasMore: false }),
           },
           stock: {},
-          // The runner only touches the methods exercised above; cast the
-          // minimal fake to the repository slice the maintenance runner needs.
         } as never,
       },
     });
@@ -580,16 +582,11 @@ describe("Mika native plugin package", () => {
 
 describe("Mika Astro helpers", () => {
   it("scales money by the currency's own fraction digits, not a fixed /100", () => {
-    // Intl uses non-breaking spaces around some currency codes; normalize them.
     const fmt = (amount: number, currency: string) =>
       formatMikaMoney({ amount, currency }, { locales: "en-US" }).replace(/[  ]/g, " ");
 
-    // 2-decimal currency: minor units divided by 100.
     expect(fmt(1200, "USD")).toBe("$12.00");
-    // Zero-decimal currency: the minor unit IS the major unit, so no /100.
-    // A stored 1000 (¥1,000 charged) must render ¥1,000, not ¥10.
     expect(fmt(1000, "JPY")).toBe("¥1,000");
-    // Three-decimal currency: divide by 1000.
     expect(fmt(1500, "BHD")).toBe("BHD 1.500");
   });
 
@@ -2774,8 +2771,6 @@ describe("Mika client", () => {
     expect(apiInput).toEqual({
       orderId: id("order_1"),
       orderLineId: id("order_line_1"),
-      // The runner forwards its invocation id as the idempotency key so the
-      // download issue dedupes on retry.
       idempotencyKey: "download_issue_invocation_1",
     });
   });

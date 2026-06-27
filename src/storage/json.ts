@@ -1,3 +1,7 @@
+/**
+ * JSON serialization helpers for aggregate payloads and document metadata in storage.
+ * Decoding validates schema version and branded primitive fields.
+ */
 import {
   createCurrencyCode,
   createISODateTime,
@@ -8,10 +12,12 @@ import {
   type JsonObject,
 } from "../types/primitives";
 
+/** Serializes a value to a JSON text column. */
 export function encodeJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/** Parses JSON text and requires a finite object envelope. */
 export function decodeJsonObject(text: string, label = "JSON"): JsonObject {
   const parsed: unknown = JSON.parse(text);
   if (!isJsonObject(parsed)) {
@@ -21,6 +27,7 @@ export function decodeJsonObject(text: string, label = "JSON"): JsonObject {
   return parsed;
 }
 
+/** Decodes and validates a versioned aggregate payload from JSON text. */
 export function decodeAggregate<TPayload extends AggregatePayload>(
   text: string,
   expectedSchemaVersion = 1,
@@ -41,6 +48,7 @@ export function decodeAggregate<TPayload extends AggregatePayload>(
   return parsed as unknown as TPayload;
 }
 
+/** Type guard for plain object records during JSON validation. */
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

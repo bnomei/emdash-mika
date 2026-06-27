@@ -1,3 +1,6 @@
+/**
+ * Single entry point for executing a Mika operation: policy check, then {@link callMikaOperation}.
+ */
 import type { MikaRequestContext } from "./context";
 import {
   callMikaOperation,
@@ -9,6 +12,7 @@ import { runMikaOperationPolicy, type MikaOperationPolicy } from "./operation-po
 import type { MikaApi } from "./server";
 import type { MikaApiResult } from "./types";
 
+/** Arguments for running one validated operation through policy and API dispatch. */
 export interface RunMikaOperationInput<TOperation extends MikaApiOperation = MikaApiOperation> {
   readonly operation: TOperation;
   readonly api: MikaApi;
@@ -17,6 +21,7 @@ export interface RunMikaOperationInput<TOperation extends MikaApiOperation = Mik
   readonly operationPolicy?: MikaOperationPolicy;
 }
 
+/** Runs optional policy, then dispatches to the operation's wired {@link MikaApi} handler. */
 export async function runMikaOperation<TOperation extends MikaApiOperation>({
   operation,
   api,

@@ -1,3 +1,7 @@
+/**
+ * Agentic Commerce Protocol (ACP) support: product feeds, checkout session HTTP handlers backed
+ * by MikaApi cart/checkout, session storage, delegated Stripe payments, and order webhooks.
+ */
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 import {
@@ -35,7 +39,10 @@ import {
   type ProviderName,
 } from "./types/primitives";
 
+/** ACP API version header value supported by Mika checkout handlers. */
 export const MIKA_ACP_API_VERSION = "2025-09-12";
+
+/** Default prefix for generated ACP checkout session ids. */
 export const MIKA_ACP_DEFAULT_SESSION_PREFIX = "acp_checkout";
 
 export interface MikaAcpSeller {
@@ -160,6 +167,7 @@ export interface MikaAcpValidationIssue {
   readonly message: string;
 }
 
+/** Persisted ACP checkout session state linking cart, checkout, buyer, and payment authorization. */
 export interface MikaAcpSessionRecord {
   readonly id: string;
   readonly sessionId: string;
@@ -178,6 +186,7 @@ export interface MikaAcpSessionRecord {
   readonly updatedAt: ISODateTime;
 }
 
+/** Pluggable store for ACP session records with optional idempotency-key coordination. */
 export interface MikaAcpSessionStore {
   get(id: string): Promise<MikaAcpSessionRecord | undefined>;
   put(record: MikaAcpSessionRecord): Promise<void>;
@@ -187,12 +196,14 @@ export interface MikaAcpSessionStore {
   releaseIdempotencyKey?(key: string, id: string): Promise<void>;
 }
 
+/** Result of claiming an ACP idempotency key before creating or replaying a checkout session. */
 export type MikaAcpIdempotencyClaim =
   | { readonly status: "claimed" }
   | { readonly status: "replayed"; readonly record: MikaAcpSessionRecord }
   | { readonly status: "conflict"; readonly id: string }
   | { readonly status: "in_progress"; readonly id: string };
 
+/** Wiring for ACP checkout HTTP handlers: MikaApi, session store, seller metadata, and auth secrets. */
 export interface CreateMikaAcpCheckoutHandlersOptions {
   readonly api: MikaApi;
   readonly store: MikaAcpSessionStore;
@@ -209,6 +220,7 @@ export interface CreateMikaAcpCheckoutHandlersOptions {
   }) => string;
 }
 
+/** Request handlers for the ACP checkout session lifecycle (create, update, complete, get, cancel). */
 export interface MikaAcpCheckoutHandlers {
   create(request: Request): Promise<Response>;
   update(request: Request, checkoutSessionId: string): Promise<Response>;
@@ -269,6 +281,7 @@ export type MikaAcpCheckoutSessionStatus =
   | "completed"
   | "canceled";
 
+/** ACP checkout session response shape projected from Mika cart quote and checkout state. */
 export interface MikaAcpCheckoutSession {
   readonly id: string;
   readonly buyer?: MikaAcpBuyer;
@@ -380,6 +393,7 @@ export interface MikaAcpError {
   readonly param?: string;
 }
 
+/** ACP order webhook payload emitted after checkout completion or order status changes. */
 export interface MikaAcpOrderWebhookEvent {
   readonly type: "order_created" | "order_updated";
   readonly data: {
@@ -400,6 +414,7 @@ export interface MikaAcpOrderWebhookEvent {
   };
 }
 
+/** Builds an ACP product feed from Mika sellables and active prices for agent discovery. */
 export function createMikaAcpProductFeed(input: {
   readonly targetCountry?: string;
   readonly products: readonly MikaAcpFeedProductInput[];
@@ -436,6 +451,7 @@ export function createMikaAcpProductFeed(input: {
   };
 }
 
+/** Flattens sellables into ACP file-upload catalog rows for merchant feed ingestion. */
 export function createMikaAcpFileUploadRows(
   input: MikaAcpFileUploadRowsInput,
 ): readonly MikaAcpFileUploadProductRow[] {
@@ -471,12 +487,14 @@ export function createMikaAcpFileUploadRows(
   );
 }
 
+/** Serializes ACP file-upload catalog rows to newline-delimited JSON for merchant feeds. */
 export function serializeMikaAcpFileUploadRows(
   rows: readonly MikaAcpFileUploadProductRow[],
 ): string {
   return rows.map((row) => JSON.stringify(row)).join("\n");
 }
 
+/** Validates an ACP product feed and returns structural issues with JSON paths. */
 export function validateMikaAcpProductFeed(
   feed: MikaAcpProductFeed,
 ): readonly MikaAcpValidationIssue[] {
@@ -522,6 +540,7 @@ export function validateMikaAcpProductFeed(
   return issues;
 }
 
+/** Serializes a validated ACP product feed to pretty-printed JSON. */
 export function serializeMikaAcpProductFeed(feed: MikaAcpProductFeed): string {
   const issues = validateMikaAcpProductFeed(feed);
   if (issues.length > 0) {
@@ -531,6 +550,7 @@ export function serializeMikaAcpProductFeed(feed: MikaAcpProductFeed): string {
   return JSON.stringify(feed, null, 2);
 }
 
+/** In-memory `MikaAcpSessionStore` for development and tests. */
 export function createMemoryMikaAcpSessionStore(): MikaAcpSessionStore {
   const sessions = new Map<string, MikaAcpSessionRecord>();
   const idempotencyKeys = new Map<string, { readonly id: string; readonly pending: boolean }>();
@@ -573,13 +593,10 @@ export function createMemoryMikaAcpSessionStore(): MikaAcpSessionStore {
   };
 }
 
+/** Creates authenticated ACP checkout HTTP handlers backed by MikaApi cart and checkout ops. */
 export function createMikaAcpCheckoutHandlers(
   options: CreateMikaAcpCheckoutHandlersOptions,
 ): MikaAcpCheckoutHandlers {
-  // Fail closed: without an `apiKey` or `signatureSecret`, `verifyAcpRequest`
-  // would authorize every caller, so knowing a checkout session id alone would
-  // be enough to read or mutate another buyer's cart and checkout. Refuse to
-  // build open handlers at all rather than silently exposing them.
   if (!options.apiKey && !options.signatureSecret) {
     throw new Error(
       "createMikaAcpCheckoutHandlers requires an apiKey or signatureSecret; refusing to expose ACP checkout sessions without authentication.",
@@ -598,6 +615,7 @@ export function createMikaAcpCheckoutHandlers(
   };
 }
 
+/** Factory for ACP `order_created` / `order_updated` webhook event payloads. */
 export function createMikaAcpOrderWebhookEvent(input: {
   readonly checkoutSessionId: string;
   readonly permalinkUrl: string;
@@ -617,6 +635,7 @@ export function createMikaAcpOrderWebhookEvent(input: {
   };
 }
 
+/** Signs an ACP order webhook body with the merchant HMAC header expected by receivers. */
 export async function signMikaAcpWebhook(input: {
   readonly payload: string;
   readonly secret: string;
@@ -696,11 +715,6 @@ async function handleAcpUpdate(
     return acpError(request, 400, "invalid_request", body.message);
   }
 
-  // Once `complete` has bound a (still non-terminal) Mika checkout, the priced
-  // lines are locked for payment handoff. Reconciling the cart to new items here
-  // would desync the delegated-payment total from the bound checkout (the buyer
-  // could be charged for a different cart). Reject item changes after bind;
-  // buyer/fulfillment-only updates still pass.
   if (record.checkoutId && body.data.items) {
     await releaseAcpIdempotency(options, idempotency.lease);
 
@@ -758,11 +772,6 @@ async function handleAcpComplete(
     return acpTerminalError(request, terminalStatus, "completed");
   }
 
-  // A prior complete already started the Mika checkout for this ACP session and
-  // it is not yet terminal (terminal cases handled above). Resume that checkout
-  // instead of starting a second provider checkout, which would create
-  // duplicate reservations. This binding must hold even when the retry arrives
-  // with a different client Idempotency-Key.
   if (record.checkoutId) {
     await commitAcpIdempotency(options, idempotency.lease);
 
@@ -895,18 +904,11 @@ async function handleAcpCancel(
     return acpJson(request, await recordToAcpSession(options, request, record), 200);
   }
 
-  // Cancel the bound Mika checkout before flipping the local record so the
-  // provider session is abandoned and its stock reservations are released.
-  // Without this the ACP record reads "canceled" while the underlying Mika
-  // checkout stays live, orphaning reservations and leaving the cart locked.
   if (record.checkoutId) {
     const cancellation = await options.api.checkout.cancel(
       acpContext(options, request, record.sessionId),
       { checkoutId: record.checkoutId },
     );
-    // A 404 means the bound checkout is already gone, so the ACP record can
-    // still proceed to `canceled`; any other failure must surface so we never
-    // report a cancellation we did not perform.
     if (!cancellation.ok && cancellation.status !== 404) {
       await releaseAcpIdempotency(options, idempotency.lease);
 
@@ -1172,6 +1174,7 @@ async function recordToAcpSession(
   });
 }
 
+/** Projects persisted session state plus Mika quote/checkout DTOs into an ACP checkout session. */
 export function acpCheckoutSessionFromState(input: {
   readonly record: MikaAcpSessionRecord;
   readonly quote: CartQuoteDTO;
@@ -1255,15 +1258,10 @@ function acpAvailability(sellable: SellableDTO): MikaAcpAvailability {
     return { available: false, status: "out_of_stock" };
   }
 
-  // Backorder sellables are purchasable regardless of on-hand quantity (the
-  // reserve path accepts policy != finite / allow_backorder), so a zero
-  // availableQuantity must not flip them to out_of_stock. Surface the real
-  // backorder status so the feed advertises them correctly.
   if (status === "backorder") {
     return { available: true, status: "backorder" };
   }
 
-  // Untracked stock is unbounded, so it is always in stock.
   if (status === "untracked") {
     return { available: true, status: "in_stock" };
   }
@@ -1614,8 +1612,5 @@ function createDefaultAcpSessionId(): string {
 }
 
 function cryptoSafeId(): string {
-  // 128 bits of CSPRNG entropy. The previous SHA-256 of `Date.now():Math.random()`
-  // was guessable: both inputs are low-entropy and non-cryptographic, so session
-  // ids could be brute-forced and used to hijack a checkout session.
   return randomBytes(16).toString("hex");
 }

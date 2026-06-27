@@ -1,3 +1,7 @@
+/**
+ * vite-plus project config for emdash-mika.
+ * Wires formatting, oxlint type-aware linting, and Node test discovery.
+ */
 import { defineConfig } from "vite-plus";
 
 const generatedPatterns = [".frigg/**", "dist/**", "node_modules/**", "package-lock.json"];

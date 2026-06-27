@@ -1,10 +1,17 @@
+/**
+ * Agent-facing contracts: capabilities, risk, idempotency, proofs, actors, and action-run telemetry.
+ * Consumed by operation descriptors, route handlers, and agent manifests.
+ */
 import type { CurrencyCode, ISODateTime, JsonObject, MikaId } from "../types/primitives";
 
+/** Version of the published agent operation manifest schema. */
 export const MIKA_AGENT_MANIFEST_VERSION = 1 as const;
 
+/** Visibility tiers controlling which operations appear in agent manifests. */
 export const MIKA_AGENT_VISIBILITIES = ["public", "trusted", "admin", "hidden"] as const;
 export type MikaAgentVisibility = (typeof MIKA_AGENT_VISIBILITIES)[number];
 
+/** Fine-grained authorization scopes agents must hold to invoke operations. */
 export const MIKA_AGENT_CAPABILITIES = [
   "catalog:read",
   "stock:read",
@@ -26,6 +33,7 @@ export const MIKA_AGENT_CAPABILITIES = [
 ] as const;
 export type MikaAgentCapability = (typeof MIKA_AGENT_CAPABILITIES)[number];
 
+/** Side-effect class used for policy and confirmation decisions. */
 export const MIKA_AGENT_EFFECTS = [
   "read",
   "cart_mutation",
@@ -39,9 +47,11 @@ export const MIKA_AGENT_EFFECTS = [
 ] as const;
 export type MikaAgentEffect = (typeof MIKA_AGENT_EFFECTS)[number];
 
+/** Risk tier guiding confirmation and proof requirements. */
 export const MIKA_AGENT_RISKS = ["none", "low", "purchase", "account", "admin"] as const;
 export type MikaAgentRisk = (typeof MIKA_AGENT_RISKS)[number];
 
+/** Minimum actor kind required before an operation may run. */
 export const MIKA_AGENT_ACTOR_REQUIREMENTS = [
   "none",
   "session",
@@ -51,16 +61,21 @@ export const MIKA_AGENT_ACTOR_REQUIREMENTS = [
 ] as const;
 export type MikaAgentActorRequirement = (typeof MIKA_AGENT_ACTOR_REQUIREMENTS)[number];
 
+/** Who must approve before a mutating operation proceeds. */
 export const MIKA_AGENT_CONFIRMATION_POLICIES = ["none", "host", "user", "payment"] as const;
 export type MikaAgentConfirmationPolicy = (typeof MIKA_AGENT_CONFIRMATION_POLICIES)[number];
 
+/** Whether callers should supply an idempotency key for safe retries. */
 export const MIKA_AGENT_IDEMPOTENCY_POLICIES = ["not_needed", "recommended", "required"] as const;
 export type MikaAgentIdempotencyPolicy = (typeof MIKA_AGENT_IDEMPOTENCY_POLICIES)[number];
 
+/** HTTP header name hosts use to pass idempotency keys. */
 export const MIKA_AGENT_IDEMPOTENCY_KEY_HEADER = "Idempotency-Key" as const;
+/** Replay scope: same actor, operation, resource, and input hash. */
 export const MIKA_AGENT_IDEMPOTENCY_SCOPES = ["actor_operation_resource_input"] as const;
 export type MikaAgentIdempotencyScope = (typeof MIKA_AGENT_IDEMPOTENCY_SCOPES)[number];
 
+/** Commerce resources an operation may read or mutate. */
 export const MIKA_AGENT_RESOURCES = [
   "sellable",
   "price",
@@ -77,6 +92,7 @@ export const MIKA_AGENT_RESOURCES = [
 ] as const;
 export type MikaAgentResource = (typeof MIKA_AGENT_RESOURCES)[number];
 
+/** Proof kinds operations may accept or require at invocation time. */
 export const MIKA_AGENT_PROOF_KINDS = [
   "consent",
   "mandate",
@@ -85,6 +101,7 @@ export const MIKA_AGENT_PROOF_KINDS = [
 ] as const;
 export type MikaAgentProofKind = (typeof MIKA_AGENT_PROOF_KINDS)[number];
 
+/** Host-owned idempotency contract attached to operation metadata. */
 export interface MikaAgentIdempotencyMetadata {
   readonly keyHeader: typeof MIKA_AGENT_IDEMPOTENCY_KEY_HEADER;
   readonly scope: MikaAgentIdempotencyScope;
@@ -92,6 +109,7 @@ export interface MikaAgentIdempotencyMetadata {
   readonly owner: "host";
 }
 
+/** Agent policy block embedded in each operation descriptor. */
 export interface MikaAgentOperationMetadata {
   readonly visible: MikaAgentVisibility;
   readonly capability: MikaAgentCapability;
@@ -107,10 +125,13 @@ export interface MikaAgentOperationMetadata {
   readonly requiredProofs: readonly MikaAgentProofKind[];
 }
 
+/** Kind of principal executing a Mika operation. */
 export type MikaActorKind = "anonymous" | "customer" | "delegated_agent" | "service" | "admin";
 
+/** Capability or host-defined scope granted to the current actor. */
 export type MikaAuthorizationScope = MikaAgentCapability | (string & {});
 
+/** Resolved actor identity carried in {@link MikaRequestContext}. */
 export interface MikaActorContext {
   readonly kind: MikaActorKind;
   readonly id?: string;
@@ -121,6 +142,7 @@ export interface MikaActorContext {
   readonly claims?: JsonObject;
 }
 
+/** Shared fields for externally issued proof references. */
 export interface MikaProofRefBase {
   readonly id: string;
   readonly issuer?: string;
@@ -154,12 +176,14 @@ export interface MikaReceiptRef extends MikaProofRefBase {
   readonly status?: "pending" | "settled" | "failed" | "refunded";
 }
 
+/** Union of proof references agents may attach to sensitive operations. */
 export type MikaAgentProofRef =
   | MikaConsentProofRef
   | MikaMandateRef
   | MikaPaymentAuthorizationRef
   | MikaReceiptRef;
 
+/** Lifecycle states for host-mediated operation approvals. */
 export const MIKA_AGENT_APPROVAL_STATUSES = [
   "requested",
   "approved",
@@ -169,6 +193,7 @@ export const MIKA_AGENT_APPROVAL_STATUSES = [
 ] as const;
 export type MikaAgentApprovalStatus = (typeof MIKA_AGENT_APPROVAL_STATUSES)[number];
 
+/** Proof reference recording an approval decision for a gated operation. */
 export interface MikaAgentApprovalRef extends MikaProofRefBase {
   readonly status: MikaAgentApprovalStatus;
   readonly operation: string;
@@ -177,6 +202,7 @@ export interface MikaAgentApprovalRef extends MikaProofRefBase {
   readonly revokedAt?: ISODateTime;
 }
 
+/** Terminal and in-flight states for tracked agent action runs. */
 export const MIKA_ACTION_RUN_STATUSES = [
   "queued",
   "running",
@@ -187,6 +213,7 @@ export const MIKA_ACTION_RUN_STATUSES = [
 ] as const;
 export type MikaActionRunStatus = (typeof MIKA_ACTION_RUN_STATUSES)[number];
 
+/** Structured failure surfaced on an action run. */
 export interface MikaActionRunError {
   readonly code: string;
   readonly message: string;
@@ -194,6 +221,7 @@ export interface MikaActionRunError {
   readonly raw?: JsonObject;
 }
 
+/** Audit record for a single agent-orchestrated operation attempt. */
 export interface MikaActionRun {
   readonly id?: string;
   readonly operation: string;
@@ -213,10 +241,13 @@ export interface MikaActionRun {
   readonly raw?: JsonObject;
 }
 
+/** Payload encoding accepted by HTML action endpoints. */
 export type MikaAgentActionAccept = "form" | "json";
+/** Where operation input is read from on the wire. */
 export type MikaAgentOperationTransport = "body" | "search" | "none";
 export type MikaAgentOperationHttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
 
+/** Single operation entry in an agent manifest. */
 export interface MikaAgentActionDescriptor {
   readonly name: string;
   readonly namespace: string;
@@ -238,6 +269,7 @@ export interface MikaAgentActionDescriptor {
   };
 }
 
+/** Published catalog of agent-callable Mika operations and their policies. */
 export interface MikaAgentManifest {
   readonly version: typeof MIKA_AGENT_MANIFEST_VERSION;
   readonly operations: readonly MikaAgentActionDescriptor[];

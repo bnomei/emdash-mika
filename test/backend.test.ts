@@ -1,3 +1,7 @@
+/**
+ * Backend API integration tests for Mika operations and storage.
+ * Exercises repositories, route handlers, checkout flows, and notification hooks.
+ */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -128,12 +132,10 @@ describe("isJsonValue / isJsonObject", () => {
     const ref = { v: 1 };
     const value = { a: ref, b: ref };
 
-    // Serializes losslessly, so it is a legitimate JsonValue.
     expect(() => JSON.stringify(value)).not.toThrow();
     expect(isJsonValue(value)).toBe(true);
     expect(isJsonObject(value)).toBe(true);
 
-    // Shared reference inside arrays too.
     expect(isJsonValue([ref, ref, { nested: ref }])).toBe(true);
   });
 
@@ -482,7 +484,6 @@ describe("backend test storage helpers", () => {
             kind: "magic_link",
             templateKey: "magic_link",
             attemptCount: 0,
-            // All due, ascending so ordering is deterministic.
             nextAttemptAt: clock.isoAt(-10_000 + index),
             metadata: { link: `https://shop.example.test/sign-in/${index}` },
           },
@@ -490,8 +491,6 @@ describe("backend test storage helpers", () => {
       );
     }
 
-    // Lease in small batches; every due email must surface across rounds with
-    // none skipped, even though all five sit on one storage page.
     const leased = new Set<string>();
     for (let round = 0; round < 10 && leased.size < dueIds.length; round += 1) {
       const due = await ops.listDueEmails(TEST_NOW, 2);
@@ -519,7 +518,6 @@ describe("backend test storage helpers", () => {
     };
     const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
 
-    // A terminal-failure email that exhausted its retry budget.
     const email = createEmailDocument({
       id: createTestMikaId("email", 1),
       status: "failed",
@@ -549,7 +547,6 @@ describe("backend test storage helpers", () => {
       record: { status: "queued", attemptCount: 0, leaseKey: undefined },
     });
 
-    // The outbox must now be able to lease and send it again.
     await expect(
       repositories.ops.tryLeaseEmail({
         emailId: email.id,
@@ -644,9 +641,6 @@ describe("backend test storage helpers", () => {
     });
     await repositories.ops.put(email);
 
-    // Simulate the lease being lost between a successful send and completion:
-    // completeEmail reports no active lease (null) even though the provider
-    // already delivered the message. Delegate everything else to the real repo.
     const leaseLosingOps = Object.assign(Object.create(repositories.ops), {
       completeEmail: async () => null,
     });
@@ -668,13 +662,11 @@ describe("backend test storage helpers", () => {
     });
     expect(sent).toHaveLength(1);
 
-    // The row is terminalized as sent in the shared store despite the lost lease.
     await expect(repositories.ops.findEmail(email.id)).resolves.toMatchObject({
       status: "sent",
       record: { sentAt: TEST_NOW, providerMessageId: "provider_message_1" },
     });
 
-    // A subsequent outbox pass with a working repo must NOT re-send it.
     const resend: MikaEmailDeliveryMessage[] = [];
     const secondRunner = createMikaEmailOutboxRunner({
       repositories,
@@ -2144,15 +2136,12 @@ describe("backend test Kysely stock database harness", () => {
             throw new Error("Expected reservations to be created.");
           }
 
-          // Maintenance releases the expired reservation back to availability
-          // before the (late) payment webhook arrives.
           await service.releaseExpiredReservations({ now: clock.isoAt(60_000) });
           await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
             quantityOnHand: 5,
             quantityReserved: 1,
           });
 
-          // The paid order must still consume its (now expired) reservation.
           await expect(
             service.consume({
               reservationEventId: expiredReservation.event.id,
@@ -2162,14 +2151,11 @@ describe("backend test Kysely stock database harness", () => {
             }),
           ).resolves.toMatchObject({ status: "consumed", event: { status: "consumed" } });
 
-          // On-hand is drawn down by the consumed quantity; the unrelated active
-          // reservation is left intact.
           await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
             quantityOnHand: 3,
             quantityReserved: 1,
           });
 
-          // Replaying the consume (webhook retry) is a no-op.
           await expect(
             service.consume({
               reservationEventId: expiredReservation.event.id,
@@ -2209,8 +2195,6 @@ describe("backend test Kysely stock database harness", () => {
             throw new Error(`Expected reservation, received '${first.status}'.`);
           }
 
-          // A failed checkout attempt releases the reservation without persisting
-          // the checkout document.
           await expect(
             service.release({ reservationEventId: first.event.id, now: clock.isoAt(60_000) }),
           ).resolves.toMatchObject({ status: "released", event: { status: "released" } });
@@ -2218,8 +2202,6 @@ describe("backend test Kysely stock database harness", () => {
             quantityReserved: 0,
           });
 
-          // Retrying checkout with the same idempotency key must reserve afresh
-          // rather than replay the released reservation.
           const retry = await service.reserve({
             stockItemId: stockItem.id,
             quantity: 2,
@@ -4542,8 +4524,6 @@ describe("backend API composition", () => {
     const fake = createFakeMikaProvider({
       optionalMethods: ["cancelSubscription"],
       overrides: {
-        // Adapter reports failure WITHOUT throwing (e.g. subscription missing
-        // its provider id). The action must not write cancelled state locally.
         cancelSubscription: async () => ({
           status: "unsupported" as const,
           message: "Subscription is not linked to the billing provider.",
@@ -4572,7 +4552,6 @@ describe("backend API composition", () => {
       },
     });
 
-    // Local subscription document is untouched and a failed audit is recorded.
     await expect(repositories.account.findSubscriptionById(subscription.id)).resolves.toEqual(
       subscription,
     );
@@ -5723,7 +5702,6 @@ describe("backend API composition", () => {
     );
     await repositories.ledger.put(order);
 
-    // First partial refund: 700 of 1200.
     await expect(api.admin.orderRefund({ orderId: order.id, amount: 700 })).resolves.toMatchObject(
       { ok: true },
     );
@@ -5732,8 +5710,6 @@ describe("backend API composition", () => {
       aggregate: { metadata: { refundAmount: 700 } },
     });
 
-    // Second partial refund covers the remaining 500 → fully refunded, with the
-    // cumulative amount recorded (not overwritten to the last 500).
     await expect(api.admin.orderRefund({ orderId: order.id, amount: 500 })).resolves.toMatchObject(
       { ok: true },
     );
@@ -5769,13 +5745,9 @@ describe("backend API composition", () => {
     const first = await api.admin.orderRefund(refundArgs);
     expect(first).toMatchObject({ ok: true, status: 200, data: { status: "completed" } });
 
-    // Retried with the same idempotency key (e.g. UI double-submit or network
-    // retry after the ledger write but before the response was delivered).
     const second = await api.admin.orderRefund(refundArgs);
     expect(second).toMatchObject({ ok: true, status: 200, data: { status: "completed" } });
 
-    // The provider was only asked to refund once; the replay returned the
-    // original result without repeating the side effect.
     expect(fake.getCalls().refundPayment).toEqual([
       {
         orderId: order.id,
@@ -5785,7 +5757,6 @@ describe("backend API composition", () => {
       },
     ]);
 
-    // Exactly one refund audit was recorded; the retry did not start a new one.
     await expect(
       repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
     ).resolves.toMatchObject({ status: "completed", record: { action: "order.refund" } });
@@ -5820,8 +5791,6 @@ describe("backend API composition", () => {
     await repositories.ledger.put(refundTarget);
     await repositories.ledger.put(cancelTarget);
 
-    // The provider returned failed without throwing: the API must surface the
-    // non-completed status and the ledger order must be untouched.
     await expect(
       api.admin.orderRefund({ orderId: refundTarget.id, amount: 500 }),
     ).resolves.toMatchObject({
@@ -6978,7 +6947,6 @@ describe("backend API composition", () => {
             providerCheckoutId: "provider_checkout_fake",
             providerPaymentId: "payment_1",
             providerOrderId: "provider_order_1",
-            // A DIFFERENT email typed at the provider's hosted page.
             customer: { email: "Typed@Hosted.test", name: "Typed Buyer" },
           }),
       },
@@ -6986,7 +6954,6 @@ describe("backend API composition", () => {
     await repositories.catalog.put(
       createCatalogItemDocument({ contentRef: createTestContentRef(), sellables: [sellable] }),
     );
-    // Authenticated account whose verified email differs from the typed email.
     await repositories.account.put(createCustomerDocument());
     const api = createMikaBackendApi(
       createIncrementingBackendDependencies({
@@ -7011,8 +6978,6 @@ describe("backend API composition", () => {
 
     await receiveWebhook(api, "payment", stripe);
 
-    // The order (and thus the queued confirmation recipient) uses the canonical
-    // account email, not the email typed at the hosted page.
     const order = await repositories.ledger.findOrderByProviderPayment(stripe, "payment_1");
     expect(order?.aggregate.customer).toMatchObject({
       customerId: "customer_1",
@@ -7360,7 +7325,6 @@ describe("backend API composition", () => {
       }),
     );
 
-    // First delivery fails because checkout state is missing.
     await expect(receiveWebhook(api, "payment-retry-failed", stripe)).resolves.toMatchObject({
       ok: true,
       status: 200,
@@ -7369,15 +7333,12 @@ describe("backend API composition", () => {
     await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({ status: "failed" });
     await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(0);
 
-    // Checkout state is restored, then the provider retries the same event id.
     await repositories.session.put(
       createCheckoutDocument({
         providerCheckoutId: "provider_checkout_retry",
       }),
     );
 
-    // The retry must re-enter processing (not be dropped as a duplicate) and
-    // fulfill the order.
     await expect(receiveWebhook(api, "payment-retry-redelivery", stripe)).resolves.toMatchObject({
       ok: true,
       status: 200,
@@ -7429,8 +7390,6 @@ describe("backend API composition", () => {
     await repositories.session.put(
       createCheckoutDocument({ providerCheckoutId: "provider_checkout_stuck" }),
     );
-    // A prior processor leased the fulfillment workflow and then crashed; the
-    // lease is still held (not yet expired) when the first delivery arrives.
     await repositories.ops.put(
       createWorkflowDocument({
         id: createMikaId("workflow_webhook_1_payment"),
@@ -7444,8 +7403,6 @@ describe("backend API composition", () => {
       }),
     );
 
-    // First delivery cannot acquire the lease, so the webhook is left received
-    // with no order created — the provider still receives HTTP 200.
     await expect(receiveWebhook(api, "payment-stuck-first", stripe)).resolves.toMatchObject({
       ok: true,
       status: 200,
@@ -7454,8 +7411,6 @@ describe("backend API composition", () => {
     await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({ status: "received" });
     await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(0);
 
-    // The provider redelivers after the stale lease has expired; the received
-    // payment webhook re-enters processing and fulfills the order.
     const redelivery = await api.webhook.receive(
       createTestRequestContext({
         request: createWebhookRequest(JSON.stringify({ marker: "payment-stuck-redelivery" })),
@@ -7566,8 +7521,6 @@ describe("backend API composition", () => {
           },
         },
       });
-      // A payment-terminal order must skip checkout completion and fulfillment
-      // entirely — those steps never run, so no confirmation email is queued.
       const workflow = await opsCollection.get("workflow_webhook_1_payment");
       const steps = (
         workflow as {
@@ -7576,8 +7529,6 @@ describe("backend API composition", () => {
       ).record.steps;
       const stepStatus = (name: string): string | undefined =>
         steps.find((step) => step.name === name)?.status;
-      // Checkout completion and fulfillment are skipped, not run, for a
-      // payment-terminal order, so no confirmation email is ever queued.
       expect(stepStatus("complete_checkout")).toBe("skipped");
       expect(stepStatus("fulfill_order")).toBe("skipped");
       await expect(opsCollection.count({ type: "email" })).resolves.toBe(0);
@@ -8285,8 +8236,6 @@ describe("backend API composition", () => {
         currentPeriodEnd: createISODateTime("2026-03-01T00:00:00.000Z"),
       },
       {
-        // Redelivered older "active" event for a PRIOR period, different id so
-        // the providerEventId dedup does not catch it. Must be rejected.
         payloadHash: "sub_stale_active_hash",
         providerEventId: "event_stale_active",
         status: "active" as const,
@@ -8339,7 +8288,6 @@ describe("backend API composition", () => {
 
     await receiveWebhook(api, "subscription-active", stripe);
     await receiveWebhook(api, "subscription-cancelled", stripe);
-    // After cancellation the subscription is cancelled and entitlement expired.
     await expect(accountCollection.get("subscription_1")).resolves.toMatchObject({
       status: "cancelled",
     });
@@ -8347,7 +8295,6 @@ describe("backend API composition", () => {
       accountCollection.get("entitlement_subscription_1_subscription"),
     ).resolves.toMatchObject({ status: "expired" });
 
-    // The stale "active" event for the earlier period must not re-activate.
     await receiveWebhook(api, "subscription-stale-active", stripe);
     await expect(accountCollection.get("subscription_1")).resolves.toMatchObject({
       status: "cancelled",
@@ -8975,7 +8922,6 @@ describe("backend API composition", () => {
         createPriceDefinition({ id: createTestMikaId("price", 2) }),
       ],
     });
-    // quantityOnHand 5 - quantityReserved 3 = availableQuantity 2.
     const repositories = createTestBackendRepositories({
       stockBySellableId: new Map([
         [
@@ -8998,7 +8944,6 @@ describe("backend API composition", () => {
       sessionId: "session_split_stock",
     });
 
-    // First line consumes the full available quantity (2).
     await expect(
       api.cart.add(ctx, {
         sellableId: sellable.id,
@@ -9007,10 +8952,6 @@ describe("backend API composition", () => {
       }),
     ).resolves.toMatchObject({ ok: true, status: 200 });
 
-    // A second line for the same sellable under a different price must be
-    // rejected: the per-sellable total (2 + 1) exceeds available stock. Before
-    // the fix each line was validated in isolation and this add succeeded, only
-    // to fail later at the checkout reservation gate.
     await expect(
       api.cart.add(ctx, {
         sellableId: sellable.id,
@@ -9403,20 +9344,16 @@ describe("backend API composition", () => {
       createCatalogItemDocument({ contentRef, sellables: [sellable] }),
     );
     const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
-    // Guest builds a cart in their browser session before logging in.
     const guestCtx = createTestRequestContext({
       customerId: false,
       userId: false,
       sessionId: "session_handoff",
     });
-    // The customer already has a cart from a prior, different session.
     const priorCustomerCtx = createTestRequestContext({
       customerId: "customer_1",
       userId: "user_1",
       sessionId: "session_prior",
     });
-    // After logging in the browser session is preserved, so the now-authenticated
-    // caller still holds `session_handoff` — proving ownership of the guest cart.
     const callerCtx = createTestRequestContext({
       customerId: "customer_1",
       userId: "user_1",
@@ -9484,8 +9421,6 @@ describe("backend API composition", () => {
       quantity: 1,
     });
 
-    // The attacker guesses the victim's session id. The merge must no-op (return
-    // the attacker's unchanged cart) without copying or disclosing victim lines.
     const merged = await api.cart.merge(attackerCtx, { sourceSessionId: "session_victim" });
     expect(merged).toMatchObject({
       ok: true,
@@ -9493,7 +9428,6 @@ describe("backend API composition", () => {
       data: { items: [{ sellableId: sellable.id, quantity: 1 }] },
     });
 
-    // The victim's cart is untouched (still open, still holds its items).
     const victimCart = await repositories.session.findOpenCartBySession(
       "session_victim",
       TEST_CURRENCY,
@@ -9565,8 +9499,6 @@ describe("backend API composition", () => {
       },
     });
 
-    // Shrinking the cart must shrink the discount too — the frozen snapshot
-    // (240) must not survive and undercharge the smaller subtotal.
     await expect(api.cart.update(ctx, { lineId, quantity: 1 })).resolves.toMatchObject({
       ok: true,
       data: {
@@ -9584,7 +9516,6 @@ describe("backend API composition", () => {
       },
     });
 
-    // Checkout must see the recomputed discount, never the stale snapshot.
     const quote = await api.cart.quote(ctx, { cartId: added.data.id });
     expect(quote).toMatchObject({
       ok: true,
@@ -9605,7 +9536,6 @@ describe("backend API composition", () => {
     );
     const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
 
-    // Victim owns a session-bound open cart.
     const victimCtx = createTestRequestContext({
       sessionId: "session_victim",
       customerId: false,
@@ -9614,7 +9544,6 @@ describe("backend API composition", () => {
     const victimCart = await api.cart.add(victimCtx, { sellableId: sellable.id, quantity: 1 });
     if (!victimCart.ok) throw new Error("Expected cart.add to succeed.");
 
-    // Attacker has no bound session or customer but knows the victim cart id.
     const unboundCtx = createTestRequestContext({
       sessionId: false,
       customerId: false,
@@ -9641,7 +9570,6 @@ describe("backend API composition", () => {
     );
     const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
 
-    // The logged-in customer adds an item to their customer-bound cart.
     const customerId = createMikaId("customer_login");
     const customerCtx = createTestRequestContext({
       sessionId: false,
@@ -9651,8 +9579,6 @@ describe("backend API composition", () => {
     const added = await api.cart.add(customerCtx, { sellableId: sellable.id, quantity: 2 });
     if (!added.ok) throw new Error("Expected cart.add to succeed.");
 
-    // A later request only carries the session (as magic-link verification left
-    // it) with the customer id stored on the session, not in ctx.customerId.
     const sessionCtx = createTestRequestContext({
       sessionId: "session_login",
       customerId: false,
@@ -10326,13 +10252,10 @@ describe("backend API composition", () => {
       status: "checkout_pending",
     });
 
-    // The checkout is abandoned and ends up failed.
     const checkoutDoc = await repositories.session.findCheckoutById(createMikaId("checkout_1"));
     if (!checkoutDoc) throw new Error("Expected checkout document.");
     await repositories.session.put({ ...checkoutDoc, status: "failed" });
 
-    // Returning to the cart must reopen it with its items intact, not start a
-    // fresh empty cart.
     const reopened = await api.cart.get(ctx);
     expect(reopened).toMatchObject({
       ok: true,
@@ -10342,7 +10265,6 @@ describe("backend API composition", () => {
       status: "open",
     });
 
-    // And the reopened cart can start checkout again.
     await expect(api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 })).resolves.toMatchObject(
       { ok: true, data: { id: cartId } },
     );
@@ -10797,9 +10719,6 @@ describe("backend API composition", () => {
       data: { id: "checkout_1", redirectUrl: "https://checkout.example.test/session/owner_only" },
     });
 
-    // A different session reusing the same key must not receive the owner's
-    // checkout handoff. It is rejected as a conflict and no second checkout is
-    // created or leaked.
     const attacker = await api.checkout.start(attackerCtx, {
       sellableId: sellable.id,
       quantity: 1,
@@ -11307,9 +11226,6 @@ describe("backend API composition", () => {
       userId: "user_1",
       sessionId: "session_target",
     });
-    // The source cart belongs to the same customer (a prior session, foreign
-    // currency) so the ownership gate passes and the merge reaches the
-    // currency-mismatch check.
     const sourceCtx = createTestRequestContext({
       customerId: "customer_1",
       userId: "user_1",
@@ -12589,8 +12505,6 @@ function createTestStockRepository(
           }
         : null;
       eventsById.set(releasedEvent.id, releasedEvent);
-      // Releasing clears the idempotency key so checkout retries reusing the key
-      // are not blocked by an idempotency replay of the released reservation.
       if (event.idempotencyKey) {
         eventsByIdempotencyKey.delete(event.idempotencyKey);
       }
@@ -12612,9 +12526,6 @@ function createTestStockRepository(
         return { status: "not_active", event, stock: current };
       }
 
-      // Expired reservations are consumed for late paid fulfillment, but only
-      // their on-hand quantity is drawn down — expiry already returned the
-      // reserved quantity to availability.
       const fromActive = event.status === "active";
       const consumedEvent: StockEventRecord = {
         ...event,

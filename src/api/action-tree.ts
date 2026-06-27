@@ -1,6 +1,13 @@
+/**
+ * Hierarchical index of Mika action-definition keys, derived from operation descriptors.
+ * Validates that every registered action appears exactly once in the tree.
+ */
 import { mikaActionDefinitions, type MikaActionDefinitions } from "./operations";
 
+/** Key into {@link mikaActionDefinitions}. */
 export type MikaActionDefinitionKey = keyof MikaActionDefinitions;
+
+/** Nested namespace/method tree whose leaves are action-definition keys. */
 export type MikaActionTreeSpec = {
   readonly [key: string]: MikaActionDefinitionKey | MikaActionTreeSpec;
 };
@@ -23,6 +30,7 @@ type MikaDerivedActionTreeSpec = {
   };
 };
 
+/** Default action tree built from {@link mikaActionDefinitions} namespace/method layout. */
 export const mikaActionTreeSpec = collectMikaActionTreeSpec();
 
 function collectMikaActionTreeSpec(): MikaDerivedActionTreeSpec {
@@ -38,6 +46,10 @@ function collectMikaActionTreeSpec(): MikaDerivedActionTreeSpec {
   return spec as MikaDerivedActionTreeSpec;
 }
 
+/**
+ * Ensures a tree spec references only known definitions and covers every definition exactly once.
+ * @throws when keys are unknown, duplicated, or missing from the tree.
+ */
 export function validateMikaActionTreeSpec(
   spec: unknown = mikaActionTreeSpec,
   definitions: Record<string, unknown> = mikaActionDefinitions,
@@ -54,6 +66,7 @@ export function validateMikaActionTreeSpec(
   return keys;
 }
 
+/** Returns validated definition keys from a tree spec (defaults to {@link mikaActionTreeSpec}). */
 export function mikaActionTreeDefinitionKeys(
   spec: unknown = mikaActionTreeSpec,
 ): readonly MikaActionDefinitionKey[] {

@@ -1,3 +1,7 @@
+/**
+ * Stripe implementation of MikaProviderAdapter: hosted checkout, delegated ACP payment intents,
+ * subscription lifecycle, refunds, and webhook event normalization into Mika payment events.
+ */
 import { createHash } from "node:crypto";
 
 import type {
@@ -31,11 +35,19 @@ import {
   type SubscriptionStatus,
 } from "./types/primitives";
 
+/** Default provider id for the Stripe adapter. */
 export const MIKA_STRIPE_PROVIDER_ID = createProviderName("stripe");
+
+/** Checkout metadata key carrying an ACP delegated payment token for PaymentIntent creation. */
 export const MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY = "acpPaymentToken";
+
+/** Checkout metadata key naming the ACP payment provider (stripe, adyen, braintree). */
 export const MIKA_STRIPE_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY = "acpPaymentProvider";
+
+/** Checkout metadata key storing the ACP payment authorization id after completion. */
 export const MIKA_STRIPE_PAYMENT_AUTHORIZATION_METADATA_KEY = "acpPaymentAuthorizationId";
 
+/** Minimal Stripe SDK surface required by `createMikaStripeProvider`; inject a real or mock client. */
 export interface MikaStripeClient {
   readonly checkout?: {
     readonly sessions: {
@@ -112,6 +124,7 @@ export interface MikaStripeClient {
   };
 }
 
+/** Configuration for the Stripe provider adapter including client, webhook secret, and optional catalog sync. */
 export interface CreateMikaStripeProviderOptions {
   readonly stripe: MikaStripeClient;
   readonly id?: ProviderName;
@@ -213,6 +226,7 @@ export interface MikaStripeSubscription {
 
 export type MikaStripeJsonObject = JsonObject;
 
+/** Creates a `MikaProviderAdapter` backed by Stripe checkout, billing portal, and webhooks. */
 export function createMikaStripeProvider(
   options: CreateMikaStripeProviderOptions,
 ): MikaProviderAdapter {
@@ -245,10 +259,6 @@ export function createMikaStripeProvider(
         return { orderId: input.orderId };
       }
 
-      // Orders persist `providerPaymentId`, which for the common hosted-checkout
-      // flow is a payment-intent id (`pi_*`), not a Stripe invoice id (`in_*`).
-      // Resolve the invoice id first so we never call invoices.retrieve with a
-      // payment-intent id.
       const invoiceId = await resolveStripeInvoiceId(options, input.providerPaymentId);
       if (!invoiceId) {
         return { orderId: input.orderId };
@@ -427,18 +437,13 @@ async function resolveStripeInvoiceId(
   options: CreateMikaStripeProviderOptions,
   providerPaymentId: string,
 ): Promise<string | undefined> {
-  // Invoice ids can be used to retrieve the invoice directly.
   if (providerPaymentId.startsWith("in_")) return providerPaymentId;
 
-  // Payment-intent ids must be resolved to the invoice they belong to (if any).
-  // One-off checkout payment intents are not attached to an invoice, in which
-  // case there is no hosted invoice to return.
   if (providerPaymentId.startsWith("pi_") && options.stripe.paymentIntents?.retrieve) {
     const intent = await options.stripe.paymentIntents.retrieve(providerPaymentId);
     return stripeObjectId(intent["invoice"]);
   }
 
-  // Unknown id kind: do not call invoices.retrieve with a non-invoice id.
   return undefined;
 }
 
@@ -676,10 +681,6 @@ function parseStripeWebhookEvent(
     };
   }
 
-  // Payment-failure events must not be swallowed as `unknown`: the backend
-  // routes non-paid `payment` events through `markWebhookFailed` and the
-  // `checkout.payment_failed` notification. `invoice.payment_failed` is handled
-  // here before the generic `invoice.` branch so it cannot fall through.
   if (STRIPE_PAYMENT_FAILURE_TYPES.has(type)) {
     return stripePaymentFailureEvent(provider, providerEventId, type, object, input.parsed);
   }
@@ -762,9 +763,6 @@ function stripePaymentFailureEvent(
   const paymentIntentId = stripeObjectId(object["payment_intent"]);
   const isCheckoutSession = type.startsWith("checkout.session.");
   const isInvoice = type.startsWith("invoice.");
-  // Mirror the paid-event conventions so failure and success events key on the
-  // same provider ids: invoices order on the invoice id, checkout sessions and
-  // payment intents order on the payment intent.
   const providerCheckoutId = isCheckoutSession ? objectId : undefined;
   const providerPaymentId = isInvoice
     ? (paymentIntentId ?? objectId)

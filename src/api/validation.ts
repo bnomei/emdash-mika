@@ -1,3 +1,7 @@
+/**
+ * Zod input schemas and parsers for Mika operations, form posts, and search-param transports.
+ * Re-exports `z` for co-located schema and handler definitions.
+ */
 import { z } from "astro/zod";
 
 import type {
@@ -59,6 +63,7 @@ import {
 
 export { z };
 
+/** Local validation outcome before mapping to a {@link MikaApiResult} failure. */
 export type MikaValidationResult<T> =
   | { readonly ok: true; readonly data: T }
   | { readonly ok: false; readonly result: MikaApiResult<never> };
@@ -448,6 +453,7 @@ export const downloadIssueInputSchema = z.object({
   idempotencyKey: optionalStringSchema,
 }) satisfies z.ZodType<DownloadIssueInput>;
 
+/** Parses unknown input; returns a 422 {@link MikaApiResult} envelope on schema failure. */
 export function parseMikaInput<T>(schema: z.ZodType<T>, input: unknown): MikaValidationResult<T> {
   const parsed = schema.safeParse(input);
   if (parsed.success) {
@@ -457,6 +463,7 @@ export function parseMikaInput<T>(schema: z.ZodType<T>, input: unknown): MikaVal
   return { ok: false, result: validationFailure(parsed.error) };
 }
 
+/** Picks declared search keys from a URL into a plain object for Zod parsing. */
 export function searchParamsObject(
   url: URL,
   keys: readonly string[],
@@ -464,6 +471,7 @@ export function searchParamsObject(
   return Object.fromEntries(keys.map((key) => [key, url.searchParams.get(key) ?? undefined]));
 }
 
+/** Parses JSON-encoded hidden form fields; passes through non-string values unchanged. */
 export function parseJsonFormValue(value: unknown): unknown {
   if (value === null || value === undefined || value === "") return undefined;
   if (typeof value !== "string") return value;

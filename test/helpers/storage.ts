@@ -1,3 +1,6 @@
+/**
+ * In-memory {@link StorageCollection} implementation for repository and query tests.
+ */
 import type {
   MikaIndex,
   PaginatedStorageResult,
@@ -12,10 +15,12 @@ type StorageItem<TDocument> = {
   readonly data: TDocument;
 };
 
+/** Map-backed storage collection with query, pagination, and unique index checks. */
 export function createMemoryStorageCollection<TDocument>(): StorageCollection<TDocument> {
   return createMemoryStorageCollectionWithConfig<TDocument>();
 }
 
+/** Memory collection with optional unique index enforcement on write. */
 export function createMemoryStorageCollectionWithConfig<TDocument>(
   config: {
     readonly uniqueIndexes?: readonly MikaIndex<TDocument>[];

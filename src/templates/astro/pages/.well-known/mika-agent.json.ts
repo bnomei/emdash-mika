@@ -1,3 +1,7 @@
+/**
+ * Agent capability manifest at `/.well-known/mika-agent.json`.
+ * Publishes public Mika operations and protected-flow requirements for agents.
+ */
 import {
   MIKA_AGENT_MANIFEST_VERSION,
   createMikaAgentManifest,

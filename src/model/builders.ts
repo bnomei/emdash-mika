@@ -1,3 +1,7 @@
+/**
+ * Pure builders mapping aggregates to API DTOs and constructing versioned aggregate payloads.
+ * Centralizes totals, purchasable snapshots, and stock availability derivation.
+ */
 import type { AvailabilityDTO, CartDTO, PriceDTO, SellableDTO, WishlistDTO } from "../api/types";
 import type { StockItemRecord } from "../types/operational";
 import type {
@@ -31,6 +35,7 @@ import type {
 } from "../types/primitives";
 import { createISODateTime } from "../types/primitives";
 
+/** Input for constructing a catalog commerce aggregate from content and sellables. */
 export interface CatalogAggregateInput {
   readonly content: ContentRef;
   readonly titleSnapshot?: string;
@@ -38,6 +43,7 @@ export interface CatalogAggregateInput {
   readonly metadata?: JsonObject;
 }
 
+/** Builds a versioned catalog commerce aggregate payload. */
 export function createCatalogAggregate(input: CatalogAggregateInput): CatalogCommerceAggregate {
   return {
     schemaVersion: 1,
@@ -48,12 +54,14 @@ export function createCatalogAggregate(input: CatalogAggregateInput): CatalogCom
   };
 }
 
+/** Input for projecting catalog sellables to API DTOs with optional stock context. */
 export interface CatalogSellableDTOInput {
   readonly catalog: CatalogCommerceAggregate;
   readonly stockBySellableId?: ReadonlyMap<MikaId, StockItemRecord>;
   readonly includeInactive?: boolean;
 }
 
+/** Maps active catalog sellables to sellable DTOs with availability overlays. */
 export function catalogSellablesToDTO(input: CatalogSellableDTOInput): readonly SellableDTO[] {
   return input.catalog.sellables
     .filter((sellable) => input.includeInactive || sellable.active)
@@ -62,6 +70,7 @@ export function catalogSellablesToDTO(input: CatalogSellableDTOInput): readonly 
     );
 }
 
+/** Builds a cart aggregate with derived totals from lines and coupon. */
 export function createCartAggregate(input: {
   readonly currency: CurrencyCode;
   readonly items?: readonly CartLine[];
@@ -78,6 +87,7 @@ export function createCartAggregate(input: {
   };
 }
 
+/** Projects a cart aggregate and document metadata to a cart DTO. */
 export function cartToDTO(input: {
   readonly id: MikaId;
   readonly status: CartDTO["status"];
@@ -113,8 +123,6 @@ export function cartToDTO(input: {
     coupon: input.cart.coupon
       ? {
           label: input.cart.coupon.label,
-          // Reflect the effective discount applied to the current totals, not the
-          // (possibly stale) snapshot amount.
           discount: totals.discount,
           providerCouponId: input.cart.coupon.providerRef?.priceId,
         }
@@ -128,6 +136,7 @@ export function cartToDTO(input: {
   };
 }
 
+/** Rebuilds a cart aggregate with replaced line items and optional coupon. */
 export function cartWithItems(input: {
   readonly cart: CartAggregate;
   readonly items: readonly CartLine[];
@@ -141,6 +150,7 @@ export function cartWithItems(input: {
   });
 }
 
+/** Rebuilds a cart aggregate with coupon removed. */
 export function cartWithoutCoupon(input: { readonly cart: CartAggregate }): CartAggregate {
   return createCartAggregate({
     currency: input.cart.currency,
@@ -149,6 +159,7 @@ export function cartWithoutCoupon(input: { readonly cart: CartAggregate }): Cart
   });
 }
 
+/** Rebuilds a cart aggregate with an applied coupon snapshot. */
 export function cartWithCoupon(input: {
   readonly cart: CartAggregate;
   readonly coupon: CouponSnapshot;
@@ -161,6 +172,7 @@ export function cartWithCoupon(input: {
   });
 }
 
+/** Builds a versioned wishlist aggregate payload. */
 export function createWishlistAggregate(
   input: {
     readonly items?: readonly WishlistItem[];
@@ -174,6 +186,7 @@ export function createWishlistAggregate(
   };
 }
 
+/** Projects a wishlist aggregate to a wishlist DTO with optional availability. */
 export function wishlistToDTO(input: {
   readonly id: MikaId;
   readonly wishlist: WishlistAggregate;
@@ -194,6 +207,7 @@ export function wishlistToDTO(input: {
   };
 }
 
+/** Freezes a sellable price into an immutable purchasable snapshot. */
 export function snapshotPrice(input: {
   readonly content: ContentRef;
   readonly sellable: SellableDefinition;
@@ -220,6 +234,7 @@ export function snapshotPrice(input: {
   };
 }
 
+/** Builds a checkout aggregate with binding and derived totals. */
 export function createCheckoutAggregate(input: {
   readonly mode: PurchaseMode;
   readonly currency: CurrencyCode;
@@ -240,6 +255,7 @@ export function createCheckoutAggregate(input: {
   };
 }
 
+/** Builds an order aggregate from checkout context and fulfillment lines. */
 export function createOrderAggregate(input: {
   readonly customer: CustomerSnapshot;
   readonly checkout: CheckoutAggregate;
@@ -271,6 +287,7 @@ export function createOrderAggregate(input: {
   };
 }
 
+/** Builds a subscription aggregate from customer and recurring sellable context. */
 export function createSubscriptionAggregate(input: {
   readonly customer: CustomerSnapshot;
   readonly sellable: PurchasableSnapshot;
@@ -302,6 +319,7 @@ export function createSubscriptionAggregate(input: {
   };
 }
 
+/** Maps a checkout line into a persisted order line with pricing breakdown. */
 export function orderLineFromCheckoutLine(input: {
   readonly id: MikaId;
   readonly line: CheckoutLine;
@@ -368,6 +386,7 @@ function priceToDTO(sellableId: MikaId, price: PriceDefinition): PriceDTO {
   };
 }
 
+/** Derives availability DTO from sellable limits and stock item record state. */
 export function stockAvailabilityToDTO(
   sellable: SellableDefinition,
   stock?: StockItemRecord,
@@ -462,12 +481,7 @@ function calculateCheckoutTotals(
   return calculateTotals(currency, cartLines, coupon);
 }
 
-/**
- * Effective coupon discount for a given subtotal. A rate-based coupon is
- * recomputed from the current subtotal (and capped at it) so a stale snapshot
- * cannot exceed the subtotal after line changes; a legacy amount-only coupon is
- * clamped to the subtotal.
- */
+/** Computes coupon discount amount capped by subtotal. */
 export function couponDiscountAmount(
   coupon: CouponSnapshot | undefined,
   subtotalAmount: number,

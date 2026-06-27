@@ -1,3 +1,7 @@
+/**
+ * Same-origin return-path sanitizer for checkout, magic links, and post-auth redirects.
+ * Rejects open redirects, protocol-relative URLs, and dot-segment traversal.
+ */
 export interface MikaSafeReturnPathOptions {
   readonly origin?: string | URL;
   readonly fallback?: string;
@@ -6,6 +10,10 @@ export interface MikaSafeReturnPathOptions {
 const DEFAULT_SAFE_RETURN_PATH = "/";
 const FALLBACK_ORIGIN = "http://mika.local";
 
+/**
+ * Returns a safe site-relative path on the request origin, or the configured fallback.
+ * Absolute URLs must match the resolved origin exactly.
+ */
 export function mikaSafeReturnPath(
   candidate: string | URL | null | undefined,
   options: MikaSafeReturnPathOptions = {},

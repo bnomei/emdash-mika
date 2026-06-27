@@ -1,3 +1,7 @@
+/**
+ * Resolves EmDash admin action invocations into validated Mika operations and UI-facing results.
+ * Maps button targets, form context, and payloads onto operation inputs and result adapters.
+ */
 import {
   mikaAdminActionDefinitions,
   type MikaAdminActionId,
@@ -8,6 +12,7 @@ import { parseMikaInput, type z } from "./validation";
 import { mikaOperationDefinitions, type MikaApiOperation } from "./operations";
 import type { AdminActionResultDTO, ContentRefDTO, MikaApiResult, MikaError } from "./types";
 
+/** Admin UI surface the action was triggered from (dashboard, entry, field, or row). */
 export type MikaActionTarget =
   | { readonly type: "dashboard"; readonly surface?: "dashboard"; readonly kind?: string }
   | {
@@ -42,6 +47,7 @@ export type MikaActionTarget =
       readonly row?: Record<string, unknown>;
     };
 
+/** Host-provided context from the admin button or form that fired the action. */
 export interface MikaActionButtonContext {
   readonly surface?: string;
   readonly collection?: string;
@@ -57,6 +63,7 @@ export interface MikaActionButtonContext {
   readonly [key: string]: unknown;
 }
 
+/** Raw admin action request before resolution to a Mika operation. */
 export interface MikaActionInvocation {
   readonly actionId: string;
   readonly invocationId?: string;
@@ -65,6 +72,7 @@ export interface MikaActionInvocation {
   readonly target?: MikaActionTarget;
 }
 
+/** Fully resolved invocation ready for {@link runMikaOperation}. */
 export interface MikaResolvedAdminActionInvocation {
   readonly actionId: MikaAdminActionId;
   readonly invocationId?: string;
@@ -74,6 +82,7 @@ export interface MikaResolvedAdminActionInvocation {
   readonly resultAdapter: MikaAdminActionResultAdapter;
 }
 
+/** EmDash admin UI envelope returned by the action runner endpoint. */
 export type MikaAdminActionRunResult = {
   readonly ok?: boolean;
   readonly status?: number;
@@ -129,6 +138,7 @@ function adminActionInputResolver(
   };
 }
 
+/** Per-action wiring from admin action id to operation key, input resolver, and result adapter. */
 export const mikaAdminActionRuntimeDefinitions: Readonly<
   Record<MikaAdminActionId, MikaAdminActionRuntimeDefinition>
 > = {
@@ -253,6 +263,7 @@ export const mikaAdminActionRuntimeDefinitions: Readonly<
   },
 };
 
+/** Validates an invocation, resolves inputs from context, and selects the target operation. */
 export function resolveMikaAdminActionInvocation(
   input: unknown,
 ): MikaApiResult<MikaResolvedAdminActionInvocation> {
@@ -287,10 +298,12 @@ export function resolveMikaAdminActionInvocation(
   };
 }
 
+/** Returns the {@link MikaApiOperation} backing a registered admin action id. */
 export function adminActionOperation(actionId: MikaAdminActionId): MikaApiOperation {
   return mikaOperationDefinitions[mikaAdminActionRuntimeDefinitions[actionId].operationKey];
 }
 
+/** Maps a {@link MikaApiResult} into the admin UI result envelope. */
 export function toMikaAdminActionRunResult(
   result: MikaApiResult<unknown>,
   adapter: MikaAdminActionResultAdapter = adminActionDtoResultAdapter,
