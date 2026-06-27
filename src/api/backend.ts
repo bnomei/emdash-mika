@@ -5828,7 +5828,13 @@ async function resolveCheckoutStart(
   checkoutInput: StartCheckoutInput,
 ): Promise<({ readonly ok: true } & CheckoutStartResolution) | MikaApiFailure> {
   const defaultCurrency = defaultBackendCurrency(input);
-  const cartResult = await findCheckoutStartCart(input, ctx, checkoutInput.cartId, defaultCurrency);
+  // Express buy-now (sellableId without cartId) is a single line and must not
+  // append to the caller's open session cart, which would double-charge any
+  // item already present in that cart.
+  const expressBuyNow = checkoutInput.sellableId !== undefined && checkoutInput.cartId === undefined;
+  const cartResult = expressBuyNow
+    ? { ok: true as const, cart: null, expired: false }
+    : await findCheckoutStartCart(input, ctx, checkoutInput.cartId, defaultCurrency);
   if (!cartResult.ok) return cartResult;
   if (cartResult.expired) return checkoutExpired();
 
