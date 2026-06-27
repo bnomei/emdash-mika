@@ -732,6 +732,17 @@ async function handleAcpComplete(
     return acpTerminalError(request, terminalStatus, "completed");
   }
 
+  // A prior complete already started the Mika checkout for this ACP session and
+  // it is not yet terminal (terminal cases handled above). Resume that checkout
+  // instead of starting a second provider checkout, which would create
+  // duplicate reservations. This binding must hold even when the retry arrives
+  // with a different client Idempotency-Key.
+  if (record.checkoutId) {
+    await commitAcpIdempotency(options, idempotency.lease);
+
+    return acpJson(request, await recordToAcpSession(options, request, record), 200);
+  }
+
   const body = await readJson<MikaAcpCheckoutCompleteRequest>(request);
   if (!body.ok) {
     await releaseAcpIdempotency(options, idempotency.lease);

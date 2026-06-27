@@ -211,6 +211,66 @@ describe("Mika ACP projection", () => {
     expect(checkoutStartCount).toBe(1);
   });
 
+  it("does not start a second Mika checkout when completing a pending ACP session again", async () => {
+    let cart = createCart([]);
+    let checkoutStartCount = 0;
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+        onCheckoutStart: () => {
+          checkoutStartCount += 1;
+        },
+        // Provider checkout stays pending after the first complete.
+        checkoutSessionStatus: "pending",
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      createSessionId: () => "checkout_session_acp_pending",
+    });
+
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_pending", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+      }),
+    );
+
+    const first = await handlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_pending/complete",
+        "idem_complete_1",
+        { payment_data: { provider: "stripe", token: "spt_test_123" } },
+      ),
+      "checkout_session_acp_pending",
+    );
+    expect(first.status).toBe(200);
+    await expect(first.json()).resolves.toMatchObject({ status: "ready_for_payment" });
+    expect(checkoutStartCount).toBe(1);
+
+    // A second complete with a DIFFERENT idempotency key must resume the
+    // existing pending checkout, not start a second provider checkout.
+    const second = await handlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_pending/complete",
+        "idem_complete_2",
+        { payment_data: { provider: "stripe", token: "spt_test_123" } },
+      ),
+      "checkout_session_acp_pending",
+    );
+    expect(second.status).toBe(200);
+    await expect(second.json()).resolves.toMatchObject({
+      id: "checkout_session_acp_pending",
+      status: "ready_for_payment",
+    });
+    expect(checkoutStartCount).toBe(1);
+  });
+
   it("pins ACP checkout context URLs to the configured baseUrl", async () => {
     let cart = createCart([]);
     let checkoutContextUrl = "";
@@ -995,7 +1055,16 @@ function createAcpTestApi(input: {
     metadata: JsonObject | undefined,
     ctx: MikaRequestContext,
   ) => void | Promise<void>;
+  readonly checkoutSessionStatus?: CheckoutSessionDTO["status"];
 }): MikaApi {
+  const checkoutSessionStatus = input.checkoutSessionStatus ?? "completed";
+  const checkoutSession = (): CheckoutSessionDTO => ({
+    id: createMikaId("checkout_1"),
+    status: checkoutSessionStatus,
+    mode: "payment",
+    provider: createProviderName("stripe"),
+    ...(checkoutSessionStatus === "completed" ? { orderId: createMikaId("order_1") } : {}),
+  });
   const api = {
     cart: {
       get: async () => ok(input.getCart()),
@@ -1050,22 +1119,9 @@ function createAcpTestApi(input: {
       ) => {
         await input.onCheckoutStart?.(checkoutInput.customFields, ctx);
 
-        return ok<CheckoutSessionDTO>({
-          id: createMikaId("checkout_1"),
-          status: "completed",
-          mode: "payment",
-          provider: createProviderName("stripe"),
-          orderId: createMikaId("order_1"),
-        });
+        return ok<CheckoutSessionDTO>(checkoutSession());
       },
-      status: async () =>
-        ok<CheckoutSessionDTO>({
-          id: createMikaId("checkout_1"),
-          status: "completed",
-          mode: "payment",
-          provider: createProviderName("stripe"),
-          orderId: createMikaId("order_1"),
-        }),
+      status: async () => ok<CheckoutSessionDTO>(checkoutSession()),
     },
   };
 

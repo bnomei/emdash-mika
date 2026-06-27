@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-Priority: P1 | Confidence: high | Security-sensitive: no | Status: open
+Priority: P1 | Confidence: high | Security-sensitive: no | Status: fixed
 Location: src/acp.ts:711-820 | Slug: acp-complete-double-checkout
 
 # ACP complete can start a second Mika checkout for the same session
@@ -47,6 +47,7 @@ After working this report, preserve the original finding body. Update line 2 `St
 ## Status Notes
 
 - 2026-06-25: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed `handleAcpComplete` only short-circuited on terminal `completed`/`canceled` status; a retry with a different `Idempotency-Key` while the Mika checkout was still pending fell through to a second `checkout.start`, creating duplicate reservations and provider sessions. Fix: after the terminal-status checks, if `record.checkoutId` is already set (checkout in flight, non-terminal), commit the idempotency lease and return the existing session via `recordToAcpSession` instead of starting a new checkout. Added regression test `does not start a second Mika checkout when completing a pending ACP session again` (extended the test API to support a pending checkout status). Typecheck + 309 tests pass.
 
 DEVANA-KEY: src/acp.ts:711-820 | P1 | acp-complete-double-checkout
-DEVANA-SUMMARY: Status=open | P1 high src/acp.ts:711-820 - ACP complete with a new idempotency key starts a second Mika checkout when payment is still pending.
+DEVANA-SUMMARY: Status=fixed | P1 high src/acp.ts:711-820 - ACP complete with a new idempotency key started a second Mika checkout while payment was pending. Fixed by resuming the existing checkout when record.checkoutId is set, with a regression test.
