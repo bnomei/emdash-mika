@@ -433,6 +433,49 @@ describe("backend test storage helpers", () => {
     });
   });
 
+  it("discovers every due email when more than the limit share a page", async () => {
+    const clock = createTestClock();
+    const ops = new OpsRepository(createStorageCollection("ops"));
+    const dueIds: MikaId[] = [];
+    for (let index = 1; index <= 5; index += 1) {
+      const id = createTestMikaId("email", index);
+      dueIds.push(id);
+      await ops.put(
+        createEmailDocument({
+          id,
+          record: {
+            id,
+            kind: "magic_link",
+            templateKey: "magic_link",
+            attemptCount: 0,
+            // All due, ascending so ordering is deterministic.
+            nextAttemptAt: clock.isoAt(-10_000 + index),
+            metadata: { link: `https://shop.example.test/sign-in/${index}` },
+          },
+        }),
+      );
+    }
+
+    // Lease in small batches; every due email must surface across rounds with
+    // none skipped, even though all five sit on one storage page.
+    const leased = new Set<string>();
+    for (let round = 0; round < 10 && leased.size < dueIds.length; round += 1) {
+      const due = await ops.listDueEmails(TEST_NOW, 2);
+      if (due.items.length === 0) break;
+      for (const item of due.items) {
+        const result = await ops.tryLeaseEmail({
+          emailId: item.id,
+          leaseKey: `worker_${round}`,
+          now: TEST_NOW,
+          leaseExpiresAt: clock.isoAt(300_000),
+        });
+        if (result) leased.add(item.id);
+      }
+    }
+
+    expect([...leased].sort()).toEqual([...dueIds].sort());
+  });
+
   it("delivers queued magic-link email through the outbox runner", async () => {
     const repositories = createTestBackendRepositories();
     const sent: MikaEmailDeliveryMessage[] = [];

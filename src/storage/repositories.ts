@@ -382,6 +382,13 @@ async function listByTypeCandidates<
   let hasMore = false;
   const pageLimit = Math.max(target, options.limit ?? 50);
 
+  // Each fetched page is consumed in full before advancing the cursor. Stopping
+  // mid-page (once `target` candidates were collected) would orphan the
+  // remaining same-page matches: the storage cursor is page-aligned, so the
+  // resume cursor would skip past them. Collecting whole pages keeps the resume
+  // cursor on a real page boundary, so no candidate is dropped. The returned
+  // batch may therefore exceed `target` by up to one page of extra matches;
+  // callers cap to their own limit.
   do {
     const page = await documents.listByType(type, {
       ...options,
@@ -390,20 +397,11 @@ async function listByTypeCandidates<
     });
 
     for (const item of page.items) {
-      if (!isCandidate(item.data)) continue;
-
-      if (items.length < target) {
-        items.push(item);
-      } else {
-        hasMore = true;
-      }
+      if (isCandidate(item.data)) items.push(item);
     }
 
     cursor = page.cursor;
-    if (items.length >= target) {
-      hasMore = hasMore || page.hasMore;
-      break;
-    }
+    hasMore = page.hasMore;
   } while (items.length < target && cursor);
 
   return {

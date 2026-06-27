@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-Priority: P1 | Confidence: high | Security-sensitive: no | Status: open
+Priority: P1 | Confidence: high | Security-sensitive: no | Status: fixed
 Location: src/storage/repositories.ts:367-412 | Slug: list-candidates-pagination-skip
 
 # listByTypeCandidates drops same-page matches once target is reached
@@ -46,6 +46,7 @@ After working this report, preserve the original finding body. Update line 2 `St
 ## Status Notes
 
 - 2026-06-25: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed `listByTypeCandidates` stopped collecting at `target` mid-page, marked the rest `hasMore`, then advanced `cursor` to the page boundary — orphaning the uncollected same-page candidates relative to the returned (page-aligned, opaque) cursor. Fix: consume each fetched page in full and only stop adding pages once `items.length >= target`, so the resume cursor always lands on a real page boundary and no candidate is skipped. The batch may now exceed `target` by up to one page; both callers (`listDueEmails`, `listDueWorkflows`) already slice to their own `limit`, and `redactQueuedFailedEmailsForAccountDelete` iterates all returned items. Note: the live impact is limited today because both lease scanners restart from the beginning each poll (they don't propagate the internal cursor) and rely on leasing to make progress; the fix corrects the helper's cursor contract and removes the latent skip. Added end-to-end regression test `discovers every due email when more than the limit share a page`. Typecheck + 308 tests pass.
 
 DEVANA-KEY: src/storage/repositories.ts:367-412 | P1 | list-candidates-pagination-skip
-DEVANA-SUMMARY: Status=open | P1 high src/storage/repositories.ts:367-412 - Email and workflow candidate pagination skips remaining matches on the current page when target count is met.
+DEVANA-SUMMARY: Status=fixed | P1 high src/storage/repositories.ts:367-412 - Candidate pagination advanced the cursor past uncollected same-page matches. Fixed by consuming whole pages so the resume cursor stays on a page boundary, with a regression test.
