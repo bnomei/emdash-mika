@@ -5461,11 +5461,14 @@ async function findOwnedActiveWishlistById(
     return invalidWishlist("targetWishlistId", wishlistId);
   }
 
-  if (ctx.customerId) {
+  // Ownership is derived from the document's owner, not the request context, so
+  // an unbound context (no customerId and no sessionId) cannot reach an owned
+  // wishlist by id. Mirrors findOwnedCartById.
+  if (document.customerId) {
     if (document.customerId !== ctx.customerId) {
       return invalidWishlist("targetWishlistId", wishlistId);
     }
-  } else if (ctx.sessionId && document.sessionId !== ctx.sessionId) {
+  } else if (document.sessionId && document.sessionId !== ctx.sessionId) {
     return invalidWishlist("targetWishlistId", wishlistId);
   }
 
@@ -6883,11 +6886,14 @@ async function findOwnedOpenCartById(
     return invalidCart(field, cartId);
   }
 
-  if (ctx.customerId) {
+  // Ownership is derived from the document's owner, not the request context, so
+  // that an unbound context (no customerId and no sessionId) cannot reach an
+  // owned cart by id. Mirrors findOwnedCartById.
+  if (document.customerId) {
     if (document.customerId !== ctx.customerId) {
       return invalidCart(field, cartId);
     }
-  } else if (ctx.sessionId && document.sessionId !== ctx.sessionId) {
+  } else if (document.sessionId && document.sessionId !== ctx.sessionId) {
     return invalidCart(field, cartId);
   }
 

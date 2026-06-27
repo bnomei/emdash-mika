@@ -8731,6 +8731,42 @@ describe("backend API composition", () => {
     });
   });
 
+  it("rejects open-cart coupon access from an unbound request context", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+
+    // Victim owns a session-bound open cart.
+    const victimCtx = createTestRequestContext({
+      sessionId: "session_victim",
+      customerId: false,
+      userId: false,
+    });
+    const victimCart = await api.cart.add(victimCtx, { sellableId: sellable.id, quantity: 1 });
+    if (!victimCart.ok) throw new Error("Expected cart.add to succeed.");
+
+    // Attacker has no bound session or customer but knows the victim cart id.
+    const unboundCtx = createTestRequestContext({
+      sessionId: false,
+      customerId: false,
+      userId: false,
+    });
+
+    await expect(
+      api.cart.applyCoupon(unboundCtx, { cartId: victimCart.data.id, code: "SAVE10" }),
+    ).resolves.toMatchObject({ ok: false, status: 404 });
+    await expect(
+      api.cart.removeCoupon(unboundCtx, { cartId: victimCart.data.id }),
+    ).resolves.toMatchObject({ ok: false, status: 404 });
+    await expect(
+      api.cart.merge(unboundCtx, { targetCartId: victimCart.data.id }),
+    ).resolves.toMatchObject({ ok: false, status: 404 });
+  });
+
   it("returns a valid cart quote without provider or stock mutations", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();

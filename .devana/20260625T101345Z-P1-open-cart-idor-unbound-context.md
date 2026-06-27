@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-Priority: P1 | Confidence: high | Security-sensitive: yes | Status: open
+Priority: P1 | Confidence: high | Security-sensitive: yes | Status: fixed
 Location: src/api/backend.ts:6839-6858 | Slug: open-cart-idor-unbound-context
 
 # Open cart operations skip ownership when request context is unbound
@@ -47,6 +47,7 @@ After working this report, preserve the original finding body. Update line 2 `St
 ## Status Notes
 
 - 2026-06-25: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed `findOwnedOpenCartById` and `findOwnedActiveWishlistById` proved ownership from the request context (`if (ctx.customerId) {...} else if (ctx.sessionId && ...)`), so an unbound context (no customerId and no sessionId) skipped both checks and returned any cart/wishlist by id — reachable via `cart.applyCoupon`/`removeCoupon`/`merge`. Fix: derive ownership from the document's owner instead (`if (document.customerId) {...} else if (document.sessionId && document.sessionId !== ctx.sessionId)`), mirroring `findOwnedCartById`. Now an unbound context cannot match an owned cart/wishlist. Added regression test `rejects open-cart coupon access from an unbound request context`. Typecheck + 302 tests pass.
 
 DEVANA-KEY: src/api/backend.ts:6839-6858 | P1 | open-cart-idor-unbound-context
-DEVANA-SUMMARY: Status=open | P1 high src/api/backend.ts:6839-6858 - Cart coupon/merge helpers accept any cartId when session and customer are unbound, enabling cross-user cart tampering.
+DEVANA-SUMMARY: Status=fixed | P1 high src/api/backend.ts:6839-6858 - Cart coupon/merge + wishlist helpers accepted any id when session and customer were unbound. Fixed by deriving ownership from the document (matching findOwnedCartById), with a regression test.
