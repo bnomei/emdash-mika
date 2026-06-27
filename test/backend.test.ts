@@ -4438,6 +4438,53 @@ describe("backend API composition", () => {
     });
   });
 
+  it("does not mutate subscription state when the provider returns a non-throwing failure", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["cancelSubscription"],
+      overrides: {
+        // Adapter reports failure WITHOUT throwing (e.g. subscription missing
+        // its provider id). The action must not write cancelled state locally.
+        cancelSubscription: async () => ({
+          status: "unsupported" as const,
+          message: "Subscription is not linked to the billing provider.",
+        }),
+      },
+    });
+    const subscription = createSubscriptionDocument();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.account.put(createCustomerDocument());
+    await repositories.account.put(subscription);
+
+    await expect(
+      api.subscription.cancel(createTestRequestContext(), { subscriptionId: subscription.id }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 502,
+      error: {
+        code: "PROVIDER_FAILED",
+        message: "Subscription is not linked to the billing provider.",
+      },
+    });
+
+    // Local subscription document is untouched and a failed audit is recorded.
+    await expect(repositories.account.findSubscriptionById(subscription.id)).resolves.toEqual(
+      subscription,
+    );
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
+    ).resolves.toMatchObject({
+      status: "failed",
+      record: { action: "subscription.cancel", status: "failed" },
+    });
+  });
+
   it("normalizes subscription change and renew provider failures with failed audit state", async () => {
     const cases = [
       {

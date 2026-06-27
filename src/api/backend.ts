@@ -1623,7 +1623,20 @@ async function runSubscriptionAction(
       },
     },
     async () => {
-      await providerFeature.method.call(providerFeature.provider, providerInput);
+      const result = await providerFeature.method.call(providerFeature.provider, providerInput);
+      // Only mutate local subscription state when the provider actually
+      // completed the action. Adapters can return a non-throwing
+      // failed/unsupported result (e.g. a subscription missing its provider id);
+      // treating that as success would leave the account/entitlements diverged
+      // from the billing provider. Surface it as a provider failure (recorded as
+      // a failed audit) instead of writing cancelled/changed state locally.
+      if (result.status !== "completed") {
+        throw new Error(
+          result.message ??
+            `Provider subscription ${action} did not complete (status: ${result.status}).`,
+        );
+      }
+
       await updateSubscriptionAfterAction(input, ctx, subscription, action, priceMatch);
 
       return accountDTOForCustomer(input, ctx, identity.customer);

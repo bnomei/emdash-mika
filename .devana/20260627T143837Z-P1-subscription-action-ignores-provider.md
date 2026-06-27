@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P1 | high | security=no
+DEVANA-STATE: fixed | P1 | high | security=no
 DEVANA-KEY: src/api/backend.ts:1582-1587 | subscription-action-ignores-provider
 
 # Subscription actions ignore non-throwing provider failures
@@ -46,6 +46,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-27: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed `runSubscriptionAction`'s provider callback awaited `providerFeature.method.call(...)` but discarded the returned `AdminActionResultDTO`, then unconditionally ran `updateSubscriptionAfterAction` and returned the account DTO, so a non-throwing `failed`/`unsupported` provider result still wrote cancelled/changed state locally. Fix mirrors the order refund/cancel contract (`admin-refund-ignores-provider-failure`): the callback now inspects `result.status` and, when it is not `completed`, throws with the provider message before any local mutation — `runAdminProviderAction` converts that to a `PROVIDER_FAILED` (502) response and records a `failed` audit. Local subscription state changes only on a completed provider result. Added regression test `does not mutate subscription state when the provider returns a non-throwing failure` (cancel adapter returns `{ status: "unsupported" }` without throwing → 502 PROVIDER_FAILED, subscription unchanged, failed audit). The existing thrown-error tests still pass. Typecheck + 319 tests pass. The later duplicate `subscription-action-ignores-provider-result` (20260627T144925Z) is already marked duplicate of this finding.
 
 DEVANA-KEY: src/api/backend.ts:1582-1587 | subscription-action-ignores-provider
-DEVANA-SUMMARY: open | P1 | high | runSubscriptionAction ignores provider failed/unsupported returns and still updates local subscription state with ok:true.
+DEVANA-SUMMARY: fixed | P1 | high | runSubscriptionAction discarded the provider result and always updated local state. Fixed by surfacing a non-completed provider status as a PROVIDER_FAILED failure (failed audit, no local mutation), with a non-throwing-failure regression test.
