@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-Priority: P1 | Confidence: high | Security-sensitive: no | Status: open
+Priority: P1 | Confidence: high | Security-sensitive: no | Status: fixed
 Location: src/api/backend.ts:1757-1766 | Slug: admin-refund-ignores-provider-failure
 
 # Admin refund and cancel persist success when provider returns failure
@@ -46,6 +46,7 @@ After working this report, preserve the original finding body. Update line 2 `St
 ## Status Notes
 
 - 2026-06-25: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed (order refund + cancel). Confirmed both `refundOrder` and `cancelOrder` ran `ledger.put` and forced `status: "completed"` regardless of the adapter's returned `AdminActionResultDTO.status`, and `runAdminProviderAction` only catches throws. Fix: in each action callback, only mutate the ledger (and report completed) when `result.status === "completed"`; otherwise return the provider result as-is (`failed`/`running`/`unsupported`) without touching the ledger. Added regression test `does not commit refund or cancel state when the provider returns a non-throwing failure`. Note: `cancelSubscription`/subscription provider-result handling is tracked by the dedicated reports `subscription-action-ignores-provider` / `subscription-action-ignores-provider-result` and is addressed there. Typecheck + 303 tests pass.
 
 DEVANA-KEY: src/api/backend.ts:1757-1766 | P1 | admin-refund-ignores-provider-failure
-DEVANA-SUMMARY: Status=open | P1 high src/api/backend.ts:1757-1766 - Admin refund/cancel always marks completed and updates ledger even when the provider adapter returns failed without throwing.
+DEVANA-SUMMARY: Status=fixed | P1 high src/api/backend.ts:1757-1766 - Admin order refund/cancel committed the ledger and forced completed even when the adapter returned failed without throwing. Fixed by gating the ledger write on result.status === completed and propagating non-completed statuses, with a regression test.

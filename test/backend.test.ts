@@ -5443,6 +5443,55 @@ describe("backend API composition", () => {
     });
   });
 
+  it("does not commit refund or cancel state when the provider returns a non-throwing failure", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["refundPayment", "cancelOrder"],
+      overrides: {
+        refundPayment: async () => ({ status: "failed", message: "Refund declined." }),
+        cancelOrder: async () => ({ status: "failed", message: "Cancel declined." }),
+      },
+    });
+    const refundTarget = createOrderDocument();
+    const cancelTarget = createOrderDocument({
+      id: createTestMikaId("order", 2),
+      orderNumber: "M-1002",
+      providerPaymentId: "payment_cancel",
+      providerOrderId: "provider_order_cancel",
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.ledger.put(refundTarget);
+    await repositories.ledger.put(cancelTarget);
+
+    // The provider returned failed without throwing: the API must surface the
+    // non-completed status and the ledger order must be untouched.
+    await expect(
+      api.admin.orderRefund({ orderId: refundTarget.id, amount: 500 }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: { status: "failed", message: "Refund declined." },
+    });
+    await expect(api.admin.orderCancel({ orderId: cancelTarget.id })).resolves.toMatchObject({
+      ok: true,
+      data: { status: "failed", message: "Cancel declined." },
+    });
+
+    await expect(repositories.ledger.findOrderById(refundTarget.id)).resolves.toMatchObject({
+      status: refundTarget.status,
+      paymentStatus: refundTarget.paymentStatus,
+    });
+    await expect(repositories.ledger.findOrderById(cancelTarget.id)).resolves.toMatchObject({
+      status: cancelTarget.status,
+      paymentStatus: cancelTarget.paymentStatus,
+    });
+  });
+
   it("runs repository-backed admin actions and records audit state", async () => {
     const db = createTestMikaDb();
     await mikaInitialMigration.up(db);

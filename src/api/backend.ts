@@ -1756,6 +1756,13 @@ async function refundOrder(
     },
     async () => {
       const result = await providerFeature.method.call(providerFeature.provider, providerInput);
+      // Only commit local refund state when the provider actually completed the
+      // refund. A non-throwing failed/running/unsupported result must not write
+      // a refunded order to the ledger; propagate the provider status instead.
+      if (result.status !== "completed") {
+        return { ...result, id: result.id ?? order.id };
+      }
+
       const updated = updateOrderAfterRefund(order, refundInput, currentBackendISODateTime(input));
       await input.repositories.ledger.put(updated);
 
@@ -1807,6 +1814,14 @@ async function cancelOrder(
     },
     async () => {
       const result = await providerFeature.method.call(providerFeature.provider, providerInput);
+      // Only commit local cancellation when the provider completed it. A
+      // non-throwing failed/running/unsupported result (e.g. a payment intent
+      // still processing the cancel) must not write a cancelled order to the
+      // ledger; propagate the provider status instead.
+      if (result.status !== "completed") {
+        return { ...result, id: result.id ?? order.id };
+      }
+
       const updated = updateOrderAfterCancel(order, cancelInput, currentBackendISODateTime(input));
       await input.repositories.ledger.put(updated);
 
