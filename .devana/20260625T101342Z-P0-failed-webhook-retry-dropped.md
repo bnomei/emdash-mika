@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-Priority: P0 | Confidence: high | Security-sensitive: no | Status: open
+Priority: P0 | Confidence: high | Security-sensitive: no | Status: fixed
 Location: src/api/backend.ts:3253-3259 | Slug: failed-webhook-retry-dropped
 
 # Failed payment webhook retries are deduped without reprocessing
@@ -46,6 +46,7 @@ After working this report, preserve the original finding body. Update line 2 `St
 ## Status Notes
 
 - 2026-06-25: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed `receiveWebhook` returned `webhookDuplicateResult` for any `findWebhookDuplicate` match, so a provider retry of a `failed` webhook was acknowledged without reprocessing. Fix: when the duplicate is `failed` AND the (freshly verified) live event is a payment event, re-enter processing via `processStoredWebhook(input, ctx, duplicate, event)` — mirroring the admin `replayWebhook` path — and return the normal received/failed response. Scoped to payment events (not all replayable statuses) so deterministically-failing webhooks (e.g. subscription events with an unknown target) are not re-run on every redelivery; this preserves the existing "fails subscription webhook processing with a stable error" dedup contract. Added regression test `reprocesses a failed payment webhook on provider retry without manual replay`. Typecheck + 298 tests pass.
 
 DEVANA-KEY: src/api/backend.ts:3253-3259 | P0 | failed-webhook-retry-dropped
-DEVANA-SUMMARY: Status=open | P0 high src/api/backend.ts:3253-3259 - Provider retries of failed payment webhooks are deduped and dropped, so orders may never fulfill without manual replay.
+DEVANA-SUMMARY: Status=fixed | P0 high src/api/backend.ts:3253-3259 - Provider retries of failed payment webhooks were deduped and dropped. Fixed by reprocessing failed payment-event duplicates on retry (admin-replay parity), with a regression test.

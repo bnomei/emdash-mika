@@ -6790,6 +6790,71 @@ describe("backend API composition", () => {
     });
   });
 
+  it("reprocesses a failed payment webhook on provider retry without manual replay", async () => {
+    const stripe = TEST_PROVIDER;
+    const sessionCollection = createStorageCollection("session");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      session: new SessionRepository(sessionCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+    };
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "payment_retry_hash",
+            parsed: { delivery: "event_payment_retry" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createPaymentWebhookEvent(verified, {
+            providerEventId: "event_payment_retry",
+            providerCheckoutId: "provider_checkout_retry",
+            providerPaymentId: "payment_retry",
+            providerOrderId: "provider_order_retry",
+          }),
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    // First delivery fails because checkout state is missing.
+    await expect(receiveWebhook(api, "payment-retry-failed", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "failed", replayable: true },
+    });
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({ status: "failed" });
+    await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(0);
+
+    // Checkout state is restored, then the provider retries the same event id.
+    await repositories.session.put(
+      createCheckoutDocument({
+        providerCheckoutId: "provider_checkout_retry",
+      }),
+    );
+
+    // The retry must re-enter processing (not be dropped as a duplicate) and
+    // fulfill the order.
+    await expect(receiveWebhook(api, "payment-retry-redelivery", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "received", replayable: true },
+    });
+    await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(1);
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
+      status: "processed",
+      record: { status: "processed", relatedOrderId: "order_1" },
+    });
+  });
+
   it("does not regress refunded or cancelled orders to paid from late payment webhooks", async () => {
     const stripe = createProviderName("stripe");
     const cases = [

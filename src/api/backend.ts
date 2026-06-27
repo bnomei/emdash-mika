@@ -3256,7 +3256,29 @@ async function receiveWebhook(
     eventType,
     payloadHash: verified.payloadHash,
   });
-  if (duplicate) return webhookDuplicateResult(duplicate);
+  if (duplicate) {
+    // A successfully handled (or otherwise non-failed) duplicate is a genuine
+    // redelivery and is acknowledged without reprocessing. But a payment attempt
+    // that ended in `failed` must re-enter processing on provider retry: a prior
+    // transient failure must not leave a paid order unfulfilled until a manual
+    // admin replay. Reprocessing is restricted to payment events so that
+    // deterministically-failing webhooks (e.g. subscription events with an
+    // unknown target) are not re-run on every redelivery.
+    if (!(duplicate.status === "failed" && event.kind === "payment")) {
+      return webhookDuplicateResult(duplicate);
+    }
+
+    const reprocessed = await processStoredWebhook(input, ctx, duplicate, event);
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        id: reprocessed.id,
+        status: reprocessed.status === "failed" ? "failed" : "received",
+        replayable: true,
+      },
+    };
+  }
 
   const webhook = createWebhookDocument(input, ctx, verified, event, {
     eventType,
