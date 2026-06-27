@@ -5711,6 +5711,39 @@ describe("backend API composition", () => {
     });
   });
 
+  it("cumulates successive partial refunds and reaches refunded when the total is covered", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({ optionalMethods: ["refundPayment"] });
+    const order = createOrderDocument(); // totalAmount 1200
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    await repositories.ledger.put(order);
+
+    // First partial refund: 700 of 1200.
+    await expect(api.admin.orderRefund({ orderId: order.id, amount: 700 })).resolves.toMatchObject(
+      { ok: true },
+    );
+    await expect(repositories.ledger.findOrderById(order.id)).resolves.toMatchObject({
+      status: "partially_refunded",
+      aggregate: { metadata: { refundAmount: 700 } },
+    });
+
+    // Second partial refund covers the remaining 500 → fully refunded, with the
+    // cumulative amount recorded (not overwritten to the last 500).
+    await expect(api.admin.orderRefund({ orderId: order.id, amount: 500 })).resolves.toMatchObject(
+      { ok: true },
+    );
+    await expect(repositories.ledger.findOrderById(order.id)).resolves.toMatchObject({
+      status: "refunded",
+      paymentStatus: "refunded",
+      aggregate: { metadata: { refundAmount: 1200 } },
+    });
+  });
+
   it("deduplicates a retried order refund by idempotency key without refunding twice", async () => {
     const repositories = createTestBackendRepositories();
     const fake = createFakeMikaProvider({

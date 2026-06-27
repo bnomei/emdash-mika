@@ -61,12 +61,26 @@ export function applyPaymentEventToOrder(
   };
 }
 
+/** Cumulative amount already refunded for an order, from prior refund metadata. */
+export function orderRefundedAmount(order: OrderDocument): number {
+  const value = order.aggregate.metadata?.["refundAmount"];
+
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
 export function applyOrderRefund(
   order: OrderDocument,
   refundInput: OrderRefundInput,
   now: ISODateTime,
 ): OrderDocument {
-  const fullRefund = refundInput.amount === undefined || refundInput.amount >= order.totalAmount;
+  // Accumulate against prior refunds rather than comparing each refund to the
+  // immutable original total. An omitted amount refunds the remaining balance.
+  // Without this, an order fully refunded via successive partials stays
+  // `partially_refunded` forever and `refundAmount` loses the earlier amounts.
+  const priorRefunded = orderRefundedAmount(order);
+  const thisRefund = refundInput.amount ?? Math.max(0, order.totalAmount - priorRefunded);
+  const cumulativeRefunded = priorRefunded + thisRefund;
+  const fullRefund = refundInput.amount === undefined || cumulativeRefunded >= order.totalAmount;
   const status = fullRefund ? "refunded" : "partially_refunded";
 
   return {
@@ -79,7 +93,7 @@ export function applyOrderRefund(
       metadata: {
         ...order.aggregate.metadata,
         lastAdminAction: "order.refund",
-        ...(refundInput.amount !== undefined ? { refundAmount: refundInput.amount } : {}),
+        refundAmount: cumulativeRefunded,
         ...(refundInput.reason ? { refundReason: refundInput.reason } : {}),
       },
     },

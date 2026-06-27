@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P2 | medium | security=no
+DEVANA-STATE: fixed | P2 | medium | security=no
 DEVANA-KEY: src/api/lifecycle.ts:69-82 | partial-refund-noncumulative-status
 
 # Partial refunds never cumulate: fully-refunded-via-partials order stays partially_refunded and refundAmount loses history
@@ -62,6 +62,8 @@ Preserve the original finding body. Update line 2 `DEVANA-STATE:` and the final 
 ## Status Notes
 
 - 2026-06-27: open by Devana. Verified lifecycle.ts:64-86 compares each refund to original total and overwrites refundAmount; refundOrder (backend.ts:1719-1770) has no status guard.
+- 2026-06-27: fixed. Confirmed `applyOrderRefund` compared each refund to the immutable `order.totalAmount` and overwrote `metadata.refundAmount`, so an order fully refunded via successive partials stayed `partially_refunded` and the recorded amount lost prior history. Fix: `applyOrderRefund` now accumulates — new `orderRefundedAmount(order)` reads the prior cumulative `refundAmount`; an omitted amount refunds the remaining balance; `fullRefund` is `amount === undefined || (prior + this) >= totalAmount`; and `refundAmount` is stored as the cumulative total. Added regression test `cumulates successive partial refunds and reaches refunded when the total is covered` (700 then 500 of 1200 → `partially_refunded` refundAmount 700, then `refunded` refundAmount 1200). The existing single-partial test (refundAmount 500) still passes since cumulative-from-zero equals the single amount.
+  - Scope: this fixes the cumulative-amount + status-from-remaining concern only. The sibling refund findings target different sites and remain to be handled in their own reports: `refund-zero-partial-status` (reject amount===0 in validation), `refund-over-total-uncapped` and `refund-cumulative-no-cap` (reject/cap amount > remaining in `refundOrder` before the provider call). Typecheck + 329 tests pass.
 
 DEVANA-KEY: src/api/lifecycle.ts:69-82 | partial-refund-noncumulative-status
-DEVANA-SUMMARY: open | P2 | medium | applyOrderRefund compares each refund to the original total and overwrites refundAmount, so an order fully refunded via partials stays partially_refunded forever and its recorded refund total loses prior amounts.
+DEVANA-SUMMARY: fixed | P2 | medium | applyOrderRefund compared each refund to the original total and overwrote refundAmount. Fixed by accumulating prior refunds (orderRefundedAmount), computing fullRefund against the cumulative total, and storing the cumulative refundAmount, with a regression test. Over-cap/zero-amount validation tracked in the sibling refund reports.
