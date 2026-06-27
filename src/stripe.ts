@@ -676,6 +676,14 @@ function parseStripeWebhookEvent(
     };
   }
 
+  // Payment-failure events must not be swallowed as `unknown`: the backend
+  // routes non-paid `payment` events through `markWebhookFailed` and the
+  // `checkout.payment_failed` notification. `invoice.payment_failed` is handled
+  // here before the generic `invoice.` branch so it cannot fall through.
+  if (STRIPE_PAYMENT_FAILURE_TYPES.has(type)) {
+    return stripePaymentFailureEvent(provider, providerEventId, type, object, input.parsed);
+  }
+
   if (type.startsWith("invoice.")) {
     if (!stripeInvoiceEventIsPaid(type, object)) {
       return unknownStripeWebhookEvent(provider, providerEventId, type, input.parsed);
@@ -735,6 +743,49 @@ function parseStripeWebhookEvent(
   }
 
   return unknownStripeWebhookEvent(provider, providerEventId, type, input.parsed);
+}
+
+const STRIPE_PAYMENT_FAILURE_TYPES = new Set([
+  "payment_intent.payment_failed",
+  "checkout.session.async_payment_failed",
+  "invoice.payment_failed",
+]);
+
+function stripePaymentFailureEvent(
+  provider: ProviderName,
+  providerEventId: string | undefined,
+  type: string,
+  object: JsonObject,
+  raw: JsonObject | undefined,
+): MikaProviderWebhookEvent {
+  const objectId = stringChild(object, "id");
+  const paymentIntentId = stripeObjectId(object["payment_intent"]);
+  const isCheckoutSession = type.startsWith("checkout.session.");
+  const isInvoice = type.startsWith("invoice.");
+  // Mirror the paid-event conventions so failure and success events key on the
+  // same provider ids: invoices order on the invoice id, checkout sessions and
+  // payment intents order on the payment intent.
+  const providerCheckoutId = isCheckoutSession ? objectId : undefined;
+  const providerPaymentId = isInvoice
+    ? (paymentIntentId ?? objectId)
+    : (paymentIntentId ?? (isCheckoutSession ? undefined : objectId));
+  const providerOrderId = isInvoice ? objectId : (paymentIntentId ?? objectId);
+  const email = stringChild(object, "customer_email") ?? stringChild(object, "receipt_email");
+
+  return {
+    kind: "payment",
+    paymentStatus: "failed",
+    provider,
+    providerEventId,
+    type,
+    ...(providerCheckoutId ? { providerCheckoutId } : {}),
+    ...(providerPaymentId ? { providerPaymentId } : {}),
+    ...(providerOrderId ? { providerOrderId } : {}),
+    ...(email ? { customer: { email } } : {}),
+    lines: [],
+    totals: moneyTotalsFromStripeAmount(object),
+    raw,
+  };
 }
 
 function unknownStripeWebhookEvent(

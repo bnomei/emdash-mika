@@ -11,6 +11,7 @@ import {
 } from "../src/acp";
 import type { MikaRequestContext } from "../src/api/context";
 import type { MikaApi } from "../src/api/server";
+import type { MikaProviderWebhookEvent } from "../src/provider";
 import type {
   CartDTO,
   CartQuoteDTO,
@@ -1227,45 +1228,7 @@ describe("Mika Stripe provider", () => {
       },
     };
     const provider = createMikaStripeProvider({ stripe, webhookSecret: "whsec_test" });
-    const cases: readonly JsonObject[] = [
-      {
-        id: "evt_expired",
-        type: "checkout.session.expired",
-        data: { object: { id: "cs_expired", payment_intent: "pi_expired" } },
-      },
-      {
-        id: "evt_async_failed",
-        type: "checkout.session.async_payment_failed",
-        data: { object: { id: "cs_async_failed", payment_status: "unpaid" } },
-      },
-      {
-        id: "evt_payment_failed",
-        type: "payment_intent.payment_failed",
-        data: { object: { id: "pi_failed", status: "requires_payment_method" } },
-      },
-      {
-        id: "evt_payment_canceled",
-        type: "payment_intent.canceled",
-        data: { object: { id: "pi_canceled", status: "canceled" } },
-      },
-      {
-        id: "evt_invoice_failed",
-        type: "invoice.payment_failed",
-        data: { object: { id: "in_failed", paid: false, amount_paid: 0 } },
-      },
-      {
-        id: "evt_invoice_unpaid",
-        type: "invoice.paid",
-        data: { object: { id: "in_unpaid", paid: false, amount_paid: 0 } },
-      },
-      {
-        id: "evt_invoice_partial",
-        type: "invoice.payment_succeeded",
-        data: { object: { id: "in_partial", paid: false, status: "open", amount_paid: 100 } },
-      },
-    ];
-
-    for (const payload of cases) {
+    const parse = async (payload: JsonObject): Promise<MikaProviderWebhookEvent> => {
       const rawBody = new TextEncoder().encode(JSON.stringify(payload));
       const verified = await provider.verifyWebhook?.({
         provider: createProviderName("stripe"),
@@ -1280,6 +1243,35 @@ describe("Mika Stripe provider", () => {
       const event = await provider.parseWebhookEvent?.(verified!);
       if (!event) throw new Error("Expected Stripe webhook event.");
 
+      return event;
+    };
+
+    // Inert event types that carry no payment outcome stay `unknown` no-ops.
+    const unknownCases: readonly JsonObject[] = [
+      {
+        id: "evt_expired",
+        type: "checkout.session.expired",
+        data: { object: { id: "cs_expired", payment_intent: "pi_expired" } },
+      },
+      {
+        id: "evt_payment_canceled",
+        type: "payment_intent.canceled",
+        data: { object: { id: "pi_canceled", status: "canceled" } },
+      },
+      {
+        id: "evt_invoice_unpaid",
+        type: "invoice.paid",
+        data: { object: { id: "in_unpaid", paid: false, amount_paid: 0 } },
+      },
+      {
+        id: "evt_invoice_partial",
+        type: "invoice.payment_succeeded",
+        data: { object: { id: "in_partial", paid: false, status: "open", amount_paid: 100 } },
+      },
+    ];
+
+    for (const payload of unknownCases) {
+      const event = await parse(payload);
       expectNonFulfillingProviderEvent(event);
       expect(event).toMatchObject({
         kind: "unknown",
@@ -1288,6 +1280,88 @@ describe("Mika Stripe provider", () => {
         type: payload["type"],
       });
     }
+  });
+
+  it("normalizes Stripe payment-failure webhooks as failed payment events", async () => {
+    const stripe: MikaStripeClient = {
+      webhooks: {
+        constructEvent: (body) => JSON.parse(body) as JsonObject,
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe, webhookSecret: "whsec_test" });
+    const parse = async (payload: JsonObject): Promise<MikaProviderWebhookEvent> => {
+      const rawBody = new TextEncoder().encode(JSON.stringify(payload));
+      const verified = await provider.verifyWebhook?.({
+        provider: createProviderName("stripe"),
+        request: new Request("https://shop.example.test/api/stripe", {
+          method: "POST",
+          headers: { "stripe-signature": "sig_test" },
+          body: rawBody,
+        }),
+        rawBody,
+      });
+      const event = await provider.parseWebhookEvent?.(verified!);
+      if (!event) throw new Error("Expected Stripe webhook event.");
+
+      return event;
+    };
+
+    const asyncFailed = await parse({
+      id: "evt_async_failed",
+      type: "checkout.session.async_payment_failed",
+      data: {
+        object: {
+          id: "cs_async_failed",
+          payment_status: "unpaid",
+          payment_intent: "pi_async",
+          customer_email: "ada@example.test",
+        },
+      },
+    });
+    expectNonFulfillingProviderEvent(asyncFailed);
+    expect(asyncFailed).toMatchObject({
+      kind: "payment",
+      paymentStatus: "failed",
+      provider: "stripe",
+      providerEventId: "evt_async_failed",
+      type: "checkout.session.async_payment_failed",
+      providerCheckoutId: "cs_async_failed",
+      providerPaymentId: "pi_async",
+      providerOrderId: "pi_async",
+      customer: { email: "ada@example.test" },
+    });
+
+    const intentFailed = await parse({
+      id: "evt_payment_failed",
+      type: "payment_intent.payment_failed",
+      data: { object: { id: "pi_failed", status: "requires_payment_method" } },
+    });
+    expectNonFulfillingProviderEvent(intentFailed);
+    expect(intentFailed).toMatchObject({
+      kind: "payment",
+      paymentStatus: "failed",
+      provider: "stripe",
+      providerEventId: "evt_payment_failed",
+      type: "payment_intent.payment_failed",
+      providerPaymentId: "pi_failed",
+      providerOrderId: "pi_failed",
+    });
+
+    const invoiceFailed = await parse({
+      id: "evt_invoice_failed",
+      type: "invoice.payment_failed",
+      data: { object: { id: "in_failed", paid: false, amount_paid: 0, payment_intent: "pi_inv" } },
+    });
+    expectNonFulfillingProviderEvent(invoiceFailed);
+    expect(invoiceFailed).toMatchObject({
+      kind: "payment",
+      paymentStatus: "failed",
+      provider: "stripe",
+      providerEventId: "evt_invoice_failed",
+      type: "invoice.payment_failed",
+      providerPaymentId: "pi_inv",
+      providerOrderId: "in_failed",
+    });
   });
 });
 

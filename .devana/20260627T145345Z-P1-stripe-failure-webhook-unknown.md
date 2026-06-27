@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P1 | high | security=no
+DEVANA-STATE: fixed | P1 | high | security=no
 DEVANA-KEY: src/stripe.ts:642-700 | stripe-failure-webhook-unknown
 
 # Stripe payment-failure webhooks are stored as unknown and never processed
@@ -46,6 +46,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-27: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed `parseStripeWebhookEvent` mapped `payment_intent.payment_failed`, `checkout.session.async_payment_failed`, and `invoice.payment_failed` to `kind:"unknown"`, and `processStoredWebhook`'s `unknown` branch is a no-op (`backend.ts:4054-4055`). The backend already routes `kind:"payment"` events with `paymentStatus !== "paid"` through `markWebhookFailed` + `emitCheckoutPaymentFailedNotification` (`backend.ts:4016-4028`), so the fix is purely in the Stripe parser: added `STRIPE_PAYMENT_FAILURE_TYPES` and `stripePaymentFailureEvent`, and route those three types into `kind:"payment", paymentStatus:"failed"` BEFORE the generic `invoice.` branch (so `invoice.payment_failed` cannot fall through to unknown). Failure events mirror the paid-event id conventions (invoices key order on the invoice id; checkout sessions/payment intents key on the payment intent) and carry customer email when present. Genuinely inert types (`checkout.session.expired`, `payment_intent.canceled`, unpaid `invoice.paid`, partial `invoice.payment_succeeded`) still parse as unknown. Updated the existing "does not normalize non-success Stripe webhooks as payments" test to cover only the inert types and added "normalizes Stripe payment-failure webhooks as failed payment events" asserting all three failure shapes. Full suite: 334 passing; typecheck clean.
 
 DEVANA-KEY: src/stripe.ts:642-700 | stripe-failure-webhook-unknown
-DEVANA-SUMMARY: open | P1 | high | Stripe payment-failure events parse as unknown and are stored as received without checkout failure handling or notifications.
+DEVANA-SUMMARY: fixed | P1 | high | Stripe payment-failure events now parse as failed payment events and flow through markWebhookFailed + checkout.payment_failed instead of being swallowed as unknown no-ops.
