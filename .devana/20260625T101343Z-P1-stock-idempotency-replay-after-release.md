@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-Priority: P1 | Confidence: high | Security-sensitive: no | Status: open
+Priority: P1 | Confidence: high | Security-sensitive: no | Status: fixed
 Location: src/storage/repositories.ts:1838-1847 | Slug: stock-idempotency-replay-after-release
 
 # Stock idempotency replay blocks checkout retry after reservation release
@@ -46,6 +46,7 @@ After working this report, preserve the original finding body. Update line 2 `St
 ## Status Notes
 
 - 2026-06-25: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed: `mika_stock_events.idempotency_key` is unique-indexed, so the report's suggested "treat replayed+released as a new reserve" cannot simply re-insert. Chosen fix: clear the idempotency key when a reservation is released (`release` now patches `idempotency_key: null`). A retry of `checkout.start` with the same key then finds no matching event and reserves afresh, while a still-active reservation continues to block concurrent double-reserves as before. Scope verified safe: the lifecycle `release` has a single caller (`releaseCheckoutReservations`), and nothing looks up reservations by idempotency key except the reserve/adjust replay guard. Mirrored in the in-memory test repository (clears the key from the lookup map). Added contract regression test `re-reserves with the same idempotency key after release` (fake + real). Typecheck + 300 tests pass.
 
 DEVANA-KEY: src/storage/repositories.ts:1838-1847 | P1 | stock-idempotency-replay-after-release
-DEVANA-SUMMARY: Status=open | P1 high src/storage/repositories.ts:1838-1847 - Released stock reservations replay on idempotency key without re-reserving, blocking checkout.start retries.
+DEVANA-SUMMARY: Status=fixed | P1 high src/storage/repositories.ts:1838-1847 - Released stock reservations replayed on idempotency key and blocked checkout.start retries. Fixed by clearing the idempotency key on release so retries reserve afresh, with a regression test.

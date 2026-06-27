@@ -1630,6 +1630,13 @@ export class StockRepository {
       reservationEventId: input.reservationEventId,
       now: input.now,
       targetStatus: "released",
+      // Clear the idempotency key so a checkout retry that reuses the same key
+      // (after a prior attempt reserved then released without persisting the
+      // checkout) is not blocked by an idempotency replay of the released
+      // reservation. The key is unique-indexed and would otherwise both match on
+      // lookup and collide on re-insert. A released reservation never needs
+      // idempotent replay protection, and nothing looks it up by key.
+      eventPatch: { idempotency_key: null },
       applyStockMutation: (executor, event) =>
         releaseStockStatement({
           stockItemId: event.stockItemId,

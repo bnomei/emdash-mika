@@ -1994,6 +1994,58 @@ describe("backend test Kysely stock database harness", () => {
       );
     });
 
+    it(`${repositoryKind} stock repository contract re-reserves with the same idempotency key after release`, async () => {
+      const stockItem = createStockRecord({
+        quantityOnHand: 5,
+        quantityReserved: 0,
+      });
+
+      await withStockRepositoryContractHarness(
+        repositoryKind,
+        stockItem,
+        async ({ repository, service }) => {
+          const clock = createTestClock();
+          const idempotencyKey = `${repositoryKind}_rereserve_after_release`;
+
+          const first = await service.reserve({
+            stockItemId: stockItem.id,
+            quantity: 2,
+            expiresAt: clock.isoAt(15 * 60_000),
+            idempotencyKey,
+          });
+          if (first.status !== "reserved") {
+            throw new Error(`Expected reservation, received '${first.status}'.`);
+          }
+
+          // A failed checkout attempt releases the reservation without persisting
+          // the checkout document.
+          await expect(
+            service.release({ reservationEventId: first.event.id, now: clock.isoAt(60_000) }),
+          ).resolves.toMatchObject({ status: "released", event: { status: "released" } });
+          await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+            quantityReserved: 0,
+          });
+
+          // Retrying checkout with the same idempotency key must reserve afresh
+          // rather than replay the released reservation.
+          const retry = await service.reserve({
+            stockItemId: stockItem.id,
+            quantity: 2,
+            expiresAt: clock.isoAt(20 * 60_000),
+            idempotencyKey,
+          });
+          expect(retry.status).toBe("reserved");
+          if (retry.status !== "reserved") {
+            throw new Error(`Expected re-reservation, received '${retry.status}'.`);
+          }
+          expect(retry.event.id).not.toBe(first.event.id);
+          await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+            quantityReserved: 2,
+          });
+        },
+      );
+    });
+
     it(`${repositoryKind} stock repository contract preserves terminal reservation invariants`, async () => {
       const scenarios = [
         {
@@ -11441,6 +11493,7 @@ function createTestStockRepository(
       const releasedEvent: StockEventRecord = {
         ...event,
         status: "released",
+        idempotencyKey: undefined,
         updatedAt: release.now,
       };
       const stock = current
@@ -11451,8 +11504,10 @@ function createTestStockRepository(
           }
         : null;
       eventsById.set(releasedEvent.id, releasedEvent);
-      if (releasedEvent.idempotencyKey) {
-        eventsByIdempotencyKey.set(releasedEvent.idempotencyKey, releasedEvent);
+      // Releasing clears the idempotency key so checkout retries reusing the key
+      // are not blocked by an idempotency replay of the released reservation.
+      if (event.idempotencyKey) {
+        eventsByIdempotencyKey.delete(event.idempotencyKey);
       }
       if (stock) {
         stockItems.set(stock.sellableId, stock);
