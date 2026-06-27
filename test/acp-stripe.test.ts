@@ -335,6 +335,61 @@ describe("Mika ACP projection", () => {
     expect(checkoutStartCount).toBe(1);
   });
 
+  it("rejects ACP item changes after a checkout has been bound", async () => {
+    let cart = createCart([]);
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+        // The bound Mika checkout stays pending (non-terminal) after complete.
+        checkoutSessionStatus: "pending",
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      createSessionId: () => "checkout_session_acp_bound",
+    });
+
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_bound", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+      }),
+    );
+
+    const completed = await handlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_bound/complete",
+        "idem_complete_bound",
+        { payment_data: { provider: "stripe", token: "spt_test_123" } },
+      ),
+      "checkout_session_acp_bound",
+    );
+    expect(completed.status).toBe(200);
+    await expect(completed.json()).resolves.toMatchObject({ status: "ready_for_payment" });
+
+    // Changing the cart items after the checkout is bound (and non-terminal)
+    // would desync the delegated-payment total from the bound checkout, so it
+    // must be rejected.
+    const updated = await handlers.update(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_bound",
+        "idem_update_bound",
+        { items: [{ id: "sellable_1:price_1", quantity: 5 }] },
+      ),
+      "checkout_session_acp_bound",
+    );
+    expect(updated.status).toBe(409);
+    await expect(updated.json()).resolves.toMatchObject({
+      code: "invalid_request",
+      message: expect.stringContaining("after checkout has started"),
+    });
+  });
+
   it("pins ACP checkout context URLs to the configured baseUrl", async () => {
     let cart = createCart([]);
     let checkoutContextUrl = "";

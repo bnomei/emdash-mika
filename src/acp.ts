@@ -686,6 +686,22 @@ async function handleAcpUpdate(
     return acpError(request, 400, "invalid_request", body.message);
   }
 
+  // Once `complete` has bound a (still non-terminal) Mika checkout, the priced
+  // lines are locked for payment handoff. Reconciling the cart to new items here
+  // would desync the delegated-payment total from the bound checkout (the buyer
+  // could be charged for a different cart). Reject item changes after bind;
+  // buyer/fulfillment-only updates still pass.
+  if (record.checkoutId && body.data.items) {
+    await releaseAcpIdempotency(options, idempotency.lease);
+
+    return acpError(
+      request,
+      409,
+      "invalid_request",
+      "Cart items cannot be changed after checkout has started.",
+    );
+  }
+
   const next: MikaAcpSessionRecord = {
     ...record,
     buyer: body.data.buyer ?? record.buyer,

@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P1 | high | security=no
+DEVANA-STATE: fixed | P1 | high | security=no
 DEVANA-KEY: src/acp.ts:663-708 | acp-update-cart-checkout-desync
 
 # ACP update mutates cart while bound checkout still reflects old totals
@@ -46,6 +46,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-27: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed `handleAcpUpdate` only blocked terminal (`completed`/`canceled`) sessions, so after `complete` bound a non-terminal Mika checkout (`record.checkoutId` set, status `ready_for_payment`) an `update` with new `items` reconciled the cart while the bound checkout kept the old amount — desyncing the delegated-payment total. Fix: after parsing the update body, if `record.checkoutId` is set and the request carries `items`, reject with 409 `invalid_request` ("Cart items cannot be changed after checkout has started.") before reconciling. Buyer/fulfillment-only updates (no `items`) still pass. Chose rejection over cancel/recreate to avoid silently invalidating an in-flight payment authorization. Added regression test `rejects ACP item changes after a checkout has been bound` (complete leaves checkout pending/bound → update with new items → 409). Typecheck + 330 tests pass.
 
 DEVANA-KEY: src/acp.ts:663-708 | acp-update-cart-checkout-desync
-DEVANA-SUMMARY: open | P1 | high | ACP update after complete changes the cart but leaves the bound Mika checkout on the old amount, desyncing delegated payment totals.
+DEVANA-SUMMARY: fixed | P1 | high | ACP update after complete reconciled the cart while leaving the bound Mika checkout on the old amount. Fixed by rejecting item-changing updates (409) once a non-terminal checkout is bound; buyer/fulfillment-only updates still pass. Regression test added.
