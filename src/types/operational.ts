@@ -298,6 +298,13 @@ export interface AdminAuditEventRecord {
   readonly targetId?: MikaId;
   readonly status: "started" | "completed" | "failed";
   readonly correlationId?: string;
+  /**
+   * Idempotency key (admin action runner invocation id) used to make retries of
+   * a mutating admin action safe. When set, a second action with the same
+   * `(action, idempotencyKey)` replays the original result instead of repeating
+   * the side effect (e.g. a double refund).
+   */
+  readonly idempotencyKey?: string;
   readonly createdAt: ISODateTime;
   readonly metadata?: JsonObject;
 }

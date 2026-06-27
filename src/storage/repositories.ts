@@ -1167,6 +1167,19 @@ export class OpsRepository {
     return this.documents.findByIdOfType(auditId, "adminAudit");
   }
 
+  async findAdminAuditByIdempotencyKey(
+    action: string,
+    idempotencyKey: string,
+  ): Promise<AdminAuditDocument | null> {
+    // Indexed on `idempotencyKey`; the runner invocation id is globally unique,
+    // but we still match `action` defensively so two distinct admin actions can
+    // never alias onto the same idempotency record.
+    const candidate = await this.documents.findOneByType("adminAudit", { idempotencyKey });
+    if (!candidate || candidate.record.action !== action) return null;
+
+    return candidate;
+  }
+
   async findEmail(emailId: MikaId): Promise<EmailDocument | null> {
     return this.documents.findByIdOfType(emailId, "email");
   }

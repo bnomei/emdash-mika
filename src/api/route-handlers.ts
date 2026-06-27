@@ -104,12 +104,35 @@ async function handleActionRunner(
   return toMikaAdminActionRunResult(result, resolved.data.resultAdapter);
 }
 
+// Admin operations whose input schema declares an `idempotencyKey` and whose
+// backend threads it into the admin-action audit for retry-safe deduplication.
+// Keep in sync with the schemas in validation.ts that expose `idempotencyKey`.
+const ADMIN_IDEMPOTENT_OPERATIONS: ReadonlySet<string> = new Set([
+  "admin.stockAdjust",
+  "admin.orderRefund",
+  "admin.orderCancel",
+  "admin.entitlementGrant",
+  "admin.entitlementRevoke",
+  "admin.emailResend",
+  "admin.licenseRevoke",
+  "admin.downloadIssue",
+]);
+
 function adminRunnerInputWithContext(
   operation: MikaRouteOperation,
   input: unknown,
   idempotencyKey: string | undefined,
 ): unknown {
-  if (!idempotencyKey || operation.name !== "admin.stockAdjust" || !isRecord(input)) {
+  // Forward the runner-enforced idempotency key to every mutating admin
+  // operation that consumes it (not just stock adjust). The backend uses it to
+  // dedupe retries, replaying the original result instead of repeating the side
+  // effect (e.g. a double refund).
+  if (
+    !idempotencyKey ||
+    !ADMIN_IDEMPOTENT_OPERATIONS.has(operation.name) ||
+    !isRecord(input) ||
+    "idempotencyKey" in input
+  ) {
     return input;
   }
 

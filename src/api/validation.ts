@@ -398,11 +398,13 @@ export const orderRefundInputSchema = z.object({
   orderId: mikaIdSchema,
   amount: optionalAmountSchema,
   reason: optionalStringSchema,
+  idempotencyKey: optionalStringSchema,
 }) satisfies z.ZodType<OrderRefundInput>;
 
 export const orderCancelInputSchema = z.object({
   orderId: mikaIdSchema,
   reason: optionalStringSchema,
+  idempotencyKey: optionalStringSchema,
 }) satisfies z.ZodType<OrderCancelInput>;
 
 export const entitlementGrantInputSchema = z.object({
@@ -411,6 +413,7 @@ export const entitlementGrantInputSchema = z.object({
   userId: optionalStringSchema,
   email: optionalStringSchema,
   expiresAt: optionalISODateTimeSchema,
+  idempotencyKey: optionalStringSchema,
 }) satisfies z.ZodType<EntitlementGrantInput>;
 
 export const entitlementRevokeInputSchema = z.object({
@@ -418,15 +421,18 @@ export const entitlementRevokeInputSchema = z.object({
   entitlementKey: optionalStringSchema,
   customerId: optionalMikaIdSchema,
   reason: optionalStringSchema,
+  idempotencyKey: optionalStringSchema,
 }) satisfies z.ZodType<EntitlementRevokeInput>;
 
 export const emailResendInputSchema = z.object({
   emailId: mikaIdSchema,
+  idempotencyKey: optionalStringSchema,
 }) satisfies z.ZodType<EmailResendInput>;
 
 export const licenseRevokeInputSchema = z.object({
   licenseId: mikaIdSchema,
   reason: optionalStringSchema,
+  idempotencyKey: optionalStringSchema,
 }) satisfies z.ZodType<LicenseRevokeInput>;
 
 export const downloadIssueInputSchema = z.object({
@@ -434,6 +440,7 @@ export const downloadIssueInputSchema = z.object({
   orderId: optionalMikaIdSchema,
   orderLineId: optionalMikaIdSchema,
   expiresAt: optionalISODateTimeSchema,
+  idempotencyKey: optionalStringSchema,
 }) satisfies z.ZodType<DownloadIssueInput>;
 
 export function parseMikaInput<T>(schema: z.ZodType<T>, input: unknown): MikaValidationResult<T> {

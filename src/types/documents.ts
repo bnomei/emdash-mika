@@ -243,7 +243,7 @@ export type WorkflowDocument = RecordBackedDocument<
 export type AdminAuditDocument = RecordBackedDocument<
   "adminAudit",
   AdminAuditEventRecord,
-  "actorId" | "targetType" | "targetId" | "status"
+  "actorId" | "targetType" | "targetId" | "status" | "idempotencyKey"
 >;
 
 export interface MikaStorageDocuments {

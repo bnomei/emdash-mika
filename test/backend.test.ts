@@ -5565,6 +5565,56 @@ describe("backend API composition", () => {
     });
   });
 
+  it("deduplicates a retried order refund by idempotency key without refunding twice", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["refundPayment"],
+    });
+    const order = createOrderDocument();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.ledger.put(order);
+
+    const refundArgs = {
+      orderId: order.id,
+      amount: 500,
+      reason: "duplicate",
+      idempotencyKey: "refund_invocation_1",
+    };
+
+    const first = await api.admin.orderRefund(refundArgs);
+    expect(first).toMatchObject({ ok: true, status: 200, data: { status: "completed" } });
+
+    // Retried with the same idempotency key (e.g. UI double-submit or network
+    // retry after the ledger write but before the response was delivered).
+    const second = await api.admin.orderRefund(refundArgs);
+    expect(second).toMatchObject({ ok: true, status: 200, data: { status: "completed" } });
+
+    // The provider was only asked to refund once; the replay returned the
+    // original result without repeating the side effect.
+    expect(fake.getCalls().refundPayment).toEqual([
+      {
+        orderId: order.id,
+        providerPaymentId: "payment_1",
+        amount: 500,
+        reason: "duplicate",
+      },
+    ]);
+
+    // Exactly one refund audit was recorded; the retry did not start a new one.
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
+    ).resolves.toMatchObject({ status: "completed", record: { action: "order.refund" } });
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 2)),
+    ).resolves.toBeNull();
+  });
+
   it("does not commit refund or cancel state when the provider returns a non-throwing failure", async () => {
     const repositories = createTestBackendRepositories();
     const fake = createFakeMikaProvider({

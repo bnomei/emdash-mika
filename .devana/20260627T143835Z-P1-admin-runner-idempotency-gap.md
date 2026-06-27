@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P1 | high | security=no
+DEVANA-STATE: fixed | P1 | high | security=no
 DEVANA-KEY: src/api/route-handlers.ts:107-119 | admin-runner-idempotency-gap
 
 # Admin action runner requires idempotency but only forwards it to stock adjust
@@ -46,6 +46,11 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-27: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed `adminRunnerInputWithContext` forwarded the runner-enforced idempotency key only to `admin.stockAdjust`, so refund/cancel/entitlement/license/download/email retries re-ran their side effects. Fix is a central idempotency gate plus generalized forwarding:
+  - Route handler now forwards the invocation idempotency key to every admin write that consumes it (`ADMIN_IDEMPOTENT_OPERATIONS`: stockAdjust, orderRefund, orderCancel, entitlementGrant, entitlementRevoke, emailResend, licenseRevoke, downloadIssue), kept in sync with the `idempotencyKey` fields added to those input schemas/types.
+  - `runAdminAction` (shared by `runAdminProviderAction`/`runAdminRepositoryAction`) now dedupes by `(action, idempotencyKey)` via the admin audit store: a prior `completed` audit replays its stored result without re-running; a prior `started` audit returns 409 (in progress) so a concurrent/crashed attempt cannot double-execute; a `failed` audit allows retry. The result snapshot is persisted on completion in the audit metadata (`result`), and the audit document now projects/indexes `idempotencyKey` (new `findAdminAuditByIdempotencyKey` repo finder). No migration needed — `idempotencyKey` is already an indexed `ops` field and documents use the host store.
+  - Each backend admin-write threads its input `idempotencyKey` into the audit record. Webhook replay was left as-is (already idempotent at the webhook layer by providerEventId/payloadHash); provider sync/health are unaffected (own run-lease/no side effect).
+  - Regression test `deduplicates a retried order refund by idempotency key without refunding twice` (two refunds, same key → `refundPayment` called once, only one audit). Updated the download-issue runner test to expect the now-forwarded key. Typecheck + 317 tests pass.
 
 DEVANA-KEY: src/api/route-handlers.ts:107-119 | admin-runner-idempotency-gap
-DEVANA-SUMMARY: open | P1 | high | Admin runner requires idempotency keys for adminWrite but only stockAdjust receives them, so retries can duplicate refunds and other admin mutations.
+DEVANA-SUMMARY: fixed | P1 | high | Admin runner only forwarded idempotency keys to stockAdjust. Fixed by forwarding to all idempotent admin writes and adding a central (action, idempotencyKey) dedup in runAdminAction that replays the prior result instead of repeating the side effect, with a refund regression test.

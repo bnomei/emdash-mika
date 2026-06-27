@@ -375,6 +375,10 @@ export interface MikaOpsRepositoryPort {
   }): Promise<WorkflowDocument | null>;
   failWorkflow(input: WorkflowFailureRepositoryInput): Promise<WorkflowDocument | null>;
   findAdminAudit(auditId: MikaId): Promise<AdminAuditDocument | null>;
+  findAdminAuditByIdempotencyKey(
+    action: string,
+    idempotencyKey: string,
+  ): Promise<AdminAuditDocument | null>;
   findEmail(emailId: MikaId): Promise<EmailDocument | null>;
   listDueEmails(now: ISODateTime, limit?: number): Promise<MikaDocumentList<EmailDocument>>;
   tryLeaseEmail(input: EmailLeaseRepositoryInput): Promise<EmailDocument | null>;
@@ -1772,6 +1776,7 @@ async function refundOrder(
       action: "order.refund",
       targetType: "order",
       targetId: order.id,
+      idempotencyKey: refundInput.idempotencyKey,
       metadata: {
         provider: order.provider,
         orderId: order.id,
@@ -1831,6 +1836,7 @@ async function cancelOrder(
       action: "order.cancel",
       targetType: "order",
       targetId: order.id,
+      idempotencyKey: cancelInput.idempotencyKey,
       metadata: {
         provider: order.provider,
         orderId: order.id,
@@ -1952,6 +1958,7 @@ async function grantEntitlement(
       action: "entitlement.grant",
       targetType: "entitlement",
       targetId: entitlementId,
+      idempotencyKey: grantInput.idempotencyKey,
       metadata: {
         entitlementKey: grantInput.entitlementKey,
         ...(grantInput.customerId ? { customerId: grantInput.customerId } : {}),
@@ -2006,6 +2013,7 @@ async function revokeEntitlement(
       action: "entitlement.revoke",
       targetType: "entitlement",
       targetId: entitlement.id,
+      idempotencyKey: revokeInput.idempotencyKey,
       metadata: {
         entitlementId: entitlement.id,
         entitlementKey: entitlement.entitlementKey,
@@ -2064,6 +2072,7 @@ async function resendEmail(
       action: "email.resend",
       targetType: "email",
       targetId: email.id,
+      idempotencyKey: resendInput.idempotencyKey,
       metadata: {
         emailId: email.id,
         kind: email.kind,
@@ -2130,6 +2139,7 @@ async function revokeLicense(
       action: "license.revoke",
       targetType: "license",
       targetId: license.id,
+      idempotencyKey: revokeInput.idempotencyKey,
       metadata: {
         licenseId: license.id,
         ...(license.customerId ? { customerId: license.customerId } : {}),
@@ -2199,6 +2209,7 @@ async function issueDownload(
       targetType: "download",
       targetId: createMikaId(target.downloadRef),
       createdAt: now,
+      idempotencyKey: issueInput.idempotencyKey,
       metadata: {
         orderId: target.order.id,
         orderLineId: target.line.id,
@@ -2398,10 +2409,24 @@ function addDownloadRefToOrder(
   };
 }
 
+const ADMIN_AUDIT_RESULT_METADATA_KEY = "result";
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 async function completeAdminAudit(
   input: CreateMikaBackendApiInput,
   audit: AdminAuditDocument,
+  result?: unknown,
 ): Promise<void> {
+  // Persist the action result so a later idempotent retry (same action +
+  // idempotency key) can replay it without repeating the side effect. Only a
+  // JSON object result (every admin action returns an AdminActionResultDTO) is
+  // snapshotted; anything else is simply not replayable.
+  const resultSnapshot =
+    audit.record.idempotencyKey && isJsonObject(result) ? result : undefined;
+
   await input.repositories.ops.writeAudit({
     ...audit,
     status: "completed",
@@ -2409,8 +2434,22 @@ async function completeAdminAudit(
     record: {
       ...audit.record,
       status: "completed",
+      ...(resultSnapshot
+        ? {
+            metadata: {
+              ...audit.record.metadata,
+              [ADMIN_AUDIT_RESULT_METADATA_KEY]: resultSnapshot,
+            },
+          }
+        : {}),
     },
   });
+}
+
+function adminAuditReplayResult<TData>(audit: AdminAuditDocument): TData | null {
+  const snapshot = audit.record.metadata?.[ADMIN_AUDIT_RESULT_METADATA_KEY];
+
+  return isJsonObject(snapshot) ? (snapshot as TData) : null;
 }
 
 async function failAdminAudit(
@@ -2501,6 +2540,36 @@ async function runAdminAction<TData>(
   fallbackMessage: string,
   failure: (message: string) => MikaApiFailure,
 ): Promise<MikaApiResult<TData>> {
+  // Idempotency gate: a mutating admin action retried with the same
+  // `(action, idempotencyKey)` must not repeat its side effect. The runner
+  // requires an idempotency key for adminWrite operations, so without this a
+  // double-submit or network retry would, e.g., refund an order twice.
+  if (record.idempotencyKey) {
+    const prior = await input.repositories.ops.findAdminAuditByIdempotencyKey(
+      record.action,
+      record.idempotencyKey,
+    );
+    if (prior?.record.status === "completed") {
+      const replay = adminAuditReplayResult<TData>(prior);
+      if (replay !== null) {
+        return { ok: true, status: 200, data: replay };
+      }
+    } else if (prior?.record.status === "started") {
+      // A prior attempt is still in flight (or crashed after the side effect but
+      // before completion). Refuse rather than risk a duplicate; the operator
+      // can inspect the audit and retry once it settles.
+      return {
+        ok: false,
+        status: 409,
+        error: {
+          code: "CONFLICT",
+          message: `Admin action '${record.action}' is already in progress for this idempotency key.`,
+        },
+      };
+    }
+    // A `failed` prior audit falls through so the action can be retried.
+  }
+
   const audit = createAdminAuditDocument(input, {
     ...record,
     status: "started",
@@ -2510,7 +2579,7 @@ async function runAdminAction<TData>(
 
   try {
     const data = await action(audit);
-    await completeAdminAudit(input, audit);
+    await completeAdminAudit(input, audit, data);
 
     return {
       ok: true,
@@ -7630,6 +7699,7 @@ function createAdminAuditDocument(
     targetType: record.targetType,
     targetId: record.targetId,
     status: record.status,
+    idempotencyKey: record.idempotencyKey,
     record: {
       id,
       ...record,

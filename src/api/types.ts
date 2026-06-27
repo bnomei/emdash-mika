@@ -595,11 +595,13 @@ export interface OrderRefundInput {
   readonly orderId: MikaId;
   readonly amount?: number;
   readonly reason?: string;
+  readonly idempotencyKey?: string;
 }
 
 export interface OrderCancelInput {
   readonly orderId: MikaId;
   readonly reason?: string;
+  readonly idempotencyKey?: string;
 }
 
 export interface EntitlementGrantInput {
@@ -608,6 +610,7 @@ export interface EntitlementGrantInput {
   readonly userId?: string;
   readonly email?: string;
   readonly expiresAt?: ISODateTime;
+  readonly idempotencyKey?: string;
 }
 
 export interface EntitlementRevokeInput {
@@ -615,15 +618,18 @@ export interface EntitlementRevokeInput {
   readonly entitlementKey?: string;
   readonly customerId?: MikaId;
   readonly reason?: string;
+  readonly idempotencyKey?: string;
 }
 
 export interface EmailResendInput {
   readonly emailId: MikaId;
+  readonly idempotencyKey?: string;
 }
 
 export interface LicenseRevokeInput {
   readonly licenseId: MikaId;
   readonly reason?: string;
+  readonly idempotencyKey?: string;
 }
 
 export interface DownloadIssueInput {
@@ -631,4 +637,5 @@ export interface DownloadIssueInput {
   readonly orderId?: MikaId;
   readonly orderLineId?: MikaId;
   readonly expiresAt?: ISODateTime;
+  readonly idempotencyKey?: string;
 }

@@ -2686,6 +2686,9 @@ describe("Mika client", () => {
     expect(apiInput).toEqual({
       orderId: id("order_1"),
       orderLineId: id("order_line_1"),
+      // The runner forwards its invocation id as the idempotency key so the
+      // download issue dedupes on retry.
+      idempotencyKey: "download_issue_invocation_1",
     });
   });
 
