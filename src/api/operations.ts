@@ -12,6 +12,7 @@ import {
   applyCouponInputSchema,
   cartAddFormInputSchema,
   cartQuoteInputSchema,
+  checkoutCancelInputSchema,
   checkoutPreviewInputSchema,
   checkoutStartFormInputSchema,
   checkoutStatusInputSchema,
@@ -703,6 +704,20 @@ export const mikaOperationDefinitions = defineMikaOperations({
     schema: checkoutStatusInputSchema,
     searchKeys: ["checkoutId", "token"],
     action: jsonAction(),
+  }),
+  checkoutCancel: defineMikaOperation({
+    namespace: "checkout",
+    method: "cancel",
+    // Routed as `checkoutAbandon` so the `checkoutCancel` name stays reserved
+    // for the browser cancel-redirect URL (not a plugin API route).
+    routeKey: "checkoutAbandon",
+    routePath: "checkout/abandon",
+    httpMethod: "POST",
+    transport: "body",
+    public: false,
+    requiresRequestContext: true,
+    agent: agentOperationMetadata.checkoutHandoff,
+    schema: checkoutCancelInputSchema,
   }),
   magicLinkRequest: defineMikaOperation({
     namespace: "magicLink",

@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P1 | high | security=no
+DEVANA-STATE: fixed | P1 | high | security=no
 DEVANA-KEY: src/acp.ts:837-868 | acp-cancel-orphan-checkout
 
 # ACP cancel leaves Mika checkout and stock reservations active
@@ -46,6 +46,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-27: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed `handleAcpCancel` only did a local `store.put({status:"canceled"})` with no downstream checkout/stock cleanup. Added a routed `checkout.cancel` API capability (operation `checkoutCancel`, routed as `checkoutAbandon` POST `checkout/abandon` so the reserved `checkoutCancel` browser-redirect route name stays free). Backend `cancelCheckout` verifies the caller owns the checkout, is a no-op for already-terminal/converted checkouts, releases the cart's stock reservations, reopens the cart to `open`, and flips the checkout to `cancelled`. `handleAcpCancel` now calls `api.checkout.cancel` before flipping the ACP record whenever `record.checkoutId` is bound; a 404 (checkout already gone) tolerantly proceeds, any other failure surfaces as a 409/4xx ACP error so the session is NOT reported as canceled. Wired the facade (`createMikaOperationFacade`), `MikaApi.checkout.cancel`, and updated the 5 contract-pinning tables in test/index.test.ts. Regression tests in test/acp-stripe.test.ts: "cancels the bound Mika checkout when an ACP session is canceled" (asserts `checkout.cancel` invoked with the bound checkoutId) and "surfaces a failure to cancel the bound Mika checkout" (asserts a provider cancel failure leaves the ACP session non-canceled). Full suite: 332 passing; typecheck clean.
 
 DEVANA-KEY: src/acp.ts:837-868 | acp-cancel-orphan-checkout
-DEVANA-SUMMARY: open | P1 | high | ACP cancel flips only the local record, leaving bound Mika checkouts and stock reservations active after complete.
+DEVANA-SUMMARY: fixed | P1 | high | ACP cancel now invokes a new routed checkout.cancel that releases reservations and reopens the cart before flipping the record; provider-cancel failures keep the ACP session non-canceled.

@@ -137,6 +137,7 @@ import type {
   CartQuoteInput,
   CartQuoteLineDTO,
   CheckoutPreviewDTO,
+  CheckoutCancelInput,
   CheckoutPreviewInput,
   CheckoutSessionDTO,
   CheckoutStatusInput,
@@ -787,6 +788,7 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
     checkout: {
       start: async (ctx, checkoutInput) => startCheckout(input, ctx, checkoutInput),
       status: async (ctx, statusInput) => checkoutStatus(input, ctx, statusInput),
+      cancel: async (ctx, cancelInput) => cancelCheckout(input, ctx, cancelInput),
       preview: async (ctx, previewInput) => {
         const preview = await createCheckoutPreview(input, ctx, previewInput);
 
@@ -6564,6 +6566,60 @@ async function checkoutStatus(
   if (checkoutIsExpired(input, document)) return checkoutStatusExpired(document);
 
   return checkoutDocumentSuccessResult(document);
+}
+
+async function cancelCheckout(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  cancelInput: CheckoutCancelInput,
+): Promise<MikaApiResult<CheckoutSessionDTO>> {
+  const checkoutId = createMikaId(cancelInput.checkoutId);
+  const document = await input.repositories.session.findCheckoutById(checkoutId);
+  if (!document) return invalidCheckout("checkoutId", checkoutId);
+
+  if (!(await checkoutBelongsToContext(document, ctx))) {
+    return authRequired(
+      "Checkout cancellation requires the matching session or customer identity.",
+    );
+  }
+
+  // Never cancel a checkout that already converted to an order, and treat an
+  // already-terminal checkout as an idempotent no-op.
+  if (document.status === "completed" || document.orderId) {
+    return checkoutDocumentSuccessResult(document);
+  }
+  if (
+    document.status === "cancelled" ||
+    document.status === "expired" ||
+    document.status === "failed"
+  ) {
+    return checkoutDocumentSuccessResult(document);
+  }
+
+  // Release the inventory the checkout reserved and return its cart to `open`
+  // so the items are not trapped until reservation expiry.
+  const cartDocument = document.cartId
+    ? await input.repositories.session.findById(document.cartId)
+    : null;
+  if (cartDocument && cartDocument.type === "cart") {
+    const reservationIds = cartDocument.aggregate.items
+      .map((item) => item.reservationId)
+      .filter((id): id is MikaId => Boolean(id));
+    if (reservationIds.length > 0) {
+      await releaseCheckoutReservations(input, reservationIds, ctx.now);
+    }
+    await input.repositories.session.put(reopenCartDocument(cartDocument, ctx.now));
+  }
+
+  const cancelled: CheckoutDocument = {
+    ...document,
+    status: "cancelled",
+    providerStatus: "cancelled",
+    updatedAt: ctx.now,
+  };
+  await input.repositories.session.put(cancelled);
+
+  return checkoutDocumentSuccessResult(cancelled);
 }
 
 async function checkoutStatusAccessError(

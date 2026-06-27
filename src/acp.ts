@@ -884,6 +884,26 @@ async function handleAcpCancel(
 
     return acpJson(request, await recordToAcpSession(options, request, record), 200);
   }
+
+  // Cancel the bound Mika checkout before flipping the local record so the
+  // provider session is abandoned and its stock reservations are released.
+  // Without this the ACP record reads "canceled" while the underlying Mika
+  // checkout stays live, orphaning reservations and leaving the cart locked.
+  if (record.checkoutId) {
+    const cancellation = await options.api.checkout.cancel(
+      acpContext(options, request, record.sessionId),
+      { checkoutId: record.checkoutId },
+    );
+    // A 404 means the bound checkout is already gone, so the ACP record can
+    // still proceed to `canceled`; any other failure must surface so we never
+    // report a cancellation we did not perform.
+    if (!cancellation.ok && cancellation.status !== 404) {
+      await releaseAcpIdempotency(options, idempotency.lease);
+
+      return acpError(request, cancellation.status, "invalid_request", resultMessage(cancellation));
+    }
+  }
+
   const canceled: MikaAcpSessionRecord = {
     ...record,
     status: "canceled",

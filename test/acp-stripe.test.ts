@@ -335,6 +335,122 @@ describe("Mika ACP projection", () => {
     expect(checkoutStartCount).toBe(1);
   });
 
+  it("cancels the bound Mika checkout when an ACP session is canceled", async () => {
+    let cart = createCart([]);
+    const cancelCalls: Array<{ readonly checkoutId: string }> = [];
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+        onCheckoutStart: () => {},
+        onCheckoutCancel: (cancelInput) => {
+          cancelCalls.push({ checkoutId: String(cancelInput.checkoutId) });
+
+          return undefined;
+        },
+        // Provider checkout stays pending so the bound checkout is non-terminal.
+        checkoutSessionStatus: "pending",
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      createSessionId: () => "checkout_session_acp_cancel_bound",
+    });
+
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_cancel_bound", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+      }),
+    );
+    // Complete binds a non-terminal Mika checkout to the ACP session.
+    await handlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_cancel_bound/complete",
+        "idem_complete_cancel_bound",
+        { payment_data: { provider: "stripe", token: "spt_test_123" } },
+      ),
+      "checkout_session_acp_cancel_bound",
+    );
+
+    const canceled = await handlers.cancel(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_cancel_bound/cancel",
+        "idem_cancel_bound",
+        {},
+      ),
+      "checkout_session_acp_cancel_bound",
+    );
+
+    expect(canceled.status).toBe(200);
+    await expect(canceled.json()).resolves.toMatchObject({ status: "canceled" });
+    // The bound Mika checkout must be released, not orphaned.
+    expect(cancelCalls).toEqual([{ checkoutId: "checkout_1" }]);
+  });
+
+  it("surfaces a failure to cancel the bound Mika checkout", async () => {
+    let cart = createCart([]);
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+        onCheckoutStart: () => {},
+        onCheckoutCancel: () => ({
+          ok: false,
+          status: 409,
+          error: { code: "CONFLICT", message: "Checkout is locked." },
+        }),
+        checkoutSessionStatus: "pending",
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      createSessionId: () => "checkout_session_acp_cancel_fail",
+    });
+
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_cancel_fail", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+      }),
+    );
+    await handlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_cancel_fail/complete",
+        "idem_complete_cancel_fail",
+        { payment_data: { provider: "stripe", token: "spt_test_123" } },
+      ),
+      "checkout_session_acp_cancel_fail",
+    );
+
+    const canceled = await handlers.cancel(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_cancel_fail/cancel",
+        "idem_cancel_fail",
+        {},
+      ),
+      "checkout_session_acp_cancel_fail",
+    );
+
+    // A failed provider cancellation must NOT report the ACP session as canceled.
+    expect(canceled.status).toBe(409);
+    const session = await handlers.get(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_cancel_fail",
+        "idem_get_cancel_fail",
+        {},
+      ),
+      "checkout_session_acp_cancel_fail",
+    );
+    await expect(session.json()).resolves.toMatchObject({ status: "ready_for_payment" });
+  });
+
   it("rejects ACP item changes after a checkout has been bound", async () => {
     let cart = createCart([]);
     const handlers = createMikaAcpCheckoutHandlers({
@@ -1174,6 +1290,10 @@ function createAcpTestApi(input: {
     metadata: JsonObject | undefined,
     ctx: MikaRequestContext,
   ) => void | Promise<void>;
+  readonly onCheckoutCancel?: (
+    cancelInput: { readonly checkoutId: MikaIdLike },
+    ctx: MikaRequestContext,
+  ) => MikaApiResult<CheckoutSessionDTO> | undefined;
   readonly checkoutSessionStatus?: CheckoutSessionDTO["status"];
 }): MikaApi {
   const checkoutSessionStatus = input.checkoutSessionStatus ?? "completed";
@@ -1241,6 +1361,15 @@ function createAcpTestApi(input: {
         return ok<CheckoutSessionDTO>(checkoutSession());
       },
       status: async () => ok<CheckoutSessionDTO>(checkoutSession()),
+      cancel: async (
+        ctx: MikaRequestContext,
+        cancelInput: { readonly checkoutId: MikaIdLike },
+      ) => {
+        const override = input.onCheckoutCancel?.(cancelInput, ctx);
+        if (override) return override;
+
+        return ok<CheckoutSessionDTO>({ ...checkoutSession(), status: "cancelled" });
+      },
     },
   };
 

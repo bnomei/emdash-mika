@@ -17,6 +17,7 @@ import type {
   CheckoutPreviewDTO,
   CheckoutPreviewInput,
   CheckoutSessionDTO,
+  CheckoutCancelInput,
   CheckoutStatusInput,
   ContentRefDTO,
   DownloadResolutionDTO,
@@ -108,6 +109,10 @@ export interface MikaApi {
     status(
       ctx: MikaRequestContext,
       input: CheckoutStatusInput,
+    ): Promise<MikaApiResult<CheckoutSessionDTO>>;
+    cancel(
+      ctx: MikaRequestContext,
+      input: CheckoutCancelInput,
     ): Promise<MikaApiResult<CheckoutSessionDTO>>;
   };
   readonly magicLink: {

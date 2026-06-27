@@ -13,6 +13,7 @@ import type {
   AddCartItemInput,
   ApplyCouponInput,
   CartQuoteInput,
+  CheckoutCancelInput,
   CheckoutPreviewInput,
   CheckoutStatusInput,
   DownloadIssueInput,
@@ -134,6 +135,7 @@ export interface MikaOperationFacade {
     start(input?: StartCheckoutInput): MikaFacadeResult<"checkout", "start">;
     preview(input?: CheckoutPreviewInput): MikaFacadeResult<"checkout", "preview">;
     status(input: CheckoutStatusInput): MikaFacadeResult<"checkout", "status">;
+    cancel(input: CheckoutCancelInput): MikaFacadeResult<"checkout", "cancel">;
   };
   readonly magicLink: {
     request(input: MagicLinkRequestInput): MikaFacadeResult<"magicLink", "request">;
@@ -256,6 +258,7 @@ export function createMikaOperationFacade<
       start: (input = emptyInput()) => invoke(mikaOperationFacadeSpec.checkout.start, input),
       preview: (input = emptyInput()) => invoke(mikaOperationFacadeSpec.checkout.preview, input),
       status: (input) => invoke(mikaOperationFacadeSpec.checkout.status, input),
+      cancel: (input) => invoke(mikaOperationFacadeSpec.checkout.cancel, input),
     },
     magicLink: {
       request: (input) => invoke(mikaOperationFacadeSpec.magicLink.request, input),

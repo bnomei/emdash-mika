@@ -503,6 +503,10 @@ export interface CheckoutStatusInput {
   readonly token?: string;
 }
 
+export interface CheckoutCancelInput {
+  readonly checkoutId: MikaId;
+}
+
 export interface OrderInvoiceInput {
   readonly orderId: MikaId;
   readonly token?: string;
