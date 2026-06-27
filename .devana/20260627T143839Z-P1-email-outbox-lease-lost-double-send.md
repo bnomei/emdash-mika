@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P1 | high | security=no
+DEVANA-STATE: fixed | P1 | high | security=no
 DEVANA-KEY: src/api/email-outbox.ts:208-223 | email-outbox-lease-lost-double-send
 
 # Email outbox can double-send after successful delivery when lease is lost
@@ -47,6 +47,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-27: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed `deliverLeasedEmail` sent via the provider, then on a null `completeEmail` (lost/expired lease) returned `lease_lost` without terminalizing — leaving the row due (`emailIsDueForLease` allows re-lease after expiry) so a later pass re-sent the same message. Fix: after a confirmed successful send, a null `completeEmail` now falls back to a new lease-agnostic `markEmailDelivered(emailId, now, providerMessageId)` repo method that sets the row `sent` (unless already terminal) regardless of who holds the lease, so the message can never be re-delivered. The run item reports `status: "sent"` with `recoveredLeaseLost: true` for observability. This closes the single-worker lease-expiry double-send; true two-worker concurrent sends (both calling the provider before either completes) still require provider-side idempotency, which is out of scope here. Added regression test `terminalizes a delivered email when the lease is lost so it is never re-sent` (completeEmail stubbed to null → row terminalized sent, second pass scans 0 / re-sends nothing). Typecheck + 321 tests pass.
 
 DEVANA-KEY: src/api/email-outbox.ts:208-223 | email-outbox-lease-lost-double-send
-DEVANA-SUMMARY: open | P1 | high | Successful email sender calls followed by completeEmail lease miss leave the row deliverable and allow duplicate sends.
+DEVANA-SUMMARY: fixed | P1 | high | A successful send followed by a lost-lease completeEmail left the row due and re-deliverable. Fixed by terminalizing out-of-lease via markEmailDelivered after a confirmed send, with a regression test. Two-worker concurrent send still needs provider idempotency (noted).

@@ -590,6 +590,71 @@ describe("backend test storage helpers", () => {
     });
   });
 
+  it("terminalizes a delivered email when the lease is lost so it is never re-sent", async () => {
+    const repositories = createTestBackendRepositories();
+    const email = createEmailDocument({
+      id: createTestMikaId("email", 1),
+      record: {
+        id: createTestMikaId("email", 1),
+        kind: "magic_link",
+        toEmail: "subscriber@example.test",
+        templateKey: "magic_link",
+        attemptCount: 0,
+        nextAttemptAt: TEST_NOW,
+        metadata: {
+          link: "https://shop.example.test/_emdash/api/plugins/mika/magic-link/verify?token=token_1",
+          purpose: "checkout",
+          expiresAt: createTestClock().isoAt(15 * 60_000),
+        },
+      },
+    });
+    await repositories.ops.put(email);
+
+    // Simulate the lease being lost between a successful send and completion:
+    // completeEmail reports no active lease (null) even though the provider
+    // already delivered the message. Delegate everything else to the real repo.
+    const leaseLosingOps = Object.assign(Object.create(repositories.ops), {
+      completeEmail: async () => null,
+    });
+    const sent: MikaEmailDeliveryMessage[] = [];
+    const runner = createMikaEmailOutboxRunner({
+      repositories: { ...repositories, ops: leaseLosingOps },
+      now: () => new Date(TEST_NOW),
+      createId: createIncrementingIdFactory("email_lease"),
+      sender: async (message) => {
+        sent.push(message);
+        return { providerMessageId: "provider_message_1" };
+      },
+    });
+
+    await expect(runner.runOnce()).resolves.toMatchObject({
+      sent: 1,
+      leaseLost: 0,
+      items: [{ emailId: email.id, status: "sent", recoveredLeaseLost: true }],
+    });
+    expect(sent).toHaveLength(1);
+
+    // The row is terminalized as sent in the shared store despite the lost lease.
+    await expect(repositories.ops.findEmail(email.id)).resolves.toMatchObject({
+      status: "sent",
+      record: { sentAt: TEST_NOW, providerMessageId: "provider_message_1" },
+    });
+
+    // A subsequent outbox pass with a working repo must NOT re-send it.
+    const resend: MikaEmailDeliveryMessage[] = [];
+    const secondRunner = createMikaEmailOutboxRunner({
+      repositories,
+      now: () => new Date(TEST_NOW),
+      createId: createIncrementingIdFactory("email_lease_second"),
+      sender: async (message) => {
+        resend.push(message);
+        return { providerMessageId: "provider_message_2" };
+      },
+    });
+    await expect(secondRunner.runOnce()).resolves.toMatchObject({ scanned: 0, sent: 0 });
+    expect(resend).toHaveLength(0);
+  });
+
   it("renders order-confirmation emails from the queued order reference", async () => {
     const repositories = createTestBackendRepositories();
     const sent: MikaEmailDeliveryMessage[] = [];

@@ -191,6 +191,12 @@ export interface EmailCompleteRepositoryInput {
   readonly providerMessageId?: string;
 }
 
+export interface EmailDeliveredRepositoryInput {
+  readonly emailId: MikaId;
+  readonly now: ISODateTime;
+  readonly providerMessageId?: string;
+}
+
 export interface EmailFailureRepositoryInput {
   readonly emailId: MikaId;
   readonly leaseKey: string;
@@ -1232,6 +1238,30 @@ export class OpsRepository {
       const email = documentOfType(current, "email");
       if (!email) return null;
       if (!emailHasActiveLease(email, input)) return null;
+
+      return emailDocumentWithRecord(email, input.now, {
+        status: "sent",
+        providerMessageId: input.providerMessageId,
+        nextAttemptAt: undefined,
+        leaseKey: undefined,
+        leasedAt: undefined,
+        leaseExpiresAt: undefined,
+        lastError: undefined,
+        sentAt: input.now,
+      });
+    });
+
+    return documentOfType(updated, "email");
+  }
+
+  async markEmailDelivered(input: EmailDeliveredRepositoryInput): Promise<EmailDocument | null> {
+    const updated = await this.documents.update(input.emailId, (current) => {
+      const email = documentOfType(current, "email");
+      if (!email) return null;
+      // No lease check: the provider already delivered this message, so we
+      // terminalize the row regardless of who holds the lease to prevent a
+      // re-send. If it is already sent, leave it untouched.
+      if (email.record.status === "sent") return email;
 
       return emailDocumentWithRecord(email, input.now, {
         status: "sent",

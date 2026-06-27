@@ -62,6 +62,12 @@ export type MikaEmailOutboxRunItem =
       readonly emailId: MikaId;
       readonly status: "sent";
       readonly providerMessageId?: string;
+      /**
+       * True when the provider delivered the message but the outbox lease was
+       * lost before completion, so the row was terminalized out-of-lease to
+       * prevent a re-send. Surfaced for observability/alerting.
+       */
+      readonly recoveredLeaseLost?: boolean;
     }
   | {
       readonly emailId: MikaId;
@@ -214,11 +220,30 @@ async function deliverLeasedEmail(
       providerMessageId: result?.providerMessageId,
     });
 
-    return completed
+    if (completed) {
+      return {
+        emailId: email.id,
+        status: "sent",
+        providerMessageId: result?.providerMessageId,
+      };
+    }
+
+    // The provider already delivered the message, but the lease was lost
+    // (expired or stolen) before completion. Terminalize the row out-of-lease so
+    // a later outbox pass cannot deliver the same message a second time. Without
+    // this the row stays due and is re-sent to the same recipient.
+    const recovered = await input.repositories.ops.markEmailDelivered({
+      emailId: email.id,
+      now,
+      providerMessageId: result?.providerMessageId,
+    });
+
+    return recovered
       ? {
           emailId: email.id,
           status: "sent",
           providerMessageId: result?.providerMessageId,
+          recoveredLeaseLost: true,
         }
       : { emailId: email.id, status: "lease_lost" };
   } catch (error) {

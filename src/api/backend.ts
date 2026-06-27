@@ -21,6 +21,7 @@ import type {
   ConsumeReservedStockRepositoryInput,
   ConsumeReservedStockRepositoryResult,
   EmailCompleteRepositoryInput,
+  EmailDeliveredRepositoryInput,
   EmailFailureRepositoryInput,
   EmailLeaseRepositoryInput,
   EmailSkipRepositoryInput,
@@ -383,6 +384,12 @@ export interface MikaOpsRepositoryPort {
   listDueEmails(now: ISODateTime, limit?: number): Promise<MikaDocumentList<EmailDocument>>;
   tryLeaseEmail(input: EmailLeaseRepositoryInput): Promise<EmailDocument | null>;
   completeEmail(input: EmailCompleteRepositoryInput): Promise<EmailDocument | null>;
+  /**
+   * Lease-agnostic terminalization used only after the provider confirmed
+   * delivery but the lease was lost, so the row cannot be re-sent. Marks the
+   * email `sent` unless it is already terminal.
+   */
+  markEmailDelivered(input: EmailDeliveredRepositoryInput): Promise<EmailDocument | null>;
   failEmail(input: EmailFailureRepositoryInput): Promise<EmailDocument | null>;
   skipEmail(input: EmailSkipRepositoryInput): Promise<EmailDocument | null>;
   redactQueuedFailedEmailsForAccountDelete(
