@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P1 | high | security=no
+DEVANA-STATE: fixed | P1 | high | security=no
 DEVANA-KEY: src/api/backend.ts:2033-2048 | email-resend-max-attempts-noop
 
 # Admin email resend no-ops when attemptCount already exhausted
@@ -46,6 +46,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-27: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed `resendEmail` re-queued (`status: "queued"`, `nextAttemptAt: now`) without touching `attemptCount`, while `emailIsDueForLease` rejects `attemptCount >= maxAttempts`, so an exhausted email was re-queued but never leasable again. Fix: the resend record patch now resets `attemptCount: 0` and clears any stale lease (`leaseKey`/`leasedAt`/`leaseExpiresAt`) so the outbox can lease and deliver it. Added regression test `re-queues an exhausted email for delivery on admin resend` (resend an attemptCount=5/5 failed email, then assert it leases). Typecheck + 315 tests pass.
 
 DEVANA-KEY: src/api/backend.ts:2033-2048 | email-resend-max-attempts-noop
-DEVANA-SUMMARY: open | P1 | high | Admin email.resend re-queues failed emails without resetting attemptCount, so the outbox never leases them again.
+DEVANA-SUMMARY: fixed | P1 | high | Admin email.resend re-queued failed emails without resetting attemptCount, so the outbox never leased them. Fixed by resetting attemptCount and clearing the stale lease on resend, with a regression test.

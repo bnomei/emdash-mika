@@ -2071,6 +2071,14 @@ async function resendEmail(
           ...email.record,
           status: "queued",
           nextAttemptAt: now,
+          // Reset the retry budget and clear any stale lease so the outbox can
+          // lease the email again. Without this, a terminal-failure email
+          // (attemptCount >= maxAttempts) stays ineligible for delivery and the
+          // resend silently no-ops.
+          attemptCount: 0,
+          leaseKey: undefined,
+          leasedAt: undefined,
+          leaseExpiresAt: undefined,
           lastError: undefined,
           metadata: {
             ...email.record.metadata,

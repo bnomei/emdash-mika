@@ -476,6 +476,56 @@ describe("backend test storage helpers", () => {
     expect([...leased].sort()).toEqual([...dueIds].sort());
   });
 
+  it("re-queues an exhausted email for delivery on admin resend", async () => {
+    const clock = createTestClock();
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      ops: new OpsRepository(opsCollection),
+    };
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+
+    // A terminal-failure email that exhausted its retry budget.
+    const email = createEmailDocument({
+      id: createTestMikaId("email", 1),
+      status: "failed",
+      record: {
+        id: createTestMikaId("email", 1),
+        kind: "order_confirmation",
+        templateKey: "order_confirmation",
+        status: "failed",
+        attemptCount: 5,
+        maxAttempts: 5,
+        nextAttemptAt: clock.isoAt(-1_000),
+        lastError: "Provider unavailable.",
+        leaseKey: "stale_lease",
+        leaseExpiresAt: clock.isoAt(-1),
+      },
+    });
+    await repositories.ops.put(email);
+
+    await expect(api.admin.emailResend({ emailId: email.id })).resolves.toMatchObject({
+      ok: true,
+      data: { id: email.id, status: "completed" },
+    });
+
+    const requeued = await repositories.ops.findEmail(email.id);
+    expect(requeued).toMatchObject({
+      status: "queued",
+      record: { status: "queued", attemptCount: 0, leaseKey: undefined },
+    });
+
+    // The outbox must now be able to lease and send it again.
+    await expect(
+      repositories.ops.tryLeaseEmail({
+        emailId: email.id,
+        leaseKey: "worker_resend",
+        now: TEST_NOW,
+        leaseExpiresAt: clock.isoAt(300_000),
+      }),
+    ).resolves.toMatchObject({ status: "queued", record: { attemptCount: 1 } });
+  });
+
   it("delivers queued magic-link email through the outbox runner", async () => {
     const repositories = createTestBackendRepositories();
     const sent: MikaEmailDeliveryMessage[] = [];
