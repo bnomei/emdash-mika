@@ -5689,6 +5689,14 @@ async function startCheckout(
     ? await input.repositories.session.findCheckoutByIdempotencyKey(ctx.idempotencyKey)
     : null;
   if (replayedCheckout) {
+    // Idempotency replay must not leak a checkout created by a different actor.
+    // Idempotency keys are client-generated and may collide across sessions or
+    // customers; a cross-actor collision is treated as a key conflict rather
+    // than returning the original actor's checkout handoff (redirect URL, id).
+    if (!(await checkoutBelongsToContext(replayedCheckout, ctx))) {
+      return checkoutIdempotencyInputMismatch();
+    }
+
     const replayedInputHash = checkoutStoredIdempotencyInputHash(replayedCheckout);
     if (replayedInputHash && idempotencyInputHash && replayedInputHash !== idempotencyInputHash) {
       return checkoutIdempotencyInputMismatch();

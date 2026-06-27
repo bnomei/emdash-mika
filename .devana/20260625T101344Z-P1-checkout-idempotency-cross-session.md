@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-Priority: P1 | Confidence: high | Security-sensitive: yes | Status: open
+Priority: P1 | Confidence: high | Security-sensitive: yes | Status: fixed
 Location: src/api/backend.ts:5666-5675 | Slug: checkout-idempotency-cross-session
 
 # Global checkout idempotency replay leaks another session's checkout
@@ -46,6 +46,7 @@ After working this report, preserve the original finding body. Update line 2 `St
 ## Status Notes
 
 - 2026-06-25: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed the `startCheckout` replay branch returned `checkoutDocumentResult(replayedCheckout)` from a global `findCheckoutByIdempotencyKey` lookup with no owner check, while `checkoutBelongsToContext` was only used for status polling. Fix: gate the replay on `checkoutBelongsToContext(replayedCheckout, ctx)`; a cross-actor key collision now returns a 409 CONFLICT (`checkoutIdempotencyInputMismatch`) instead of leaking the owner's checkout id/redirect URL. Added regression test `does not replay a checkout idempotency key across a different session`. Typecheck + 301 tests pass.
 
 DEVANA-KEY: src/api/backend.ts:5666-5675 | P1 | checkout-idempotency-cross-session
-DEVANA-SUMMARY: Status=open | P1 high src/api/backend.ts:5666-5675 - Checkout idempotency replay is globally keyed and returns another session's checkout handoff without ownership check.
+DEVANA-SUMMARY: Status=fixed | P1 high src/api/backend.ts:5666-5675 - Checkout idempotency replay was globally keyed and returned another session's checkout handoff. Fixed by gating replay on checkoutBelongsToContext (cross-actor collision -> 409), with a regression test.

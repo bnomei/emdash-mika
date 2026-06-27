@@ -9738,6 +9738,73 @@ describe("backend API composition", () => {
     });
   });
 
+  it("does not replay a checkout idempotency key across a different session", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider({
+      overrides: {
+        createCheckoutSession: async () => ({
+          id: createMikaId("checkout_fake"),
+          status: "created",
+          mode: "payment",
+          provider: TEST_PROVIDER,
+          redirectUrl: "https://checkout.example.test/session/owner_only",
+          expiresAt: createTestClock().isoAt(60 * 60_000),
+          providerCheckoutId: "provider_checkout_owner_only",
+        }),
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const sharedKey = "checkout_cross_session_1";
+    const ownerCtx = createTestRequestContext({
+      sessionId: "session_owner",
+      customerId: false,
+      userId: false,
+      idempotencyKey: sharedKey,
+    });
+    const attackerCtx = createTestRequestContext({
+      sessionId: "session_attacker",
+      customerId: false,
+      userId: false,
+      idempotencyKey: sharedKey,
+    });
+
+    const owner = await api.checkout.start(ownerCtx, { sellableId: sellable.id, quantity: 1 });
+    expect(owner).toMatchObject({
+      ok: true,
+      data: { id: "checkout_1", redirectUrl: "https://checkout.example.test/session/owner_only" },
+    });
+
+    // A different session reusing the same key must not receive the owner's
+    // checkout handoff. It is rejected as a conflict and no second checkout is
+    // created or leaked.
+    const attacker = await api.checkout.start(attackerCtx, {
+      sellableId: sellable.id,
+      quantity: 1,
+    });
+    expect(attacker).toMatchObject({ ok: false, status: 409, error: { code: "CONFLICT" } });
+    if (attacker.ok) throw new Error("Expected cross-session replay to be rejected.");
+    await expect(
+      repositories.session.findById(createTestMikaId("checkout", 2)),
+    ).resolves.toBeNull();
+  });
+
   it("rejects duplicate checkout starts that reuse an idempotency key with different input", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();
