@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P1 | high | security=no
+DEVANA-STATE: invalid | P1 | high | security=no
 DEVANA-KEY: src/api/backend.ts:4044-4065 | workflow-replay-reruns-steps
 
 # Payment webhook workflow replay re-executes completed step callbacks
@@ -46,6 +46,10 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-27: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: invalid. The observation (runStep always invokes `fn()`, even for `completed` steps) is factually correct, but the stated invariant — "completed workflow steps must not re-run side effects; the step ledger should gate callback execution" — is NOT this workflow's design contract, and the suggested fix breaks correctness.
+  - Re-running steps on replay is intentional and required. Steps re-evaluate external state that changes between runs: e.g. `link_checkout`/`persist_order` fail when the checkout is missing and must re-run after it is restored. The regression test `replays failed payment webhooks after missing checkout state is restored` proves this — it relies on `link_checkout` returning `null` on the first run and a real checkout on replay. I prototyped the report's exact fix (skip `fn()` for completed steps, returning a cached step-result snapshot); it broke that test (and `reprocesses a failed payment webhook on provider retry`) because `link_checkout`/`mark_webhook` are reused across branches and the cached `null`/failed snapshot reproduced the original failure forever. Reverted.
+  - The real concern (duplicate side effects on re-run) is already addressed by per-side-effect idempotency, which is the actual design contract: `persist_order` finds the existing order first (unique-indexed) then updates; `complete_checkout` overwrites checkout→completed / cart→converted (terminal, no incremental effect, no notification); `fulfill_order`→`fulfillPaidOrderLine` is fully idempotent (deterministic entitlement/license ids with find-existing, download-ref dedup, idempotent stock `consume`); `queueOrderConfirmationEmail` guards with a notification marker (`order.confirmed:${orderId}`) plus a deterministic `defaultEmailId` existence check; `mark_webhook` sets the webhook to a terminal status. No harmful non-idempotent effect was found. `markWebhookProcessed` attempt-count bumps are benign counters.
+  - Conclusion: short-circuiting completed steps would break replay recovery; the existing idempotent side effects already provide at-most-once semantics across replays. No code change. Typecheck + 321 tests pass on the reverted (unchanged) tree.
 
 DEVANA-KEY: src/api/backend.ts:4044-4065 | workflow-replay-reruns-steps
-DEVANA-SUMMARY: open | P1 | high | Webhook workflow replay always runs step callbacks even when the step ledger already marks them completed.
+DEVANA-SUMMARY: invalid | P1 | high | runStep re-runs completed steps by design — replay re-evaluates external state (proven by the checkout-restore replay test) and every step side effect is already idempotent (find-existing orders, notification marker + deterministic email/entitlement/license ids, idempotent stock consume). The proposed skip-completed-steps fix breaks replay recovery; no change made.
