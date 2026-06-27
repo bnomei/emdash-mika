@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P1 | high | security=no
+DEVANA-STATE: fixed | P1 | high | security=no
 DEVANA-KEY: src/api/backend.ts:5890-5891 | cart-checkout-pending-stuck
 
 # Abandoned checkout leaves cart stuck in checkout_pending
@@ -47,6 +47,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-27: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed `checkout.start` moves the cart to `checkout_pending` (`cartWithCheckoutReservations`) with no path back to `open` on abandonment/expiry/failure, so the cart and items became unreachable (`findOpenCart*` gate on `open`). Fix: `findOpenCart` now lazily reopens an abandoned cart — when no open cart exists it looks up the actor's `checkout_pending` cart (new repo finders `findCheckoutPendingCartBy{Session,Customer}`), loads the linked checkout via the cart's `checkoutSessionId` metadata, and reopens the cart (status→open, clears `checkoutSessionId` + stale line `reservationId`s) only when the checkout is non-convertible (missing, failed, cancelled, expired). A still-resumable checkout (created/redirected within expiry) or a completed one is left untouched so an in-flight/converted payment is never duplicated. This covers `cart.get`, `cart.add`, and `checkout.start` without `cartId`. Added regression test `reopens an abandoned checkout_pending cart so its items are not trapped`. Typecheck + 314 tests pass.
 
 DEVANA-KEY: src/api/backend.ts:5890-5891 | cart-checkout-pending-stuck
-DEVANA-SUMMARY: open | P1 | high | Carts left in checkout_pending after abandoned checkout cannot be reopened or checkout-started, trapping line items.
+DEVANA-SUMMARY: fixed | P1 | high | Abandoned checkout_pending carts were unreachable. Fixed by lazily reopening the actor's pending cart in findOpenCart when its checkout is non-convertible (not when resumable/completed), with a regression test.

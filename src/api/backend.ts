@@ -242,6 +242,14 @@ export interface MikaSessionRepositoryPort {
   findCheckoutById(id: MikaId): Promise<CheckoutDocument | null>;
   findOpenCartBySession(sessionId: string, currency: string): Promise<CartDocument | null>;
   findOpenCartByCustomer(customerId: MikaId, currency: string): Promise<CartDocument | null>;
+  findCheckoutPendingCartBySession(
+    sessionId: string,
+    currency: string,
+  ): Promise<CartDocument | null>;
+  findCheckoutPendingCartByCustomer(
+    customerId: MikaId,
+    currency: string,
+  ): Promise<CartDocument | null>;
   findWishlistBySession(sessionId: string): Promise<WishlistDocument | null>;
   findWishlistByCustomer(customerId: MikaId): Promise<WishlistDocument | null>;
   findCheckoutByProvider(
@@ -5597,13 +5605,73 @@ async function findOpenCart(
   ctx: MikaRequestContext,
   currency: CurrencyCode,
 ): Promise<CartDocument | null> {
-  if (ctx.customerId) {
-    return input.repositories.session.findOpenCartByCustomer(ctx.customerId, currency);
+  const open = ctx.customerId
+    ? await input.repositories.session.findOpenCartByCustomer(ctx.customerId, currency)
+    : ctx.sessionId
+      ? await input.repositories.session.findOpenCartBySession(ctx.sessionId, currency)
+      : null;
+  if (open) return open;
+
+  return reopenAbandonedCheckoutCart(input, ctx, currency);
+}
+
+/**
+ * Recovers a cart left in `checkout_pending` after an abandoned/failed checkout.
+ * Without this, the cart and its lines become unreachable (status reads gate on
+ * `open`) and a subsequent add silently starts a fresh empty cart. The cart is
+ * only reopened when its checkout is no longer convertible — never while a
+ * checkout is still resumable (created/redirected within expiry) or has already
+ * converted, so an in-flight payment is not duplicated.
+ */
+async function reopenAbandonedCheckoutCart(
+  input: MikaCartWishlistBackendInput,
+  ctx: MikaRequestContext,
+  currency: CurrencyCode,
+): Promise<CartDocument | null> {
+  const pending = ctx.customerId
+    ? await input.repositories.session.findCheckoutPendingCartByCustomer(ctx.customerId, currency)
+    : ctx.sessionId
+      ? await input.repositories.session.findCheckoutPendingCartBySession(ctx.sessionId, currency)
+      : null;
+  if (!pending) return null;
+
+  const checkoutId = metadataMikaId(pending.aggregate.metadata, "checkoutSessionId");
+  const checkout = checkoutId
+    ? await input.repositories.session.findCheckoutById(checkoutId)
+    : null;
+  if (checkout && (checkout.status === "completed" || checkoutIsResumable(checkout, ctx.now))) {
+    return null;
   }
 
-  return ctx.sessionId
-    ? input.repositories.session.findOpenCartBySession(ctx.sessionId, currency)
-    : null;
+  const reopened = reopenCartDocument(pending, ctx.now);
+  await input.repositories.session.put(reopened);
+
+  return reopened;
+}
+
+/** A checkout that can still be completed (and whose cart must stay pending). */
+function checkoutIsResumable(checkout: CheckoutDocument, now: ISODateTime): boolean {
+  if (checkout.status !== "created" && checkout.status !== "redirected") return false;
+  if (!checkout.expiresAt) return true;
+
+  return new Date(checkout.expiresAt).getTime() > new Date(now).getTime();
+}
+
+function reopenCartDocument(cart: CartDocument, now: ISODateTime): CartDocument {
+  const { checkoutSessionId: _checkoutSessionId, ...metadata } = cart.aggregate.metadata ?? {};
+
+  return {
+    ...cart,
+    status: "open",
+    updatedAt: now,
+    aggregate: {
+      ...cart.aggregate,
+      items: cart.aggregate.items.map((item) =>
+        item.reservationId ? { ...item, reservationId: undefined } : item,
+      ),
+      metadata,
+    },
+  };
 }
 
 async function createCartQuote(

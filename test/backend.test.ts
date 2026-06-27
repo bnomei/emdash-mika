@@ -9677,6 +9677,73 @@ describe("backend API composition", () => {
     });
   });
 
+  it("reopens an abandoned checkout_pending cart so its items are not trapped", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const stock = createStockRecord({
+      sellableId: sellable.id,
+      quantityOnHand: 5,
+      quantityReserved: 0,
+    });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([[sellable.id, stock]]),
+    });
+    const fake = createFakeMikaProvider({
+      overrides: {
+        createCheckoutSession: async () => ({
+          id: createMikaId("checkout_fake"),
+          status: "created",
+          mode: "payment",
+          provider: TEST_PROVIDER,
+          redirectUrl: "https://checkout.example.test/session/abandoned",
+          expiresAt: createTestClock().isoAt(60 * 60_000),
+          providerCheckoutId: "provider_checkout_abandoned",
+        }),
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ sessionId: "session_abandon", customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) throw new Error("Expected cart.add to succeed.");
+    const cartId = added.data.id;
+
+    const checkout = await api.checkout.start(ctx, { cartId });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+    await expect(repositories.session.findById(cartId)).resolves.toMatchObject({
+      status: "checkout_pending",
+    });
+
+    // The checkout is abandoned and ends up failed.
+    const checkoutDoc = await repositories.session.findCheckoutById(createMikaId("checkout_1"));
+    if (!checkoutDoc) throw new Error("Expected checkout document.");
+    await repositories.session.put({ ...checkoutDoc, status: "failed" });
+
+    // Returning to the cart must reopen it with its items intact, not start a
+    // fresh empty cart.
+    const reopened = await api.cart.get(ctx);
+    expect(reopened).toMatchObject({
+      ok: true,
+      data: { id: cartId, items: [{ sellableId: sellable.id, quantity: 2 }] },
+    });
+    await expect(repositories.session.findById(cartId)).resolves.toMatchObject({
+      status: "open",
+    });
+
+    // And the reopened cart can start checkout again.
+    await expect(api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 })).resolves.toMatchObject(
+      { ok: true, data: { id: cartId } },
+    );
+  });
+
   it("rejects checkout start for providers without hosted checkout support", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();

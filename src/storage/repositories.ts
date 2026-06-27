@@ -555,6 +555,28 @@ export class SessionRepository {
     });
   }
 
+  async findCheckoutPendingCartBySession(
+    sessionId: string,
+    currency: string,
+  ): Promise<CartDocument | null> {
+    return this.documents.findOneByType("cart", {
+      sessionId,
+      status: "checkout_pending",
+      currency,
+    });
+  }
+
+  async findCheckoutPendingCartByCustomer(
+    customerId: MikaId,
+    currency: string,
+  ): Promise<CartDocument | null> {
+    return this.documents.findOneByType("cart", {
+      customerId,
+      status: "checkout_pending",
+      currency,
+    });
+  }
+
   async findWishlistBySession(sessionId: string): Promise<WishlistDocument | null> {
     return this.documents.findOneByType("wishlist", {
       sessionId,
