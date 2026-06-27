@@ -59,6 +59,19 @@ export function consumeReservedStockStatement(
   `;
 }
 
+export function consumeOnHandStatement(input: ReleaseStockStatementInput): RawBuilder<unknown> {
+  return sql`
+    UPDATE mika_stock_items
+    SET
+      quantity_on_hand = CASE
+        WHEN policy = 'finite' THEN MAX(0, quantity_on_hand - ${input.quantity})
+        ELSE quantity_on_hand
+      END,
+      updated_at = ${input.now}
+    WHERE id = ${input.stockItemId}
+  `;
+}
+
 export function adjustStockStatement(input: AdjustStockStatementInput): RawBuilder<unknown> {
   return sql`
     UPDATE mika_stock_items

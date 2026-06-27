@@ -1922,6 +1922,78 @@ describe("backend test Kysely stock database harness", () => {
       );
     });
 
+    it(`${repositoryKind} stock repository contract consumes an expired reservation for late paid fulfillment`, async () => {
+      const stockItem = createStockRecord({
+        quantityOnHand: 5,
+        quantityReserved: 0,
+      });
+
+      await withStockRepositoryContractHarness(
+        repositoryKind,
+        stockItem,
+        async ({ repository, service }) => {
+          const clock = createTestClock();
+          const expiredReservation = await service.reserve({
+            stockItemId: stockItem.id,
+            quantity: 2,
+            expiresAt: clock.isoAt(30_000),
+            idempotencyKey: `${repositoryKind}_expired_consume_1`,
+          });
+          const otherReservation = await service.reserve({
+            stockItemId: stockItem.id,
+            quantity: 1,
+            expiresAt: clock.isoAt(15 * 60_000),
+            idempotencyKey: `${repositoryKind}_expired_consume_2`,
+          });
+          if (
+            expiredReservation.status !== "reserved" ||
+            otherReservation.status !== "reserved"
+          ) {
+            throw new Error("Expected reservations to be created.");
+          }
+
+          // Maintenance releases the expired reservation back to availability
+          // before the (late) payment webhook arrives.
+          await service.releaseExpiredReservations({ now: clock.isoAt(60_000) });
+          await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+            quantityOnHand: 5,
+            quantityReserved: 1,
+          });
+
+          // The paid order must still consume its (now expired) reservation.
+          await expect(
+            service.consume({
+              reservationEventId: expiredReservation.event.id,
+              orderId: createTestMikaId("order", 1),
+              orderLineId: createTestMikaId("order_line", 1),
+              now: clock.isoAt(90_000),
+            }),
+          ).resolves.toMatchObject({ status: "consumed", event: { status: "consumed" } });
+
+          // On-hand is drawn down by the consumed quantity; the unrelated active
+          // reservation is left intact.
+          await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+            quantityOnHand: 3,
+            quantityReserved: 1,
+          });
+
+          // Replaying the consume (webhook retry) is a no-op.
+          await expect(
+            service.consume({
+              reservationEventId: expiredReservation.event.id,
+              orderId: createTestMikaId("order", 1),
+              orderLineId: createTestMikaId("order_line", 1),
+              now: clock.isoAt(120_000),
+            }),
+          ).resolves.toMatchObject({ status: "not_active", event: { status: "consumed" } });
+          await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+            quantityOnHand: 3,
+            quantityReserved: 1,
+          });
+        },
+      );
+    });
+
     it(`${repositoryKind} stock repository contract preserves terminal reservation invariants`, async () => {
       const scenarios = [
         {
@@ -11331,10 +11403,14 @@ function createTestStockRepository(
 
       const current =
         Array.from(stockItems.values()).find((stock) => stock.id === event.stockItemId) ?? null;
-      if (event.status !== "active") {
+      if (event.status !== "active" && event.status !== "expired") {
         return { status: "not_active", event, stock: current };
       }
 
+      // Expired reservations are consumed for late paid fulfillment, but only
+      // their on-hand quantity is drawn down — expiry already returned the
+      // reserved quantity to availability.
+      const fromActive = event.status === "active";
       const consumedEvent: StockEventRecord = {
         ...event,
         status: "consumed",
@@ -11349,7 +11425,9 @@ function createTestStockRepository(
               current.policy === "finite"
                 ? Math.max(0, current.quantityOnHand - event.quantityDelta)
                 : current.quantityOnHand,
-            quantityReserved: Math.max(0, current.quantityReserved - event.quantityDelta),
+            quantityReserved: fromActive
+              ? Math.max(0, current.quantityReserved - event.quantityDelta)
+              : current.quantityReserved,
             updatedAt: consume.now,
           }
         : null;

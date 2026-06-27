@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-Priority: P0 | Confidence: high | Security-sensitive: no | Status: open
+Priority: P0 | Confidence: high | Security-sensitive: no | Status: fixed
 Location: src/api/backend.ts:4914-4934 | Slug: fulfillment-after-reservation-expiry
 
 # Paid order fulfillment fails when stock reservation expired
@@ -47,6 +47,7 @@ After working this report, preserve the original finding body. Update line 2 `St
 ## Status Notes
 
 - 2026-06-25: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed `consumeOrderLineReservation` threw on `not_active`+`expired`, failing the payment webhook for a paid order whose reservation maintenance had already released. Fix moved into the stock repository `consume` primitive (the only consumer is paid-order fulfillment via the lifecycle service): it now consumes `expired` reservations in addition to `active` ones. For the expired case only `quantity_on_hand` is drawn down (new `consumeOnHandStatement`) because expiry already returned `quantity_reserved` to availability — drawing it down again would corrupt other active reservations on the same item. Idempotent replay still works: after consumption the event id equals the reservationId, caught by the existing `line.stockMovementId === reservationId` guard. Mirrored the change in the in-memory test stock repository. Added a contract regression test (`consumes an expired reservation for late paid fulfillment`) run against both fake and real repositories. Typecheck + 297 tests pass.
 
 DEVANA-KEY: src/api/backend.ts:4914-4934 | P0 | fulfillment-after-reservation-expiry
-DEVANA-SUMMARY: Status=open | P0 high src/api/backend.ts:4914-4934 - Late payment webhooks fail fulfillment when maintenance expired the checkout reservation, leaving paid orders unfulfilled and stock oversellable.
+DEVANA-SUMMARY: Status=fixed | P0 high src/api/backend.ts:4914-4934 - Late payment webhooks failed fulfillment when maintenance expired the checkout reservation. Fixed by making stock `consume` draw down on-hand for expired reservations (paid-order fulfillment path), with a regression test.

@@ -45,6 +45,7 @@ import type {
 import type { MikaDatabase, MikaInsertable, MikaSelectable, MikaUpdateable } from "./schema";
 import {
   adjustStockStatement,
+  consumeOnHandStatement,
   consumeReservedStockStatement,
   releaseStockStatement,
   reserveStockStatement,
@@ -1641,21 +1642,79 @@ export class StockRepository {
   async consume(
     input: ConsumeReservedStockRepositoryInput,
   ): Promise<ConsumeReservedStockRepositoryResult> {
-    return mutateActiveReservationEvent({
-      executor: this.db,
-      reservationEventId: input.reservationEventId,
-      now: input.now,
-      targetStatus: "consumed",
-      eventPatch: {
-        ...(input.orderId === undefined ? {} : { order_id: input.orderId }),
-        ...(input.orderLineId === undefined ? {} : { order_line_id: input.orderLineId }),
-      },
-      applyStockMutation: (executor, event) =>
-        consumeReservedStockStatement({
-          stockItemId: event.stockItemId,
-          quantity: event.quantityDelta,
-          now: input.now,
-        }).execute(executor),
+    return withTransaction(this.db, async (executor) => {
+      const current = await findStockEventById(executor, input.reservationEventId);
+      if (!current || current.kind !== "reservation") {
+        return { status: "not_found" };
+      }
+
+      // Active reservations consume normally. Expired reservations are also
+      // consumed so a paid order can still draw down stock: maintenance may
+      // release the reservation (returning the reserved quantity to
+      // availability) before a late payment webhook arrives, but the paid order
+      // must still be fulfilled. For the expired case only the on-hand quantity
+      // is drawn down — the reserved quantity was already returned at expiry, so
+      // touching it again would corrupt other active reservations on the item.
+      if (current.status !== "active" && current.status !== "expired") {
+        return {
+          status: "not_active",
+          event: current,
+          stock: await findStockItemById(executor, current.stockItemId),
+        };
+      }
+
+      const eventMutation = await executor
+        .updateTable("mika_stock_events")
+        .set({
+          status: "consumed",
+          updated_at: input.now,
+          ...(input.orderId === undefined ? {} : { order_id: input.orderId }),
+          ...(input.orderLineId === undefined ? {} : { order_line_id: input.orderLineId }),
+        })
+        .where("id", "=", input.reservationEventId)
+        .where("kind", "=", "reservation")
+        .where("status", "in", ["active", "expired"])
+        .executeTakeFirst();
+
+      if (!mutationAffected(eventMutation)) {
+        const event = await findStockEventById(executor, input.reservationEventId);
+        if (!event || event.kind !== "reservation") {
+          return { status: "not_found" };
+        }
+        return {
+          status: "not_active",
+          event,
+          stock: await findStockItemById(executor, event.stockItemId),
+        };
+      }
+
+      const stockMutation =
+        current.status === "active"
+          ? await consumeReservedStockStatement({
+              stockItemId: current.stockItemId,
+              quantity: current.quantityDelta,
+              now: input.now,
+            }).execute(executor)
+          : await consumeOnHandStatement({
+              stockItemId: current.stockItemId,
+              quantity: current.quantityDelta,
+              now: input.now,
+            }).execute(executor);
+      if (!mutationAffected(stockMutation)) {
+        throw new Error(
+          `Stock item '${current.stockItemId}' for reservation event '${current.id}' could not be updated.`,
+        );
+      }
+
+      const event = await findStockEventById(executor, input.reservationEventId);
+      const stock = await findStockItemById(executor, current.stockItemId);
+      if (!event || !stock) {
+        throw new Error(
+          `Reservation event '${input.reservationEventId}' could not be reloaded after stock mutation.`,
+        );
+      }
+
+      return { status: "consumed", event, stock };
     });
   }
 
