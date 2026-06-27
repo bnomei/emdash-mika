@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P2 | medium | security=no
+DEVANA-STATE: fixed | P2 | medium | security=no
 DEVANA-KEY: src/api/backend.ts:4368-4406 | subscription-webhook-status-nonmonotonic
 
 # Subscription webhook applies event status unconditionally; a stale/out-of-order event re-activates a cancelled subscription and re-grants entitlement
@@ -61,6 +61,8 @@ Preserve the original finding body. Update line 2 `DEVANA-STATE:` and the final 
 ## Status Notes
 
 - 2026-06-27: open by Devana. Verified backend.ts:4368-4406 unconditional status write; 4257-4283 no lease; entitlement derived from status.
+- 2026-06-27: fixed. Confirmed `updateSubscriptionFromEvent` wrote `event.status` (and re-derived the entitlement) with no recency guard, so a redelivered/out-of-order `active` event for an older period could revert a `cancelled` subscription and re-grant access. Fix: new `subscriptionEventIsStale(subscription, event)` guard compares the event's `currentPeriodStart` against the applied `aggregate.currentPeriodStart` (the only recency signal the parsed event carries) and, when the event is strictly older, `updateSubscriptionFromEvent` returns the subscription unchanged (no write); the downstream entitlement derivation then runs on the non-regressed status, so no re-grant. When either side lacks `currentPeriodStart` the event is applied as before. Added regression test `ignores a stale out-of-order subscription event so a cancelled sub is not re-activated` (active@Feb → cancelled@Feb → stale active@Jan with a distinct providerEventId → subscription stays cancelled, entitlement stays expired). Typecheck + 327 tests pass.
+  - Scope note: this guards the documented out-of-order/redelivery case (older period). It does NOT serialize truly concurrent same-period deliveries (cancel + active sharing one `currentPeriodStart`); a per-subscription lease like the payment workflow would be needed for that and is left as a follow-up since the parsed event carries no provider sequence/created timestamp.
 
 DEVANA-KEY: src/api/backend.ts:4368-4406 | subscription-webhook-status-nonmonotonic
-DEVANA-SUMMARY: open | P2 | medium | Subscription webhook writes event.status unconditionally with no recency/lease guard, so a stale or out-of-order/redelivered active event reverts a cancelled subscription and re-grants its entitlement.
+DEVANA-SUMMARY: fixed | P2 | medium | Subscription webhook wrote event.status with no recency guard, so a stale/redelivered active event reverted a cancelled subscription and re-granted entitlement. Fixed with a currentPeriodStart recency guard that drops older-period events, with a regression test. Same-period concurrency (needs a lease) noted as follow-up.

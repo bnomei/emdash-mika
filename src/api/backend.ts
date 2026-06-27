@@ -4577,12 +4577,40 @@ async function findOrCreateSubscriptionFromEvent(
   };
 }
 
+/**
+ * True when a subscription event describes an older billing period than the
+ * state already applied. Providers (e.g. Stripe) do not guarantee webhook
+ * ordering and redeliver old events, so without this an out-of-order `active`
+ * event for a prior period could overwrite a `cancelled` subscription and
+ * re-grant its entitlement. `currentPeriodStart` is the only recency signal the
+ * parsed event carries; if either side lacks it we cannot judge staleness and
+ * apply the event as before.
+ */
+function subscriptionEventIsStale(
+  subscription: SubscriptionDocument,
+  event: MikaProviderSubscriptionEvent,
+): boolean {
+  const appliedStart = subscription.aggregate.currentPeriodStart;
+  const eventStart = event.currentPeriodStart;
+  if (!appliedStart || !eventStart) return false;
+
+  return new Date(eventStart).getTime() < new Date(appliedStart).getTime();
+}
+
 async function updateSubscriptionFromEvent(
   input: CreateMikaBackendApiInput,
   ctx: MikaRequestContext,
   subscription: SubscriptionDocument,
   event: MikaProviderSubscriptionEvent,
 ): Promise<SubscriptionDocument> {
+  // Reject stale/out-of-order events so they cannot regress subscription status
+  // (and re-grant entitlement) for an already-advanced period. The subscription
+  // is returned unchanged; the downstream entitlement derivation then runs on
+  // the current (non-regressed) status.
+  if (subscriptionEventIsStale(subscription, event)) {
+    return subscription;
+  }
+
   const updated: SubscriptionDocument = {
     ...subscription,
     providerCustomerId: event.providerCustomerId ?? subscription.providerCustomerId,

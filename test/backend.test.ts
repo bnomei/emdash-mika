@@ -8118,6 +8118,114 @@ describe("backend API composition", () => {
     ]);
   });
 
+  it("ignores a stale out-of-order subscription event so a cancelled sub is not re-activated", async () => {
+    const stripe = createProviderName("stripe");
+    const accountCollection = createStorageCollection("account");
+    const opsCollection = createStorageCollection("ops");
+    const subscriptionSellable = createSellableDefinition({
+      prices: [
+        createPriceDefinition({
+          id: createTestMikaId("price", 1),
+          mode: "subscription",
+          fulfillmentKind: "entitlement",
+          entitlementKey: "course:subscription-product",
+          providerRefs: [{ provider: stripe, productId: "prod_sub", priceId: "price_sub" }],
+        }),
+      ],
+    });
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      ops: new OpsRepository(opsCollection),
+    };
+    const deliveries = [
+      {
+        payloadHash: "sub_active_hash",
+        providerEventId: "event_active",
+        status: "active" as const,
+        currentPeriodStart: createISODateTime("2026-02-01T00:00:00.000Z"),
+        currentPeriodEnd: createISODateTime("2026-03-01T00:00:00.000Z"),
+      },
+      {
+        payloadHash: "sub_cancelled_hash",
+        providerEventId: "event_cancelled",
+        status: "cancelled" as const,
+        currentPeriodStart: createISODateTime("2026-02-01T00:00:00.000Z"),
+        currentPeriodEnd: createISODateTime("2026-03-01T00:00:00.000Z"),
+      },
+      {
+        // Redelivered older "active" event for a PRIOR period, different id so
+        // the providerEventId dedup does not catch it. Must be rejected.
+        payloadHash: "sub_stale_active_hash",
+        providerEventId: "event_stale_active",
+        status: "active" as const,
+        currentPeriodStart: createISODateTime("2026-01-01T00:00:00.000Z"),
+        currentPeriodEnd: createISODateTime("2026-02-01T00:00:00.000Z"),
+      },
+    ];
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) => {
+          const delivery = deliveries[0];
+          if (!delivery) throw new Error("Unexpected webhook verification call.");
+
+          return createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: delivery.payloadHash,
+            parsed: { delivery: delivery.providerEventId },
+          });
+        },
+        parseWebhookEvent: async (verified) => {
+          const delivery = deliveries.shift();
+          if (!delivery) throw new Error("Unexpected webhook parse call.");
+
+          return createSubscriptionWebhookEvent(verified, {
+            providerEventId: delivery.providerEventId,
+            providerSubscriptionId: "provider_subscription_1",
+            providerCustomerId: "provider_customer_1",
+            providerPriceId: "price_sub",
+            status: delivery.status,
+            currentPeriodStart: delivery.currentPeriodStart,
+            currentPeriodEnd: delivery.currentPeriodEnd,
+          });
+        },
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({
+        contentRef: createTestContentRef(),
+        sellables: [subscriptionSellable],
+      }),
+    );
+    await repositories.account.put(createCustomerDocument());
+    await repositories.account.put(createProviderAccountDocument({ provider: stripe }));
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await receiveWebhook(api, "subscription-active", stripe);
+    await receiveWebhook(api, "subscription-cancelled", stripe);
+    // After cancellation the subscription is cancelled and entitlement expired.
+    await expect(accountCollection.get("subscription_1")).resolves.toMatchObject({
+      status: "cancelled",
+    });
+    await expect(
+      accountCollection.get("entitlement_subscription_1_subscription"),
+    ).resolves.toMatchObject({ status: "expired" });
+
+    // The stale "active" event for the earlier period must not re-activate.
+    await receiveWebhook(api, "subscription-stale-active", stripe);
+    await expect(accountCollection.get("subscription_1")).resolves.toMatchObject({
+      status: "cancelled",
+    });
+    await expect(
+      accountCollection.get("entitlement_subscription_1_subscription"),
+    ).resolves.toMatchObject({ status: "expired" });
+  });
+
   it("emits subscription renewal-failed notifications from past-due webhooks", async () => {
     const stripe = createProviderName("stripe");
     const accountCollection = createStorageCollection("account");
