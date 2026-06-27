@@ -474,6 +474,13 @@ export interface MikaBackendConfig {
   };
   readonly magicLink?: {
     readonly ttlMs?: number;
+    /**
+     * Path of the host page that consumes the magic-link token when the
+     * recipient clicks the email (a GET-served page that then POSTs the token).
+     * Defaults to the bundled template route `/account/magic-link`. Must not be
+     * the plugin `magicLinkVerify` API route, which is POST-only.
+     */
+    readonly verifyPath?: string;
   };
   readonly metadata?: JsonObject;
   readonly order?: {
@@ -2627,7 +2634,7 @@ async function requestMagicLink(
     },
   });
 
-  const link = magicLinkUrl(ctx, token, safeReturnTo);
+  const link = magicLinkUrl(input, ctx, token, safeReturnTo);
   const intent: MikaNotificationIntent<"magic_link.requested"> = {
     kind: "magic_link.requested",
     occurredAt: now,
@@ -3164,11 +3171,23 @@ async function hashMagicLinkToken(
   return input.hash(`magic-link-token:${token}`);
 }
 
-function magicLinkUrl(ctx: MikaRequestContext, token: string, returnTo?: string): string {
-  return mikaPluginRoute("magicLinkVerify", {
-    origin: ctx.url?.origin,
-    search: { token, returnTo },
-  });
+// The bundled magic-link template page lives here; it is GET-served and POSTs
+// the token to the (POST-only) magicLinkVerify action. The email link must
+// target this page, never the plugin API route.
+const DEFAULT_MAGIC_LINK_VERIFY_PATH = "/account/magic-link";
+
+function magicLinkUrl(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  token: string,
+  returnTo?: string,
+): string {
+  const verifyPath = input.config?.magicLink?.verifyPath ?? DEFAULT_MAGIC_LINK_VERIFY_PATH;
+  const search = new URLSearchParams({ token });
+  if (returnTo) search.set("returnTo", returnTo);
+  const target = `${verifyPath}?${search.toString()}`;
+
+  return ctx.url?.origin ? new URL(target, ctx.url.origin).toString() : target;
 }
 
 function accountPortalReturnUrl(ctx: MikaRequestContext, returnTo?: string): string {

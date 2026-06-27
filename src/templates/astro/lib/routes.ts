@@ -1,5 +1,6 @@
 export const mikaTemplateRoutes = {
   account: "/account",
+  accountMagicLink: "/account/magic-link",
   accountOrders: "/account/orders",
   accountSubscriptions: "/account/subscriptions",
   accountLicenses: "/account/licenses",

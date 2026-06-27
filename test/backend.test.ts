@@ -2992,7 +2992,7 @@ describe("backend API composition", () => {
 
       const tokenHash = createTestHash("magic-link-token:magic_link_token_1");
       const expectedLink =
-        "https://shop.example.test/_emdash/api/plugins/mika/magic-link/verify?token=magic_link_token_1&returnTo=%2Faccount";
+        "https://shop.example.test/account/magic-link?token=magic_link_token_1&returnTo=%2Faccount";
       await expect(harness.repositories.ephemeral.get(tokenHash)).resolves.toMatchObject({
         key: tokenHash,
         kind: "token",
@@ -3080,7 +3080,7 @@ describe("backend API composition", () => {
         kind: "magic_link.requested",
         context: {
           returnTo: "/products/test-product?ref=test",
-          link: "https://shop.example.test/_emdash/api/plugins/mika/magic-link/verify?token=magic_link_token_1&returnTo=%2Fproducts%2Ftest-product%3Fref%3Dtest",
+          link: "https://shop.example.test/account/magic-link?token=magic_link_token_1&returnTo=%2Fproducts%2Ftest-product%3Fref%3Dtest",
         },
       });
 
@@ -3091,8 +3091,37 @@ describe("backend API composition", () => {
       }
       expect(queuedEmail.record.metadata?.["returnTo"]).toBe("/products/test-product?ref=test");
       expect(queuedEmail.record.metadata?.["link"]).toBe(
-        "https://shop.example.test/_emdash/api/plugins/mika/magic-link/verify?token=magic_link_token_1&returnTo=%2Fproducts%2Ftest-product%3Fref%3Dtest",
+        "https://shop.example.test/account/magic-link?token=magic_link_token_1&returnTo=%2Fproducts%2Ftest-product%3Fref%3Dtest",
       );
+    } finally {
+      await harness.destroy();
+    }
+  });
+
+  it("builds the magic-link email URL from the configured verify page path", async () => {
+    const notificationIntents: MikaNotificationIntent[] = [];
+    const harness = await createMagicLinkHarness({
+      ttlMs: 60_000,
+      verifyPath: "/sign-in",
+      notificationHook: (intent) => {
+        notificationIntents.push(intent);
+      },
+    });
+
+    try {
+      await expect(
+        harness.api.magicLink.request(
+          createTestRequestContext({ customerId: false, userId: false }),
+          { email: "Subscriber@Example.test", returnTo: "/account" },
+        ),
+      ).resolves.toEqual({ ok: true, status: 200, data: { sent: true } });
+
+      expect(notificationIntents[0]).toMatchObject({
+        kind: "magic_link.requested",
+        context: {
+          link: "https://shop.example.test/sign-in?token=magic_link_token_1&returnTo=%2Faccount",
+        },
+      });
     } finally {
       await harness.destroy();
     }
@@ -11620,7 +11649,11 @@ class FailingTerminalWebhookOpsRepository extends OpsRepository {
 }
 
 async function createMagicLinkHarness(
-  options: { readonly ttlMs?: number; readonly notificationHook?: MikaNotificationHook } = {},
+  options: {
+    readonly ttlMs?: number;
+    readonly verifyPath?: string;
+    readonly notificationHook?: MikaNotificationHook;
+  } = {},
 ): Promise<{
   readonly api: MikaApi;
   readonly repositories: MikaBackendRepositories;
@@ -11646,6 +11679,7 @@ async function createMagicLinkHarness(
       config: {
         magicLink: {
           ttlMs: options.ttlMs,
+          ...(options.verifyPath ? { verifyPath: options.verifyPath } : {}),
         },
       },
       ...(options.notificationHook

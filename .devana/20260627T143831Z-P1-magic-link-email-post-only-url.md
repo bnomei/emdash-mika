@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P1 | high | security=no
+DEVANA-STATE: fixed | P1 | high | security=no
 DEVANA-KEY: src/api/backend.ts:3150-3154 | magic-link-email-post-only-url
 
 # Default magic-link email points at POST-only verify route
@@ -46,6 +46,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-27: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed `magicLinkUrl` built the email link from `mikaPluginRoute("magicLinkVerify", ...)`, the POST/body-only plugin API route, so a GET click 405s. Fix: `magicLinkUrl` now targets a GET-served host page (the bundled template `/account/magic-link`, which reads `?token=` and POSTs it via the verify action). Added a `magicLink.verifyPath` config option (default `DEFAULT_MAGIC_LINK_VERIFY_PATH = "/account/magic-link"`) so hosts can point at their own page, and added `accountMagicLink` to `mikaTemplateRoutes`. Updated the three magic-link URL assertions to the corrected default and added a regression test for the configurable path. Typecheck + 313 tests pass.
 
 DEVANA-KEY: src/api/backend.ts:3150-3154 | magic-link-email-post-only-url
-DEVANA-SUMMARY: open | P1 | high | Default magic-link emails link to a POST-only plugin verify route, so email clicks cannot complete sign-in without host overrides.
+DEVANA-SUMMARY: fixed | P1 | high | Default magic-link email linked to the POST-only plugin verify route. Fixed by targeting the GET-served /account/magic-link page (configurable via magicLink.verifyPath), with regression tests.
