@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P2 | high | security=no
+DEVANA-STATE: fixed | P2 | high | security=no
 DEVANA-KEY: src/acp.ts:1194-1206 | acp-backorder-reported-out-of-stock
 
 # ACP feed reports a sold-out backorder item as out_of_stock, hiding a purchasable product
@@ -60,6 +60,7 @@ Preserve the original finding body. Update line 2 `DEVANA-STATE:` and the final 
 ## Status Notes
 
 - 2026-06-27: open by Devana. Verified acp.ts:1194-1218; builders.ts:417-425; statements.ts:28-32.
+- 2026-06-27: fixed. Confirmed `acpAvailability`'s `availableQuantity !== 0` term flipped a sold-out `backorder` sellable to `out_of_stock`, even though the reserve path (`policy != finite OR allow_backorder`) still sells it, and `acpFileAvailability`'s `backorder` branch was dead because `acpAvailability` only ever returned `in_stock`/`out_of_stock`. Fix: `acpAvailability` now returns early — `out_of_stock` for inactive/`out_of_stock`/`manual`; `{ available: true, status: "backorder" }` for `backorder` (purchasable at zero on-hand); `{ available: true, status: "in_stock" }` for `untracked` (unbounded); and only applies the `availableQuantity !== 0` gate to the remaining tracked statuses (`available`/`low_stock`). This makes `acpFileAvailability`'s `backorder` branch live. Note: the actual `AvailabilityStatus` enum has no `preorder` value, so that branch stays inert (harmless). Added regression test `advertises a sold-out backorder sellable as available/backorder, not out_of_stock` (feed variant availability `{ available: true, status: "backorder" }`; file row availability `"backorder"`). Typecheck + 325 tests pass.
 
 DEVANA-KEY: src/acp.ts:1194-1206 | acp-backorder-reported-out-of-stock
-DEVANA-SUMMARY: open | P2 | high | acpAvailability marks any availableQuantity===0 item out_of_stock, so sold-out backorder/pre-order sellables that checkout will sell are advertised as out of stock in the ACP feed.
+DEVANA-SUMMARY: fixed | P2 | high | acpAvailability marked any availableQuantity===0 item out_of_stock, hiding sold-out backorder sellables that checkout still sells. Fixed by returning available/backorder for backorder (and in_stock for untracked) regardless of quantity, making the feed's backorder branch live, with a regression test.

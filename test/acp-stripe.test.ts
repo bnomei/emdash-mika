@@ -117,6 +117,70 @@ describe("Mika ACP projection", () => {
     expect(serializeMikaAcpFileUploadRows(rows)).toContain('"item_id":"sellable_print:price_1"');
   });
 
+  it("advertises a sold-out backorder sellable as available/backorder, not out_of_stock", async () => {
+    const sellable = createTestSellableDTO({
+      id: createMikaId("sellable_backorder"),
+      title: "Backorder poster",
+      // Sold out on-hand, but backorderable: the reserve path still accepts it.
+      availability: {
+        sellableId: createMikaId("sellable_backorder"),
+        status: "backorder",
+        availableQuantity: 0,
+      },
+    });
+
+    const feed = createMikaAcpProductFeed({
+      targetCountry: "US",
+      products: [
+        {
+          id: "product_backorder",
+          title: "Backorder poster",
+          description: { plain: "Ships when restocked." },
+          url: "https://shop.example.test/products/backorder",
+          media: [{ type: "image", url: "https://shop.example.test/backorder.jpg" }],
+          seller: {
+            name: "Mika Studio",
+            links: [
+              { type: "terms_of_use", url: "https://shop.example.test/terms" },
+              { type: "privacy_policy", url: "https://shop.example.test/privacy" },
+            ],
+          },
+          sellables: [sellable],
+        },
+      ],
+    });
+
+    expect(validateMikaAcpProductFeed(feed)).toEqual([]);
+    expect(feed.products[0]?.variants[0]?.availability).toEqual({
+      available: true,
+      status: "backorder",
+    });
+
+    const rows = createMikaAcpFileUploadRows({
+      products: [
+        {
+          id: "product_backorder",
+          title: "Backorder poster",
+          description: { plain: "Ships when restocked." },
+          url: "https://shop.example.test/products/backorder",
+          media: [{ type: "image", url: "https://shop.example.test/backorder.jpg" }],
+          sellables: [sellable],
+        },
+      ],
+      brand: "Mika",
+      sellerName: "Mika Studio",
+      sellerUrl: "https://shop.example.test",
+      returnPolicy: "https://shop.example.test/returns",
+      targetCountries: ["US"],
+      storeCountry: "US",
+      checkoutEnabled: true,
+      sellerPrivacyPolicy: "https://shop.example.test/privacy",
+      sellerTos: "https://shop.example.test/terms",
+    });
+
+    expect(rows[0]?.availability).toBe("backorder");
+  });
+
   it("creates and completes ACP checkout sessions with Stripe SPT metadata", async () => {
     let cart = createCart([]);
     let checkoutStartMetadata: JsonObject | undefined;

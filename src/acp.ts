@@ -1204,11 +1204,25 @@ function requiredProductField(value: string | undefined, field: string): string 
 
 function acpAvailability(sellable: SellableDTO): MikaAcpAvailability {
   const status = sellable.availability?.status;
-  const available =
-    sellable.active &&
-    status !== "out_of_stock" &&
-    status !== "manual" &&
-    sellable.availability?.availableQuantity !== 0;
+
+  if (!sellable.active || status === "out_of_stock" || status === "manual") {
+    return { available: false, status: "out_of_stock" };
+  }
+
+  // Backorder sellables are purchasable regardless of on-hand quantity (the
+  // reserve path accepts policy != finite / allow_backorder), so a zero
+  // availableQuantity must not flip them to out_of_stock. Surface the real
+  // backorder status so the feed advertises them correctly.
+  if (status === "backorder") {
+    return { available: true, status: "backorder" };
+  }
+
+  // Untracked stock is unbounded, so it is always in stock.
+  if (status === "untracked") {
+    return { available: true, status: "in_stock" };
+  }
+
+  const available = sellable.availability?.availableQuantity !== 0;
 
   return {
     available,
