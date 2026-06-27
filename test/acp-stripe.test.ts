@@ -23,6 +23,7 @@ import {
   MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY,
   MIKA_STRIPE_PAYMENT_AUTHORIZATION_METADATA_KEY,
   createMikaStripeProvider,
+  type MikaStripeCheckoutSessionCreateParams,
   type MikaStripeClient,
 } from "../src/stripe";
 import {
@@ -574,6 +575,58 @@ describe("Mika Stripe provider", () => {
         line_items: [{ price: "price_stripe_123", quantity: 2 }],
       },
       options: { idempotencyKey: "idem_1" },
+    });
+  });
+
+  it("maps catalog billing cadence onto inline subscription price_data", async () => {
+    const createCalls: { params: MikaStripeCheckoutSessionCreateParams }[] = [];
+    const stripe: MikaStripeClient = {
+      checkout: {
+        sessions: {
+          create: async (params) => {
+            createCalls.push({ params });
+            return {
+              id: "cs_sub_1",
+              status: "open",
+              mode: "subscription",
+              url: "https://checkout.stripe.test/cs_sub_1",
+            };
+          },
+          retrieve: async () => ({ id: "cs_sub_1", status: "open", mode: "subscription" }),
+        },
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe });
+
+    await provider.createCheckoutSession({
+      idempotencyKey: "idem_sub_1",
+      mode: "subscription",
+      provider: createProviderName("stripe"),
+      successUrl: "https://shop.example.test/success",
+      cancelUrl: "https://shop.example.test/cancel",
+      lines: [
+        {
+          sellableId: createMikaId("sellable_sub"),
+          priceId: createMikaId("price_sub"),
+          contentRef: { collection: "products", id: "membership" },
+          title: "Annual membership",
+          quantity: 1,
+          unitAmount: 12000,
+          currency: createCurrencyCode("EUR"),
+          mode: "subscription",
+          fulfillmentKind: "none",
+          interval: "year",
+          intervalCount: 2,
+        },
+      ],
+    });
+
+    // The inline price_data must reflect the catalog cadence, not a hardcoded
+    // monthly interval.
+    expect(createCalls[0]?.params.line_items[0]).toMatchObject({
+      price_data: {
+        recurring: { interval: "year", interval_count: 2 },
+      },
     });
   });
 

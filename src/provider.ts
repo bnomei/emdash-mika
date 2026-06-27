@@ -126,6 +126,8 @@ export interface MikaProviderLineItem {
   readonly mode: PurchaseMode;
   readonly fulfillmentKind: FulfillmentKind;
   readonly entitlementKey?: string;
+  readonly interval?: "month" | "year";
+  readonly intervalCount?: number;
   readonly metadata?: JsonObject;
 }
 

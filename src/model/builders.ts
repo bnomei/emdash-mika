@@ -211,6 +211,8 @@ export function snapshotPrice(input: {
     mode: input.price.mode,
     fulfillmentKind: input.price.fulfillmentKind,
     entitlementKey: input.price.entitlementKey,
+    interval: input.price.interval,
+    intervalCount: input.price.intervalCount,
     providerRefs: input.price.providerRefs,
     metadata: input.price.metadata,
   };

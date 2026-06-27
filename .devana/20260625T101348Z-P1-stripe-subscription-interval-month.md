@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-Priority: P1 | Confidence: high | Security-sensitive: no | Status: open
+Priority: P1 | Confidence: high | Security-sensitive: no | Status: fixed
 Location: src/stripe.ts:434 | Slug: stripe-subscription-interval-month
 
 # Stripe checkout price_data hardcodes subscription interval to month
@@ -46,6 +46,7 @@ After working this report, preserve the original finding body. Update line 2 `St
 ## Status Notes
 
 - 2026-06-25: open by Devana. Initial report written from static source inspection.
+- 2026-06-27: fixed. Confirmed `stripeCheckoutLineItem` hardcoded `recurring: { interval: "month" }` and the catalog `interval`/`intervalCount` never reached the provider line. Threaded the cadence through the snapshot chain: added `interval`/`intervalCount` to `PurchasableSnapshot` (populated in `snapshotPrice` from `PriceDefinition`) and to `MikaProviderLineItem` (mapped in `checkoutLineToProviderLine`). `stripeCheckoutLineItem` now emits `recurring: { interval: line.interval ?? "month", interval_count: <n when >1> }`. Backward compatible (interval defaults to month when absent). Added regression test `maps catalog billing cadence onto inline subscription price_data`. Typecheck + 307 tests pass.
 
 DEVANA-KEY: src/stripe.ts:434 | P1 | stripe-subscription-interval-month
-DEVANA-SUMMARY: Status=open | P1 high src/stripe.ts:434 - Stripe inline price_data always uses monthly recurring interval, ignoring catalog year/week cadence.
+DEVANA-SUMMARY: Status=fixed | P1 high src/stripe.ts:434 - Stripe inline price_data hardcoded a monthly interval. Fixed by threading catalog interval/intervalCount through the snapshot and provider line into Stripe recurring price_data, with a regression test.

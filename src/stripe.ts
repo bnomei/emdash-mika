@@ -459,7 +459,16 @@ function stripeCheckoutLineItem(line: MikaProviderLineItem): JsonObject {
         name: line.title,
         ...(line.sku ? { metadata: { sku: line.sku } } : {}),
       },
-      ...(line.mode === "subscription" ? { recurring: { interval: "month" } } : {}),
+      ...(line.mode === "subscription"
+        ? {
+            recurring: {
+              interval: line.interval ?? "month",
+              ...(line.intervalCount && line.intervalCount > 1
+                ? { interval_count: line.intervalCount }
+                : {}),
+            },
+          }
+        : {}),
     },
   };
 }

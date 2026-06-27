@@ -96,6 +96,8 @@ export interface PurchasableSnapshot {
   readonly mode: PurchaseMode;
   readonly fulfillmentKind: FulfillmentKind;
   readonly entitlementKey?: string;
+  readonly interval?: "month" | "year";
+  readonly intervalCount?: number;
   readonly providerRefs?: readonly ProviderProductRef[];
   readonly metadata?: JsonObject;
 }

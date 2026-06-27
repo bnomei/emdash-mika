@@ -6480,6 +6480,8 @@ function checkoutLineToProviderLine(
     mode: line.item.mode,
     fulfillmentKind: line.item.fulfillmentKind,
     entitlementKey: line.item.entitlementKey,
+    interval: line.item.interval,
+    intervalCount: line.item.intervalCount,
     metadata: line.metadata ?? line.item.metadata,
   };
 }
