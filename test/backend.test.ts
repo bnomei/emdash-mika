@@ -11962,22 +11962,38 @@ describe("backend API composition", () => {
       userId: false,
       sessionId: "session_wishlist_source",
     });
-    const targetCtx = createTestRequestContext({
+    // The customer already has a wishlist from an earlier authenticated session.
+    const priorCustomerCtx = createTestRequestContext({
       customerId: "customer_1",
       userId: "user_1",
-      sessionId: "session_wishlist_target",
+      sessionId: "session_prior",
+    });
+    // Legitimate handoff: the guest session signs in as customer_1, keeping its session id (so it
+    // owns the guest wishlist it created) and merging that source into the customer's wishlist.
+    const callerCtx = createTestRequestContext({
+      customerId: "customer_1",
+      userId: "user_1",
+      sessionId: "session_wishlist_source",
     });
 
     await api.wishlist.add(sourceCtx, { sellableId: duplicateSellable.id });
     await api.wishlist.add(sourceCtx, { sellableId: sourceOnlySellable.id });
-    await api.wishlist.add(targetCtx, { sellableId: duplicateSellable.id });
+    const customerWishlist = await api.wishlist.add(priorCustomerCtx, {
+      sellableId: duplicateSellable.id,
+    });
+    if (!customerWishlist.ok) {
+      throw new Error("Expected customer wishlist.add to succeed.");
+    }
     const sourceBeforeMerge = await api.wishlist.get(sourceCtx);
     if (!sourceBeforeMerge.ok) {
       throw new Error("Expected source wishlist.get to succeed.");
     }
 
     await expect(
-      api.wishlist.merge(targetCtx, { sourceSessionId: "session_wishlist_source" }),
+      api.wishlist.merge(callerCtx, {
+        targetWishlistId: customerWishlist.data.id,
+        sourceSessionId: "session_wishlist_source",
+      }),
     ).resolves.toMatchObject({
       ok: true,
       status: 200,
@@ -11986,7 +12002,7 @@ describe("backend API composition", () => {
       },
     });
 
-    const merged = await api.wishlist.get(targetCtx);
+    const merged = await api.wishlist.get(callerCtx);
     expect(merged).toMatchObject({
       ok: true,
       data: {
@@ -12004,6 +12020,49 @@ describe("backend API composition", () => {
       type: "wishlist",
       status: "merged",
     });
+  });
+
+  it("refuses to merge a source wishlist the caller does not own (cross-session IDOR)", async () => {
+    const contentRef = createTestContentRef();
+    const victimSellable = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
+    const attackerSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 2),
+      sku: "TEST-SKU-2",
+      titleSnapshot: "Attacker sellable",
+      prices: [createPriceDefinition({ id: createTestMikaId("price", 2) })],
+    });
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [victimSellable, attackerSellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const victimCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_victim",
+    });
+    const attackerCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_attacker",
+    });
+
+    await api.wishlist.add(victimCtx, { sellableId: victimSellable.id });
+    await api.wishlist.add(attackerCtx, { sellableId: attackerSellable.id });
+
+    // Attacker tries to harvest the victim's saved items via a guessed/leaked session id.
+    const merged = await api.wishlist.merge(attackerCtx, { sourceSessionId: "session_victim" });
+    if (!merged.ok) {
+      throw new Error("Expected wishlist.merge to succeed without merging the foreign source.");
+    }
+    expect(merged.data.items).toHaveLength(1);
+    expect(merged.data.items[0]?.sellableId).toBe(attackerSellable.id);
+
+    // The victim wishlist must be untouched: still active and holding its own item.
+    const victimWishlist = await repositories.session.findWishlistBySession("session_victim");
+    expect(victimWishlist?.status).toBe("active");
+    expect(victimWishlist?.aggregate.items).toHaveLength(1);
+    expect(victimWishlist?.aggregate.items[0]?.item.sellableId).toBe(victimSellable.id);
   });
 
   it("returns stable errors for missing wishlist items on remove", async () => {

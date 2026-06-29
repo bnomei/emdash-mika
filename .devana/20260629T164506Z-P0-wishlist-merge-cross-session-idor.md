@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P0 | high | security=yes
+DEVANA-STATE: fixed | P0 | high | security=yes
 DEVANA-KEY: src/api/backend.ts:1186 | wishlist-merge-cross-session-idor
 
 # Wishlist merge lacks cross-session ownership check
@@ -48,6 +48,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-29: open by Devana. Initial report written from static source inspection.
+- 2026-06-29: fixed. `wishlist.merge` now applies the same `callerOwnsMergeSource(ctx, source)` guard as `cart.merge` before merging a `sourceSessionId` wishlist: the caller must own the source (matching customer id, or matching session id for a guest source). A foreign source is ignored and the caller's target wishlist is returned unchanged. Evidence: the legitimate login-handoff path still works because the signing-in browser keeps its session id (and so owns the guest wishlist it created); the existing merge test was retargeted to that pattern (explicit `targetWishlistId`, source session owned via the caller's session). Added a cross-session IDOR regression test mirroring the cart-merge case asserting the attacker's wishlist is unchanged and the victim wishlist stays active and intact.
 
 DEVANA-KEY: src/api/backend.ts:1186 | wishlist-merge-cross-session-idor
-DEVANA-SUMMARY: open | P0 | high | wishlist.merge copies any sourceSessionId wishlist without ownership checks that cart.merge already enforces.
+DEVANA-SUMMARY: fixed | P0 | high | wishlist.merge now enforces the same caller-ownership guard as cart.merge, so a guessed/leaked sourceSessionId can no longer harvest another session's saved items.

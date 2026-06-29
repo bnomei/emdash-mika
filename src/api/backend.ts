@@ -1199,7 +1199,11 @@ function createWishlistBackend(input: MikaCartWishlistBackendInput): MikaApi["wi
       }
 
       const source = await input.repositories.session.findWishlistBySession(sourceSessionId);
-      if (!source || source.id === targetResult.wishlist.id) {
+      if (
+        !source ||
+        source.id === targetResult.wishlist.id ||
+        !callerOwnsMergeSource(ctx, source)
+      ) {
         return {
           ok: true,
           status: 200,
