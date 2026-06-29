@@ -606,6 +606,10 @@ describe("Mika Astro helpers", () => {
     expect(mikaSafeReturnTo("https://shop.test/account/orders", options)).toBe("/account/orders");
     expect(mikaSafeReturnTo("https://evil.test/account", options)).toBe("/fallback");
     expect(mikaSafeReturnTo("//evil.test/account", options)).toBe("/fallback");
+    // Same-origin absolute URL whose pathname begins with "//" must not survive sanitization:
+    // a downstream `new URL(path, origin)` would resolve it to an attacker origin.
+    expect(mikaSafeReturnTo("https://shop.test//evil.test/done", options)).toBe("/fallback");
+    expect(mikaSafeReturnTo("https://shop.test//evil.test", options)).toBe("/fallback");
     expect(mikaSafeReturnTo("javascript:alert(1)", options)).toBe("/fallback");
     expect(mikaSafeReturnTo("data:text/html,hi", options)).toBe("/fallback");
     expect(mikaSafeReturnTo("account", options)).toBe("/fallback");

@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P0 | high | security=yes
+DEVANA-STATE: resolved | P0 | high | security=yes
 DEVANA-KEY: src/api/redirect-policy.ts:17 | return-path-open-redirect
 
 # Same-origin absolute return URL with protocol-relative pathname bypasses sanitizer
@@ -50,6 +50,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-29: open by Devana. Initial report written from static source inspection across security-boundaries and boundaries-oracles trails.
+- 2026-06-29: resolved. `mikaSafeReturnPath` now rejects any sanitized result whose path begins with `//` (after URL parsing), returning the safe fallback instead. This closes the bypass where a same-origin absolute URL like `https://shop.test//evil.test/done` parsed to pathname `//evil.test/done` and a downstream `new URL(path, origin)` reinterpreted it as a protocol-relative URL to an attacker origin. Added regression assertions to the open-redirect test covering same-origin absolute URLs with `//` pathnames.
 
 DEVANA-KEY: src/api/redirect-policy.ts:17 | return-path-open-redirect
-DEVANA-SUMMARY: open | P0 | high | Same-origin checkout return URLs can yield protocol-relative pathnames that redirect shoppers to an attacker origin.
+DEVANA-SUMMARY: resolved | P0 | high | The return-path sanitizer now rejects parsed paths starting with `//`, so same-origin checkout return URLs can no longer be reinterpreted as protocol-relative redirects to an attacker origin.
