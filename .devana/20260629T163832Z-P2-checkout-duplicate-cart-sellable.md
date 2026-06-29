@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P2 | medium | security=no
+DEVANA-STATE: fixed | P2 | medium | security=no
 DEVANA-KEY: src/api/backend.ts:6135 | checkout-duplicate-cart-sellable
 
 # checkout.start with cartId and sellableId duplicates lines
@@ -47,6 +47,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-29: open by Devana. Initial report written from static source inspection across boundaries-oracles and inside-out-paths trails.
+- 2026-06-29: fixed (report's first suggested approach: reject). `resolveCheckoutStart` now returns a `422 VALIDATION_FAILED` when both `cartId` and `sellableId` are supplied, before loading the cart or resolving any line. `cartId` (checkout an existing cart) and `sellableId` (express buy-now) are mutually exclusive line sources: with both set, `expressBuyNow` was false (it requires `cartId === undefined`), so the resolver added every cart line and then unconditionally appended a separate line for the sellable, double-counting a sellable already in the cart. Rejecting early — rather than silently skipping — was chosen because this is a mutating, charging operation, so an ambiguous request should surface as a client error rather than guess intent. Scope: `checkout.start`. Note on a sibling path: `createCartQuote` (backend.ts ~5921, used by `cart.quote` and `checkout.preview`) has the same loop-then-append-`sellableId` shape, so a both-fields quote/preview is similarly doubled; it is intentionally NOT changed here because (a) it is non-mutating (no reservation/charge — outside this report's double-charge/double-reservation harm), and (b) `createCartQuote` returns a `CartQuoteDTO` with no failure channel, so a clean rejection there is a separate change. Flagging it as a related follow-up. Evidence: a new test puts sellable A (qty 1) in a cart, calls `checkout.start({ cartId, sellableId: A, quantity: 1 })`, and asserts `422 VALIDATION_FAILED` with zero stock reserved and no provider checkout session created; without the guard the same call does not cleanly succeed (it reaches a 409 reservation conflict after partial work), so the early 422 is the clean, correct outcome. Full suite (359) and both tsc configs pass.
 
 DEVANA-KEY: src/api/backend.ts:6135 | checkout-duplicate-cart-sellable
-DEVANA-SUMMARY: open | P2 | medium | Supplying both cartId and sellableId on checkout.start duplicates cart lines and reservations.
+DEVANA-SUMMARY: fixed | P2 | medium | checkout.start now returns 422 when both cartId and sellableId are supplied (mutually exclusive line sources), before any reservation or provider handoff, instead of double-counting the sellable; the non-mutating createCartQuote sibling is noted as a separate follow-up.

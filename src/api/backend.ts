@@ -6313,6 +6313,17 @@ async function resolveCheckoutStart(
   ctx: MikaRequestContext,
   checkoutInput: StartCheckoutInput,
 ): Promise<({ readonly ok: true } & CheckoutStartResolution) | MikaApiFailure> {
+  // cartId (checkout an existing cart) and sellableId (express buy-now) are
+  // mutually exclusive line sources. Supplying both would add every cart line
+  // and then a separate line for the sellable, double-counting (and
+  // double-reserving / double-charging) a sellable already in the cart.
+  if (checkoutInput.cartId && checkoutInput.sellableId) {
+    return validationFailed(
+      "sellableId",
+      "Provide either a cartId or a sellableId for checkout, not both.",
+    );
+  }
+
   const defaultCurrency = defaultBackendCurrency(input);
   const expressBuyNow =
     checkoutInput.sellableId !== undefined && checkoutInput.cartId === undefined;

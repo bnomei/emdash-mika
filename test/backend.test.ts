@@ -9842,6 +9842,47 @@ describe("backend API composition", () => {
     expect(lineSubtotal - (call?.discount?.amount ?? 0)).toBe(2160);
   });
 
+  it("rejects checkout.start when both cartId and sellableId are supplied", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const stock = createStockRecord({
+      sellableId: sellable.id,
+      quantityOnHand: 5,
+      quantityReserved: 0,
+    });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([[sellable.id, stock]]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    if (!added.ok) throw new Error("Expected cart.add to succeed.");
+
+    await expect(
+      api.checkout.start(ctx, { cartId: added.data.id, sellableId: sellable.id, quantity: 1 }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 422,
+      error: { code: "VALIDATION_FAILED" },
+    });
+
+    // The ambiguous request reserves no stock and never hands off to the provider.
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 0,
+    });
+    expect(fake.getCalls().createCheckoutSession).toEqual([]);
+  });
+
   it("omits a provider discount when no coupon is applied", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();
