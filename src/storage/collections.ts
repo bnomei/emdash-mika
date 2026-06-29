@@ -1,21 +1,29 @@
+/**
+ * Document collection configuration and query contracts for indexed storage backends.
+ * Defines per-collection indexes used to resolve documents by aggregate and record fields.
+ */
 import type { MikaStorageDocuments } from "../types/documents";
 
 type KeysOfUnion<TValue> = TValue extends TValue ? keyof TValue : never;
 type StorageField<TDocument> = Extract<KeysOfUnion<TDocument>, string>;
 
+/** Single or compound index field path on a stored document. */
 export type MikaIndex<TDocument = Record<string, unknown>> =
   | StorageField<TDocument>
   | readonly StorageField<TDocument>[];
 
+/** Index and uniqueness configuration for one document collection. */
 export interface MikaStorageCollectionConfig<TDocument = Record<string, unknown>> {
   readonly indexes: readonly MikaIndex<TDocument>[];
   readonly uniqueIndexes?: readonly MikaIndex<TDocument>[];
 }
 
+/** Index configuration keyed by storage collection name. */
 export type MikaStorageConfig = {
   readonly [K in keyof MikaStorageDocuments]: MikaStorageCollectionConfig<MikaStorageDocuments[K]>;
 };
 
+/** Ordered list of document collection names in the storage partition. */
 export const MIKA_STORAGE_COLLECTION_NAMES = [
   "catalog",
   "session",
@@ -24,6 +32,7 @@ export const MIKA_STORAGE_COLLECTION_NAMES = [
   "ops",
 ] as const satisfies readonly (keyof MikaStorageDocuments)[];
 
+/** Default index configuration for catalog, session, account, ledger, and ops documents. */
 export const mikaStorageConfig = {
   catalog: {
     indexes: [
@@ -169,14 +178,17 @@ export const mikaStorageConfig = {
   },
 } satisfies MikaStorageConfig;
 
+/** Returns the default document collection index configuration. */
 export function createMikaStorageConfig(): MikaStorageConfig {
   return mikaStorageConfig;
 }
 
+/** Runtime storage collection handles keyed by document partition. */
 export type MikaStorageCollections = {
   readonly [K in keyof MikaStorageDocuments]: StorageCollection<MikaStorageDocuments[K]>;
 };
 
+/** Generic document collection port for CRUD and indexed query operations. */
 export interface StorageCollection<TDocument> {
   get(id: string): Promise<TDocument | null>;
   put(id: string, data: TDocument): Promise<void>;
@@ -195,6 +207,7 @@ export interface StorageCollection<TDocument> {
   count(where?: StorageWhereClause<TDocument>): Promise<number>;
 }
 
+/** Query options for filtering, ordering, and paginating stored documents. */
 export interface StorageQueryOptions<TDocument = Record<string, unknown>> {
   readonly where?: StorageWhereClause<TDocument>;
   readonly orderBy?: Partial<Record<StorageField<TDocument>, "asc" | "desc">>;
@@ -202,6 +215,7 @@ export interface StorageQueryOptions<TDocument = Record<string, unknown>> {
   readonly cursor?: string;
 }
 
+/** Range comparison filter for indexed document fields. */
 export interface StorageRangeFilter {
   readonly gt?: number | string;
   readonly gte?: number | string;
@@ -209,14 +223,17 @@ export interface StorageRangeFilter {
   readonly lte?: number | string;
 }
 
+/** Membership filter for indexed document fields. */
 export interface StorageInFilter {
   readonly in: readonly (string | number)[];
 }
 
+/** Prefix filter for string indexed document fields. */
 export interface StorageStartsWithFilter {
   readonly startsWith: string;
 }
 
+/** Allowed where-clause value shapes for document queries. */
 export type StorageWhereValue =
   | string
   | number
@@ -226,10 +243,12 @@ export type StorageWhereValue =
   | StorageInFilter
   | StorageStartsWithFilter;
 
+/** Partial equality and filter map over indexed document fields. */
 export type StorageWhereClause<TDocument = Record<string, unknown>> = Partial<
   Record<StorageField<TDocument>, StorageWhereValue>
 >;
 
+/** Cursor-paginated query result from a document collection. */
 export interface PaginatedStorageResult<TItem> {
   readonly items: TItem[];
   readonly cursor?: string;

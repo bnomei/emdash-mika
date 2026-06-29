@@ -1,3 +1,7 @@
+/**
+ * Commerce aggregate payloads and indexed record projections.
+ * Aggregates embed in documents; records expose queryable fields for storage indexes.
+ */
 import type {
   AggregatePayload,
   CartStatus,
@@ -19,18 +23,21 @@ import type {
   WishlistStatus,
 } from "./primitives";
 
+/** Single variant option value within a sellable definition. */
 export interface VariantOptionValue {
   readonly option: string;
   readonly value: string;
   readonly label?: string;
 }
 
+/** Grouped variant options presented in catalog surfaces. */
 export interface VariantOptionGroup {
   readonly option: string;
   readonly label: string;
   readonly values: readonly VariantOptionValue[];
 }
 
+/** Provider-side identifiers linked to a sellable or price. */
 export interface ProviderProductRef {
   readonly provider: ProviderName;
   readonly productId?: string;
@@ -42,6 +49,7 @@ export interface ProviderProductRef {
   readonly customerId?: string;
 }
 
+/** Purchasable price variant with fulfillment and provider bindings. */
 export interface PriceDefinition {
   readonly id: MikaId;
   readonly sku?: string;
@@ -58,6 +66,7 @@ export interface PriceDefinition {
   readonly metadata?: JsonObject;
 }
 
+/** Catalog sellable with variant metadata, stock linkage, and price list. */
 export interface SellableDefinition {
   readonly id: MikaId;
   readonly sku?: string;
@@ -75,6 +84,7 @@ export interface SellableDefinition {
   readonly metadata?: JsonObject;
 }
 
+/** Catalog item aggregate: content reference plus sellable and provider catalog. */
 export interface CatalogCommerceAggregate extends AggregatePayload {
   readonly content: ContentRef;
   readonly titleSnapshot?: string;
@@ -83,6 +93,7 @@ export interface CatalogCommerceAggregate extends AggregatePayload {
   readonly metadata?: JsonObject;
 }
 
+/** Immutable purchasable snapshot frozen at cart, checkout, or order time. */
 export interface PurchasableSnapshot {
   readonly content: ContentRef;
   readonly sellableId: MikaId;
@@ -96,10 +107,13 @@ export interface PurchasableSnapshot {
   readonly mode: PurchaseMode;
   readonly fulfillmentKind: FulfillmentKind;
   readonly entitlementKey?: string;
+  readonly interval?: "month" | "year";
+  readonly intervalCount?: number;
   readonly providerRefs?: readonly ProviderProductRef[];
   readonly metadata?: JsonObject;
 }
 
+/** Cart line with quantity, purchasable snapshot, and optional reservation link. */
 export interface CartLine {
   readonly id: MikaId;
   readonly item: PurchasableSnapshot;
@@ -109,14 +123,17 @@ export interface CartLine {
   readonly metadata?: JsonObject;
 }
 
+/** Coupon terms applied to a cart or checkout aggregate. */
 export interface CouponSnapshot {
   readonly codeHash?: string;
   readonly label?: string;
   readonly providerRef?: ProviderProductRef;
+  readonly rate?: number;
   readonly discountAmount?: number;
   readonly metadata?: JsonObject;
 }
 
+/** Monetary totals derived from cart or checkout line items. */
 export interface CartTotals {
   readonly subtotal: Money;
   readonly discount?: Money;
@@ -125,6 +142,7 @@ export interface CartTotals {
   readonly total: Money;
 }
 
+/** Validation issue surfaced when quoting or mutating a cart aggregate. */
 export interface CartValidationIssue {
   readonly code:
     | "inactive_sellable"
@@ -137,6 +155,7 @@ export interface CartValidationIssue {
   readonly message?: string;
 }
 
+/** Cart aggregate holding lines, coupon, totals, and validation state. */
 export interface CartAggregate extends AggregatePayload {
   readonly currency: CurrencyCode;
   readonly items: readonly CartLine[];
@@ -146,6 +165,7 @@ export interface CartAggregate extends AggregatePayload {
   readonly metadata?: JsonObject;
 }
 
+/** Wishlist entry referencing a purchasable snapshot. */
 export interface WishlistItem {
   readonly id: MikaId;
   readonly item: PurchasableSnapshot;
@@ -153,11 +173,13 @@ export interface WishlistItem {
   readonly metadata?: JsonObject;
 }
 
+/** Wishlist aggregate for deferred purchase intent. */
 export interface WishlistAggregate extends AggregatePayload {
   readonly items: readonly WishlistItem[];
   readonly metadata?: JsonObject;
 }
 
+/** Checkout line with reservation binding carried into fulfillment. */
 export interface CheckoutLine {
   readonly id: MikaId;
   readonly cartLineId?: MikaId;
@@ -167,6 +189,7 @@ export interface CheckoutLine {
   readonly metadata?: JsonObject;
 }
 
+/** Provider checkout binding with return paths and idempotency fingerprints. */
 export interface CheckoutBinding {
   readonly provider: ProviderName;
   readonly providerCheckoutId?: string;
@@ -177,6 +200,7 @@ export interface CheckoutBinding {
   readonly cartHash?: string;
 }
 
+/** Checkout aggregate snapshot at provider handoff. */
 export interface CheckoutAggregate extends AggregatePayload {
   readonly mode: PurchaseMode;
   readonly currency: CurrencyCode;
@@ -187,6 +211,7 @@ export interface CheckoutAggregate extends AggregatePayload {
   readonly metadata?: JsonObject;
 }
 
+/** Customer identity snapshot embedded in order and subscription aggregates. */
 export interface CustomerSnapshot {
   readonly customerId?: MikaId;
   readonly userId?: string;
@@ -197,6 +222,7 @@ export interface CustomerSnapshot {
   readonly vatId?: string;
 }
 
+/** Persisted order line with pricing breakdown and fulfillment references. */
 export interface OrderLine {
   readonly id: MikaId;
   readonly item: PurchasableSnapshot;
@@ -212,6 +238,7 @@ export interface OrderLine {
   readonly metadata?: JsonObject;
 }
 
+/** Order aggregate representing a completed or refunded purchase. */
 export interface OrderAggregate extends AggregatePayload {
   readonly customer: CustomerSnapshot;
   readonly lines: readonly OrderLine[];
@@ -223,6 +250,7 @@ export interface OrderAggregate extends AggregatePayload {
   readonly metadata?: JsonObject;
 }
 
+/** Subscription aggregate tied to a recurring sellable and provider billing. */
 export interface SubscriptionAggregate extends AggregatePayload {
   readonly customer: CustomerSnapshot;
   readonly sellable: PurchasableSnapshot;
@@ -235,6 +263,7 @@ export interface SubscriptionAggregate extends AggregatePayload {
   readonly metadata?: JsonObject;
 }
 
+/** Summary of a linked provider customer account on a customer aggregate. */
 export interface ProviderAccountSummary {
   readonly provider: ProviderName;
   readonly providerCustomerId: string;
@@ -242,6 +271,7 @@ export interface ProviderAccountSummary {
   readonly createdAt?: ISODateTime;
 }
 
+/** Customer aggregate with profile fields and provider account summaries. */
 export interface CustomerAggregate extends AggregatePayload {
   readonly email?: string;
   readonly emailHash?: string;
@@ -252,6 +282,7 @@ export interface CustomerAggregate extends AggregatePayload {
   readonly metadata?: JsonObject;
 }
 
+/** Coupon aggregate defining discount rules and redemption window. */
 export interface CouponAggregate extends AggregatePayload {
   readonly label: string;
   readonly codeHash: string;
@@ -265,12 +296,14 @@ export interface CouponAggregate extends AggregatePayload {
   readonly metadata?: JsonObject;
 }
 
+/** Versioned aggregate envelope with branded id used before document wrapping. */
 export interface AggregateRecord<TPayload extends AggregatePayload> extends Timestamped {
   readonly id: MikaId;
   readonly version: number;
   readonly payload: TPayload;
 }
 
+/** Indexed catalog item record fields mirrored on catalog documents. */
 export interface CatalogItemRecord extends AggregateRecord<CatalogCommerceAggregate> {
   readonly contentCollection: string;
   readonly contentId: string;
@@ -278,6 +311,7 @@ export interface CatalogItemRecord extends AggregateRecord<CatalogCommerceAggreg
   readonly titleSnapshot?: string;
 }
 
+/** Indexed cart record fields mirrored on session cart documents. */
 export interface CartRecord extends AggregateRecord<CartAggregate> {
   readonly sessionId?: string;
   readonly customerId?: MikaId;
@@ -287,6 +321,7 @@ export interface CartRecord extends AggregateRecord<CartAggregate> {
   readonly expiresAt?: ISODateTime;
 }
 
+/** Indexed wishlist record fields mirrored on session wishlist documents. */
 export interface WishlistRecord extends AggregateRecord<WishlistAggregate> {
   readonly sessionId?: string;
   readonly customerId?: MikaId;
@@ -295,6 +330,7 @@ export interface WishlistRecord extends AggregateRecord<WishlistAggregate> {
   readonly expiresAt?: ISODateTime;
 }
 
+/** Indexed checkout session record fields mirrored on checkout documents. */
 export interface CheckoutSessionRecord extends AggregateRecord<CheckoutAggregate> {
   readonly cartId?: MikaId;
   readonly customerId?: MikaId;
@@ -304,6 +340,7 @@ export interface CheckoutSessionRecord extends AggregateRecord<CheckoutAggregate
   readonly expiresAt?: ISODateTime;
 }
 
+/** Indexed order record fields mirrored on ledger order documents. */
 export interface OrderRecord extends AggregateRecord<OrderAggregate> {
   readonly orderNumber: string;
   readonly customerId?: MikaId;
@@ -319,6 +356,7 @@ export interface OrderRecord extends AggregateRecord<OrderAggregate> {
   readonly paidAt?: ISODateTime;
 }
 
+/** Indexed subscription record fields mirrored on account documents. */
 export interface SubscriptionRecord extends AggregateRecord<SubscriptionAggregate> {
   readonly customerId?: MikaId;
   readonly provider: ProviderName;
@@ -328,6 +366,7 @@ export interface SubscriptionRecord extends AggregateRecord<SubscriptionAggregat
   readonly currentPeriodEnd?: ISODateTime;
 }
 
+/** Indexed customer record fields mirrored on account customer documents. */
 export interface CustomerRecord extends AggregateRecord<CustomerAggregate> {
   readonly userId?: string;
   readonly email?: string;
@@ -335,6 +374,7 @@ export interface CustomerRecord extends AggregateRecord<CustomerAggregate> {
   readonly lastLoginAt?: ISODateTime;
 }
 
+/** Indexed coupon record fields mirrored on catalog coupon documents. */
 export interface CouponRecord extends AggregateRecord<CouponAggregate> {
   readonly codeHash: string;
   readonly active: boolean;

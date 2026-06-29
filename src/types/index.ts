@@ -1,3 +1,7 @@
+/**
+ * Public type surface for the commerce document model, API DTOs, and agent contracts.
+ * Re-exports primitives, aggregates, documents, and operational records via wildcard paths.
+ */
 export { MIKA_ERROR_CODES, MIKA_PROVIDER_CAPABILITIES } from "../api/types";
 export {
   MIKA_ACTION_RUN_STATUSES,

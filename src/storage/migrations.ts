@@ -1,10 +1,16 @@
+/**
+ * Kysely migrations for atomic stock and ephemeral operational tables in SQLite.
+ * Creates reservation, movement, and ephemeral record storage used by repositories.
+ */
 import { sql, type Kysely, type Migration } from "kysely";
 
+/** Named migration with stable id for operational SQLite schema evolution. */
 export interface MikaMigration extends Migration {
   readonly id: string;
   readonly name: string;
 }
 
+/** Initial migration creating stock item, stock event, and ephemeral record tables. */
 export const mikaInitialMigration: MikaMigration = {
   id: "0001",
   name: "initial_atomic_stock_and_ephemeral_state",
@@ -21,14 +27,18 @@ export const mikaInitialMigration: MikaMigration = {
   },
 };
 
+/** Alias of the initial migration for atomic operational storage bootstrap. */
 export const initialAtomicStorageMigration: Migration = mikaInitialMigration;
 
+/** Ordered registry of all Mika SQLite migrations. */
 export const mikaMigrations = [mikaInitialMigration] as const;
 
+/** Kysely migration provider map keyed by migration name. */
 export const mikaKyselyMigrations = {
   "0001_initial_atomic_stock_and_ephemeral_state": initialAtomicStorageMigration,
 } satisfies Record<string, Migration>;
 
+/** Runs a single migration against a Kysely database executor. */
 export async function executeMikaMigration(
   db: Kysely<unknown>,
   migration: Migration = mikaInitialMigration,

@@ -1,3 +1,7 @@
+/**
+ * Backend API integration tests for Mika operations and storage.
+ * Exercises repositories, route handlers, checkout flows, and notification hooks.
+ */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -87,6 +91,8 @@ import {
   createISODateTime,
   createMikaId,
   createProviderName,
+  isJsonObject,
+  isJsonValue,
   type ISODateTime,
   type JsonObject,
   type MikaId,
@@ -120,6 +126,36 @@ type MemoryRecord = {
   readonly createdAt: string;
   readonly priority?: number;
 };
+
+describe("isJsonValue / isJsonObject", () => {
+  it("accepts valid JSON that reuses a non-cyclic object reference (diamond)", () => {
+    const ref = { v: 1 };
+    const value = { a: ref, b: ref };
+
+    expect(() => JSON.stringify(value)).not.toThrow();
+    expect(isJsonValue(value)).toBe(true);
+    expect(isJsonObject(value)).toBe(true);
+
+    expect(isJsonValue([ref, ref, { nested: ref }])).toBe(true);
+  });
+
+  it("still rejects true cycles", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic["self"] = cyclic;
+    expect(isJsonValue(cyclic)).toBe(false);
+
+    const a: Record<string, unknown> = {};
+    const b: Record<string, unknown> = { a };
+    a["b"] = b;
+    expect(isJsonValue({ a, b })).toBe(false);
+  });
+
+  it("rejects non-JSON leaves", () => {
+    expect(isJsonValue(Number.POSITIVE_INFINITY)).toBe(false);
+    expect(isJsonValue({ fn: () => 1 })).toBe(false);
+    expect(isJsonValue(undefined)).toBe(false);
+  });
+});
 
 describe("backend test storage helpers", () => {
   it("satisfies the storage collection contract", () => {
@@ -433,6 +469,94 @@ describe("backend test storage helpers", () => {
     });
   });
 
+  it("discovers every due email when more than the limit share a page", async () => {
+    const clock = createTestClock();
+    const ops = new OpsRepository(createStorageCollection("ops"));
+    const dueIds: MikaId[] = [];
+    for (let index = 1; index <= 5; index += 1) {
+      const id = createTestMikaId("email", index);
+      dueIds.push(id);
+      await ops.put(
+        createEmailDocument({
+          id,
+          record: {
+            id,
+            kind: "magic_link",
+            templateKey: "magic_link",
+            attemptCount: 0,
+            nextAttemptAt: clock.isoAt(-10_000 + index),
+            metadata: { link: `https://shop.example.test/sign-in/${index}` },
+          },
+        }),
+      );
+    }
+
+    const leased = new Set<string>();
+    for (let round = 0; round < 10 && leased.size < dueIds.length; round += 1) {
+      const due = await ops.listDueEmails(TEST_NOW, 2);
+      if (due.items.length === 0) break;
+      for (const item of due.items) {
+        const result = await ops.tryLeaseEmail({
+          emailId: createMikaId(item.id),
+          leaseKey: `worker_${round}`,
+          now: TEST_NOW,
+          leaseExpiresAt: clock.isoAt(300_000),
+        });
+        if (result) leased.add(item.id);
+      }
+    }
+
+    expect([...leased].sort()).toEqual([...dueIds].sort());
+  });
+
+  it("re-queues an exhausted email for delivery on admin resend", async () => {
+    const clock = createTestClock();
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      ops: new OpsRepository(opsCollection),
+    };
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+
+    const email = createEmailDocument({
+      id: createTestMikaId("email", 1),
+      status: "failed",
+      record: {
+        id: createTestMikaId("email", 1),
+        kind: "order_confirmation",
+        templateKey: "order_confirmation",
+        status: "failed",
+        attemptCount: 5,
+        maxAttempts: 5,
+        nextAttemptAt: clock.isoAt(-1_000),
+        lastError: "Provider unavailable.",
+        leaseKey: "stale_lease",
+        leaseExpiresAt: clock.isoAt(-1),
+      },
+    });
+    await repositories.ops.put(email);
+
+    await expect(api.admin.emailResend({ emailId: email.id })).resolves.toMatchObject({
+      ok: true,
+      data: { id: email.id, status: "completed" },
+    });
+
+    const requeued = await repositories.ops.findEmail(email.id);
+    expect(requeued).toMatchObject({
+      status: "queued",
+      record: { status: "queued", attemptCount: 0, leaseKey: undefined },
+    });
+
+    await expect(
+      repositories.ops.tryLeaseEmail({
+        emailId: email.id,
+        leaseKey: "worker_resend",
+        now: TEST_NOW,
+        leaseExpiresAt: clock.isoAt(300_000),
+      }),
+    ).resolves.toMatchObject({ status: "queued", record: { attemptCount: 1 } });
+  });
+
   it("delivers queued magic-link email through the outbox runner", async () => {
     const repositories = createTestBackendRepositories();
     const sent: MikaEmailDeliveryMessage[] = [];
@@ -495,6 +619,66 @@ describe("backend test storage helpers", () => {
         sentAt: TEST_NOW,
       },
     });
+  });
+
+  it("terminalizes a delivered email when the lease is lost so it is never re-sent", async () => {
+    const repositories = createTestBackendRepositories();
+    const email = createEmailDocument({
+      id: createTestMikaId("email", 1),
+      record: {
+        id: createTestMikaId("email", 1),
+        kind: "magic_link",
+        toEmail: "subscriber@example.test",
+        templateKey: "magic_link",
+        attemptCount: 0,
+        nextAttemptAt: TEST_NOW,
+        metadata: {
+          link: "https://shop.example.test/_emdash/api/plugins/mika/magic-link/verify?token=token_1",
+          purpose: "checkout",
+          expiresAt: createTestClock().isoAt(15 * 60_000),
+        },
+      },
+    });
+    await repositories.ops.put(email);
+
+    const leaseLosingOps = Object.assign(Object.create(repositories.ops), {
+      completeEmail: async () => null,
+    });
+    const sent: MikaEmailDeliveryMessage[] = [];
+    const runner = createMikaEmailOutboxRunner({
+      repositories: { ...repositories, ops: leaseLosingOps },
+      now: () => new Date(TEST_NOW),
+      createId: createIncrementingIdFactory("email_lease"),
+      sender: async (message) => {
+        sent.push(message);
+        return { providerMessageId: "provider_message_1" };
+      },
+    });
+
+    await expect(runner.runOnce()).resolves.toMatchObject({
+      sent: 1,
+      leaseLost: 0,
+      items: [{ emailId: email.id, status: "sent", recoveredLeaseLost: true }],
+    });
+    expect(sent).toHaveLength(1);
+
+    await expect(repositories.ops.findEmail(email.id)).resolves.toMatchObject({
+      status: "sent",
+      record: { sentAt: TEST_NOW, providerMessageId: "provider_message_1" },
+    });
+
+    const resend: MikaEmailDeliveryMessage[] = [];
+    const secondRunner = createMikaEmailOutboxRunner({
+      repositories,
+      now: () => new Date(TEST_NOW),
+      createId: createIncrementingIdFactory("email_lease_second"),
+      sender: async (message) => {
+        resend.push(message);
+        return { providerMessageId: "provider_message_2" };
+      },
+    });
+    await expect(secondRunner.runOnce()).resolves.toMatchObject({ scanned: 0, sent: 0 });
+    expect(resend).toHaveLength(0);
   });
 
   it("renders order-confirmation emails from the queued order reference", async () => {
@@ -1922,6 +2106,120 @@ describe("backend test Kysely stock database harness", () => {
       );
     });
 
+    it(`${repositoryKind} stock repository contract consumes an expired reservation for late paid fulfillment`, async () => {
+      const stockItem = createStockRecord({
+        quantityOnHand: 5,
+        quantityReserved: 0,
+      });
+
+      await withStockRepositoryContractHarness(
+        repositoryKind,
+        stockItem,
+        async ({ repository, service }) => {
+          const clock = createTestClock();
+          const expiredReservation = await service.reserve({
+            stockItemId: stockItem.id,
+            quantity: 2,
+            expiresAt: clock.isoAt(30_000),
+            idempotencyKey: `${repositoryKind}_expired_consume_1`,
+          });
+          const otherReservation = await service.reserve({
+            stockItemId: stockItem.id,
+            quantity: 1,
+            expiresAt: clock.isoAt(15 * 60_000),
+            idempotencyKey: `${repositoryKind}_expired_consume_2`,
+          });
+          if (
+            expiredReservation.status !== "reserved" ||
+            otherReservation.status !== "reserved"
+          ) {
+            throw new Error("Expected reservations to be created.");
+          }
+
+          await service.releaseExpiredReservations({ now: clock.isoAt(60_000) });
+          await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+            quantityOnHand: 5,
+            quantityReserved: 1,
+          });
+
+          await expect(
+            service.consume({
+              reservationEventId: expiredReservation.event.id,
+              orderId: createTestMikaId("order", 1),
+              orderLineId: createTestMikaId("order_line", 1),
+              now: clock.isoAt(90_000),
+            }),
+          ).resolves.toMatchObject({ status: "consumed", event: { status: "consumed" } });
+
+          await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+            quantityOnHand: 3,
+            quantityReserved: 1,
+          });
+
+          await expect(
+            service.consume({
+              reservationEventId: expiredReservation.event.id,
+              orderId: createTestMikaId("order", 1),
+              orderLineId: createTestMikaId("order_line", 1),
+              now: clock.isoAt(120_000),
+            }),
+          ).resolves.toMatchObject({ status: "not_active", event: { status: "consumed" } });
+          await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+            quantityOnHand: 3,
+            quantityReserved: 1,
+          });
+        },
+      );
+    });
+
+    it(`${repositoryKind} stock repository contract re-reserves with the same idempotency key after release`, async () => {
+      const stockItem = createStockRecord({
+        quantityOnHand: 5,
+        quantityReserved: 0,
+      });
+
+      await withStockRepositoryContractHarness(
+        repositoryKind,
+        stockItem,
+        async ({ repository, service }) => {
+          const clock = createTestClock();
+          const idempotencyKey = `${repositoryKind}_rereserve_after_release`;
+
+          const first = await service.reserve({
+            stockItemId: stockItem.id,
+            quantity: 2,
+            expiresAt: clock.isoAt(15 * 60_000),
+            idempotencyKey,
+          });
+          if (first.status !== "reserved") {
+            throw new Error(`Expected reservation, received '${first.status}'.`);
+          }
+
+          await expect(
+            service.release({ reservationEventId: first.event.id, now: clock.isoAt(60_000) }),
+          ).resolves.toMatchObject({ status: "released", event: { status: "released" } });
+          await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+            quantityReserved: 0,
+          });
+
+          const retry = await service.reserve({
+            stockItemId: stockItem.id,
+            quantity: 2,
+            expiresAt: clock.isoAt(20 * 60_000),
+            idempotencyKey,
+          });
+          expect(retry.status).toBe("reserved");
+          if (retry.status !== "reserved") {
+            throw new Error(`Expected re-reservation, received '${retry.status}'.`);
+          }
+          expect(retry.event.id).not.toBe(first.event.id);
+          await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+            quantityReserved: 2,
+          });
+        },
+      );
+    });
+
     it(`${repositoryKind} stock repository contract preserves terminal reservation invariants`, async () => {
       const scenarios = [
         {
@@ -2825,7 +3123,7 @@ describe("backend API composition", () => {
 
       const tokenHash = createTestHash("magic-link-token:magic_link_token_1");
       const expectedLink =
-        "https://shop.example.test/_emdash/api/plugins/mika/magic-link/verify?token=magic_link_token_1&returnTo=%2Faccount";
+        "https://shop.example.test/account/magic-link?token=magic_link_token_1&returnTo=%2Faccount";
       await expect(harness.repositories.ephemeral.get(tokenHash)).resolves.toMatchObject({
         key: tokenHash,
         kind: "token",
@@ -2913,7 +3211,7 @@ describe("backend API composition", () => {
         kind: "magic_link.requested",
         context: {
           returnTo: "/products/test-product?ref=test",
-          link: "https://shop.example.test/_emdash/api/plugins/mika/magic-link/verify?token=magic_link_token_1&returnTo=%2Fproducts%2Ftest-product%3Fref%3Dtest",
+          link: "https://shop.example.test/account/magic-link?token=magic_link_token_1&returnTo=%2Fproducts%2Ftest-product%3Fref%3Dtest",
         },
       });
 
@@ -2924,8 +3222,37 @@ describe("backend API composition", () => {
       }
       expect(queuedEmail.record.metadata?.["returnTo"]).toBe("/products/test-product?ref=test");
       expect(queuedEmail.record.metadata?.["link"]).toBe(
-        "https://shop.example.test/_emdash/api/plugins/mika/magic-link/verify?token=magic_link_token_1&returnTo=%2Fproducts%2Ftest-product%3Fref%3Dtest",
+        "https://shop.example.test/account/magic-link?token=magic_link_token_1&returnTo=%2Fproducts%2Ftest-product%3Fref%3Dtest",
       );
+    } finally {
+      await harness.destroy();
+    }
+  });
+
+  it("builds the magic-link email URL from the configured verify page path", async () => {
+    const notificationIntents: MikaNotificationIntent[] = [];
+    const harness = await createMagicLinkHarness({
+      ttlMs: 60_000,
+      verifyPath: "/sign-in",
+      notificationHook: (intent) => {
+        notificationIntents.push(intent);
+      },
+    });
+
+    try {
+      await expect(
+        harness.api.magicLink.request(
+          createTestRequestContext({ customerId: false, userId: false }),
+          { email: "Subscriber@Example.test", returnTo: "/account" },
+        ),
+      ).resolves.toEqual({ ok: true, status: 200, data: { sent: true } });
+
+      expect(notificationIntents[0]).toMatchObject({
+        kind: "magic_link.requested",
+        context: {
+          link: "https://shop.example.test/sign-in?token=magic_link_token_1&returnTo=%2Faccount",
+        },
+      });
     } finally {
       await harness.destroy();
     }
@@ -4192,6 +4519,50 @@ describe("backend API composition", () => {
     });
   });
 
+  it("does not mutate subscription state when the provider returns a non-throwing failure", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["cancelSubscription"],
+      overrides: {
+        cancelSubscription: async () => ({
+          status: "unsupported" as const,
+          message: "Subscription is not linked to the billing provider.",
+        }),
+      },
+    });
+    const subscription = createSubscriptionDocument();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.account.put(createCustomerDocument());
+    await repositories.account.put(subscription);
+
+    await expect(
+      api.subscription.cancel(createTestRequestContext(), { subscriptionId: subscription.id }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 502,
+      error: {
+        code: "PROVIDER_FAILED",
+        message: "Subscription is not linked to the billing provider.",
+      },
+    });
+
+    await expect(repositories.account.findSubscriptionById(subscription.id)).resolves.toEqual(
+      subscription,
+    );
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
+    ).resolves.toMatchObject({
+      status: "failed",
+      record: { action: "subscription.cancel", status: "failed" },
+    });
+  });
+
   it("normalizes subscription change and renew provider failures with failed audit state", async () => {
     const cases = [
       {
@@ -5319,6 +5690,128 @@ describe("backend API composition", () => {
     });
   });
 
+  it("cumulates successive partial refunds and reaches refunded when the total is covered", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({ optionalMethods: ["refundPayment"] });
+    const order = createOrderDocument(); // totalAmount 1200
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    await repositories.ledger.put(order);
+
+    await expect(api.admin.orderRefund({ orderId: order.id, amount: 700 })).resolves.toMatchObject(
+      { ok: true },
+    );
+    await expect(repositories.ledger.findOrderById(order.id)).resolves.toMatchObject({
+      status: "partially_refunded",
+      aggregate: { metadata: { refundAmount: 700 } },
+    });
+
+    await expect(api.admin.orderRefund({ orderId: order.id, amount: 500 })).resolves.toMatchObject(
+      { ok: true },
+    );
+    await expect(repositories.ledger.findOrderById(order.id)).resolves.toMatchObject({
+      status: "refunded",
+      paymentStatus: "refunded",
+      aggregate: { metadata: { refundAmount: 1200 } },
+    });
+  });
+
+  it("deduplicates a retried order refund by idempotency key without refunding twice", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["refundPayment"],
+    });
+    const order = createOrderDocument();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.ledger.put(order);
+
+    const refundArgs = {
+      orderId: order.id,
+      amount: 500,
+      reason: "duplicate",
+      idempotencyKey: "refund_invocation_1",
+    };
+
+    const first = await api.admin.orderRefund(refundArgs);
+    expect(first).toMatchObject({ ok: true, status: 200, data: { status: "completed" } });
+
+    const second = await api.admin.orderRefund(refundArgs);
+    expect(second).toMatchObject({ ok: true, status: 200, data: { status: "completed" } });
+
+    expect(fake.getCalls().refundPayment).toEqual([
+      {
+        orderId: order.id,
+        providerPaymentId: "payment_1",
+        amount: 500,
+        reason: "duplicate",
+      },
+    ]);
+
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
+    ).resolves.toMatchObject({ status: "completed", record: { action: "order.refund" } });
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 2)),
+    ).resolves.toBeNull();
+  });
+
+  it("does not commit refund or cancel state when the provider returns a non-throwing failure", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["refundPayment", "cancelOrder"],
+      overrides: {
+        refundPayment: async () => ({ status: "failed", message: "Refund declined." }),
+        cancelOrder: async () => ({ status: "failed", message: "Cancel declined." }),
+      },
+    });
+    const refundTarget = createOrderDocument();
+    const cancelTarget = createOrderDocument({
+      id: createTestMikaId("order", 2),
+      orderNumber: "M-1002",
+      providerPaymentId: "payment_cancel",
+      providerOrderId: "provider_order_cancel",
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.ledger.put(refundTarget);
+    await repositories.ledger.put(cancelTarget);
+
+    await expect(
+      api.admin.orderRefund({ orderId: refundTarget.id, amount: 500 }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: { status: "failed", message: "Refund declined." },
+    });
+    await expect(api.admin.orderCancel({ orderId: cancelTarget.id })).resolves.toMatchObject({
+      ok: true,
+      data: { status: "failed", message: "Cancel declined." },
+    });
+
+    await expect(repositories.ledger.findOrderById(refundTarget.id)).resolves.toMatchObject({
+      status: refundTarget.status,
+      paymentStatus: refundTarget.paymentStatus,
+    });
+    await expect(repositories.ledger.findOrderById(cancelTarget.id)).resolves.toMatchObject({
+      status: cancelTarget.status,
+      paymentStatus: cancelTarget.paymentStatus,
+    });
+  });
+
   it("runs repository-backed admin actions and records audit state", async () => {
     const db = createTestMikaDb();
     await mikaInitialMigration.up(db);
@@ -6420,6 +6913,85 @@ describe("backend API composition", () => {
     });
   });
 
+  it("addresses the paid-order confirmation to the canonical account email, not the provider event email", async () => {
+    const stripe = createProviderName("stripe");
+    const sessionCollection = createStorageCollection("session");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const accountCollection = createStorageCollection("account");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      session: new SessionRepository(sessionCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+      account: new AccountRepository(accountCollection),
+    };
+    const sellable = createSellableDefinition({
+      prices: [
+        createPriceDefinition({
+          providerRefs: [{ provider: stripe, productId: "prod_payment", priceId: "price_payment" }],
+        }),
+      ],
+    });
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "payment_canonical_hash",
+            parsed: { delivery: "event_payment_canonical" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createPaymentWebhookEvent(verified, {
+            providerEventId: "event_payment_canonical",
+            providerCheckoutId: "provider_checkout_fake",
+            providerPaymentId: "payment_1",
+            providerOrderId: "provider_order_1",
+            customer: { email: "Typed@Hosted.test", name: "Typed Buyer" },
+          }),
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef: createTestContentRef(), sellables: [sellable] }),
+    );
+    await repositories.account.put(createCustomerDocument());
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const shopperCtx = createTestRequestContext({
+      sessionId: "session_payment",
+      customerId: createTestMikaId("customer", 1),
+      userId: "user_1",
+      idempotencyKey: "checkout_payment_canonical",
+    });
+
+    const cart = await api.cart.add(shopperCtx, { sellableId: sellable.id, quantity: 1 });
+    if (!cart.ok) throw new Error("Expected cart.add to succeed.");
+    const checkout = await api.checkout.start(shopperCtx, {
+      cartId: cart.data.id,
+      provider: stripe,
+    });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+
+    await receiveWebhook(api, "payment", stripe);
+
+    const order = await repositories.ledger.findOrderByProviderPayment(stripe, "payment_1");
+    expect(order?.aggregate.customer).toMatchObject({
+      customerId: "customer_1",
+      email: "Subscriber@Example.test",
+      emailHash: createTestHash("email:subscriber@example.test"),
+    });
+    const confirmationEmail = await opsCollection.get(
+      "email_order_1_order_confirmation",
+    );
+    expect(confirmationEmail).toMatchObject({
+      record: { toEmail: "Subscriber@Example.test" },
+    });
+  });
+
   it("does not run payment webhook side effects without the workflow lease", async () => {
     const stripe = createProviderName("stripe");
     const clock = createTestClock();
@@ -6718,6 +7290,147 @@ describe("backend API composition", () => {
     });
   });
 
+  it("reprocesses a failed payment webhook on provider retry without manual replay", async () => {
+    const stripe = TEST_PROVIDER;
+    const sessionCollection = createStorageCollection("session");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      session: new SessionRepository(sessionCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+    };
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "payment_retry_hash",
+            parsed: { delivery: "event_payment_retry" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createPaymentWebhookEvent(verified, {
+            providerEventId: "event_payment_retry",
+            providerCheckoutId: "provider_checkout_retry",
+            providerPaymentId: "payment_retry",
+            providerOrderId: "provider_order_retry",
+          }),
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(receiveWebhook(api, "payment-retry-failed", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "failed", replayable: true },
+    });
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({ status: "failed" });
+    await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(0);
+
+    await repositories.session.put(
+      createCheckoutDocument({
+        providerCheckoutId: "provider_checkout_retry",
+      }),
+    );
+
+    await expect(receiveWebhook(api, "payment-retry-redelivery", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "received", replayable: true },
+    });
+    await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(1);
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
+      status: "processed",
+      record: { status: "processed", relatedOrderId: "order_1" },
+    });
+  });
+
+  it("recovers a payment webhook stuck in received once a lost workflow lease expires", async () => {
+    const stripe = TEST_PROVIDER;
+    const clock = createTestClock();
+    const sessionCollection = createStorageCollection("session");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      session: new SessionRepository(sessionCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+    };
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "payment_stuck_hash",
+            parsed: { delivery: "event_payment_stuck" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createPaymentWebhookEvent(verified, {
+            providerEventId: "event_payment_stuck",
+            providerCheckoutId: "provider_checkout_stuck",
+            providerPaymentId: "payment_stuck",
+            providerOrderId: "provider_order_stuck",
+          }),
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.session.put(
+      createCheckoutDocument({ providerCheckoutId: "provider_checkout_stuck" }),
+    );
+    await repositories.ops.put(
+      createWorkflowDocument({
+        id: createMikaId("workflow_webhook_1_payment"),
+        subjectId: createMikaId("webhook_1"),
+        idempotencyKey: "event_payment_stuck",
+        status: "running",
+        nextAttemptAt: clock.isoAt(0),
+        leaseExpiresAt: clock.isoAt(300_000),
+        leaseKey: "crashed_worker",
+        leasedAt: clock.isoAt(0),
+      }),
+    );
+
+    await expect(receiveWebhook(api, "payment-stuck-first", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "received", replayable: true },
+    });
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({ status: "received" });
+    await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(0);
+
+    const redelivery = await api.webhook.receive(
+      createTestRequestContext({
+        request: createWebhookRequest(JSON.stringify({ marker: "payment-stuck-redelivery" })),
+        sessionId: false,
+        customerId: false,
+        userId: false,
+        idempotencyKey: false,
+        now: new Date(clock.isoAt(600_000)),
+      }),
+      { provider: stripe },
+    );
+    expect(redelivery).toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "received" },
+    });
+    await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(1);
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({ status: "processed" });
+  });
+
   it("does not regress refunded or cancelled orders to paid from late payment webhooks", async () => {
     const stripe = createProviderName("stripe");
     const cases = [
@@ -6808,6 +7521,17 @@ describe("backend API composition", () => {
           },
         },
       });
+      const workflow = await opsCollection.get("workflow_webhook_1_payment");
+      const steps = (
+        workflow as {
+          readonly record: { readonly steps: ReadonlyArray<{ name: string; status: string }> };
+        }
+      ).record.steps;
+      const stepStatus = (name: string): string | undefined =>
+        steps.find((step) => step.name === name)?.status;
+      expect(stepStatus("complete_checkout")).toBe("skipped");
+      expect(stepStatus("fulfill_order")).toBe("skipped");
+      await expect(opsCollection.count({ type: "email" })).resolves.toBe(0);
     }
   });
 
@@ -7476,6 +8200,110 @@ describe("backend API composition", () => {
     ]);
   });
 
+  it("ignores a stale out-of-order subscription event so a cancelled sub is not re-activated", async () => {
+    const stripe = createProviderName("stripe");
+    const accountCollection = createStorageCollection("account");
+    const opsCollection = createStorageCollection("ops");
+    const subscriptionSellable = createSellableDefinition({
+      prices: [
+        createPriceDefinition({
+          id: createTestMikaId("price", 1),
+          mode: "subscription",
+          fulfillmentKind: "entitlement",
+          entitlementKey: "course:subscription-product",
+          providerRefs: [{ provider: stripe, productId: "prod_sub", priceId: "price_sub" }],
+        }),
+      ],
+    });
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      ops: new OpsRepository(opsCollection),
+    };
+    const deliveries = [
+      {
+        payloadHash: "sub_active_hash",
+        providerEventId: "event_active",
+        status: "active" as const,
+        currentPeriodStart: createISODateTime("2026-02-01T00:00:00.000Z"),
+        currentPeriodEnd: createISODateTime("2026-03-01T00:00:00.000Z"),
+      },
+      {
+        payloadHash: "sub_cancelled_hash",
+        providerEventId: "event_cancelled",
+        status: "cancelled" as const,
+        currentPeriodStart: createISODateTime("2026-02-01T00:00:00.000Z"),
+        currentPeriodEnd: createISODateTime("2026-03-01T00:00:00.000Z"),
+      },
+      {
+        payloadHash: "sub_stale_active_hash",
+        providerEventId: "event_stale_active",
+        status: "active" as const,
+        currentPeriodStart: createISODateTime("2026-01-01T00:00:00.000Z"),
+        currentPeriodEnd: createISODateTime("2026-02-01T00:00:00.000Z"),
+      },
+    ];
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) => {
+          const delivery = deliveries[0];
+          if (!delivery) throw new Error("Unexpected webhook verification call.");
+
+          return createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: delivery.payloadHash,
+            parsed: { delivery: delivery.providerEventId },
+          });
+        },
+        parseWebhookEvent: async (verified) => {
+          const delivery = deliveries.shift();
+          if (!delivery) throw new Error("Unexpected webhook parse call.");
+
+          return createSubscriptionWebhookEvent(verified, {
+            providerEventId: delivery.providerEventId,
+            providerSubscriptionId: "provider_subscription_1",
+            providerCustomerId: "provider_customer_1",
+            providerPriceId: "price_sub",
+            status: delivery.status,
+            currentPeriodStart: delivery.currentPeriodStart,
+            currentPeriodEnd: delivery.currentPeriodEnd,
+          });
+        },
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({
+        contentRef: createTestContentRef(),
+        sellables: [subscriptionSellable],
+      }),
+    );
+    await repositories.account.put(createCustomerDocument());
+    await repositories.account.put(createProviderAccountDocument({ provider: stripe }));
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await receiveWebhook(api, "subscription-active", stripe);
+    await receiveWebhook(api, "subscription-cancelled", stripe);
+    await expect(accountCollection.get("subscription_1")).resolves.toMatchObject({
+      status: "cancelled",
+    });
+    await expect(
+      accountCollection.get("entitlement_subscription_1_subscription"),
+    ).resolves.toMatchObject({ status: "expired" });
+
+    await receiveWebhook(api, "subscription-stale-active", stripe);
+    await expect(accountCollection.get("subscription_1")).resolves.toMatchObject({
+      status: "cancelled",
+    });
+    await expect(
+      accountCollection.get("entitlement_subscription_1_subscription"),
+    ).resolves.toMatchObject({ status: "expired" });
+  });
+
   it("emits subscription renewal-failed notifications from past-due webhooks", async () => {
     const stripe = createProviderName("stripe");
     const accountCollection = createStorageCollection("account");
@@ -8086,6 +8914,57 @@ describe("backend API composition", () => {
     });
   });
 
+  it("sums quantity across split price lines of the same sellable for stock checks", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition({
+      prices: [
+        createPriceDefinition({ id: createTestMikaId("price", 1) }),
+        createPriceDefinition({ id: createTestMikaId("price", 2) }),
+      ],
+    });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({
+            sellableId: sellable.id,
+            quantityOnHand: 5,
+            quantityReserved: 3,
+          }),
+        ],
+      ]),
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_split_stock",
+    });
+
+    await expect(
+      api.cart.add(ctx, {
+        sellableId: sellable.id,
+        priceId: createTestMikaId("price", 1),
+        quantity: 2,
+      }),
+    ).resolves.toMatchObject({ ok: true, status: 200 });
+
+    await expect(
+      api.cart.add(ctx, {
+        sellableId: sellable.id,
+        priceId: createTestMikaId("price", 2),
+        quantity: 1,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "OUT_OF_STOCK" },
+    });
+  });
+
   it("returns active catalog sellables with stock availability", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition({ maxPerOrder: 3 });
@@ -8457,7 +9336,7 @@ describe("backend API composition", () => {
     });
   });
 
-  it("merges compatible cart lines from a source session into the current cart", async () => {
+  it("merges the caller's own guest cart into their cart on login handoff", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition({ maxPerOrder: 5 });
     const repositories = createTestBackendRepositories();
@@ -8465,30 +9344,39 @@ describe("backend API composition", () => {
       createCatalogItemDocument({ contentRef, sellables: [sellable] }),
     );
     const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
-    const sourceCtx = createTestRequestContext({
+    const guestCtx = createTestRequestContext({
       customerId: false,
       userId: false,
-      sessionId: "session_source",
+      sessionId: "session_handoff",
     });
-    const targetCtx = createTestRequestContext({
+    const priorCustomerCtx = createTestRequestContext({
       customerId: "customer_1",
       userId: "user_1",
-      sessionId: "session_target",
+      sessionId: "session_prior",
+    });
+    const callerCtx = createTestRequestContext({
+      customerId: "customer_1",
+      userId: "user_1",
+      sessionId: "session_handoff",
     });
 
-    await api.cart.add(sourceCtx, {
+    await api.cart.add(guestCtx, {
       sellableId: sellable.id,
       priceId: createTestMikaId("price", 1),
       quantity: 2,
     });
-    await api.cart.add(targetCtx, {
+    const customerCart = await api.cart.add(priorCustomerCtx, {
       sellableId: sellable.id,
       priceId: createTestMikaId("price", 1),
       quantity: 1,
     });
+    if (!customerCart.ok) throw new Error("expected customer cart");
 
     await expect(
-      api.cart.merge(targetCtx, { sourceSessionId: "session_source" }),
+      api.cart.merge(callerCtx, {
+        targetCartId: customerCart.data.id,
+        sourceSessionId: "session_handoff",
+      }),
     ).resolves.toMatchObject({
       ok: true,
       status: 200,
@@ -8499,8 +9387,54 @@ describe("backend API composition", () => {
       },
     });
     await expect(
-      repositories.session.findOpenCartBySession("session_source", TEST_CURRENCY),
+      repositories.session.findOpenCartBySession("session_handoff", TEST_CURRENCY),
     ).resolves.toBeNull();
+  });
+
+  it("refuses to merge a source cart the caller does not own (cross-session IDOR)", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition({ maxPerOrder: 5 });
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const victimCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_victim",
+    });
+    const attackerCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_attacker",
+    });
+
+    await api.cart.add(victimCtx, {
+      sellableId: sellable.id,
+      priceId: createTestMikaId("price", 1),
+      quantity: 2,
+    });
+    await api.cart.add(attackerCtx, {
+      sellableId: sellable.id,
+      priceId: createTestMikaId("price", 1),
+      quantity: 1,
+    });
+
+    const merged = await api.cart.merge(attackerCtx, { sourceSessionId: "session_victim" });
+    expect(merged).toMatchObject({
+      ok: true,
+      status: 200,
+      data: { items: [{ sellableId: sellable.id, quantity: 1 }] },
+    });
+
+    const victimCart = await repositories.session.findOpenCartBySession(
+      "session_victim",
+      TEST_CURRENCY,
+    );
+    expect(victimCart?.status).toBe("open");
+    expect(victimCart?.aggregate.items).toHaveLength(1);
+    expect(victimCart?.aggregate.items[0]?.quantity).toBe(2);
   });
 
   it("applies and removes coupon snapshots on cart totals", async () => {
@@ -8538,6 +9472,126 @@ describe("backend API composition", () => {
         subtotal: { amount: 2400, currency: TEST_CURRENCY },
         discount: undefined,
         total: { amount: 2400, currency: TEST_CURRENCY },
+      },
+    });
+  });
+
+  it("recomputes a percentage coupon against the current subtotal after line changes", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) throw new Error("Expected cart.add to succeed.");
+    const lineId = added.data.items[0]!.id;
+
+    await expect(api.cart.applyCoupon(ctx, { code: "SAVE10" })).resolves.toMatchObject({
+      ok: true,
+      data: {
+        subtotal: { amount: 2400 },
+        discount: { amount: 240 },
+        total: { amount: 2160 },
+      },
+    });
+
+    await expect(api.cart.update(ctx, { lineId, quantity: 1 })).resolves.toMatchObject({
+      ok: true,
+      data: {
+        subtotal: { amount: 1200 },
+        discount: { amount: 120 },
+        total: { amount: 1080 },
+      },
+    });
+    await expect(api.cart.get(ctx)).resolves.toMatchObject({
+      ok: true,
+      data: {
+        subtotal: { amount: 1200 },
+        discount: { amount: 120 },
+        total: { amount: 1080 },
+      },
+    });
+
+    const quote = await api.cart.quote(ctx, { cartId: added.data.id });
+    expect(quote).toMatchObject({
+      ok: true,
+      data: {
+        subtotal: { amount: 1200 },
+        discount: { amount: 120 },
+        total: { amount: 1080 },
+      },
+    });
+  });
+
+  it("rejects open-cart coupon access from an unbound request context", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+
+    const victimCtx = createTestRequestContext({
+      sessionId: "session_victim",
+      customerId: false,
+      userId: false,
+    });
+    const victimCart = await api.cart.add(victimCtx, { sellableId: sellable.id, quantity: 1 });
+    if (!victimCart.ok) throw new Error("Expected cart.add to succeed.");
+
+    const unboundCtx = createTestRequestContext({
+      sessionId: false,
+      customerId: false,
+      userId: false,
+    });
+
+    await expect(
+      api.cart.applyCoupon(unboundCtx, { cartId: victimCart.data.id, code: "SAVE10" }),
+    ).resolves.toMatchObject({ ok: false, status: 404 });
+    await expect(
+      api.cart.removeCoupon(unboundCtx, { cartId: victimCart.data.id }),
+    ).resolves.toMatchObject({ ok: false, status: 404 });
+    await expect(
+      api.cart.merge(unboundCtx, { targetCartId: victimCart.data.id }),
+    ).resolves.toMatchObject({ ok: false, status: 404 });
+  });
+
+  it("resolves the customer-bound cart from a session-stored identity after login", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+
+    const customerId = createMikaId("customer_login");
+    const customerCtx = createTestRequestContext({
+      sessionId: false,
+      customerId,
+      userId: false,
+    });
+    const added = await api.cart.add(customerCtx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) throw new Error("Expected cart.add to succeed.");
+
+    const sessionCtx = createTestRequestContext({
+      sessionId: "session_login",
+      customerId: false,
+      userId: false,
+    });
+    await sessionCtx.session?.set("mika.customerId", customerId);
+
+    const resolved = await api.cart.get(sessionCtx);
+    expect(resolved).toMatchObject({
+      ok: true,
+      data: {
+        id: added.data.id,
+        items: [{ sellableId: sellable.id, quantity: 2 }],
       },
     });
   });
@@ -9153,6 +10207,84 @@ describe("backend API composition", () => {
     });
   });
 
+  it("reopens an abandoned checkout_pending cart so its items are not trapped", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const stock = createStockRecord({
+      sellableId: sellable.id,
+      quantityOnHand: 5,
+      quantityReserved: 0,
+    });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([[sellable.id, stock]]),
+    });
+    const fake = createFakeMikaProvider({
+      overrides: {
+        createCheckoutSession: async () => ({
+          id: createMikaId("checkout_fake"),
+          status: "created",
+          mode: "payment",
+          provider: TEST_PROVIDER,
+          redirectUrl: "https://checkout.example.test/session/abandoned",
+          expiresAt: createTestClock().isoAt(60 * 60_000),
+          providerCheckoutId: "provider_checkout_abandoned",
+        }),
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({
+      sessionId: "session_abandon",
+      customerId: false,
+      userId: false,
+    });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) throw new Error("Expected cart.add to succeed.");
+    const cartId = added.data.id;
+
+    const checkout = await api.checkout.start(ctx, { cartId });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+    await expect(repositories.session.findById(cartId)).resolves.toMatchObject({
+      status: "checkout_pending",
+    });
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 2,
+    });
+
+    const checkoutDoc = await repositories.session.findCheckoutById(createMikaId("checkout_1"));
+    if (!checkoutDoc) throw new Error("Expected checkout document.");
+    await repositories.session.put({ ...checkoutDoc, status: "failed" });
+
+    const reopened = await api.cart.get(ctx);
+    expect(reopened).toMatchObject({
+      ok: true,
+      data: { id: cartId, items: [{ sellableId: sellable.id, quantity: 2 }] },
+    });
+    await expect(repositories.session.findById(cartId)).resolves.toMatchObject({
+      status: "open",
+    });
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 0,
+    });
+    await expect(
+      repositories.stock.findEventById(createTestMikaId("stock_event", 1)),
+    ).resolves.toMatchObject({
+      status: "released",
+    });
+
+    await expect(
+      api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 }),
+    ).resolves.toMatchObject({ ok: true, data: { id: cartId } });
+  });
+
   it("rejects checkout start for providers without hosted checkout support", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();
@@ -9453,6 +10585,122 @@ describe("backend API composition", () => {
     });
   });
 
+  it("does not redirect when the provider creates a cancelled checkout", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider({
+      overrides: {
+        createCheckoutSession: async () => ({
+          id: createMikaId("checkout_fake"),
+          status: "cancelled",
+          mode: "payment",
+          provider: TEST_PROVIDER,
+          redirectUrl: "https://checkout.example.test/session/cancelled",
+          expiresAt: createTestClock().isoAt(60 * 60_000),
+          providerCheckoutId: "provider_checkout_cancelled",
+        }),
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+
+    const checkout = await api.checkout.start(ctx, { cartId: added.data.id });
+    expect(checkout).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "checkout_1",
+        status: "cancelled",
+        mode: "payment",
+        provider: TEST_PROVIDER,
+      },
+    });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+    expect(checkout.data.redirectUrl).toBeUndefined();
+    expect(checkout.effects).toBeUndefined();
+  });
+
+  it("cancels a hosted checkout without redirecting back to the provider", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+
+    await expect(api.checkout.start(ctx, { cartId: added.data.id })).resolves.toMatchObject({
+      ok: true,
+      data: {
+        id: "checkout_1",
+        redirectUrl: "https://checkout.example.test/session/checkout_fake",
+      },
+      effects: [{ type: "redirect", url: "https://checkout.example.test/session/checkout_fake" }],
+    });
+
+    const cancelled = await api.checkout.cancel(ctx, {
+      checkoutId: createTestMikaId("checkout", 1),
+    });
+    expect(cancelled).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "checkout_1",
+        status: "cancelled",
+        mode: "payment",
+        provider: TEST_PROVIDER,
+      },
+    });
+    if (!cancelled.ok) throw new Error("Expected checkout.cancel to succeed.");
+    expect(cancelled.data.redirectUrl).toBeUndefined();
+    expect(cancelled.effects).toBeUndefined();
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 0,
+    });
+    await expect(repositories.session.findById(added.data.id)).resolves.toMatchObject({
+      type: "cart",
+      status: "open",
+    });
+  });
+
   it("replays duplicate checkout starts locally without another provider handoff", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();
@@ -9547,6 +10795,70 @@ describe("backend API composition", () => {
     ).resolves.toMatchObject({
       id: "checkout_1",
     });
+  });
+
+  it("does not replay a checkout idempotency key across a different session", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider({
+      overrides: {
+        createCheckoutSession: async () => ({
+          id: createMikaId("checkout_fake"),
+          status: "created",
+          mode: "payment",
+          provider: TEST_PROVIDER,
+          redirectUrl: "https://checkout.example.test/session/owner_only",
+          expiresAt: createTestClock().isoAt(60 * 60_000),
+          providerCheckoutId: "provider_checkout_owner_only",
+        }),
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const sharedKey = "checkout_cross_session_1";
+    const ownerCtx = createTestRequestContext({
+      sessionId: "session_owner",
+      customerId: false,
+      userId: false,
+      idempotencyKey: sharedKey,
+    });
+    const attackerCtx = createTestRequestContext({
+      sessionId: "session_attacker",
+      customerId: false,
+      userId: false,
+      idempotencyKey: sharedKey,
+    });
+
+    const owner = await api.checkout.start(ownerCtx, { sellableId: sellable.id, quantity: 1 });
+    expect(owner).toMatchObject({
+      ok: true,
+      data: { id: "checkout_1", redirectUrl: "https://checkout.example.test/session/owner_only" },
+    });
+
+    const attacker = await api.checkout.start(attackerCtx, {
+      sellableId: sellable.id,
+      quantity: 1,
+    });
+    expect(attacker).toMatchObject({ ok: false, status: 409, error: { code: "CONFLICT" } });
+    if (attacker.ok) throw new Error("Expected cross-session replay to be rejected.");
+    await expect(
+      repositories.session.findById(createTestMikaId("checkout", 2)),
+    ).resolves.toBeNull();
   });
 
   it("rejects duplicate checkout starts that reuse an idempotency key with different input", async () => {
@@ -9884,8 +11196,12 @@ describe("backend API composition", () => {
         sessionId: "session_1",
         providerCheckoutId: "provider_checkout_3",
         status: "cancelled",
+        redirectUrl: "https://checkout.example.test/cancelled",
         expiresAt: createTestClock().isoAt(-1),
-        metadata: { checkoutProviderStatus: "cancelled" },
+        metadata: {
+          checkoutProviderStatus: "cancelled",
+          checkoutRedirectUrl: "https://checkout.example.test/cancelled-stale",
+        },
       }),
     );
 
@@ -9934,6 +11250,39 @@ describe("backend API composition", () => {
         provider: TEST_PROVIDER,
       },
     });
+    const cancelledStatus = await api.checkout.status(createTestRequestContext(), {
+      checkoutId: createTestMikaId("checkout", 3),
+    });
+    expect(cancelledStatus).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "checkout_3",
+        status: "cancelled",
+        mode: "payment",
+        provider: TEST_PROVIDER,
+      },
+    });
+    if (!cancelledStatus.ok) throw new Error("Expected cancelled checkout status to succeed.");
+    expect(cancelledStatus.data.redirectUrl).toBeUndefined();
+    expect(cancelledStatus.effects).toBeUndefined();
+
+    const cancelledAgain = await api.checkout.cancel(createTestRequestContext(), {
+      checkoutId: createTestMikaId("checkout", 3),
+    });
+    expect(cancelledAgain).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "checkout_3",
+        status: "cancelled",
+        mode: "payment",
+        provider: TEST_PROVIDER,
+      },
+    });
+    if (!cancelledAgain.ok) throw new Error("Expected cancelled checkout cancel to succeed.");
+    expect(cancelledAgain.data.redirectUrl).toBeUndefined();
+    expect(cancelledAgain.effects).toBeUndefined();
   });
 
   it("compensates stock when local checkout persistence fails after provider success", async () => {
@@ -10046,13 +11395,17 @@ describe("backend API composition", () => {
       sessionId: "session_target",
     });
     const sourceCtx = createTestRequestContext({
-      customerId: false,
-      userId: false,
-      sessionId: "session_usd_source",
+      customerId: "customer_1",
+      userId: "user_1",
+      sessionId: "session_gbp_source",
     });
     const usdApi = createMikaBackendApi({
       ...dependencies,
       defaults: { ...dependencies.defaults, currency: createTestCurrencyCode("USD") },
+    });
+    const gbpApi = createMikaBackendApi({
+      ...dependencies,
+      defaults: { ...dependencies.defaults, currency: createTestCurrencyCode("GBP") },
     });
 
     await expect(
@@ -10080,10 +11433,10 @@ describe("backend API composition", () => {
       },
     });
 
-    await usdApi.cart.get(sourceCtx);
+    await gbpApi.cart.get(sourceCtx);
 
     await expect(
-      api.cart.merge(ctx, { sourceSessionId: "session_usd_source" }),
+      api.cart.merge(ctx, { sourceSessionId: "session_gbp_source" }),
     ).resolves.toMatchObject({
       ok: false,
       status: 422,
@@ -11058,7 +12411,11 @@ class FailingTerminalWebhookOpsRepository extends OpsRepository {
 }
 
 async function createMagicLinkHarness(
-  options: { readonly ttlMs?: number; readonly notificationHook?: MikaNotificationHook } = {},
+  options: {
+    readonly ttlMs?: number;
+    readonly verifyPath?: string;
+    readonly notificationHook?: MikaNotificationHook;
+  } = {},
 ): Promise<{
   readonly api: MikaApi;
   readonly repositories: MikaBackendRepositories;
@@ -11084,6 +12441,7 @@ async function createMagicLinkHarness(
       config: {
         magicLink: {
           ttlMs: options.ttlMs,
+          ...(options.verifyPath ? { verifyPath: options.verifyPath } : {}),
         },
       },
       ...(options.notificationHook
@@ -11304,6 +12662,7 @@ function createTestStockRepository(
       const releasedEvent: StockEventRecord = {
         ...event,
         status: "released",
+        idempotencyKey: undefined,
         updatedAt: release.now,
       };
       const stock = current
@@ -11314,8 +12673,8 @@ function createTestStockRepository(
           }
         : null;
       eventsById.set(releasedEvent.id, releasedEvent);
-      if (releasedEvent.idempotencyKey) {
-        eventsByIdempotencyKey.set(releasedEvent.idempotencyKey, releasedEvent);
+      if (event.idempotencyKey) {
+        eventsByIdempotencyKey.delete(event.idempotencyKey);
       }
       if (stock) {
         stockItems.set(stock.sellableId, stock);
@@ -11331,10 +12690,11 @@ function createTestStockRepository(
 
       const current =
         Array.from(stockItems.values()).find((stock) => stock.id === event.stockItemId) ?? null;
-      if (event.status !== "active") {
+      if (event.status !== "active" && event.status !== "expired") {
         return { status: "not_active", event, stock: current };
       }
 
+      const fromActive = event.status === "active";
       const consumedEvent: StockEventRecord = {
         ...event,
         status: "consumed",
@@ -11349,7 +12709,9 @@ function createTestStockRepository(
               current.policy === "finite"
                 ? Math.max(0, current.quantityOnHand - event.quantityDelta)
                 : current.quantityOnHand,
-            quantityReserved: Math.max(0, current.quantityReserved - event.quantityDelta),
+            quantityReserved: fromActive
+              ? Math.max(0, current.quantityReserved - event.quantityDelta)
+              : current.quantityReserved,
             updatedAt: consume.now,
           }
         : null;

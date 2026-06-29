@@ -1,3 +1,7 @@
+/**
+ * Astro Actions integration mapping Mika operation descriptors to typed form/json action clients
+ * for cart, checkout, wishlist, account, and subscription flows.
+ */
 /// <reference types="astro/client" />
 
 import {
@@ -35,6 +39,7 @@ import type {
   WishlistDTO,
 } from "./api/types";
 
+/** Configuration for the Astro Actions tree: API overrides, guards, and operation policy. */
 export interface MikaActionsOptions {
   readonly api?: MikaApiOverrides;
   readonly guard?: (
@@ -78,6 +83,7 @@ type MikaJsonActionClient<TInput, TOutput> = {
   readonly orThrow: (input: TInput) => Promise<Awaited<TOutput>>;
 };
 
+/** Typed Astro Actions clients for catalog, cart, checkout, wishlist, account, and subscription ops. */
 export interface MikaActions {
   readonly catalog: {
     readonly sellables: MikaJsonActionClient<ContentRefDTO, readonly SellableDTO[]>;
@@ -124,6 +130,7 @@ export interface MikaActions {
   };
 }
 
+/** Builds the Mika Astro Actions tree from operation descriptors and optional host guards. */
 export function createMikaActions(options: MikaActionsOptions = {}): MikaActions {
   const run = async <T>(
     ctx: ActionAPIContext,
@@ -189,6 +196,7 @@ export function createMikaActions(options: MikaActionsOptions = {}): MikaActions
   return buildMikaActionTree(mikaActionTreeSpec) as MikaActions;
 }
 
+/** Default Mika Astro Actions instance with library defaults. */
 export const mika: MikaActions = createMikaActions();
 
 function actionRequestContext(ctx: ActionAPIContext): MikaRequestContext {

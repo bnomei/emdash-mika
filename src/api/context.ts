@@ -1,6 +1,11 @@
+/**
+ * Per-request context for Mika operations: actor, session, idempotency, and correlation.
+ * Built by route handlers and passed into every context-aware {@link MikaApi} method.
+ */
 import { createISODateTime, type ISODateTime, type MikaId } from "../types/primitives";
 import type { MikaActorContext, MikaAuthorizationScope } from "./agent-types";
 
+/** Immutable snapshot of request-scoped identity and timing for one operation invocation. */
 export interface MikaRequestContext {
   readonly request?: Request;
   readonly url?: URL;
@@ -19,6 +24,7 @@ export interface MikaRequestContext {
   readonly now: ISODateTime;
 }
 
+/** Host session store abstraction used for anonymous cart and wishlist binding. */
 export interface MikaSessionAccess {
   readonly sessionID?: string;
   get<T = unknown>(key: string): Promise<T | undefined>;
@@ -32,6 +38,7 @@ export interface MikaSessionAccess {
   load?(id: string): Promise<void> | void;
 }
 
+/** Fields available when constructing a {@link MikaRequestContext}. */
 export interface CreateMikaRequestContextInput {
   readonly request?: Request;
   readonly url?: URL | string;
@@ -49,6 +56,7 @@ export interface CreateMikaRequestContextInput {
   readonly now?: Date;
 }
 
+/** Normalizes host request, session, and actor data into a {@link MikaRequestContext}. */
 export function createMikaRequestContext(
   input: CreateMikaRequestContextInput = {},
 ): MikaRequestContext {
@@ -80,11 +88,13 @@ export function createMikaRequestContext(
   };
 }
 
+/** Reads a non-empty string field from `FormData`. */
 export function readFormString(form: FormData, key: string): string | undefined {
   const value = form.get(key);
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+/** Reads a finite numeric field from `FormData`. */
 export function readFormNumber(form: FormData, key: string): number | undefined {
   const value = readFormString(form, key);
   if (value === undefined) return undefined;

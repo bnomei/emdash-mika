@@ -1,3 +1,7 @@
+/**
+ * Stripe implementation of MikaProviderAdapter: hosted checkout, delegated ACP payment intents,
+ * subscription lifecycle, refunds, and webhook event normalization into Mika payment events.
+ */
 import { createHash } from "node:crypto";
 
 import type {
@@ -31,11 +35,19 @@ import {
   type SubscriptionStatus,
 } from "./types/primitives";
 
+/** Default provider id for the Stripe adapter. */
 export const MIKA_STRIPE_PROVIDER_ID = createProviderName("stripe");
+
+/** Checkout metadata key carrying an ACP delegated payment token for PaymentIntent creation. */
 export const MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY = "acpPaymentToken";
+
+/** Checkout metadata key naming the ACP payment provider (stripe, adyen, braintree). */
 export const MIKA_STRIPE_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY = "acpPaymentProvider";
+
+/** Checkout metadata key storing the ACP payment authorization id after completion. */
 export const MIKA_STRIPE_PAYMENT_AUTHORIZATION_METADATA_KEY = "acpPaymentAuthorizationId";
 
+/** Minimal Stripe SDK surface required by `createMikaStripeProvider`; inject a real or mock client. */
 export interface MikaStripeClient {
   readonly checkout?: {
     readonly sessions: {
@@ -112,6 +124,7 @@ export interface MikaStripeClient {
   };
 }
 
+/** Configuration for the Stripe provider adapter including client, webhook secret, and optional catalog sync. */
 export interface CreateMikaStripeProviderOptions {
   readonly stripe: MikaStripeClient;
   readonly id?: ProviderName;
@@ -213,6 +226,7 @@ export interface MikaStripeSubscription {
 
 export type MikaStripeJsonObject = JsonObject;
 
+/** Creates a `MikaProviderAdapter` backed by Stripe checkout, billing portal, and webhooks. */
 export function createMikaStripeProvider(
   options: CreateMikaStripeProviderOptions,
 ): MikaProviderAdapter {
@@ -245,7 +259,12 @@ export function createMikaStripeProvider(
         return { orderId: input.orderId };
       }
 
-      const invoice = await options.stripe.invoices.retrieve(input.providerPaymentId);
+      const invoiceId = await resolveStripeInvoiceId(options, input.providerPaymentId);
+      if (!invoiceId) {
+        return { orderId: input.orderId };
+      }
+
+      const invoice = await options.stripe.invoices.retrieve(invoiceId);
 
       return {
         orderId: input.orderId,
@@ -414,6 +433,20 @@ async function retrieveStripeCheckoutSession(
   return stripeCheckoutSessionToMika(provider, session);
 }
 
+async function resolveStripeInvoiceId(
+  options: CreateMikaStripeProviderOptions,
+  providerPaymentId: string,
+): Promise<string | undefined> {
+  if (providerPaymentId.startsWith("in_")) return providerPaymentId;
+
+  if (providerPaymentId.startsWith("pi_") && options.stripe.paymentIntents?.retrieve) {
+    const intent = await options.stripe.paymentIntents.retrieve(providerPaymentId);
+    return stripeObjectId(intent["invoice"]);
+  }
+
+  return undefined;
+}
+
 function stripeCheckoutLineItem(line: MikaProviderLineItem): JsonObject {
   if (line.providerPriceId) {
     return {
@@ -431,7 +464,16 @@ function stripeCheckoutLineItem(line: MikaProviderLineItem): JsonObject {
         name: line.title,
         ...(line.sku ? { metadata: { sku: line.sku } } : {}),
       },
-      ...(line.mode === "subscription" ? { recurring: { interval: "month" } } : {}),
+      ...(line.mode === "subscription"
+        ? {
+            recurring: {
+              interval: line.interval ?? "month",
+              ...(line.intervalCount && line.intervalCount > 1
+                ? { interval_count: line.intervalCount }
+                : {}),
+            },
+          }
+        : {}),
     },
   };
 }
@@ -639,6 +681,10 @@ function parseStripeWebhookEvent(
     };
   }
 
+  if (STRIPE_PAYMENT_FAILURE_TYPES.has(type)) {
+    return stripePaymentFailureEvent(provider, providerEventId, type, object, input.parsed);
+  }
+
   if (type.startsWith("invoice.")) {
     if (!stripeInvoiceEventIsPaid(type, object)) {
       return unknownStripeWebhookEvent(provider, providerEventId, type, input.parsed);
@@ -698,6 +744,46 @@ function parseStripeWebhookEvent(
   }
 
   return unknownStripeWebhookEvent(provider, providerEventId, type, input.parsed);
+}
+
+const STRIPE_PAYMENT_FAILURE_TYPES = new Set([
+  "payment_intent.payment_failed",
+  "checkout.session.async_payment_failed",
+  "invoice.payment_failed",
+]);
+
+function stripePaymentFailureEvent(
+  provider: ProviderName,
+  providerEventId: string | undefined,
+  type: string,
+  object: JsonObject,
+  raw: JsonObject | undefined,
+): MikaProviderWebhookEvent {
+  const objectId = stringChild(object, "id");
+  const paymentIntentId = stripeObjectId(object["payment_intent"]);
+  const isCheckoutSession = type.startsWith("checkout.session.");
+  const isInvoice = type.startsWith("invoice.");
+  const providerCheckoutId = isCheckoutSession ? objectId : undefined;
+  const providerPaymentId = isInvoice
+    ? (paymentIntentId ?? objectId)
+    : (paymentIntentId ?? (isCheckoutSession ? undefined : objectId));
+  const providerOrderId = isInvoice ? objectId : (paymentIntentId ?? objectId);
+  const email = stringChild(object, "customer_email") ?? stringChild(object, "receipt_email");
+
+  return {
+    kind: "payment",
+    paymentStatus: "failed",
+    provider,
+    providerEventId,
+    type,
+    ...(providerCheckoutId ? { providerCheckoutId } : {}),
+    ...(providerPaymentId ? { providerPaymentId } : {}),
+    ...(providerOrderId ? { providerOrderId } : {}),
+    ...(email ? { customer: { email } } : {}),
+    lines: [],
+    totals: moneyTotalsFromStripeAmount(object),
+    raw,
+  };
 }
 
 function unknownStripeWebhookEvent(

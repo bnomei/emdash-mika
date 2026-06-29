@@ -1,3 +1,7 @@
+/**
+ * Default Mika backend: repository ports, stock lifecycle, and full {@link MikaApi} wiring.
+ * Implements cart, checkout, order, subscription, wishlist, webhook fulfillment, and admin flows.
+ */
 import type {
   MikaProviderAdapter,
   MikaProviderInvoiceInput,
@@ -21,6 +25,7 @@ import type {
   ConsumeReservedStockRepositoryInput,
   ConsumeReservedStockRepositoryResult,
   EmailCompleteRepositoryInput,
+  EmailDeliveredRepositoryInput,
   EmailFailureRepositoryInput,
   EmailLeaseRepositoryInput,
   EmailSkipRepositoryInput,
@@ -43,6 +48,7 @@ import {
   cartWithCoupon,
   cartWithoutCoupon,
   catalogSellablesToDTO,
+  couponDiscountAmount,
   createCartAggregate,
   createCheckoutAggregate,
   createOrderAggregate,
@@ -62,6 +68,7 @@ import {
   applyOrderCancel,
   applyOrderRefund,
   applyPaymentEventToOrder,
+  orderIsPaymentTerminal,
   subscriptionCancelAtPeriodEndAfterAction,
   subscriptionStatusAfterAction,
 } from "./lifecycle";
@@ -104,6 +111,7 @@ import type {
   CheckoutStatus,
   ContentRef,
   CurrencyCode,
+  FulfillmentKind,
   ISODateTime,
   JsonObject,
   JsonValue,
@@ -134,6 +142,7 @@ import type {
   CartQuoteInput,
   CartQuoteLineDTO,
   CheckoutPreviewDTO,
+  CheckoutCancelInput,
   CheckoutPreviewInput,
   CheckoutSessionDTO,
   CheckoutStatusInput,
@@ -224,6 +233,7 @@ type MikaDocumentList<TDocument> = PaginatedStorageResult<{
   readonly data: TDocument;
 }>;
 
+/** Catalog persistence boundary for sellables, prices, and content refs. */
 export interface MikaCatalogRepositoryPort {
   findItemByContent(content: ContentRef): Promise<CatalogItemDocument | null>;
   findItemBySellableId(sellableId: MikaId): Promise<CatalogItemDocument | null>;
@@ -235,11 +245,20 @@ export interface MikaCatalogRepositoryPort {
   put(document: CatalogDocument): Promise<void>;
 }
 
+/** Session-scoped cart, checkout, and wishlist persistence. */
 export interface MikaSessionRepositoryPort {
   findById(id: MikaId): Promise<SessionDocument | null>;
   findCheckoutById(id: MikaId): Promise<CheckoutDocument | null>;
   findOpenCartBySession(sessionId: string, currency: string): Promise<CartDocument | null>;
   findOpenCartByCustomer(customerId: MikaId, currency: string): Promise<CartDocument | null>;
+  findCheckoutPendingCartBySession(
+    sessionId: string,
+    currency: string,
+  ): Promise<CartDocument | null>;
+  findCheckoutPendingCartByCustomer(
+    customerId: MikaId,
+    currency: string,
+  ): Promise<CartDocument | null>;
   findWishlistBySession(sessionId: string): Promise<WishlistDocument | null>;
   findWishlistByCustomer(customerId: MikaId): Promise<WishlistDocument | null>;
   findCheckoutByProvider(
@@ -250,6 +269,7 @@ export interface MikaSessionRepositoryPort {
   put(document: SessionDocument): Promise<void>;
 }
 
+/** Customer, entitlement, license, and subscription account data. */
 export interface MikaAccountRepositoryPort {
   findCustomerById(customerId: MikaId): Promise<CustomerDocument | null>;
   findCustomerByUserId(userId: string): Promise<CustomerDocument | null>;
@@ -292,6 +312,7 @@ export interface MikaAccountRepositoryPort {
   put(document: AccountDocument): Promise<void>;
 }
 
+/** Order ledger and payment correlation lookups. */
 export interface MikaLedgerRepositoryPort {
   findOrderById(orderId: MikaId): Promise<OrderDocument | null>;
   findOrderByNumber(orderNumber: string): Promise<OrderDocument | null>;
@@ -316,6 +337,7 @@ export interface MikaLedgerRepositoryPort {
   put(document: LedgerDocument): Promise<void>;
 }
 
+/** Operational store: webhooks, workflows, emails, audits, and account-delete jobs. */
 export interface MikaOpsRepositoryPort {
   findWebhookDuplicate(input: {
     readonly provider: string;
@@ -365,10 +387,15 @@ export interface MikaOpsRepositoryPort {
   }): Promise<WorkflowDocument | null>;
   failWorkflow(input: WorkflowFailureRepositoryInput): Promise<WorkflowDocument | null>;
   findAdminAudit(auditId: MikaId): Promise<AdminAuditDocument | null>;
+  findAdminAuditByIdempotencyKey(
+    action: string,
+    idempotencyKey: string,
+  ): Promise<AdminAuditDocument | null>;
   findEmail(emailId: MikaId): Promise<EmailDocument | null>;
   listDueEmails(now: ISODateTime, limit?: number): Promise<MikaDocumentList<EmailDocument>>;
   tryLeaseEmail(input: EmailLeaseRepositoryInput): Promise<EmailDocument | null>;
   completeEmail(input: EmailCompleteRepositoryInput): Promise<EmailDocument | null>;
+  markEmailDelivered(input: EmailDeliveredRepositoryInput): Promise<EmailDocument | null>;
   failEmail(input: EmailFailureRepositoryInput): Promise<EmailDocument | null>;
   skipEmail(input: EmailSkipRepositoryInput): Promise<EmailDocument | null>;
   redactQueuedFailedEmailsForAccountDelete(
@@ -392,6 +419,7 @@ export interface MikaOpsRepositoryPort {
   put(document: OpsDocument): Promise<void>;
 }
 
+/** Stock items, reservation events, and quantity adjustments. */
 export interface MikaStockRepositoryPort {
   findItemById(stockItemId: MikaId): Promise<StockItemRecord | null>;
   findBySellableId(sellableId: MikaId): Promise<StockItemRecord | null>;
@@ -416,6 +444,7 @@ export interface MikaStockRepositoryPort {
   adjustStock(input: AdjustStockRepositoryInput): Promise<AdjustStockRepositoryResult>;
 }
 
+/** Short-lived tokens, counters, and rate-limit state. */
 export interface MikaEphemeralRepositoryPort {
   get(key: string): Promise<EphemeralRecord | null>;
   put(record: EphemeralRecord): Promise<void>;
@@ -433,6 +462,7 @@ export interface MikaEphemeralRepositoryPort {
   deleteTokensBySubjectHashes(subjectHashes: readonly string[]): Promise<number>;
 }
 
+/** Aggregate repository ports required by {@link createMikaBackendApi}. */
 export interface MikaBackendRepositories {
   readonly catalog: MikaCatalogRepositoryPort;
   readonly session: MikaSessionRepositoryPort;
@@ -443,18 +473,24 @@ export interface MikaBackendRepositories {
   readonly ephemeral: MikaEphemeralRepositoryPort;
 }
 
+/** Injectable clock for deterministic tests and jobs. */
 export type MikaBackendNow = () => Date;
+/** Injectable ISO timestamp source aligned with backend `now`. */
 export type MikaBackendISODateTime = () => ISODateTime;
+/** Namespaced id generator for documents and events. */
 export type MikaBackendIdFactory = (namespace: string) => MikaId;
 export type MikaBackendHashInput = string | Uint8Array;
+/** Hash helper for PII, tokens, and webhook payload deduplication. */
 export type MikaBackendHashHelper = (input: MikaBackendHashInput) => Promise<string> | string;
 
+/** Site-wide defaults applied when request context omits values. */
 export interface MikaBackendDefaults {
   readonly currency?: CurrencyCode;
   readonly locale?: string;
   readonly provider?: ProviderName;
 }
 
+/** TTLs, redirect URLs, and metadata knobs for backend-owned resources. */
 export interface MikaBackendConfig {
   readonly accountExport?: {
     readonly ttlMs?: number;
@@ -472,6 +508,7 @@ export interface MikaBackendConfig {
   };
   readonly magicLink?: {
     readonly ttlMs?: number;
+    readonly verifyPath?: string;
   };
   readonly metadata?: JsonObject;
   readonly order?: {
@@ -482,6 +519,7 @@ export interface MikaBackendConfig {
   };
 }
 
+/** Shared dependencies injected into backend services and handlers. */
 export interface MikaBackendDependencies {
   readonly config?: MikaBackendConfig;
   readonly createId: MikaBackendIdFactory;
@@ -496,9 +534,17 @@ export interface MikaBackendDependencies {
   readonly repositories: MikaBackendRepositories;
 }
 
+/** Input for constructing a fully wired {@link MikaApi} from repositories and providers. */
 export interface CreateMikaBackendApiInput extends MikaBackendDependencies {
   readonly overrides?: MikaApiOverrides;
 }
+
+type MikaStockLifecycleDependencies = Pick<
+  MikaBackendDependencies,
+  "createId" | "isoNow" | "now"
+> & {
+  readonly repositories: Pick<MikaBackendRepositories, "stock">;
+};
 
 type MikaCartWishlistBackendRepositories = Pick<
   MikaBackendRepositories,
@@ -508,6 +554,7 @@ type MikaCartWishlistBackendInput = Omit<CreateMikaBackendApiInput, "repositorie
   readonly repositories: MikaCartWishlistBackendRepositories;
 };
 
+/** Input for creating a time-bounded stock reservation tied to cart or checkout. */
 export interface ReserveStockInput {
   readonly stockItemId: MikaId;
   readonly quantity: number;
@@ -523,6 +570,7 @@ export interface ReserveStockInput {
 
 export type ReserveStockResult = ReserveStockRepositoryResult;
 
+/** Input for releasing a prior stock reservation by event id. */
 export interface ReleaseReservedStockInput {
   readonly reservationEventId: MikaId;
   readonly now?: ISODateTime;
@@ -530,6 +578,7 @@ export interface ReleaseReservedStockInput {
 
 export type ReleaseReservedStockResult = ReleaseReservedStockRepositoryResult;
 
+/** Input for consuming a reservation at order fulfillment. */
 export interface ConsumeReservedStockInput {
   readonly reservationEventId: MikaId;
   readonly now?: ISODateTime;
@@ -539,18 +588,21 @@ export interface ConsumeReservedStockInput {
 
 export type ConsumeReservedStockResult = ConsumeReservedStockRepositoryResult;
 
+/** Input for maintenance sweep of expired stock reservations. */
 export interface ReleaseExpiredReservationsInput {
   readonly now?: ISODateTime;
 }
 
 export type ReleaseExpiredReservationsResult = ReleaseExpiredReservationsRepositoryResult;
 
+/** Admin stock adjustment with optional clock override. */
 export interface AdjustStockInput extends StockAdjustInput {
   readonly now?: ISODateTime;
 }
 
 export type AdjustStockResult = AdjustStockRepositoryResult;
 
+/** Stock reservation and adjustment API used by cart, checkout, and maintenance. */
 export interface MikaStockLifecycleService {
   reserve(input: ReserveStockInput): Promise<ReserveStockResult>;
   release(input: ReleaseReservedStockInput): Promise<ReleaseReservedStockResult>;
@@ -561,8 +613,9 @@ export interface MikaStockLifecycleService {
   adjust(input: AdjustStockInput): Promise<AdjustStockResult>;
 }
 
+/** Builds a stock lifecycle service bound to backend repositories and clocks. */
 export function createMikaStockLifecycleService(
-  input: MikaBackendDependencies,
+  input: MikaStockLifecycleDependencies,
 ): MikaStockLifecycleService {
   return {
     reserve: async (reservation) =>
@@ -594,6 +647,7 @@ export function createMikaStockLifecycleService(
   };
 }
 
+/** Creates the production {@link MikaApi} implementation from storage and provider adapters. */
 export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi {
   return createMikaApi({
     ...input.overrides,
@@ -759,6 +813,7 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
     checkout: {
       start: async (ctx, checkoutInput) => startCheckout(input, ctx, checkoutInput),
       status: async (ctx, statusInput) => checkoutStatus(input, ctx, statusInput),
+      cancel: async (ctx, cancelInput) => cancelCheckout(input, ctx, cancelInput),
       preview: async (ctx, previewInput) => {
         const preview = await createCheckoutPreview(input, ctx, previewInput);
 
@@ -827,7 +882,12 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
       const currentItems = existing?.aggregate.items ?? [];
       const existingLine = currentItems.find((line) => isEquivalentCartLine(line, resolved.line));
       const nextQuantity = (existingLine?.quantity ?? 0) + resolved.line.quantity;
-      const quantityError = validateQuantityLimit(resolved.sellable, resolved.stock, nextQuantity);
+      const sellableDemand = nextQuantity + siblingSellableQuantity(currentItems, resolved.line);
+      const quantityError = validateQuantityLimit(
+        resolved.sellable,
+        resolved.stock,
+        sellableDemand,
+      );
       if (quantityError) return quantityError;
 
       const document = existing ?? createCartDocument(input, ctx, currency);
@@ -859,7 +919,9 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
       );
       const stock = await input.repositories.stock.findBySellableId(line.item.sellableId);
       if (sellable) {
-        const quantityError = validateQuantityLimit(sellable, stock, itemInput.quantity);
+        const sellableDemand =
+          itemInput.quantity + siblingSellableQuantity(document.aggregate.items, line);
+        const quantityError = validateQuantityLimit(sellable, stock, sellableDemand);
         if (quantityError) return quantityError;
       }
 
@@ -916,7 +978,7 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
       const source =
         (await input.repositories.session.findOpenCartBySession(sourceSessionId, currency)) ??
         (await findOpenCartBySessionAnyCurrency(input, sourceSessionId));
-      if (!source || source.id === targetResult.cart.id) {
+      if (!source || source.id === targetResult.cart.id || !callerOwnsMergeSource(ctx, source)) {
         return {
           ok: true,
           status: 200,
@@ -992,7 +1054,7 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
     },
   } satisfies MikaApi["cart"];
 
-  return { ...cart, ...input.overrides?.cart };
+  return withHydratedCustomerContext({ ...cart, ...input.overrides?.cart });
 }
 
 function createWishlistBackend(input: MikaCartWishlistBackendInput): MikaApi["wishlist"] {
@@ -1148,7 +1210,7 @@ function createWishlistBackend(input: MikaCartWishlistBackendInput): MikaApi["wi
     },
   } satisfies MikaApi["wishlist"];
 
-  return { ...wishlist, ...input.overrides?.wishlist };
+  return withHydratedCustomerContext({ ...wishlist, ...input.overrides?.wishlist });
 }
 
 async function getAccount(
@@ -1329,7 +1391,7 @@ async function requestAccountExport(
   await emitBackendNotification(input, "account.export_ready", now, {
     ...(record.customerId ? { customerId: record.customerId } : {}),
     ...(record.userId ? { userId: record.userId } : {}),
-    ...(identity.customer?.emailHash ?? identity.emailHash
+    ...((identity.customer?.emailHash ?? identity.emailHash)
       ? { emailHash: identity.customer?.emailHash ?? identity.emailHash }
       : {}),
     exportId,
@@ -1580,7 +1642,14 @@ async function runSubscriptionAction(
       },
     },
     async () => {
-      await providerFeature.method.call(providerFeature.provider, providerInput);
+      const result = await providerFeature.method.call(providerFeature.provider, providerInput);
+      if (result.status !== "completed") {
+        throw new Error(
+          result.message ??
+            `Provider subscription ${action} did not complete (status: ${result.status}).`,
+        );
+      }
+
       await updateSubscriptionAfterAction(input, ctx, subscription, action, priceMatch);
 
       return accountDTOForCustomer(input, ctx, identity.customer);
@@ -1746,6 +1815,7 @@ async function refundOrder(
       action: "order.refund",
       targetType: "order",
       targetId: order.id,
+      idempotencyKey: refundInput.idempotencyKey,
       metadata: {
         provider: order.provider,
         orderId: order.id,
@@ -1756,6 +1826,10 @@ async function refundOrder(
     },
     async () => {
       const result = await providerFeature.method.call(providerFeature.provider, providerInput);
+      if (result.status !== "completed") {
+        return { ...result, id: result.id ?? order.id };
+      }
+
       const updated = updateOrderAfterRefund(order, refundInput, currentBackendISODateTime(input));
       await input.repositories.ledger.put(updated);
 
@@ -1798,6 +1872,7 @@ async function cancelOrder(
       action: "order.cancel",
       targetType: "order",
       targetId: order.id,
+      idempotencyKey: cancelInput.idempotencyKey,
       metadata: {
         provider: order.provider,
         orderId: order.id,
@@ -1807,6 +1882,10 @@ async function cancelOrder(
     },
     async () => {
       const result = await providerFeature.method.call(providerFeature.provider, providerInput);
+      if (result.status !== "completed") {
+        return { ...result, id: result.id ?? order.id };
+      }
+
       const updated = updateOrderAfterCancel(order, cancelInput, currentBackendISODateTime(input));
       await input.repositories.ledger.put(updated);
 
@@ -1911,6 +1990,7 @@ async function grantEntitlement(
       action: "entitlement.grant",
       targetType: "entitlement",
       targetId: entitlementId,
+      idempotencyKey: grantInput.idempotencyKey,
       metadata: {
         entitlementKey: grantInput.entitlementKey,
         ...(grantInput.customerId ? { customerId: grantInput.customerId } : {}),
@@ -1965,6 +2045,7 @@ async function revokeEntitlement(
       action: "entitlement.revoke",
       targetType: "entitlement",
       targetId: entitlement.id,
+      idempotencyKey: revokeInput.idempotencyKey,
       metadata: {
         entitlementId: entitlement.id,
         entitlementKey: entitlement.entitlementKey,
@@ -2023,6 +2104,7 @@ async function resendEmail(
       action: "email.resend",
       targetType: "email",
       targetId: email.id,
+      idempotencyKey: resendInput.idempotencyKey,
       metadata: {
         emailId: email.id,
         kind: email.kind,
@@ -2039,6 +2121,10 @@ async function resendEmail(
           ...email.record,
           status: "queued",
           nextAttemptAt: now,
+          attemptCount: 0,
+          leaseKey: undefined,
+          leasedAt: undefined,
+          leaseExpiresAt: undefined,
           lastError: undefined,
           metadata: {
             ...email.record.metadata,
@@ -2081,6 +2167,7 @@ async function revokeLicense(
       action: "license.revoke",
       targetType: "license",
       targetId: license.id,
+      idempotencyKey: revokeInput.idempotencyKey,
       metadata: {
         licenseId: license.id,
         ...(license.customerId ? { customerId: license.customerId } : {}),
@@ -2150,6 +2237,7 @@ async function issueDownload(
       targetType: "download",
       targetId: createMikaId(target.downloadRef),
       createdAt: now,
+      idempotencyKey: issueInput.idempotencyKey,
       metadata: {
         orderId: target.order.id,
         orderLineId: target.line.id,
@@ -2349,10 +2437,19 @@ function addDownloadRefToOrder(
   };
 }
 
+const ADMIN_AUDIT_RESULT_METADATA_KEY = "result";
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 async function completeAdminAudit(
   input: CreateMikaBackendApiInput,
   audit: AdminAuditDocument,
+  result?: unknown,
 ): Promise<void> {
+  const resultSnapshot = audit.record.idempotencyKey && isJsonObject(result) ? result : undefined;
+
   await input.repositories.ops.writeAudit({
     ...audit,
     status: "completed",
@@ -2360,8 +2457,22 @@ async function completeAdminAudit(
     record: {
       ...audit.record,
       status: "completed",
+      ...(resultSnapshot
+        ? {
+            metadata: {
+              ...audit.record.metadata,
+              [ADMIN_AUDIT_RESULT_METADATA_KEY]: resultSnapshot,
+            },
+          }
+        : {}),
     },
   });
+}
+
+function adminAuditReplayResult<TData>(audit: AdminAuditDocument): TData | null {
+  const snapshot = audit.record.metadata?.[ADMIN_AUDIT_RESULT_METADATA_KEY];
+
+  return isJsonObject(snapshot) ? (snapshot as TData) : null;
 }
 
 async function failAdminAudit(
@@ -2452,6 +2563,28 @@ async function runAdminAction<TData>(
   fallbackMessage: string,
   failure: (message: string) => MikaApiFailure,
 ): Promise<MikaApiResult<TData>> {
+  if (record.idempotencyKey) {
+    const prior = await input.repositories.ops.findAdminAuditByIdempotencyKey(
+      record.action,
+      record.idempotencyKey,
+    );
+    if (prior?.record.status === "completed") {
+      const replay = adminAuditReplayResult<TData>(prior);
+      if (replay !== null) {
+        return { ok: true, status: 200, data: replay };
+      }
+    } else if (prior?.record.status === "started") {
+      return {
+        ok: false,
+        status: 409,
+        error: {
+          code: "CONFLICT",
+          message: `Admin action '${record.action}' is already in progress for this idempotency key.`,
+        },
+      };
+    }
+  }
+
   const audit = createAdminAuditDocument(input, {
     ...record,
     status: "started",
@@ -2461,7 +2594,7 @@ async function runAdminAction<TData>(
 
   try {
     const data = await action(audit);
-    await completeAdminAudit(input, audit);
+    await completeAdminAudit(input, audit, data);
 
     return {
       ok: true,
@@ -2610,7 +2743,7 @@ async function requestMagicLink(
     },
   });
 
-  const link = magicLinkUrl(ctx, token, safeReturnTo);
+  const link = magicLinkUrl(input, ctx, token, safeReturnTo);
   const intent: MikaNotificationIntent<"magic_link.requested"> = {
     kind: "magic_link.requested",
     occurredAt: now,
@@ -3147,11 +3280,20 @@ async function hashMagicLinkToken(
   return input.hash(`magic-link-token:${token}`);
 }
 
-function magicLinkUrl(ctx: MikaRequestContext, token: string, returnTo?: string): string {
-  return mikaPluginRoute("magicLinkVerify", {
-    origin: ctx.url?.origin,
-    search: { token, returnTo },
-  });
+const DEFAULT_MAGIC_LINK_VERIFY_PATH = "/account/magic-link";
+
+function magicLinkUrl(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  token: string,
+  returnTo?: string,
+): string {
+  const verifyPath = input.config?.magicLink?.verifyPath ?? DEFAULT_MAGIC_LINK_VERIFY_PATH;
+  const search = new URLSearchParams({ token });
+  if (returnTo) search.set("returnTo", returnTo);
+  const target = `${verifyPath}?${search.toString()}`;
+
+  return ctx.url?.origin ? new URL(target, ctx.url.origin).toString() : target;
 }
 
 function accountPortalReturnUrl(ctx: MikaRequestContext, returnTo?: string): string {
@@ -3256,7 +3398,27 @@ async function receiveWebhook(
     eventType,
     payloadHash: verified.payloadHash,
   });
-  if (duplicate) return webhookDuplicateResult(duplicate);
+  if (duplicate) {
+    if (
+      !(
+        event.kind === "payment" &&
+        (duplicate.status === "failed" || duplicate.status === "received")
+      )
+    ) {
+      return webhookDuplicateResult(duplicate);
+    }
+
+    const reprocessed = await processStoredWebhook(input, ctx, duplicate, event);
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        id: reprocessed.id,
+        status: reprocessed.status === "failed" ? "failed" : "received",
+        replayable: true,
+      },
+    };
+  }
 
   const webhook = createWebhookDocument(input, ctx, verified, event, {
     eventType,
@@ -3786,16 +3948,21 @@ function isSubscriptionStatus(value: string | undefined): value is SubscriptionS
   );
 }
 
-function isFulfillmentKind(
-  value: string | undefined,
-): value is MikaProviderLineItem["fulfillmentKind"] {
-  return (
-    value === "none" ||
-    value === "download" ||
-    value === "license" ||
-    value === "entitlement" ||
-    value === "physical"
-  );
+const FULFILLMENT_KINDS = [
+  "none",
+  "entitlement",
+  "download",
+  "license",
+  "external",
+] as const satisfies readonly FulfillmentKind[];
+
+type AssertAllFulfillmentKinds =
+  Exclude<FulfillmentKind, (typeof FULFILLMENT_KINDS)[number]> extends never ? true : never;
+const _assertAllFulfillmentKinds: AssertAllFulfillmentKinds = true;
+void _assertAllFulfillmentKinds;
+
+function isFulfillmentKind(value: string | undefined): value is FulfillmentKind {
+  return value !== undefined && (FULFILLMENT_KINDS as readonly string[]).includes(value);
 }
 
 async function processStoredWebhook(
@@ -3865,7 +4032,7 @@ async function emitCheckoutPaymentFailedNotification(
     ...(checkout?.customerId ? { customerId: checkout.customerId } : {}),
     ...(checkout?.id ? { checkoutId: checkout.id } : {}),
     provider: event.provider,
-    ...(event.providerCheckoutId ?? checkout?.providerCheckoutId
+    ...((event.providerCheckoutId ?? checkout?.providerCheckoutId)
       ? { providerCheckoutId: event.providerCheckoutId ?? checkout?.providerCheckoutId }
       : {}),
     ...(event.providerPaymentId ? { providerPaymentId: event.providerPaymentId } : {}),
@@ -3891,12 +4058,9 @@ async function processPaymentWebhook(
       const order = await runWorkflowStep("persist_order", () =>
         updatePaymentOrderFromEvent(input, ctx, orderSource, event),
       );
-      await runWorkflowStep("complete_checkout", () =>
-        completeCheckoutForPaymentOrder(input, ctx, order, event),
-      );
-      const fulfilledOrder = await runWorkflowStep("fulfill_order", () =>
-        fulfillPaidOrder(input, ctx, order),
-      );
+      const fulfilledOrder = orderIsPaymentTerminal(order)
+        ? order
+        : await fulfillCheckoutPaymentOrder(input, ctx, runWorkflowStep, order, event);
 
       return runWorkflowStep("mark_webhook", () =>
         markWebhookProcessedForOrder(input, webhook, ctx.now, fulfilledOrder),
@@ -3926,12 +4090,9 @@ async function processPaymentWebhook(
       const order = await runWorkflowStep("persist_order", () =>
         updatePaymentOrderFromEvent(input, ctx, orderSource, event),
       );
-      await runWorkflowStep("complete_checkout", () =>
-        completeCheckoutForPaymentOrder(input, ctx, order, event, checkout),
-      );
-      const fulfilledOrder = await runWorkflowStep("fulfill_order", () =>
-        fulfillPaidOrder(input, ctx, order),
-      );
+      const fulfilledOrder = orderIsPaymentTerminal(order)
+        ? order
+        : await fulfillCheckoutPaymentOrder(input, ctx, runWorkflowStep, order, event, checkout);
 
       return runWorkflowStep("mark_webhook", () =>
         markWebhookProcessedForOrder(input, webhook, ctx.now, fulfilledOrder),
@@ -3958,6 +4119,21 @@ async function processPaymentWebhook(
       markWebhookProcessedForOrder(input, webhook, ctx.now, fulfilledOrder),
     );
   });
+}
+
+async function fulfillCheckoutPaymentOrder(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  runWorkflowStep: RunPaymentWebhookWorkflowStep,
+  order: OrderDocument,
+  event: MikaProviderPaymentEvent,
+  checkout?: CheckoutDocument,
+): Promise<OrderDocument> {
+  await runWorkflowStep("complete_checkout", () =>
+    completeCheckoutForPaymentOrder(input, ctx, order, event, checkout),
+  );
+
+  return runWorkflowStep("fulfill_order", () => fulfillPaidOrder(input, ctx, order));
 }
 
 async function runPaymentWebhookWorkflow(
@@ -4365,12 +4541,27 @@ async function findOrCreateSubscriptionFromEvent(
   };
 }
 
+function subscriptionEventIsStale(
+  subscription: SubscriptionDocument,
+  event: MikaProviderSubscriptionEvent,
+): boolean {
+  const appliedStart = subscription.aggregate.currentPeriodStart;
+  const eventStart = event.currentPeriodStart;
+  if (!appliedStart || !eventStart) return false;
+
+  return new Date(eventStart).getTime() < new Date(appliedStart).getTime();
+}
+
 async function updateSubscriptionFromEvent(
   input: CreateMikaBackendApiInput,
   ctx: MikaRequestContext,
   subscription: SubscriptionDocument,
   event: MikaProviderSubscriptionEvent,
 ): Promise<SubscriptionDocument> {
+  if (subscriptionEventIsStale(subscription, event)) {
+    return subscription;
+  }
+
   const updated: SubscriptionDocument = {
     ...subscription,
     providerCustomerId: event.providerCustomerId ?? subscription.providerCustomerId,
@@ -4485,8 +4676,7 @@ async function emitSubscriptionLifecycleNotification(
   const kind =
     subscription.status === "past_due"
       ? "subscription.renewal_failed"
-      : options.created &&
-          (subscription.status === "active" || subscription.status === "trialing")
+      : options.created && (subscription.status === "active" || subscription.status === "trialing")
         ? "subscription.started"
         : "subscription.updated";
 
@@ -4498,20 +4688,34 @@ async function emitSubscriptionLifecycleNotification(
       ? { previousStatus: options.previous.status }
       : {}),
     provider: subscription.provider,
-    ...(subscription.providerCustomerId ?? subscription.aggregate.providerRef.customerId
-      ? { providerCustomerId: subscription.providerCustomerId ?? subscription.aggregate.providerRef.customerId }
+    ...((subscription.providerCustomerId ?? subscription.aggregate.providerRef.customerId)
+      ? {
+          providerCustomerId:
+            subscription.providerCustomerId ?? subscription.aggregate.providerRef.customerId,
+        }
       : {}),
-    ...(subscription.providerSubscriptionId ?? subscription.aggregate.providerRef.subscriptionId
-      ? { providerSubscriptionId: subscription.providerSubscriptionId ?? subscription.aggregate.providerRef.subscriptionId }
+    ...((subscription.providerSubscriptionId ?? subscription.aggregate.providerRef.subscriptionId)
+      ? {
+          providerSubscriptionId:
+            subscription.providerSubscriptionId ??
+            subscription.aggregate.providerRef.subscriptionId,
+        }
       : {}),
-    ...(subscription.aggregate.providerRef.priceId ? { providerPriceId: subscription.aggregate.providerRef.priceId } : {}),
-    ...(subscription.currentPeriodEnd ?? subscription.aggregate.currentPeriodEnd
-      ? { currentPeriodEnd: subscription.currentPeriodEnd ?? subscription.aggregate.currentPeriodEnd }
+    ...(subscription.aggregate.providerRef.priceId
+      ? { providerPriceId: subscription.aggregate.providerRef.priceId }
+      : {}),
+    ...((subscription.currentPeriodEnd ?? subscription.aggregate.currentPeriodEnd)
+      ? {
+          currentPeriodEnd:
+            subscription.currentPeriodEnd ?? subscription.aggregate.currentPeriodEnd,
+        }
       : {}),
     cancelAtPeriodEnd: subscription.aggregate.cancelAtPeriodEnd,
     sellableId: subscription.aggregate.sellable.sellableId,
     title: subscription.aggregate.sellable.titleSnapshot,
-    ...(subscription.aggregate.entitlementId ? { entitlementId: subscription.aggregate.entitlementId } : {}),
+    ...(subscription.aggregate.entitlementId
+      ? { entitlementId: subscription.aggregate.entitlementId }
+      : {}),
     ...(options.event?.type ? { eventType: options.event.type } : {}),
   });
 }
@@ -4772,12 +4976,20 @@ async function paymentCustomerSnapshot(
   checkout: CheckoutDocument,
   event: MikaProviderPaymentEvent,
 ): Promise<CustomerSnapshot> {
-  const normalizedEmail = event.customer?.email?.trim().toLowerCase();
+  const customer = checkout.customerId
+    ? await input.repositories.account.findCustomerById(checkout.customerId)
+    : null;
+  const email = customer?.aggregate.email ?? event.customer?.email;
+  const normalizedEmail = email?.trim().toLowerCase();
+  const canonicalEmailHash = customer?.emailHash ?? customer?.aggregate.emailHash;
 
   return {
     customerId: checkout.customerId,
-    email: event.customer?.email,
-    emailHash: normalizedEmail ? await input.hash(`email:${normalizedEmail}`) : undefined,
+    ...(customer?.userId ? { userId: customer.userId } : {}),
+    email,
+    emailHash:
+      canonicalEmailHash ??
+      (normalizedEmail ? await input.hash(`email:${normalizedEmail}`) : undefined),
     name: event.customer?.name,
     company: event.customer?.company,
     vatId: event.customer?.vatId,
@@ -5168,7 +5380,9 @@ async function emitOrderDownloadReadyNotifications(
 
   for (const line of order.aggregate.lines) {
     const originalRefs = new Set(originalById.get(line.id)?.downloadRefs ?? []);
-    const addedRefs = (line.downloadRefs ?? []).filter((downloadRef) => !originalRefs.has(downloadRef));
+    const addedRefs = (line.downloadRefs ?? []).filter(
+      (downloadRef) => !originalRefs.has(downloadRef),
+    );
 
     for (const downloadRef of addedRefs) {
       await emitBackendNotification(input, "download.ready", ctx.now, {
@@ -5370,9 +5584,13 @@ async function markWebhookFailed(
     ...(persisted.providerEventId ? { providerEventId: persisted.providerEventId } : {}),
     payloadHash: persisted.payloadHash,
     lastError,
-    ...(persisted.record.relatedCustomerId ? { relatedCustomerId: persisted.record.relatedCustomerId } : {}),
+    ...(persisted.record.relatedCustomerId
+      ? { relatedCustomerId: persisted.record.relatedCustomerId }
+      : {}),
     ...(persisted.record.relatedOrderId ? { relatedOrderId: persisted.record.relatedOrderId } : {}),
-    ...(persisted.record.relatedSubscriptionId ? { relatedSubscriptionId: persisted.record.relatedSubscriptionId } : {}),
+    ...(persisted.record.relatedSubscriptionId
+      ? { relatedSubscriptionId: persisted.record.relatedSubscriptionId }
+      : {}),
   });
 
   return persisted;
@@ -5439,11 +5657,11 @@ async function findOwnedActiveWishlistById(
     return invalidWishlist("targetWishlistId", wishlistId);
   }
 
-  if (ctx.customerId) {
+  if (document.customerId) {
     if (document.customerId !== ctx.customerId) {
       return invalidWishlist("targetWishlistId", wishlistId);
     }
-  } else if (ctx.sessionId && document.sessionId !== ctx.sessionId) {
+  } else if (document.sessionId && document.sessionId !== ctx.sessionId) {
     return invalidWishlist("targetWishlistId", wishlistId);
   }
 
@@ -5509,13 +5727,71 @@ async function findOpenCart(
   ctx: MikaRequestContext,
   currency: CurrencyCode,
 ): Promise<CartDocument | null> {
-  if (ctx.customerId) {
-    return input.repositories.session.findOpenCartByCustomer(ctx.customerId, currency);
+  const open = ctx.customerId
+    ? await input.repositories.session.findOpenCartByCustomer(ctx.customerId, currency)
+    : ctx.sessionId
+      ? await input.repositories.session.findOpenCartBySession(ctx.sessionId, currency)
+      : null;
+  if (open) return open;
+
+  return reopenAbandonedCheckoutCart(input, ctx, currency);
+}
+
+async function reopenAbandonedCheckoutCart(
+  input: MikaCartWishlistBackendInput,
+  ctx: MikaRequestContext,
+  currency: CurrencyCode,
+): Promise<CartDocument | null> {
+  const pending = ctx.customerId
+    ? await input.repositories.session.findCheckoutPendingCartByCustomer(ctx.customerId, currency)
+    : ctx.sessionId
+      ? await input.repositories.session.findCheckoutPendingCartBySession(ctx.sessionId, currency)
+      : null;
+  if (!pending) return null;
+
+  const checkoutId = metadataMikaId(pending.aggregate.metadata, "checkoutSessionId");
+  const checkout = checkoutId
+    ? await input.repositories.session.findCheckoutById(checkoutId)
+    : null;
+  if (checkout && (checkout.status === "completed" || checkoutIsResumable(checkout, ctx.now))) {
+    return null;
   }
 
-  return ctx.sessionId
-    ? input.repositories.session.findOpenCartBySession(ctx.sessionId, currency)
-    : null;
+  const reservationIds = pending.aggregate.items
+    .map((item) => item.reservationId)
+    .filter((id): id is MikaId => Boolean(id));
+  if (reservationIds.length > 0) {
+    await releaseCheckoutReservations(input, reservationIds, ctx.now);
+  }
+
+  const reopened = reopenCartDocument(pending, ctx.now);
+  await input.repositories.session.put(reopened);
+
+  return reopened;
+}
+
+function checkoutIsResumable(checkout: CheckoutDocument, now: ISODateTime): boolean {
+  if (checkout.status !== "created" && checkout.status !== "redirected") return false;
+  if (!checkout.expiresAt) return true;
+
+  return new Date(checkout.expiresAt).getTime() > new Date(now).getTime();
+}
+
+function reopenCartDocument(cart: CartDocument, now: ISODateTime): CartDocument {
+  const { checkoutSessionId: _checkoutSessionId, ...metadata } = cart.aggregate.metadata ?? {};
+
+  return {
+    ...cart,
+    status: "open",
+    updatedAt: now,
+    aggregate: {
+      ...cart.aggregate,
+      items: cart.aggregate.items.map((item) =>
+        item.reservationId ? { ...item, reservationId: undefined } : item,
+      ),
+      metadata,
+    },
+  };
 }
 
 async function createCartQuote(
@@ -5580,17 +5856,15 @@ async function createCartQuote(
   }
 
   const subtotalAmount = quoteLines.reduce((sum, line) => sum + (line.subtotal?.amount ?? 0), 0);
-  const discountAmount =
-    quotedCouponLabel !== undefined
-      ? Math.floor(subtotalAmount * 0.1)
-      : (coupon?.discountAmount ?? 0);
   if (quotedCouponLabel !== undefined) {
     coupon = {
       codeHash: quotedCouponCodeHash ?? "",
       label: quotedCouponLabel,
-      discountAmount,
+      rate: COUPON_DISCOUNT_RATE,
+      discountAmount: Math.floor(subtotalAmount * COUPON_DISCOUNT_RATE),
     };
   }
+  const discountAmount = couponDiscountAmount(coupon, subtotalAmount);
   const totalAmount = Math.max(0, subtotalAmount - discountAmount);
   const status = cartResult.expired
     ? "expired"
@@ -5667,6 +5941,10 @@ async function startCheckout(
     ? await input.repositories.session.findCheckoutByIdempotencyKey(ctx.idempotencyKey)
     : null;
   if (replayedCheckout) {
+    if (!(await checkoutBelongsToContext(replayedCheckout, ctx))) {
+      return checkoutIdempotencyInputMismatch();
+    }
+
     const replayedInputHash = checkoutStoredIdempotencyInputHash(replayedCheckout);
     if (replayedInputHash && idempotencyInputHash && replayedInputHash !== idempotencyInputHash) {
       return checkoutIdempotencyInputMismatch();
@@ -5725,10 +6003,7 @@ async function startCheckout(
       status: "failed",
       error: "Checkout provider failed to create a session.",
       total: {
-        amount: reserved.lines.reduce(
-          (sum, line) => sum + line.item.unitAmount * line.quantity,
-          0,
-        ),
+        amount: reserved.lines.reduce((sum, line) => sum + line.item.unitAmount * line.quantity, 0),
         currency: resolved.currency,
       },
     });
@@ -5803,6 +6078,13 @@ async function startCheckout(
   );
   if (!persisted.ok) return persisted;
 
+  const checkoutRedirectUrl = checkoutStatusAllowsRedirect(
+    checkoutDocument.status,
+    providerSession.status,
+  )
+    ? providerSession.redirectUrl
+    : undefined;
+
   return {
     ok: true,
     status: 200,
@@ -5811,14 +6093,12 @@ async function startCheckout(
       status: providerSession.status,
       mode: providerSession.mode,
       provider: providerSession.provider,
-      redirectUrl: providerSession.redirectUrl,
+      redirectUrl: checkoutRedirectUrl,
       statusToken,
       expiresAt: providerSession.expiresAt ?? checkoutDocument.expiresAt,
       paymentPending: providerSession.status === "pending" ? true : undefined,
     },
-    effects: providerSession.redirectUrl
-      ? [{ type: "redirect", url: providerSession.redirectUrl }]
-      : undefined,
+    effects: checkoutRedirectUrl ? [{ type: "redirect", url: checkoutRedirectUrl }] : undefined,
   };
 }
 
@@ -5828,7 +6108,11 @@ async function resolveCheckoutStart(
   checkoutInput: StartCheckoutInput,
 ): Promise<({ readonly ok: true } & CheckoutStartResolution) | MikaApiFailure> {
   const defaultCurrency = defaultBackendCurrency(input);
-  const cartResult = await findCheckoutStartCart(input, ctx, checkoutInput.cartId, defaultCurrency);
+  const expressBuyNow =
+    checkoutInput.sellableId !== undefined && checkoutInput.cartId === undefined;
+  const cartResult = expressBuyNow
+    ? { ok: true as const, cart: null, expired: false }
+    : await findCheckoutStartCart(input, ctx, checkoutInput.cartId, defaultCurrency);
   if (!cartResult.ok) return cartResult;
   if (cartResult.expired) return checkoutExpired();
 
@@ -6125,7 +6409,7 @@ async function markCheckoutPersistenceFailed(
 }
 
 async function releaseCheckoutReservations(
-  input: CreateMikaBackendApiInput,
+  input: MikaStockLifecycleDependencies,
   reservationIds: readonly MikaId[],
   now: ISODateTime,
 ): Promise<void> {
@@ -6236,6 +6520,56 @@ async function checkoutStatus(
   return checkoutDocumentSuccessResult(document);
 }
 
+async function cancelCheckout(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  cancelInput: CheckoutCancelInput,
+): Promise<MikaApiResult<CheckoutSessionDTO>> {
+  const checkoutId = createMikaId(cancelInput.checkoutId);
+  const document = await input.repositories.session.findCheckoutById(checkoutId);
+  if (!document) return invalidCheckout("checkoutId", checkoutId);
+
+  if (!(await checkoutBelongsToContext(document, ctx))) {
+    return authRequired(
+      "Checkout cancellation requires the matching session or customer identity.",
+    );
+  }
+
+  if (document.status === "completed" || document.orderId) {
+    return checkoutDocumentSuccessResult(document);
+  }
+  if (
+    document.status === "cancelled" ||
+    document.status === "expired" ||
+    document.status === "failed"
+  ) {
+    return checkoutDocumentSuccessResult(document);
+  }
+
+  const cartDocument = document.cartId
+    ? await input.repositories.session.findById(document.cartId)
+    : null;
+  if (cartDocument && cartDocument.type === "cart") {
+    const reservationIds = cartDocument.aggregate.items
+      .map((item) => item.reservationId)
+      .filter((id): id is MikaId => Boolean(id));
+    if (reservationIds.length > 0) {
+      await releaseCheckoutReservations(input, reservationIds, ctx.now);
+    }
+    await input.repositories.session.put(reopenCartDocument(cartDocument, ctx.now));
+  }
+
+  const cancelled: CheckoutDocument = {
+    ...document,
+    status: "cancelled",
+    providerStatus: "cancelled",
+    updatedAt: ctx.now,
+  };
+  await input.repositories.session.put(cancelled);
+
+  return checkoutDocumentSuccessResult(cancelled);
+}
+
 async function checkoutStatusAccessError(
   input: CreateMikaBackendApiInput,
   ctx: MikaRequestContext,
@@ -6254,22 +6588,54 @@ async function checkoutBelongsToContext(
   document: CheckoutDocument,
   ctx: MikaRequestContext,
 ): Promise<boolean> {
-  const sessionCustomerId = await ctx.session?.get<MikaId>("mika.customerId");
-  const customerId = ctx.customerId ?? sessionCustomerId;
+  const customerId = await effectiveCustomerId(ctx);
   if (document.customerId) return document.customerId === customerId;
 
   return Boolean(document.sessionId && ctx.sessionId && document.sessionId === ctx.sessionId);
 }
 
+async function effectiveCustomerId(ctx: MikaRequestContext): Promise<MikaId | undefined> {
+  if (ctx.customerId) return ctx.customerId;
+
+  return ctx.session?.get<MikaId>("mika.customerId");
+}
+
+async function withEffectiveCustomer(ctx: MikaRequestContext): Promise<MikaRequestContext> {
+  if (ctx.customerId) return ctx;
+  const sessionCustomerId = await ctx.session?.get<MikaId>("mika.customerId");
+
+  return sessionCustomerId ? { ...ctx, customerId: sessionCustomerId } : ctx;
+}
+
+function withHydratedCustomerContext<TApi extends Record<string, unknown>>(api: TApi): TApi {
+  const wrapped: Record<string, unknown> = {};
+  for (const [key, method] of Object.entries(api)) {
+    if (typeof method !== "function") {
+      wrapped[key] = method;
+      continue;
+    }
+
+    const handler = method as (ctx: MikaRequestContext, ...rest: unknown[]) => unknown;
+    wrapped[key] = (ctx: MikaRequestContext, ...rest: unknown[]) =>
+      Promise.resolve(withEffectiveCustomer(ctx)).then((hydrated) => handler(hydrated, ...rest));
+  }
+
+  return wrapped as TApi;
+}
+
 function checkoutDocumentSuccessResult(
   document: CheckoutDocument,
 ): MikaApiResult<CheckoutSessionDTO> {
-  const redirectUrl =
+  const rawRedirectUrl =
     document.redirectUrl ?? metadataString(document.aggregate.metadata, "checkoutRedirectUrl");
   const status =
     document.providerStatus ??
     metadataString(document.aggregate.metadata, "checkoutProviderStatus") ??
     checkoutSessionStatus(document.status);
+  const sessionStatus = checkoutSessionStatus(status);
+  const redirectUrl = checkoutStatusAllowsRedirect(document.status, sessionStatus)
+    ? rawRedirectUrl
+    : undefined;
   const orderId =
     document.orderId ?? metadataMikaId(document.aggregate.metadata, "checkoutOrderId");
 
@@ -6278,7 +6644,7 @@ function checkoutDocumentSuccessResult(
     status: 200,
     data: {
       id: document.id,
-      status: checkoutSessionStatus(status),
+      status: sessionStatus,
       mode: document.aggregate.mode,
       provider: document.provider,
       redirectUrl,
@@ -6288,6 +6654,26 @@ function checkoutDocumentSuccessResult(
     },
     effects: redirectUrl ? [{ type: "redirect", url: redirectUrl }] : undefined,
   };
+}
+
+function checkoutStatusAllowsRedirect(
+  documentStatus: CheckoutStatus,
+  sessionStatus: CheckoutSessionDTO["status"],
+): boolean {
+  if (
+    documentStatus === "cancelled" ||
+    documentStatus === "expired" ||
+    documentStatus === "failed"
+  ) {
+    return false;
+  }
+
+  return (
+    sessionStatus === "created" ||
+    sessionStatus === "redirected" ||
+    sessionStatus === "pending" ||
+    sessionStatus === "completed"
+  );
 }
 
 function checkoutBindingError(document: CheckoutDocument): MikaApiFailure | null {
@@ -6426,6 +6812,8 @@ function checkoutLineToProviderLine(
     mode: line.item.mode,
     fulfillmentKind: line.item.fulfillmentKind,
     entitlementKey: line.item.entitlementKey,
+    interval: line.item.interval,
+    intervalCount: line.item.intervalCount,
     metadata: line.metadata ?? line.item.metadata,
   };
 }
@@ -6847,15 +7235,28 @@ async function findOwnedOpenCartById(
     return invalidCart(field, cartId);
   }
 
-  if (ctx.customerId) {
+  if (document.customerId) {
     if (document.customerId !== ctx.customerId) {
       return invalidCart(field, cartId);
     }
-  } else if (ctx.sessionId && document.sessionId !== ctx.sessionId) {
+  } else if (document.sessionId && document.sessionId !== ctx.sessionId) {
     return invalidCart(field, cartId);
   }
 
   return { ok: true, cart: document };
+}
+
+function callerOwnsMergeSource(
+  ctx: MikaRequestContext,
+  source: { readonly customerId?: MikaId; readonly sessionId?: string },
+): boolean {
+  if (source.customerId) {
+    return Boolean(ctx.customerId) && source.customerId === ctx.customerId;
+  }
+  if (source.sessionId) {
+    return Boolean(ctx.sessionId) && source.sessionId === ctx.sessionId;
+  }
+  return false;
 }
 
 async function mergeCartLines(
@@ -6875,7 +7276,11 @@ async function mergeCartLines(
 
     const existingLine = items.find((line) => isEquivalentCartLine(line, sourceLine));
     const nextQuantity = (existingLine?.quantity ?? 0) + sourceLine.quantity;
-    const quantityError = await validateExistingLineQuantity(input, sourceLine, nextQuantity);
+    const quantityError = await validateExistingLineQuantity(
+      input,
+      sourceLine,
+      nextQuantity + siblingSellableQuantity(items, sourceLine),
+    );
     if (quantityError) return quantityError;
 
     if (existingLine) {
@@ -6897,7 +7302,11 @@ async function mergeCartLine(
   const items = [...currentItems];
   const existingLine = items.find((line) => isEquivalentCartLine(line, nextLine));
   const nextQuantity = (existingLine?.quantity ?? 0) + nextLine.quantity;
-  const quantityError = await validateExistingLineQuantity(input, nextLine, nextQuantity);
+  const quantityError = await validateExistingLineQuantity(
+    input,
+    nextLine,
+    nextQuantity + siblingSellableQuantity(items, nextLine),
+  );
   if (quantityError) return quantityError;
 
   if (!existingLine) {
@@ -6940,6 +7349,8 @@ async function validateExistingLineQuantity(
   return validateQuantityLimit(sellable, stock, quantity);
 }
 
+const COUPON_DISCOUNT_RATE = 0.1;
+
 async function createCouponSnapshot(
   input: MikaCartWishlistBackendInput,
   cart: CartDocument,
@@ -6954,7 +7365,8 @@ async function createCouponSnapshot(
   return {
     codeHash: await input.hash(`coupon:${normalizedCode}`),
     label: normalizedCode,
-    discountAmount: Math.floor(subtotalAmount * 0.1),
+    rate: COUPON_DISCOUNT_RATE,
+    discountAmount: Math.floor(subtotalAmount * COUPON_DISCOUNT_RATE),
   };
 }
 
@@ -7256,6 +7668,16 @@ function isEquivalentCartLine(left: CartLine, right: CartLine): boolean {
   );
 }
 
+function siblingSellableQuantity(items: readonly CartLine[], line: CartLine): number {
+  return items.reduce(
+    (sum, other) =>
+      other.item.sellableId === line.item.sellableId && !isEquivalentCartLine(other, line)
+        ? sum + other.quantity
+        : sum,
+    0,
+  );
+}
+
 function isEquivalentWishlistItem(left: WishlistItem, right: WishlistItem): boolean {
   return (
     left.item.sellableId === right.item.sellableId &&
@@ -7373,6 +7795,7 @@ function createAdminAuditDocument(
     targetType: record.targetType,
     targetId: record.targetId,
     status: record.status,
+    idempotencyKey: record.idempotencyKey,
     record: {
       id,
       ...record,

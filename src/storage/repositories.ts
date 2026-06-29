@@ -1,3 +1,7 @@
+/**
+ * Repository layer over document collections and operational SQLite tables.
+ * Encapsulates typed queries, stock mutations, workflow leases, and ephemeral record access.
+ */
 import { sql, type Kysely, type Transaction } from "kysely";
 
 import type {
@@ -45,21 +49,27 @@ import type {
 import type { MikaDatabase, MikaInsertable, MikaSelectable, MikaUpdateable } from "./schema";
 import {
   adjustStockStatement,
+  consumeOnHandStatement,
   consumeReservedStockStatement,
   releaseStockStatement,
   reserveStockStatement,
 } from "./statements";
 
+/** Kysely database handle for operational SQLite tables. */
 export type MikaDb = Kysely<MikaDatabase>;
+/** Transaction scope for atomic stock and ephemeral mutations. */
 export type MikaTransaction = Transaction<MikaDatabase>;
+/** Database or transaction executor accepted by operational repositories. */
 export type MikaDbExecutor = MikaDb | MikaTransaction;
 
+/** Catalog item, sellable, and price tuple resolved from provider price lookup. */
 export interface CatalogProviderPriceMatch {
   readonly catalog: CatalogItemDocument;
   readonly sellable: SellableDefinition;
   readonly price: PriceDefinition;
 }
 
+/** Input for creating a stock reservation event with optional idempotency key. */
 export interface ReserveStockRepositoryInput {
   readonly reservationEventId: MikaId;
   readonly stockItemId: MikaId;
@@ -74,6 +84,7 @@ export interface ReserveStockRepositoryInput {
   readonly metadata?: JsonObject;
 }
 
+/** Discriminated result of a stock reservation attempt or idempotent replay. */
 export type ReserveStockRepositoryResult =
   | {
       readonly status: "reserved";
@@ -93,11 +104,13 @@ export type ReserveStockRepositoryResult =
       readonly status: "not_found";
     };
 
+/** Input for releasing an active reservation event. */
 export interface ReleaseReservedStockRepositoryInput {
   readonly reservationEventId: MikaId;
   readonly now: ISODateTime;
 }
 
+/** Input for consuming a reservation into an order line fulfillment. */
 export interface ConsumeReservedStockRepositoryInput {
   readonly reservationEventId: MikaId;
   readonly now: ISODateTime;
@@ -105,21 +118,25 @@ export interface ConsumeReservedStockRepositoryInput {
   readonly orderLineId?: MikaId;
 }
 
+/** Input for sweeping expired reservation events back to availability. */
 export interface ReleaseExpiredReservationsRepositoryInput {
   readonly now: ISODateTime;
 }
 
+/** Summary counts from an expired reservation release sweep. */
 export interface ReleaseExpiredReservationsRepositoryResult {
   readonly scannedCount: number;
   readonly releasedCount: number;
   readonly stockItemsAffected: number;
 }
 
+/** Input for releasing all active reservations owned by a customer. */
 export interface ReleaseActiveReservationsByCustomerRepositoryInput {
   readonly customerId: MikaId;
   readonly now: ISODateTime;
 }
 
+/** Input for recording a manual or audited stock movement event. */
 export interface AdjustStockRepositoryInput {
   readonly movementEventId: MikaId;
   readonly stockItemId: MikaId;
@@ -131,6 +148,7 @@ export interface AdjustStockRepositoryInput {
   readonly metadata?: JsonObject;
 }
 
+/** Discriminated result of a stock adjustment attempt or idempotent replay. */
 export type AdjustStockRepositoryResult =
   | {
       readonly status: "adjusted";
@@ -150,6 +168,7 @@ export type AdjustStockRepositoryResult =
       readonly status: "not_found";
     };
 
+/** Input for acquiring a workflow execution lease. */
 export interface WorkflowLeaseRepositoryInput {
   readonly workflowId: MikaId;
   readonly leaseKey: string;
@@ -158,6 +177,7 @@ export interface WorkflowLeaseRepositoryInput {
   readonly force?: boolean;
 }
 
+/** Input for advancing a leased workflow step. */
 export interface WorkflowStepRepositoryInput {
   readonly workflowId: MikaId;
   readonly leaseKey: string;
@@ -166,6 +186,7 @@ export interface WorkflowStepRepositoryInput {
   readonly state?: JsonObject;
 }
 
+/** Input for failing a leased workflow or step with retry scheduling. */
 export interface WorkflowFailureRepositoryInput {
   readonly workflowId: MikaId;
   readonly leaseKey: string;
@@ -175,6 +196,7 @@ export interface WorkflowFailureRepositoryInput {
   readonly stepName?: string;
 }
 
+/** Input for acquiring an email delivery lease. */
 export interface EmailLeaseRepositoryInput {
   readonly emailId: MikaId;
   readonly leaseKey: string;
@@ -183,6 +205,7 @@ export interface EmailLeaseRepositoryInput {
   readonly force?: boolean;
 }
 
+/** Input for marking a leased email as successfully sent. */
 export interface EmailCompleteRepositoryInput {
   readonly emailId: MikaId;
   readonly leaseKey: string;
@@ -190,6 +213,14 @@ export interface EmailCompleteRepositoryInput {
   readonly providerMessageId?: string;
 }
 
+/** Input for idempotently marking an email as delivered without an active lease. */
+export interface EmailDeliveredRepositoryInput {
+  readonly emailId: MikaId;
+  readonly now: ISODateTime;
+  readonly providerMessageId?: string;
+}
+
+/** Input for failing a leased email with optional retry scheduling. */
 export interface EmailFailureRepositoryInput {
   readonly emailId: MikaId;
   readonly leaseKey: string;
@@ -198,6 +229,7 @@ export interface EmailFailureRepositoryInput {
   readonly nextAttemptAt?: ISODateTime;
 }
 
+/** Input for skipping a leased email without retry. */
 export interface EmailSkipRepositoryInput {
   readonly emailId: MikaId;
   readonly leaseKey: string;
@@ -205,18 +237,21 @@ export interface EmailSkipRepositoryInput {
   readonly lastError: string;
 }
 
+/** Input for completing a queued account deletion request record. */
 export interface AccountDeleteRequestCompletionRepositoryInput {
   readonly requestId: MikaId;
   readonly now: ISODateTime;
   readonly metadata?: JsonObject;
 }
 
+/** Input for failing a queued account deletion request record. */
 export interface AccountDeleteRequestFailureRepositoryInput {
   readonly requestId: MikaId;
   readonly now: ISODateTime;
   readonly lastError: string;
 }
 
+/** Identity selectors for redacting queued email records after account deletion. */
 export interface AccountDeleteEmailRedactionRepositoryInput {
   readonly now: ISODateTime;
   readonly customerId?: MikaId;
@@ -239,8 +274,10 @@ type ReservationEventMutationRepositoryResult<TStatus extends "released" | "cons
       readonly status: "not_found";
     };
 
+/** Result of releasing an active reservation event. */
 export type ReleaseReservedStockRepositoryResult =
   ReservationEventMutationRepositoryResult<"released">;
+/** Result of consuming a reservation event into fulfillment. */
 export type ConsumeReservedStockRepositoryResult =
   ReservationEventMutationRepositoryResult<"consumed">;
 
@@ -389,20 +426,11 @@ async function listByTypeCandidates<
     });
 
     for (const item of page.items) {
-      if (!isCandidate(item.data)) continue;
-
-      if (items.length < target) {
-        items.push(item);
-      } else {
-        hasMore = true;
-      }
+      if (isCandidate(item.data)) items.push(item);
     }
 
     cursor = page.cursor;
-    if (items.length >= target) {
-      hasMore = hasMore || page.hasMore;
-      break;
-    }
+    hasMore = page.hasMore;
   } while (items.length < target && cursor);
 
   return {
@@ -447,6 +475,7 @@ function typedCollection<TDocument extends TypedDocument & { readonly id: string
   };
 }
 
+/** Reads an open cart by session id across currencies via repository internals. */
 export function findSessionRepositoryOpenCartBySessionAnyCurrency(
   repository: unknown,
   sessionId: string,
@@ -458,6 +487,7 @@ export function findSessionRepositoryOpenCartBySessionAnyCurrency(
   );
 }
 
+/** Document repository for catalog item and coupon lookup by content and provider refs. */
 export class CatalogRepository {
   private readonly documents: TypedCollectionFacade<CatalogDocument>;
 
@@ -518,6 +548,7 @@ export class CatalogRepository {
   }
 }
 
+/** Document repository for cart, wishlist, and checkout session documents. */
 export class SessionRepository {
   private readonly documents: TypedCollectionFacade<SessionDocument>;
 
@@ -552,6 +583,28 @@ export class SessionRepository {
     return this.documents.findOneByType("cart", {
       customerId,
       status: "open",
+      currency,
+    });
+  }
+
+  async findCheckoutPendingCartBySession(
+    sessionId: string,
+    currency: string,
+  ): Promise<CartDocument | null> {
+    return this.documents.findOneByType("cart", {
+      sessionId,
+      status: "checkout_pending",
+      currency,
+    });
+  }
+
+  async findCheckoutPendingCartByCustomer(
+    customerId: MikaId,
+    currency: string,
+  ): Promise<CartDocument | null> {
+    return this.documents.findOneByType("cart", {
+      customerId,
+      status: "checkout_pending",
       currency,
     });
   }
@@ -600,6 +653,7 @@ export class SessionRepository {
   }
 }
 
+/** Document repository for customer, entitlement, license, and subscription documents. */
 export class AccountRepository {
   private readonly documents: TypedCollectionFacade<AccountDocument>;
 
@@ -722,6 +776,7 @@ export class AccountRepository {
   }
 }
 
+/** Document repository for order ledger documents and provider payment lookup. */
 export class LedgerRepository {
   private readonly documents: TypedCollectionFacade<LedgerDocument>;
 
@@ -792,6 +847,7 @@ export class LedgerRepository {
   }
 }
 
+/** Document repository for webhooks, emails, workflows, audits, and account ops records. */
 export class OpsRepository {
   private readonly documents: TypedCollectionFacade<OpsDocument>;
   private readonly dueDocuments: TypedCollectionFacade<DueOpsDocument>;
@@ -1146,6 +1202,16 @@ export class OpsRepository {
     return this.documents.findByIdOfType(auditId, "adminAudit");
   }
 
+  async findAdminAuditByIdempotencyKey(
+    action: string,
+    idempotencyKey: string,
+  ): Promise<AdminAuditDocument | null> {
+    const candidate = await this.documents.findOneByType("adminAudit", { idempotencyKey });
+    if (!candidate || candidate.record.action !== action) return null;
+
+    return candidate;
+  }
+
   async findEmail(emailId: MikaId): Promise<EmailDocument | null> {
     return this.documents.findByIdOfType(emailId, "email");
   }
@@ -1198,6 +1264,27 @@ export class OpsRepository {
       const email = documentOfType(current, "email");
       if (!email) return null;
       if (!emailHasActiveLease(email, input)) return null;
+
+      return emailDocumentWithRecord(email, input.now, {
+        status: "sent",
+        providerMessageId: input.providerMessageId,
+        nextAttemptAt: undefined,
+        leaseKey: undefined,
+        leasedAt: undefined,
+        leaseExpiresAt: undefined,
+        lastError: undefined,
+        sentAt: input.now,
+      });
+    });
+
+    return documentOfType(updated, "email");
+  }
+
+  async markEmailDelivered(input: EmailDeliveredRepositoryInput): Promise<EmailDocument | null> {
+    const updated = await this.documents.update(input.emailId, (current) => {
+      const email = documentOfType(current, "email");
+      if (!email) return null;
+      if (email.record.status === "sent") return email;
 
       return emailDocumentWithRecord(email, input.now, {
         status: "sent",
@@ -1485,6 +1572,7 @@ function accountDeleteRequestDocumentWithRecord(
   };
 }
 
+/** Operational repository for atomic stock items, reservations, and movement events. */
 export class StockRepository {
   private readonly db: MikaDbExecutor;
 
@@ -1629,6 +1717,7 @@ export class StockRepository {
       reservationEventId: input.reservationEventId,
       now: input.now,
       targetStatus: "released",
+      eventPatch: { idempotency_key: null },
       applyStockMutation: (executor, event) =>
         releaseStockStatement({
           stockItemId: event.stockItemId,
@@ -1641,21 +1730,72 @@ export class StockRepository {
   async consume(
     input: ConsumeReservedStockRepositoryInput,
   ): Promise<ConsumeReservedStockRepositoryResult> {
-    return mutateActiveReservationEvent({
-      executor: this.db,
-      reservationEventId: input.reservationEventId,
-      now: input.now,
-      targetStatus: "consumed",
-      eventPatch: {
-        ...(input.orderId === undefined ? {} : { order_id: input.orderId }),
-        ...(input.orderLineId === undefined ? {} : { order_line_id: input.orderLineId }),
-      },
-      applyStockMutation: (executor, event) =>
-        consumeReservedStockStatement({
-          stockItemId: event.stockItemId,
-          quantity: event.quantityDelta,
-          now: input.now,
-        }).execute(executor),
+    return withTransaction(this.db, async (executor) => {
+      const current = await findStockEventById(executor, input.reservationEventId);
+      if (!current || current.kind !== "reservation") {
+        return { status: "not_found" };
+      }
+
+      if (current.status !== "active" && current.status !== "expired") {
+        return {
+          status: "not_active",
+          event: current,
+          stock: await findStockItemById(executor, current.stockItemId),
+        };
+      }
+
+      const eventMutation = await executor
+        .updateTable("mika_stock_events")
+        .set({
+          status: "consumed",
+          updated_at: input.now,
+          ...(input.orderId === undefined ? {} : { order_id: input.orderId }),
+          ...(input.orderLineId === undefined ? {} : { order_line_id: input.orderLineId }),
+        })
+        .where("id", "=", input.reservationEventId)
+        .where("kind", "=", "reservation")
+        .where("status", "in", ["active", "expired"])
+        .executeTakeFirst();
+
+      if (!mutationAffected(eventMutation)) {
+        const event = await findStockEventById(executor, input.reservationEventId);
+        if (!event || event.kind !== "reservation") {
+          return { status: "not_found" };
+        }
+        return {
+          status: "not_active",
+          event,
+          stock: await findStockItemById(executor, event.stockItemId),
+        };
+      }
+
+      const stockMutation =
+        current.status === "active"
+          ? await consumeReservedStockStatement({
+              stockItemId: current.stockItemId,
+              quantity: current.quantityDelta,
+              now: input.now,
+            }).execute(executor)
+          : await consumeOnHandStatement({
+              stockItemId: current.stockItemId,
+              quantity: current.quantityDelta,
+              now: input.now,
+            }).execute(executor);
+      if (!mutationAffected(stockMutation)) {
+        throw new Error(
+          `Stock item '${current.stockItemId}' for reservation event '${current.id}' could not be updated.`,
+        );
+      }
+
+      const event = await findStockEventById(executor, input.reservationEventId);
+      const stock = await findStockItemById(executor, current.stockItemId);
+      if (!event || !stock) {
+        throw new Error(
+          `Reservation event '${input.reservationEventId}' could not be reloaded after stock mutation.`,
+        );
+      }
+
+      return { status: "consumed", event, stock };
     });
   }
 
@@ -1968,6 +2108,7 @@ async function insertStockEvent(executor: MikaDbExecutor, record: StockEventReco
     .execute();
 }
 
+/** Operational repository for TTL-bound ephemeral records and token consumption. */
 export class EphemeralRepository {
   private readonly db: MikaDbExecutor;
 
@@ -2099,6 +2240,7 @@ export class EphemeralRepository {
   }
 }
 
+/** Facade wiring document and operational repositories for the commerce storage model. */
 export class MikaRepositories {
   readonly catalog: CatalogRepository;
   readonly session: SessionRepository;
@@ -2119,6 +2261,7 @@ export class MikaRepositories {
   }
 }
 
+/** Constructs the full repository facade from storage collections and a db executor. */
 export function createMikaRepositories(input: {
   readonly storage: MikaStorageCollections;
   readonly db: MikaDbExecutor;

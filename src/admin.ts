@@ -1,6 +1,13 @@
+/**
+ * EmDash admin action definitions and manifests for Mika ops: provider health/sync, stock,
+ * webhooks, orders, entitlements, licenses, downloads, and email resend via the actions runner.
+ */
 import { MIKA_PLUGIN_ID } from "./api/routes";
 
+/** Well-known route serving the Mika admin actions manifest JSON. */
 export const MIKA_ACTIONS_MANIFEST_ROUTE = ".well-known/actions";
+
+/** Well-known route executing Mika admin runner actions from the EmDash dashboard. */
 export const MIKA_ACTIONS_RUNNER_ROUTE = ".well-known/actions/run";
 
 export type MikaAdminActionTone = "default" | "positive" | "warning" | "danger" | "info";
@@ -57,6 +64,7 @@ export interface MikaAdminActionFeedback {
   readonly error?: string;
 }
 
+/** Declarative admin action metadata consumed by EmDash dashboard and field action buttons. */
 export interface MikaAdminActionDefinition {
   readonly id: string;
   readonly label: string;
@@ -91,10 +99,12 @@ export type MikaAdminActionDescriptor = MikaAdminActionDescriptorBase & {
   readonly runner: MikaAdminActionRunnerMetadata;
 };
 
+/** Manifest payload listing runner-backed admin actions exposed to the EmDash actions provider. */
 export interface MikaAdminActionsManifest {
   readonly actions: readonly MikaAdminActionDescriptor[];
 }
 
+/** EmDash actions provider registration for Mika admin runner routes and allowed targets. */
 export interface MikaActionsProviderConfig {
   readonly pluginId: string;
   readonly label?: string;
@@ -103,6 +113,7 @@ export interface MikaActionsProviderConfig {
   readonly allowedTargetPluginIds?: readonly string[];
 }
 
+/** Field-editor options wiring an admin action button to the Mika actions runner. */
 export interface MikaActionButtonFieldOptions {
   readonly mode?: "run" | "clipboard";
   readonly provider?: string;
@@ -185,6 +196,7 @@ const MIKA_DOWNLOAD_ACTION_TARGET = {
   ...MIKA_FIELD_ROW_ACTION_TARGET,
 } as const satisfies MikaAdminActionTargetMetadata;
 
+/** Canonical catalog of Mika admin runner actions (provider, stock, orders, entitlements, etc.). */
 export const mikaAdminActionDefinitions = defineMikaAdminActionDefinitions({
   "mika.provider.health": {
     id: "mika.provider.health",
@@ -448,6 +460,7 @@ export const mikaAdminActionDefinitions = defineMikaAdminActionDefinitions({
   },
 });
 
+/** Stable id union for built-in Mika admin actions. */
 export type MikaAdminActionId = keyof typeof mikaAdminActionDefinitions;
 
 const MIKA_DASHBOARD_ACTION_IDS = [
@@ -469,12 +482,14 @@ const MIKA_FIELD_ACTION_IDS = [
   "mika.download.issue",
 ] as const satisfies readonly MikaAdminActionId[];
 
+/** Options for filtering which dashboard and field admin actions appear in a manifest. */
 export interface MikaAdminManifestOptions {
   readonly includeDashboardActions?: boolean;
   readonly includeFieldActions?: boolean;
   readonly disabled?: readonly MikaAdminActionId[];
 }
 
+/** Builds the EmDash actions provider config with Mika default routes and plugin id. */
 export function createMikaActionsProviderConfig(
   options: Partial<MikaActionsProviderConfig> = {},
 ): MikaActionsProviderConfig {
@@ -487,6 +502,7 @@ export function createMikaActionsProviderConfig(
   };
 }
 
+/** Serializes selected Mika admin actions into an EmDash actions manifest document. */
 export function createMikaAdminActionsManifest(
   options: MikaAdminManifestOptions = {},
 ): MikaAdminActionsManifest {
@@ -500,6 +516,7 @@ export function createMikaAdminActionsManifest(
   return { actions };
 }
 
+/** Merges a built-in admin action definition with field-button overrides for EmDash editors. */
 export function createMikaActionButtonOptions(
   actionId: MikaAdminActionId,
   options: Partial<MikaActionButtonFieldOptions> = {},
@@ -538,12 +555,14 @@ export function createMikaActionButtonOptions(
   };
 }
 
+/** Preset field-button options for the per-entry catalog sync admin action. */
 export function createMikaCatalogSyncActionButtonOptions(
   options: Partial<MikaActionButtonFieldOptions> = {},
 ): MikaActionButtonFieldOptions {
   return createMikaActionButtonOptions("mika.catalog.syncEntry", options);
 }
 
+/** Preset field-button options for the stock adjust admin action. */
 export function createMikaStockAdjustActionButtonOptions(
   options: Partial<MikaActionButtonFieldOptions> = {},
 ): MikaActionButtonFieldOptions {

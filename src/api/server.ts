@@ -1,3 +1,7 @@
+/**
+ * {@link MikaApi} interface and stub factory: namespace method contracts and not-implemented wiring.
+ * Production handlers are supplied by {@link createMikaBackendApi} or host overrides.
+ */
 import type {
   AccountDTO,
   AccountDeleteInput,
@@ -17,6 +21,7 @@ import type {
   CheckoutPreviewDTO,
   CheckoutPreviewInput,
   CheckoutSessionDTO,
+  CheckoutCancelInput,
   CheckoutStatusInput,
   ContentRefDTO,
   DownloadResolutionDTO,
@@ -57,6 +62,7 @@ import type {
 import type { MikaRequestContext } from "./context";
 import { mikaOperationApiMethodNames } from "./operations";
 
+/** Typed commerce API surface grouped by namespace (catalog through admin). */
 export interface MikaApi {
   readonly catalog: {
     sellables(input: {
@@ -108,6 +114,10 @@ export interface MikaApi {
     status(
       ctx: MikaRequestContext,
       input: CheckoutStatusInput,
+    ): Promise<MikaApiResult<CheckoutSessionDTO>>;
+    cancel(
+      ctx: MikaRequestContext,
+      input: CheckoutCancelInput,
     ): Promise<MikaApiResult<CheckoutSessionDTO>>;
   };
   readonly magicLink: {
@@ -190,6 +200,7 @@ export interface MikaApi {
   };
 }
 
+/** Partial per-namespace handler overrides merged into {@link createMikaApi}. */
 export type MikaApiOverrides = {
   readonly [K in keyof MikaApi]?: Partial<MikaApi[K]>;
 };
@@ -208,6 +219,7 @@ function defineMikaApiMethodNames<const TNames extends MikaApiMethodNameMap>(
   return names;
 }
 
+/** Authoritative list of method names on each {@link MikaApi} namespace. */
 export const mikaApiMethodNames = defineMikaApiMethodNames(mikaOperationApiMethodNames);
 
 type MikaApiNamespace = keyof typeof mikaApiMethodNames;
@@ -218,6 +230,7 @@ type NotImplementedMikaApiMethod = {
   readonly [mikaNotImplementedApiMethod]: string;
 };
 
+/** Builds a {@link MikaApi} with not-implemented stubs replaced by provided overrides. */
 export function createMikaApi(overrides: MikaApiOverrides = {}): MikaApi {
   return {
     catalog: createMikaApiNamespace("catalog", overrides.catalog),
@@ -249,10 +262,12 @@ function createMikaApiNamespace<TNamespace extends MikaApiNamespace>(
   ) as MikaApi[TNamespace];
 }
 
+/** Options limiting which namespaces or methods {@link assertMikaApiWired} inspects. */
 export interface AssertMikaApiWiredOptions {
   readonly scope?: readonly string[];
 }
 
+/** Throws when any requested method still resolves to the not-implemented stub. */
 export function assertMikaApiWired(api: MikaApi, options: AssertMikaApiWiredOptions = {}): void {
   const scope = options.scope ? new Set(options.scope) : undefined;
   const missing: string[] = [];
@@ -272,6 +287,7 @@ export function assertMikaApiWired(api: MikaApi, options: AssertMikaApiWiredOpti
   }
 }
 
+/** Standard not-implemented {@link MikaApiResult} returned by unwired stub methods. */
 export async function notImplemented<TData>(feature: string): Promise<MikaApiResult<TData>> {
   return {
     ok: false,

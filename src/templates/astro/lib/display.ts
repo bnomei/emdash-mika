@@ -1,5 +1,10 @@
+/**
+ * Storefront display formatting for the copyable Astro template.
+ * Maps Mika status codes to human labels, badge variants, dates, and counts.
+ */
 import type { CartDTO } from "@bnomei/emdash-mika/types";
 
+/** Kumo badge variant chosen from a Mika entity status. */
 export type MikaTemplateBadgeVariant = "success" | "warning" | "error" | "neutral";
 
 const statusLabels: Record<string, string> = {
@@ -40,6 +45,7 @@ const warningStatuses = new Set([
 ]);
 const errorStatuses = new Set(["cancelled", "expired", "failed", "out_of_stock", "revoked"]);
 
+/** Human-readable label for a Mika status code, with underscore fallback formatting. */
 export function mikaTemplateStatusLabel(status: string | undefined): string {
   if (!status) return "Unknown";
   return (
@@ -48,6 +54,7 @@ export function mikaTemplateStatusLabel(status: string | undefined): string {
   );
 }
 
+/** Badge color variant for a Mika status code. */
 export function mikaTemplateStatusVariant(status: string | undefined): MikaTemplateBadgeVariant {
   if (!status) return "neutral";
   if (successStatuses.has(status)) return "success";
@@ -56,6 +63,7 @@ export function mikaTemplateStatusVariant(status: string | undefined): MikaTempl
   return "neutral";
 }
 
+/** Locale-aware short date for ISO timestamps, or "Not set" when absent. */
 export function mikaTemplateDateLabel(isoDate: string | undefined): string {
   if (!isoDate) return "Not set";
   return new Date(isoDate).toLocaleDateString(undefined, {
@@ -65,6 +73,7 @@ export function mikaTemplateDateLabel(isoDate: string | undefined): string {
   });
 }
 
+/** Counted noun phrase, e.g. "1 item" or "3 items". */
 export function mikaTemplatePlural(
   count: number,
   singular: string,
@@ -73,6 +82,7 @@ export function mikaTemplatePlural(
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+/** Sum of line quantities across an open cart. */
 export function mikaTemplateCartItemCount(cart: CartDTO | null | undefined): number {
   return cart?.items.reduce((total, line) => total + line.quantity, 0) ?? 0;
 }

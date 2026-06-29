@@ -1,3 +1,6 @@
+/**
+ * Backend test fixtures: request context, clocks, DTOs, and in-memory Kysely DB.
+ */
 import { LibsqlDialect } from "@libsql/kysely-libsql";
 import { Kysely } from "kysely";
 
@@ -16,11 +19,13 @@ import {
   type ProviderName,
 } from "../../src/types/primitives";
 
+/** Fixed ISO timestamp shared across backend tests. */
 export const TEST_NOW = createISODateTime("2026-01-01T00:00:00.000Z");
 export const TEST_NOW_DATE = new Date(TEST_NOW);
 export const TEST_CURRENCY = createCurrencyCode("EUR");
 export const TEST_PROVIDER = createProviderName("fake");
 
+/** Deterministic clock with offset helpers for time-dependent assertions. */
 export type TestClock = {
   readonly now: Date;
   readonly iso: ISODateTime;
@@ -40,6 +45,7 @@ export type CreateTestRequestContextOptions = {
   readonly now?: Date;
 };
 
+/** Builds a frozen test clock anchored at `now`. */
 export function createTestClock(now: Date | string = TEST_NOW_DATE): TestClock {
   const date = typeof now === "string" ? new Date(now) : new Date(now);
 
@@ -63,6 +69,7 @@ export function createTestCurrencyCode(currency = "EUR"): CurrencyCode {
   return createCurrencyCode(currency);
 }
 
+/** In-memory LibSQL-backed Kysely instance for repository tests. */
 export function createTestMikaDb(): MikaDb {
   return new Kysely<MikaDatabase>({
     dialect: new LibsqlDialect({ url: "file::memory:" }),
@@ -80,6 +87,7 @@ export function createTestHash(input = "mika:test"): string {
   return `test_${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
+/** Minimal {@link MikaRequestContext} with session, customer, and idempotency defaults. */
 export function createTestRequestContext(
   options: CreateTestRequestContextOptions = {},
 ): MikaRequestContext {

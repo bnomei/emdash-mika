@@ -1,3 +1,7 @@
+/**
+ * Ergonomic typed facade over raw operation keys: namespace.method helpers with input normalizers.
+ * Used by server clients and integration tests.
+ */
 import {
   normalizeAccountExportDownloadInput,
   normalizeAccountExportInput,
@@ -13,6 +17,7 @@ import type {
   AddCartItemInput,
   ApplyCouponInput,
   CartQuoteInput,
+  CheckoutCancelInput,
   CheckoutPreviewInput,
   CheckoutStatusInput,
   DownloadIssueInput,
@@ -72,6 +77,7 @@ type MikaFacadeInvoke = <TOperation extends MikaOperationKey>(
 
 const emptyInput = () => ({});
 
+/** Namespace/method tree mapping facade calls to {@link mikaOperationDefinitions} keys. */
 export const mikaOperationFacadeSpec = collectMikaOperationFacadeSpec();
 
 function collectMikaOperationFacadeSpec(): MikaOperationFacadeSpec {
@@ -101,6 +107,7 @@ type MikaFacadeResult<
   >
 >;
 
+/** Storefront and account operations exposed as nested async methods. */
 export interface MikaOperationFacade {
   readonly catalog: {
     sellables(
@@ -134,6 +141,7 @@ export interface MikaOperationFacade {
     start(input?: StartCheckoutInput): MikaFacadeResult<"checkout", "start">;
     preview(input?: CheckoutPreviewInput): MikaFacadeResult<"checkout", "preview">;
     status(input: CheckoutStatusInput): MikaFacadeResult<"checkout", "status">;
+    cancel(input: CheckoutCancelInput): MikaFacadeResult<"checkout", "cancel">;
   };
   readonly magicLink: {
     request(input: MagicLinkRequestInput): MikaFacadeResult<"magicLink", "request">;
@@ -164,12 +172,14 @@ export interface MikaOperationFacade {
   };
 }
 
+/** Webhook ingest surface (typically server-only). */
 export interface MikaOperationWebhookFacade {
   readonly webhook: {
     receive(input: WebhookReceiveInput): MikaFacadeResult<"webhook", "receive">;
   };
 }
 
+/** Admin mutation surface (typically server-only). */
 export interface MikaOperationAdminFacade {
   readonly admin: {
     providerHealth(input?: ProviderHealthInput): MikaFacadeResult<"admin", "providerHealth">;
@@ -191,6 +201,7 @@ export interface MikaOperationAdminFacade {
   };
 }
 
+/** Full facade including webhook and admin namespaces. */
 export type MikaServerOperationFacade = MikaOperationFacade &
   MikaOperationWebhookFacade &
   MikaOperationAdminFacade;
@@ -203,12 +214,14 @@ type Writable<TValue> = {
   -readonly [TKey in keyof TValue]: TValue[TKey];
 };
 
+/** Options controlling locale defaults and optional namespace inclusion. */
 export interface MikaOperationFacadeOptions {
   readonly locale?: string;
   readonly includeAdmin?: boolean;
   readonly includeWebhook?: boolean;
 }
 
+/** Builds a typed facade from a low-level operation invoker function. */
 export function createMikaOperationFacade<
   const TOptions extends MikaOperationFacadeOptions | undefined = undefined,
 >(invoke: MikaFacadeInvoke, options?: TOptions): MikaOperationFacadeForOptions<TOptions> {
@@ -256,6 +269,7 @@ export function createMikaOperationFacade<
       start: (input = emptyInput()) => invoke(mikaOperationFacadeSpec.checkout.start, input),
       preview: (input = emptyInput()) => invoke(mikaOperationFacadeSpec.checkout.preview, input),
       status: (input) => invoke(mikaOperationFacadeSpec.checkout.status, input),
+      cancel: (input) => invoke(mikaOperationFacadeSpec.checkout.cancel, input),
     },
     magicLink: {
       request: (input) => invoke(mikaOperationFacadeSpec.magicLink.request, input),

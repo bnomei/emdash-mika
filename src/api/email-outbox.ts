@@ -1,3 +1,7 @@
+/**
+ * Leased email outbox runner: renders queued emails, delivers via injectable sender, handles retries.
+ * Integrates with ops repository leasing and EmDash host email pipelines.
+ */
 import { renderMikaEmail, type MikaEmailBrand, type MikaRenderedEmail } from "../email";
 import type { EmailDocument, OrderDocument } from "../types/documents";
 import {
@@ -9,6 +13,7 @@ import {
 } from "../types/primitives";
 import type { MikaBackendIdFactory, MikaBackendNow, MikaBackendRepositories } from "./backend";
 
+/** Fully rendered message passed to the host email sender. */
 export interface MikaEmailDeliveryMessage {
   readonly emailId: MikaId;
   readonly kind: EmailDocument["kind"];
@@ -20,10 +25,12 @@ export interface MikaEmailDeliveryMessage {
   readonly metadata?: JsonObject;
 }
 
+/** Optional provider message id returned after successful delivery. */
 export interface MikaEmailDeliveryResult {
   readonly providerMessageId?: string;
 }
 
+/** Host-injected transport that sends a prepared outbox message. */
 export type MikaEmailSender = (
   message: MikaEmailDeliveryMessage,
 ) => Promise<MikaEmailDeliveryResult | void>;
@@ -35,6 +42,7 @@ export interface MikaEmailOutboxRetryInput {
   readonly now: ISODateTime;
 }
 
+/** Dependencies for constructing an outbox runner. */
 export interface MikaEmailOutboxRunnerInput {
   readonly repositories: Pick<MikaBackendRepositories, "ledger" | "ops">;
   readonly sender: MikaEmailSender;
@@ -62,6 +70,7 @@ export type MikaEmailOutboxRunItem =
       readonly emailId: MikaId;
       readonly status: "sent";
       readonly providerMessageId?: string;
+      readonly recoveredLeaseLost?: boolean;
     }
   | {
       readonly emailId: MikaId;
@@ -80,6 +89,7 @@ export type MikaEmailOutboxRunItem =
       readonly status: "lease_missed" | "lease_lost";
     };
 
+/** Aggregated counters and per-email outcomes from one outbox sweep. */
 export interface MikaEmailOutboxRunResult {
   readonly scanned: number;
   readonly leased: number;
@@ -92,6 +102,7 @@ export interface MikaEmailOutboxRunResult {
   readonly items: readonly MikaEmailOutboxRunItem[];
 }
 
+/** Batch processor that drains due emails with lease-based concurrency safety. */
 export interface MikaEmailOutboxRunner {
   runOnce(options?: MikaEmailOutboxRunOptions): Promise<MikaEmailOutboxRunResult>;
 }
@@ -103,6 +114,7 @@ export interface MikaEmDashEmailMessage {
   readonly html?: string;
 }
 
+/** EmDash host email pipeline (`locals.emdash.email`). */
 export interface MikaEmDashEmailPipeline {
   readonly send: (message: MikaEmDashEmailMessage, source: string) => Promise<void>;
   readonly isAvailable?: () => boolean;
@@ -116,6 +128,7 @@ export interface MikaEmDashEmailSenderOptions {
 const DEFAULT_EMAIL_BATCH_SIZE = 25;
 const DEFAULT_EMAIL_LEASE_MS = 5 * 60_000;
 
+/** Creates a leased outbox runner bound to ops storage and a sender implementation. */
 export function createMikaEmailOutboxRunner(
   input: MikaEmailOutboxRunnerInput,
 ): MikaEmailOutboxRunner {
@@ -152,6 +165,7 @@ export function createMikaEmailOutboxRunner(
   };
 }
 
+/** Adapts an EmDash email pipeline into a {@link MikaEmailSender}. */
 export function createEmDashMikaEmailSender(
   email: MikaEmDashEmailPipeline,
   options: MikaEmDashEmailSenderOptions = {},
@@ -214,11 +228,26 @@ async function deliverLeasedEmail(
       providerMessageId: result?.providerMessageId,
     });
 
-    return completed
+    if (completed) {
+      return {
+        emailId: email.id,
+        status: "sent",
+        providerMessageId: result?.providerMessageId,
+      };
+    }
+
+    const recovered = await input.repositories.ops.markEmailDelivered({
+      emailId: email.id,
+      now,
+      providerMessageId: result?.providerMessageId,
+    });
+
+    return recovered
       ? {
           emailId: email.id,
           status: "sent",
           providerMessageId: result?.providerMessageId,
+          recoveredLeaseLost: true,
         }
       : { emailId: email.id, status: "lease_lost" };
   } catch (error) {

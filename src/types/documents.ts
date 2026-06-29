@@ -1,3 +1,7 @@
+/**
+ * Persisted document envelopes for the commerce storage model.
+ * Documents pair indexed top-level fields with either an aggregate payload or an operational record.
+ */
 import type {
   CartAggregate,
   CatalogCommerceAggregate,
@@ -33,6 +37,7 @@ import type {
   WishlistStatus,
 } from "./primitives";
 
+/** Base persisted document with branded id, type discriminator, and timestamps. */
 export interface MikaStorageDocument {
   readonly id: MikaId;
   readonly type: string;
@@ -41,10 +46,12 @@ export interface MikaStorageDocument {
   readonly updatedAt: ISODateTime;
 }
 
+/** Document narrowed to a fixed type discriminator. */
 export type MikaBaseDocument<TType extends string> = MikaStorageDocument & {
   readonly type: TType;
 };
 
+/** Document embedding a versioned aggregate plus indexed query fields. */
 export type AggregateDocument<
   TType extends string,
   TIndexed extends object,
@@ -54,6 +61,7 @@ export type AggregateDocument<
     readonly aggregate: TAggregate;
   };
 
+/** Document wrapping an operational record with selected indexed record fields. */
 export type RecordBackedDocument<
   TType extends string,
   TRecord,
@@ -63,6 +71,7 @@ export type RecordBackedDocument<
     readonly record: TRecord;
   };
 
+/** Catalog collection document for a commerce catalog item aggregate. */
 export type CatalogItemDocument = AggregateDocument<
   "catalogItem",
   {
@@ -74,6 +83,7 @@ export type CatalogItemDocument = AggregateDocument<
   CatalogCommerceAggregate
 >;
 
+/** Catalog collection document for a coupon aggregate. */
 export type CouponDocument = AggregateDocument<
   "coupon",
   {
@@ -85,6 +95,7 @@ export type CouponDocument = AggregateDocument<
   CouponAggregate
 >;
 
+/** Session collection document for a cart aggregate. */
 export type CartDocument = AggregateDocument<
   "cart",
   {
@@ -98,6 +109,7 @@ export type CartDocument = AggregateDocument<
   CartAggregate
 >;
 
+/** Session collection document for a wishlist aggregate. */
 export type WishlistDocument = AggregateDocument<
   "wishlist",
   {
@@ -110,6 +122,7 @@ export type WishlistDocument = AggregateDocument<
   WishlistAggregate
 >;
 
+/** Session collection document for a checkout aggregate. */
 export type CheckoutDocument = AggregateDocument<
   "checkout",
   {
@@ -130,6 +143,7 @@ export type CheckoutDocument = AggregateDocument<
   CheckoutAggregate
 >;
 
+/** Account collection document for a customer aggregate. */
 export type CustomerDocument = AggregateDocument<
   "customer",
   {
@@ -140,12 +154,14 @@ export type CustomerDocument = AggregateDocument<
   CustomerAggregate
 >;
 
+/** Account collection document for a provider-linked customer record. */
 export type ProviderAccountDocument = RecordBackedDocument<
   "providerAccount",
   CustomerProviderAccountRecord,
   "customerId" | "provider" | "providerCustomerId"
 >;
 
+/** Account collection document for a subscription aggregate. */
 export type SubscriptionDocument = AggregateDocument<
   "subscription",
   {
@@ -159,12 +175,14 @@ export type SubscriptionDocument = AggregateDocument<
   SubscriptionAggregate
 >;
 
+/** Account collection document for an entitlement record. */
 export type EntitlementDocument = RecordBackedDocument<
   "entitlement",
   EntitlementRecord,
   "customerId" | "userId" | "emailHash" | "entitlementKey" | "status" | "subscriptionId" | "orderId"
 >;
 
+/** Account collection document for a license key record. */
 export type LicenseDocument = RecordBackedDocument<
   "license",
   LicenseKeyRecord,
@@ -173,6 +191,7 @@ export type LicenseDocument = RecordBackedDocument<
   readonly customerId?: MikaId;
 };
 
+/** Ledger collection document for an order aggregate. */
 export type OrderDocument = AggregateDocument<
   "order",
   {
@@ -192,6 +211,7 @@ export type OrderDocument = AggregateDocument<
   OrderAggregate
 >;
 
+/** Ops collection document for a webhook event record. */
 export type WebhookDocument = RecordBackedDocument<
   "webhook",
   WebhookEventRecord,
@@ -204,30 +224,35 @@ export type WebhookDocument = RecordBackedDocument<
   | "receivedAt"
 >;
 
+/** Ops collection document for an email message record with lease fields. */
 export type EmailDocument = RecordBackedDocument<
   "email",
   EmailMessageRecord,
   "status" | "nextAttemptAt" | "orderId" | "tokenId" | "kind"
 >;
 
+/** Ops collection document for a GDPR account export request record. */
 export type AccountExportDocument = RecordBackedDocument<
   "accountExport",
   AccountExportRecord,
   "customerId" | "userId" | "status" | "expiresAt"
 >;
 
+/** Ops collection document for an account deletion request record. */
 export type AccountDeleteRequestDocument = RecordBackedDocument<
   "accountDeleteRequest",
   AccountDeleteRequestRecord,
   "customerId" | "userId" | "emailHash" | "status" | "expiresAt"
 >;
 
+/** Ops collection document for a provider catalog sync run record. */
 export type ProviderSyncRunDocument = RecordBackedDocument<
   "providerSyncRun",
   ProviderSyncRunRecord,
   "provider" | "status" | "startedAt"
 >;
 
+/** Ops collection document for a lease-backed workflow record. */
 export type WorkflowDocument = RecordBackedDocument<
   "workflow",
   WorkflowRecord,
@@ -240,12 +265,14 @@ export type WorkflowDocument = RecordBackedDocument<
   | "leaseExpiresAt"
 >;
 
+/** Ops collection document for an admin audit event record. */
 export type AdminAuditDocument = RecordBackedDocument<
   "adminAudit",
   AdminAuditEventRecord,
-  "actorId" | "targetType" | "targetId" | "status"
+  "actorId" | "targetType" | "targetId" | "status" | "idempotencyKey"
 >;
 
+/** Partition of document unions by storage collection name. */
 export interface MikaStorageDocuments {
   readonly catalog: CatalogItemDocument | CouponDocument;
   readonly session: CartDocument | WishlistDocument | CheckoutDocument;
@@ -266,9 +293,15 @@ export interface MikaStorageDocuments {
     | AdminAuditDocument;
 }
 
+/** Union of catalog collection documents. */
 export type CatalogDocument = MikaStorageDocuments["catalog"];
+/** Union of session collection documents. */
 export type SessionDocument = MikaStorageDocuments["session"];
+/** Union of account collection documents. */
 export type AccountDocument = MikaStorageDocuments["account"];
+/** Union of ledger collection documents. */
 export type LedgerDocument = MikaStorageDocuments["ledger"];
+/** Union of ops collection documents. */
 export type OpsDocument = MikaStorageDocuments["ops"];
+/** Storage collection key for document partitioning. */
 export type MikaStorageCollectionName = keyof MikaStorageDocuments;

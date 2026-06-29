@@ -1,3 +1,7 @@
+/**
+ * Astro server integration: request-scoped MikaApi facade, plugin route builder, purchase UI
+ * models from sellables, and locale-aware money/variant formatting helpers.
+ */
 import type { APIContext } from "astro";
 
 import { createMikaRequestContext } from "./api/context";
@@ -25,15 +29,18 @@ import type {
   VariantOptionValueDTO,
 } from "./api/types";
 
+/** Minimal Astro API context slice used to build request-scoped Mika clients. */
 export type MikaAstroContext = Pick<APIContext, "request" | "url"> &
   Partial<Pick<APIContext, "session" | "currentLocale">>;
 
+/** Overrides for API wiring, operation policy, and optional webhook facade on Astro pages. */
 export interface MikaAstroClientOptions {
   readonly api?: MikaApiOverrides;
   readonly operationPolicy?: MikaOperationPolicy;
   readonly includeWebhook?: boolean;
 }
 
+/** Request-scoped Mika operation facade plus plugin route builder for Astro server code. */
 export type MikaAstroClient<TOptions extends MikaAstroClientOptions | undefined = undefined> =
   MikaOperationFacade &
     (TOptions extends { readonly includeWebhook: true } ? MikaOperationWebhookFacade : {}) & {
@@ -44,6 +51,7 @@ export interface MikaFormatOptions {
   readonly locales?: Intl.LocalesArgument;
 }
 
+/** One selectable sellable/price pair with serialized form fields for add-to-cart. */
 export interface MikaPurchaseOption {
   readonly sellable: SellableDTO;
   readonly price: PriceDTO;
@@ -70,6 +78,7 @@ export interface MikaPurchaseModelOptions extends MikaFormatOptions {
   readonly selectedPriceId?: string;
 }
 
+/** View-model for purchase UI controls derived from active sellables, prices, and stock limits. */
 export interface MikaPurchaseModel {
   readonly activeSellables: readonly SellableDTO[];
   readonly options: readonly MikaPurchaseOption[];
@@ -87,6 +96,7 @@ export interface MikaPurchaseModel {
   readonly variantOptionMap: readonly MikaPurchaseVariantMapItem[];
 }
 
+/** Creates a request-scoped Mika client wired to Astro session, locale, and plugin routes. */
 export function createMikaAstroClient<
   const TOptions extends MikaAstroClientOptions | undefined = undefined,
 >(ctx: MikaAstroContext, options?: TOptions): MikaAstroClient<TOptions> {
@@ -126,14 +136,17 @@ export function createMikaAstroClient<
   } as unknown as MikaAstroClient<TOptions>;
 }
 
+/** Alias for `createMikaAstroClient`. */
 export const createMika = createMikaAstroClient;
 
+/** Serializes the current URL path and query for checkout return-to parameters. */
 export function mikaReturnTo(url: URL): string {
   return `${url.pathname}${url.search}`;
 }
 
 export type MikaSafeReturnToOptions = MikaSafeReturnPathOptions;
 
+/** Validates and normalizes a post-checkout return path against open-redirect rules. */
 export function mikaSafeReturnTo(
   candidate: string | URL | null | undefined,
   options: MikaSafeReturnToOptions = {},
@@ -141,15 +154,20 @@ export function mikaSafeReturnTo(
   return mikaSafeReturnPath(candidate, options);
 }
 
+/** Locale-aware currency formatter for Mika `MoneyDTO` minor-unit amounts. */
 export function formatMikaMoney(value?: MoneyDTO | null, options: MikaFormatOptions = {}): string {
   if (!value) return "";
 
-  return new Intl.NumberFormat(options.locales, {
+  const formatter = new Intl.NumberFormat(options.locales, {
     style: "currency",
     currency: value.currency,
-  }).format(value.amount / 100);
+  });
+  const fractionDigits = formatter.resolvedOptions().maximumFractionDigits ?? 2;
+
+  return formatter.format(value.amount / 10 ** fractionDigits);
 }
 
+/** Formats a price including subscription billing interval when applicable. */
 export function formatMikaPrice(price: PriceDTO, options: MikaFormatOptions = {}): string {
   const amount = formatMikaMoney(price, options);
   if (price.mode !== "subscription") return amount;
@@ -170,6 +188,7 @@ export function formatMikaSellable(sellable: SellableDTO): string {
   return formatMikaVariant(sellable.variantOptions, sellable.title);
 }
 
+/** Builds selectable purchase options (sellable + active price) for form controls. */
 export function createMikaPurchaseOptions(
   sellables: readonly SellableDTO[],
   options: MikaFormatOptions = {},
@@ -206,6 +225,7 @@ export function createMikaPurchaseOptions(
   );
 }
 
+/** Assembles the full purchase view-model including variant grouping and availability flags. */
 export function createMikaPurchaseModel(
   sellables: readonly SellableDTO[],
   options: MikaPurchaseModelOptions = {},
@@ -259,10 +279,12 @@ export function createMikaPurchaseModel(
   };
 }
 
+/** Whether stock availability allows adding the sellable to cart. */
 export function isMikaPurchasable(availability?: AvailabilityDTO): boolean {
   return availability?.status !== "out_of_stock";
 }
 
+/** Resolves the effective per-order quantity cap from availability limits. */
 export function mikaMaxPurchaseQuantity(availability?: AvailabilityDTO): number | undefined {
   const limits = [availability?.maxPerOrder, availability?.availableQuantity].filter(
     (value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0,

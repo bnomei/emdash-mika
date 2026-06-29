@@ -1,3 +1,7 @@
+/**
+ * Typed notification intents emitted by the backend after commerce lifecycle events.
+ * Hosts may intercept via {@link MikaNotificationHook} or rely on default email outbox behavior.
+ */
 import type {
   CheckoutStatus,
   FulfillmentKind,
@@ -9,6 +13,7 @@ import type {
   SubscriptionStatus,
 } from "../types/primitives";
 
+/** Discriminant for notification intents raised by backend workflows. */
 export type MikaNotificationKind =
   | "magic_link.requested"
   | "order.confirmed"
@@ -22,6 +27,7 @@ export type MikaNotificationKind =
   | "account.delete_requested"
   | "ops.webhook_failed";
 
+/** Recipient identity fields shared across notification contexts. */
 export interface MikaNotificationRecipientContext {
   readonly toEmail?: string;
   readonly customerId?: MikaId;
@@ -35,8 +41,7 @@ export type MikaMagicLinkNotificationPurpose =
   | "account_delete"
   | (string & {});
 
-export interface MikaMagicLinkRequestedNotificationContext
-  extends MikaNotificationRecipientContext {
+export interface MikaMagicLinkRequestedNotificationContext extends MikaNotificationRecipientContext {
   readonly toEmail: string;
   readonly link: string;
   readonly purpose: MikaMagicLinkNotificationPurpose;
@@ -61,8 +66,7 @@ export interface MikaOrderConfirmedNotificationLine {
   readonly metadata?: JsonObject;
 }
 
-export interface MikaOrderConfirmedNotificationContext
-  extends MikaNotificationRecipientContext {
+export interface MikaOrderConfirmedNotificationContext extends MikaNotificationRecipientContext {
   readonly toEmail: string;
   readonly orderId: MikaId;
   readonly orderNumber: string;
@@ -75,8 +79,7 @@ export interface MikaOrderConfirmedNotificationContext
   readonly fulfillmentKinds: readonly FulfillmentKind[];
 }
 
-export interface MikaCheckoutPaymentFailedNotificationContext
-  extends MikaNotificationRecipientContext {
+export interface MikaCheckoutPaymentFailedNotificationContext extends MikaNotificationRecipientContext {
   readonly checkoutId?: MikaId;
   readonly orderId?: MikaId;
   readonly provider: ProviderName;
@@ -128,16 +131,14 @@ export interface MikaSubscriptionNotificationContext extends MikaNotificationRec
   readonly eventType?: string;
 }
 
-export interface MikaAccountExportReadyNotificationContext
-  extends MikaNotificationRecipientContext {
+export interface MikaAccountExportReadyNotificationContext extends MikaNotificationRecipientContext {
   readonly exportId: MikaId;
   readonly expiresAt: ISODateTime;
   readonly downloadHref?: string;
   readonly tokenId?: MikaId;
 }
 
-export interface MikaAccountDeleteRequestedNotificationContext
-  extends MikaNotificationRecipientContext {
+export interface MikaAccountDeleteRequestedNotificationContext extends MikaNotificationRecipientContext {
   readonly requestId: MikaId;
 }
 
@@ -157,6 +158,7 @@ export interface MikaGenericNotificationContext extends MikaNotificationRecipien
   readonly metadata?: JsonObject;
 }
 
+/** Maps each notification kind to its structured context payload. */
 export interface MikaNotificationContextMap {
   readonly "magic_link.requested": MikaMagicLinkRequestedNotificationContext;
   readonly "order.confirmed": MikaOrderConfirmedNotificationContext;
@@ -171,9 +173,8 @@ export interface MikaNotificationContextMap {
   readonly "ops.webhook_failed": MikaOpsWebhookFailedNotificationContext;
 }
 
-export type MikaNotificationIntent<
-  TKind extends MikaNotificationKind = MikaNotificationKind,
-> = {
+/** Tagged notification event with occurrence time and kind-specific context. */
+export type MikaNotificationIntent<TKind extends MikaNotificationKind = MikaNotificationKind> = {
   readonly [Kind in TKind]: {
     readonly kind: Kind;
     readonly occurredAt: ISODateTime;
@@ -185,10 +186,12 @@ export interface MikaNotificationHookResult {
   readonly handled: boolean;
 }
 
+/** Host hook that may fully handle a notification and suppress the default handler. */
 export type MikaNotificationHook = (
   intent: MikaNotificationIntent,
 ) => MikaNotificationHookResult | void | Promise<MikaNotificationHookResult | void>;
 
+/** Invokes the host hook; runs the default handler when the hook does not mark `handled`. */
 export async function emitMikaNotification(
   hook: MikaNotificationHook | undefined,
   intent: MikaNotificationIntent,

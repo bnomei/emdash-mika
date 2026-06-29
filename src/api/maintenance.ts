@@ -1,3 +1,7 @@
+/**
+ * Scheduled maintenance orchestrator: email outbox, expired stock reservations,
+ * ephemeral purge, and queued account-delete completion.
+ */
 import type { MikaBackendNow, MikaBackendRepositories } from "./backend";
 import type { AdminActionResultDTO, MikaApiResult, ReleaseExpiredReservationsInput } from "./types";
 import type { MikaApi } from "./server";
@@ -8,6 +12,7 @@ import type {
 } from "./email-outbox";
 import { createISODateTime, type ISODateTime, type MikaId } from "../types/primitives";
 
+/** Per-run limits and clock override for maintenance sweeps. */
 export interface MikaMaintenanceRunOptions {
   readonly now?: ISODateTime;
   readonly emailLimit?: number;
@@ -60,6 +65,7 @@ export type MikaMaintenanceAccountDeleteRequestItem =
       readonly error: string;
     };
 
+/** Outcome of a single maintenance sweep across all configured tasks. */
 export interface MikaMaintenanceRunResult {
   readonly now: ISODateTime;
   readonly emailOutbox: MikaMaintenanceTaskResult<MikaEmailOutboxRunResult>;
@@ -68,6 +74,7 @@ export interface MikaMaintenanceRunResult {
   readonly accountDeleteRequests: MikaMaintenanceTaskResult<MikaMaintenanceAccountDeleteRequestsResult>;
 }
 
+/** Runs background hygiene tasks; skips tasks when dependencies are not configured. */
 export interface MikaMaintenanceRunner {
   runOnce(options?: MikaMaintenanceRunOptions): Promise<MikaMaintenanceRunResult>;
 }
@@ -91,6 +98,7 @@ interface MikaMaintenanceRunnerInput {
 
 const DEFAULT_ACCOUNT_DELETE_BATCH_SIZE = 25;
 
+/** Composes optional outbox, stock, ephemeral, and account-delete processors. */
 export function createMikaMaintenanceRunner(
   input: MikaMaintenanceRunnerInput = {},
 ): MikaMaintenanceRunner {

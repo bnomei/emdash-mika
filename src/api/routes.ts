@@ -1,17 +1,25 @@
+/**
+ * EmDash plugin URL helpers: route key to path mapping and absolute URL construction.
+ */
 import { mikaOperationPluginRoutes, mikaOperationPublicRouteNames } from "./operations";
 
+/** Default EmDash plugin identifier for Mika. */
 export const MIKA_PLUGIN_ID = "mika";
+/** Base path prefix for EmDash plugin API routes. */
 export const EMDASH_PLUGIN_API_BASE = "/_emdash/api/plugins";
 
+/** Re-exported operation route map keyed by stable route names. */
 export const mikaPluginRoutes = mikaOperationPluginRoutes;
 
 export type MikaPluginRouteName = keyof typeof mikaPluginRoutes;
 
+/** Route names exposed without authentication requirements. */
 export const publicMikaPluginRouteNames =
   mikaOperationPublicRouteNames satisfies readonly MikaPluginRouteName[];
 
 export type MikaPublicPluginRouteName = (typeof publicMikaPluginRouteNames)[number];
 
+/** Options for resolving a plugin route to a URL string. */
 export interface MikaRouteOptions {
   readonly pluginId?: string;
   readonly apiBase?: string;
@@ -19,11 +27,13 @@ export interface MikaRouteOptions {
   readonly search?: Record<string, string | number | boolean | undefined>;
 }
 
+/** Curried route builder with default api base, plugin id, and origin. */
 export type MikaPluginRouteBuilder<TRoute extends MikaPluginRouteName = MikaPluginRouteName> = (
   route: TRoute,
   options?: MikaRouteOptions,
 ) => string;
 
+/** Creates a route builder with frozen default URL options. */
 export function createMikaPluginRouteBuilder<
   TRoute extends MikaPluginRouteName = MikaPluginRouteName,
 >(defaults: MikaRouteOptions = {}): MikaPluginRouteBuilder<TRoute> {
@@ -36,6 +46,7 @@ export function createMikaPluginRouteBuilder<
     });
 }
 
+/** Resolves a route key to a path or absolute URL with optional search params. */
 export function mikaPluginRoute(
   route: MikaPluginRouteName,
   options: MikaRouteOptions = {},

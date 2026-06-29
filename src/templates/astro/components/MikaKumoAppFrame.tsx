@@ -1,3 +1,7 @@
+/**
+ * Cloudflare Kumo sidebar shell for the copyable Mika storefront template.
+ * Provides navigation, cart badge, and links to agent discovery routes.
+ */
 import type { ReactNode } from "react";
 import { Badge, Button, Link, Sidebar, Text, useSidebar } from "@cloudflare/kumo";
 import type { Icon } from "@phosphor-icons/react";
@@ -39,6 +43,13 @@ const fixtureLinks: readonly (MikaKumoResourceLink & { readonly icon: Icon })[] 
   { label: "Admin action testbed", href: "/_emdash/admin", icon: WrenchIcon },
 ];
 
+/**
+ * Root layout frame with storefront, account, and developer navigation.
+ *
+ * @param title - Page title used in sidebar aria labels.
+ * @param currentPath - Active route path for nav highlighting.
+ * @param cartItemCount - Optional cart quantity shown in sidebar and mobile bar.
+ */
 export default function MikaKumoAppFrame({
   title,
   currentPath,

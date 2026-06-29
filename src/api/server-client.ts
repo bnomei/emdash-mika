@@ -1,3 +1,7 @@
+/**
+ * Server-side HTTP client with full operation facade (including admin and webhook namespaces).
+ * Forwards same-origin cookies from the incoming request by default.
+ */
 import { createMikaClient, type MikaClientOptions } from "./client";
 import {
   mikaOperationRequestInit,
@@ -11,14 +15,17 @@ import { createMikaPluginRouteBuilder, type MikaPluginRouteBuilder } from "./rou
 import type { MikaApiResult } from "./types";
 import type { MikaPluginRouteName } from "./routes";
 
+/** Server client options including cross-origin cookie forwarding control. */
 export interface MikaServerClientOptions extends MikaClientOptions {
   readonly forwardCrossOriginCookies?: boolean;
 }
 
+/** {@link MikaServerOperationFacade} plus plugin route URL builder. */
 export interface MikaServerClient extends MikaServerOperationFacade {
   readonly routes: MikaPluginRouteBuilder;
 }
 
+/** Creates a fetch client that invokes operations via plugin HTTP routes. */
 export function createMikaServerClient(options: MikaServerClientOptions = {}): MikaServerClient {
   const request = <TData>(route: MikaPluginRouteName, init: MikaRequestInit = {}) =>
     requestMika<TData>(route, init, options);

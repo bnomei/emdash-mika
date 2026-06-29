@@ -1,3 +1,7 @@
+/**
+ * Public package entry for the EmDash Mika plugin: descriptor factory, plugin id/version constants,
+ * and commerce operation descriptor types for host integration.
+ */
 export {
   MIKA_PACKAGE_NAME,
   MIKA_MAINTENANCE_CRON_SCHEDULE,

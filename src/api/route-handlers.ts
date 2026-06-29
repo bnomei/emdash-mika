@@ -1,3 +1,7 @@
+/**
+ * EmDash plugin route table: wires HTTP paths to operations, admin actions, and manifests.
+ * Builds {@link MikaRequestContext} from incoming requests before dispatch.
+ */
 import { createMikaAdminActionsManifest } from "../admin";
 import {
   resolveMikaAdminActionInvocation,
@@ -15,6 +19,7 @@ import type { MikaOperationPolicy } from "./operation-policy";
 import { mikaPluginRoutes, type MikaPluginRouteName } from "./routes";
 import { createMikaApi, type MikaApi } from "./server";
 
+/** Host framework context passed into each plugin route handler. */
 export interface MikaRouteContext<TInput = unknown> {
   readonly input: TInput;
   readonly request: Request;
@@ -23,18 +28,23 @@ export interface MikaRouteContext<TInput = unknown> {
   readonly currentLocale?: string;
 }
 
+/** Single plugin route entry with optional public access and async handler. */
 export interface MikaPluginRoute<TInput = unknown> {
   readonly public?: boolean;
   readonly handler: (ctx: MikaRouteContext<TInput>) => Promise<unknown>;
 }
 
+/** Options applied when constructing the plugin route table. */
 export interface MikaPluginRoutesOptions {
   readonly operationPolicy?: MikaOperationPolicy;
 }
 
 export type MikaPluginRoutePath = (typeof mikaPluginRoutes)[MikaPluginRouteName];
+
+/** Complete path-to-handler map for the Mika EmDash plugin. */
 export type MikaPluginRoutes = Record<MikaPluginRoutePath, MikaPluginRoute>;
 
+/** Registers operation routes, admin action runner, and actions manifest handlers. */
 export function createMikaPluginRoutes(
   api: MikaApi = createMikaApi(),
   options: MikaPluginRoutesOptions = {},
@@ -104,12 +114,28 @@ async function handleActionRunner(
   return toMikaAdminActionRunResult(result, resolved.data.resultAdapter);
 }
 
+const ADMIN_IDEMPOTENT_OPERATIONS: ReadonlySet<string> = new Set([
+  "admin.stockAdjust",
+  "admin.orderRefund",
+  "admin.orderCancel",
+  "admin.entitlementGrant",
+  "admin.entitlementRevoke",
+  "admin.emailResend",
+  "admin.licenseRevoke",
+  "admin.downloadIssue",
+]);
+
 function adminRunnerInputWithContext(
   operation: MikaRouteOperation,
   input: unknown,
   idempotencyKey: string | undefined,
 ): unknown {
-  if (!idempotencyKey || operation.name !== "admin.stockAdjust" || !isRecord(input)) {
+  if (
+    !idempotencyKey ||
+    !ADMIN_IDEMPOTENT_OPERATIONS.has(operation.name) ||
+    !isRecord(input) ||
+    "idempotencyKey" in input
+  ) {
     return input;
   }
 

@@ -1,3 +1,7 @@
+/**
+ * Integration harness for the published Mika package surface.
+ * Covers plugin wiring, subpath exports, agent manifests, and template contracts.
+ */
 import { readdirSync, readFileSync } from "node:fs";
 import Ajv2020 from "ajv/dist/2020";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
@@ -125,6 +129,7 @@ import {
   createMika,
   createMikaPurchaseModel,
   createMikaPurchaseOptions,
+  formatMikaMoney,
   isMikaPurchasable,
   type MikaAstroClientOptions,
   mikaMaxPurchaseQuantity,
@@ -204,6 +209,7 @@ const expectedOperationContracts = [
   ["checkoutStart", "checkout", "start", "checkoutStart"],
   ["checkoutPreview", "checkout", "preview", ""],
   ["checkoutStatus", "checkout", "status", "checkoutStatus"],
+  ["checkoutCancel", "checkout", "cancel", ""],
   ["magicLinkRequest", "magicLink", "request", "magicLinkRequest"],
   ["magicLinkVerify", "magicLink", "verify", "magicLinkVerify"],
   ["accountGet", "account", "get", ""],
@@ -467,6 +473,74 @@ describe("Mika native plugin package", () => {
     ]);
   });
 
+  it("runs the email outbox, ephemeral purge, and account-delete tasks when the host wires them", async () => {
+    const logCalls: unknown[] = [];
+    const emailRunCalls: unknown[] = [];
+    const purgeCalls: unknown[] = [];
+    const plugin = createPlugin({
+      api: {
+        admin: {
+          releaseExpiredReservations: async () => ({
+            ok: true,
+            status: 200,
+            data: { status: "completed", affected: { reservationsReleased: 0 } },
+          }),
+        },
+      },
+      maintenance: {
+        emailOutboxRunner: {
+          runOnce: async (options) => {
+            emailRunCalls.push(options);
+            return {
+              scanned: 2,
+              leased: 2,
+              sent: 2,
+              failed: 0,
+              skipped: 0,
+              leaseMissed: 0,
+              leaseLost: 0,
+              hasMore: false,
+              items: [],
+            };
+          },
+        },
+        repositories: {
+          ephemeral: {
+            purgeExpired: async (now: string) => {
+              purgeCalls.push(now);
+              return 4;
+            },
+          },
+          ops: {
+            listQueuedAccountDeleteRequests: async () => ({ items: [], hasMore: false }),
+          },
+          stock: {},
+        } as never,
+      },
+    });
+
+    await plugin.hooks.cron?.handler(
+      { name: MIKA_MAINTENANCE_CRON_TASK, scheduledAt: "2026-06-21T10:00:00.000Z" },
+      createPluginCronContext([], logCalls),
+    );
+
+    expect(emailRunCalls).toEqual([{ now: "2026-06-21T10:00:00.000Z" }]);
+    expect(purgeCalls).toEqual(["2026-06-21T10:00:00.000Z"]);
+    expect(logCalls).toEqual([
+      [
+        "info",
+        "Mika maintenance completed",
+        expect.objectContaining({
+          tasks: expect.objectContaining({
+            emailOutbox: expect.objectContaining({ status: "completed", sent: 2 }),
+            ephemeralRecords: expect.objectContaining({ status: "completed", purged: 4 }),
+            accountDeleteRequests: expect.objectContaining({ status: "completed" }),
+          }),
+        }),
+      ],
+    ]);
+  });
+
   it("logs Mika maintenance failures before surfacing stock cleanup errors", async () => {
     const logCalls: unknown[] = [];
     const plugin = createPlugin({
@@ -507,6 +581,18 @@ describe("Mika native plugin package", () => {
 });
 
 describe("Mika Astro helpers", () => {
+  it("scales money by the currency's own fraction digits, not a fixed /100", () => {
+    const fmt = (amount: number, currency: string) =>
+      formatMikaMoney(
+        { amount, currency: createCurrencyCode(currency) },
+        { locales: "en-US" },
+      ).replace(/[  ]/g, " ");
+
+    expect(fmt(1200, "USD")).toBe("$12.00");
+    expect(fmt(1000, "JPY")).toBe("¥1,000");
+    expect(fmt(1500, "BHD")).toBe("BHD 1.500");
+  });
+
   it("preserves query strings in return targets", () => {
     expect(mikaReturnTo(new URL("https://shop.test/products/ring?size=5"))).toBe(
       "/products/ring?size=5",
@@ -1164,6 +1250,7 @@ describe("Mika client", () => {
       checkout: "checkout",
       checkoutPreview: "checkout/preview",
       checkoutStatus: "checkout/status",
+      checkoutAbandon: "checkout/abandon",
       magicLink: "magic-link",
       magicLinkVerify: "magic-link/verify",
       account: "account",
@@ -1197,7 +1284,7 @@ describe("Mika client", () => {
       stock: ["availability"],
       cart: ["get", "quote", "add", "update", "remove", "merge", "applyCoupon", "removeCoupon"],
       wishlist: ["get", "add", "remove", "moveToCart", "saveForLater", "merge"],
-      checkout: ["start", "preview", "status"],
+      checkout: ["start", "preview", "status", "cancel"],
       magicLink: ["request", "verify"],
       account: ["get", "export", "exportStatus", "exportDownload", "delete", "portal"],
       subscription: ["cancel", "change", "renew"],
@@ -1283,6 +1370,7 @@ describe("Mika client", () => {
       "checkoutStart|checkout.start|checkout.start|checkout|POST|body|trusted|ctx||form",
       "checkoutPreview|checkout.preview|checkout.preview|checkoutPreview|POST|body|trusted|ctx||",
       "checkoutStatus|checkout.status|checkout.status|checkoutStatus|GET|search|trusted|ctx|checkoutId,token|json",
+      "checkoutCancel|checkout.cancel|checkout.cancel|checkoutAbandon|POST|body|trusted|ctx||",
       "magicLinkRequest|magicLink.request|magicLink.request|magicLink|POST|body|trusted|ctx||form",
       "magicLinkVerify|magicLink.verify|magicLink.verify|magicLinkVerify|POST|body|trusted|ctx||form",
       "accountGet|account.get|account.get|account|GET|none|trusted|ctx||",
@@ -2686,6 +2774,7 @@ describe("Mika client", () => {
     expect(apiInput).toEqual({
       orderId: id("order_1"),
       orderLineId: id("order_line_1"),
+      idempotencyKey: "download_issue_invocation_1",
     });
   });
 

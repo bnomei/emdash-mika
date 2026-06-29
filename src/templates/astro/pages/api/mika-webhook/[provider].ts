@@ -1,3 +1,7 @@
+/**
+ * Provider webhook ingest route for the storefront template.
+ * Hashes the raw body, records signature metadata, and forwards to `Mika.webhook.receive`.
+ */
 import { createHash } from "node:crypto";
 import { createMika } from "@bnomei/emdash-mika/astro";
 import { createProviderName } from "@bnomei/emdash-mika/types";
