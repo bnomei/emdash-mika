@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P1 | high | security=no
+DEVANA-STATE: fixed | P1 | high | security=no
 DEVANA-KEY: src/api/backend.ts:813 | checkout-missing-customer-hydration
 
 # checkout.start omits session customerId hydration after magic-link login
@@ -50,6 +50,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-29: open by Devana. Initial report written from static source inspection across dataflow-boundaries and outside-in-entrypoints trails.
+- 2026-06-29: fixed. The `checkout` namespace is now wrapped with `withHydratedCustomerContext({ ... })` — identical to `cart` (~1085) and `wishlist` — so every checkout handler runs `withEffectiveCustomer` first, hydrating `ctx.customerId` from the session's `mika.customerId` before `startCheckout` resolves the cart and persists the checkout document. The persisted `CheckoutDocument.customerId` (backend.ts:6135) therefore binds to the magic-link customer, and `createPaymentOrderDocument` copies it onto the order, so paid orders show up in `account.get` history. Scope: only the wiring at the namespace boundary changed; handler internals are untouched. Evidence: a regression test logs in via `session.set("mika.customerId", ...)` on a session-bound cart, starts checkout with no explicit context customerId, and asserts the persisted checkout document carries that customerId; full suite (225) and both tsc configs pass.
 
 DEVANA-KEY: src/api/backend.ts:813 | checkout-missing-customer-hydration
-DEVANA-SUMMARY: open | P1 | high | Magic-link session customerId is hydrated for cart but not checkout, orphaning paid orders from account history.
+DEVANA-SUMMARY: fixed | P1 | high | Wrapped the checkout namespace in withHydratedCustomerContext so magic-link session customerId hydrates into the persisted checkout document and order, matching cart/wishlist and keeping paid orders in account history.

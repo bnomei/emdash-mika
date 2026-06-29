@@ -9789,6 +9789,48 @@ describe("backend API composition", () => {
     });
   });
 
+  it("hydrates the session customerId onto the persisted checkout document", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const stock = createStockRecord({
+      sellableId: sellable.id,
+      quantityOnHand: 5,
+      quantityReserved: 0,
+    });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([[sellable.id, stock]]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    const ctx = createTestRequestContext({
+      sessionId: "session_checkout_login",
+      customerId: false,
+      userId: false,
+    });
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) throw new Error("Expected cart.add to succeed.");
+
+    // Magic-link verification persists the customer id on the same session.
+    const customerId = createMikaId("customer_checkout_login");
+    await ctx.session?.set("mika.customerId", customerId);
+
+    const checkout = await api.checkout.start(ctx, { cartId: added.data.id });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+
+    await expect(
+      repositories.session.findCheckoutById(checkout.data.id),
+    ).resolves.toMatchObject({ customerId });
+  });
+
   it("returns a valid cart quote without provider or stock mutations", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();

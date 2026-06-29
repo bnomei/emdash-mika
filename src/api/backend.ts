@@ -838,7 +838,7 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
     }),
     cart: createCartBackend(input),
     wishlist: createWishlistBackend(input),
-    checkout: {
+    checkout: withHydratedCustomerContext({
       start: async (ctx, checkoutInput) => startCheckout(input, ctx, checkoutInput),
       status: async (ctx, statusInput) => checkoutStatus(input, ctx, statusInput),
       cancel: async (ctx, cancelInput) => cancelCheckout(input, ctx, cancelInput),
@@ -848,7 +848,7 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
         return { ok: true, status: 200, data: preview };
       },
       ...input.overrides?.checkout,
-    },
+    }),
     magicLink: {
       request: async (ctx, requestInput) => requestMagicLink(input, ctx, requestInput),
       verify: async (ctx, verifyInput) => verifyMagicLink(input, ctx, verifyInput),
