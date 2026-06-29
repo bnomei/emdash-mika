@@ -854,6 +854,17 @@ export class LedgerRepository {
     });
   }
 
+  async listOrdersByEmailHash(
+    emailHash: string,
+    limit = 50,
+  ): Promise<DocumentList<OrderDocument>> {
+    return this.documents.listByType("order", {
+      where: { emailHash },
+      orderBy: { createdAt: "desc" },
+      limit,
+    });
+  }
+
   async put(document: LedgerDocument): Promise<void> {
     await this.documents.put(document);
   }

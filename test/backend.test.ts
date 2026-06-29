@@ -3687,6 +3687,61 @@ describe("backend API composition", () => {
     expect("customer" in emailHashResult.data).toBe(false);
   });
 
+  it("lists guest orders for an emailHash-only magic-link identity", async () => {
+    const emailHash = createTestHash("email:guest@example.test");
+    const repositories = createTestBackendRepositories();
+
+    const baseOrder = createOrderDocument();
+    const guestOrder = createOrderDocument({
+      orderNumber: "M-2001",
+      customerId: undefined,
+      emailHash,
+      aggregate: {
+        ...baseOrder.aggregate,
+        customer: {
+          ...baseOrder.aggregate.customer,
+          customerId: undefined,
+          userId: undefined,
+          email: "guest@example.test",
+          emailHash,
+        },
+      },
+    });
+    await repositories.ledger.put(guestOrder);
+
+    const baseEntitlement = createEntitlementDocument({ id: createTestMikaId("entitlement", 1) });
+    await repositories.account.put({
+      ...baseEntitlement,
+      customerId: undefined,
+      userId: undefined,
+      emailHash,
+      entitlementKey: "downloads.guest",
+      record: {
+        ...baseEntitlement.record,
+        customerId: undefined,
+        userId: undefined,
+        emailHash,
+        entitlementKey: "downloads.guest",
+      },
+    });
+
+    const api = createMikaBackendApi(createTestBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+    await ctx.session?.set("mika.emailHash", emailHash);
+
+    const account = await api.account.get(ctx);
+    expect(account).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        orders: [{ id: guestOrder.id, orderNumber: "M-2001", status: "paid" }],
+        entitlements: [{ key: "downloads.guest" }],
+      },
+    });
+    if (!account.ok) throw new Error("Expected guest account lookup to succeed.");
+    expect(account.data.orders).toHaveLength(1);
+  });
+
   it("requires identity for account overview", async () => {
     const api = createMikaBackendApi(createTestBackendDependencies());
 
@@ -8212,6 +8267,8 @@ describe("backend API composition", () => {
       findOrderByDownloadRef: (downloadRef) => baseLedger.findOrderByDownloadRef(downloadRef),
       listOrdersByCustomer: (customerId, limit) =>
         baseLedger.listOrdersByCustomer(customerId, limit),
+      listOrdersByEmailHash: (emailHash, limit) =>
+        baseLedger.listOrdersByEmailHash(emailHash, limit),
       put: async (document) => {
         if (
           document.type === "order" &&

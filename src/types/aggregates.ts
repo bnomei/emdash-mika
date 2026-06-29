@@ -344,6 +344,7 @@ export interface CheckoutSessionRecord extends AggregateRecord<CheckoutAggregate
 export interface OrderRecord extends AggregateRecord<OrderAggregate> {
   readonly orderNumber: string;
   readonly customerId?: MikaId;
+  readonly emailHash?: string;
   readonly provider: ProviderName;
   readonly providerCheckoutId?: string;
   readonly providerPaymentId?: string;

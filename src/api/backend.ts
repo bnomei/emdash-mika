@@ -344,6 +344,10 @@ export interface MikaLedgerRepositoryPort {
     customerId: MikaId,
     limit?: number,
   ): Promise<MikaDocumentList<OrderDocument>>;
+  listOrdersByEmailHash(
+    emailHash: string,
+    limit?: number,
+  ): Promise<MikaDocumentList<OrderDocument>>;
   put(document: LedgerDocument): Promise<void>;
 }
 
@@ -1270,14 +1274,24 @@ async function getAccount(
     };
   }
 
+  // Guest orders carry no customerId, so a magic-link emailHash identity must
+  // find its paid orders by the emailHash snapshotted onto the order. (A
+  // userId-only identity has no emailHash and keeps an empty order list.)
+  const orderItems = identity.emailHash
+    ? (await input.repositories.ledger.listOrdersByEmailHash(identity.emailHash)).items
+    : [];
+  const orders = await Promise.all(
+    orderItems.map((item) => orderSummaryDTO(input, ctx, item.data)),
+  );
+
   return {
     ok: true,
     status: 200,
     data: {
-      orders: [],
+      orders,
       subscriptions: [],
       entitlements: identity.entitlements.map((item) => entitlementDTO(item.data)),
-      downloads: [],
+      downloads: orderItems.flatMap((item) => orderDownloadDTOs(item.data)),
     },
   };
 }
@@ -4928,6 +4942,10 @@ async function createPaymentOrderDocument(
       metadata: paymentOrderLineMetadata(line, event),
     }),
   );
+  // Snapshot the purchaser once so the order's top-level emailHash mirrors
+  // aggregate.customer.emailHash. Guest orders have no customerId, so the
+  // top-level emailHash is what lets a magic-link emailHash session find them.
+  const customer = await paymentCustomerSnapshot(input, checkout, event);
 
   return {
     id: orderId,
@@ -4935,6 +4953,7 @@ async function createPaymentOrderDocument(
     schemaVersion: 1,
     orderNumber: orderId,
     customerId: checkout.customerId,
+    ...(customer.emailHash ? { emailHash: customer.emailHash } : {}),
     provider: event.provider,
     providerCheckoutId:
       event.providerCheckoutId ??
@@ -4949,7 +4968,7 @@ async function createPaymentOrderDocument(
     totalAmount: total.amount,
     paidAt: ctx.now,
     aggregate: createOrderAggregate({
-      customer: await paymentCustomerSnapshot(input, checkout, event),
+      customer,
       checkout: checkout.aggregate,
       lines,
       providerPaymentId: event.providerPaymentId,

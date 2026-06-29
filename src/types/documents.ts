@@ -197,6 +197,7 @@ export type OrderDocument = AggregateDocument<
   {
     readonly orderNumber: string;
     readonly customerId?: MikaId;
+    readonly emailHash?: string;
     readonly provider: ProviderName;
     readonly providerCheckoutId?: string;
     readonly providerPaymentId?: string;
