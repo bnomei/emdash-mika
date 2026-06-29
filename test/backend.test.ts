@@ -7105,7 +7105,7 @@ describe("backend API composition", () => {
     });
   });
 
-  it("does not run payment webhook side effects without the workflow lease", async () => {
+  it("returns a retryable conflict and runs no payment webhook side effects without the workflow lease", async () => {
     const stripe = createProviderName("stripe");
     const clock = createTestClock();
     const ledgerCollection = createStorageCollection("ledger");
@@ -7150,14 +7150,13 @@ describe("backend API composition", () => {
       }),
     );
 
+    // The paid webhook cannot acquire the lease (another worker holds it), so it
+    // stays `received`. The provider must be told to retry rather than receiving
+    // a 200 acknowledgement for an unfulfilled paid order.
     await expect(receiveWebhook(api, "payment-active-lease", stripe)).resolves.toMatchObject({
-      ok: true,
-      status: 200,
-      data: {
-        id: "webhook_1",
-        status: "received",
-        replayable: true,
-      },
+      ok: false,
+      status: 409,
+      error: { code: "CONFLICT" },
     });
 
     await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(0);
@@ -7516,10 +7515,12 @@ describe("backend API composition", () => {
       }),
     );
 
+    // First delivery cannot reclaim the not-yet-expired lease, so the webhook
+    // stays `received`. A retryable conflict tells the provider to redeliver.
     await expect(receiveWebhook(api, "payment-stuck-first", stripe)).resolves.toMatchObject({
-      ok: true,
-      status: 200,
-      data: { id: "webhook_1", status: "received", replayable: true },
+      ok: false,
+      status: 409,
+      error: { code: "CONFLICT" },
     });
     await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({ status: "received" });
     await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(0);

@@ -3441,15 +3441,7 @@ async function receiveWebhook(
     }
 
     const reprocessed = await processStoredWebhook(input, ctx, duplicate, event);
-    return {
-      ok: true,
-      status: 200,
-      data: {
-        id: reprocessed.id,
-        status: reprocessed.status === "failed" ? "failed" : "received",
-        replayable: true,
-      },
-    };
+    return webhookReceiptResult(reprocessed, event);
   }
 
   const webhook = createWebhookDocument(input, ctx, verified, event, {
@@ -3473,15 +3465,7 @@ async function receiveWebhook(
 
   const processedWebhook = await processStoredWebhook(input, ctx, webhook, event);
 
-  return {
-    ok: true,
-    status: 200,
-    data: {
-      id: processedWebhook.id,
-      status: processedWebhook.status === "failed" ? "failed" : "received",
-      replayable: true,
-    },
-  };
+  return webhookReceiptResult(processedWebhook, event);
 }
 
 async function replayWebhook(
@@ -5651,6 +5635,34 @@ function webhookDuplicateResult(duplicate: WebhookDocument): MikaApiResult<Webho
       id: duplicate.id,
       status: "duplicate",
       replayable: duplicate.status === "failed" ? true : undefined,
+    },
+  };
+}
+
+function webhookReceiptResult(
+  webhook: WebhookDocument,
+  event: MikaProviderWebhookEvent,
+): MikaApiResult<WebhookReceiveDTO> {
+  // A paid payment webhook still in `received` after processing means the
+  // fulfillment workflow could not run to a terminal state: the lease was lost
+  // mid-step or is held by another worker (`runPaymentWebhookWorkflow` and the
+  // `WorkflowRunnerLeaseLostError` catch both return the webhook unchanged).
+  // Acknowledging HTTP 200 here would tell the provider to stop redelivering
+  // while the paid order is unfulfilled. Surface a retryable conflict so the
+  // provider redelivers; a later delivery (after the lease frees or expires)
+  // reprocesses the still-`received` webhook and completes fulfillment
+  // idempotently.
+  if (event.kind === "payment" && event.paymentStatus === "paid" && webhook.status === "received") {
+    return webhookProcessingDeferred(webhook.id);
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      id: webhook.id,
+      status: webhook.status === "failed" ? "failed" : "received",
+      replayable: true,
     },
   };
 }
@@ -7939,6 +7951,14 @@ function createAdminAuditDocument(
 
 function webhookInvalid(message: string): MikaApiFailure {
   return apiFailure(400, "WEBHOOK_INVALID", message);
+}
+
+function webhookProcessingDeferred(webhookId: MikaId): MikaApiFailure {
+  return apiFailure(
+    409,
+    "CONFLICT",
+    `Webhook '${webhookId}' is awaiting fulfillment and was not processed; retry delivery.`,
+  );
 }
 
 function validationFailed(field: string, message: string): MikaApiFailure {
