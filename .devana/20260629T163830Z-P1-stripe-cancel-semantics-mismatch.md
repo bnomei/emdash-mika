@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P1 | medium | security=no
+DEVANA-STATE: fixed | P1 | medium | security=no
 DEVANA-KEY: src/stripe.ts:274 | stripe-cancel-semantics-mismatch
 
 # Stripe subscription cancel is immediate; Mika lifecycle expects cancel-at-period-end
@@ -49,6 +49,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-29: open by Devana. Initial report written from static source inspection across invariants-contracts and contracts-errors trails.
+- 2026-06-29: fixed (report's first suggested approach). The Stripe adapter's `cancelSubscription` now calls `subscriptions.update(providerSubscriptionId, { cancel_at_period_end: true })` instead of the immediate `subscriptions.cancel(...)`, mirroring how `changeStripeSubscription`/`renewStripeSubscription` already use `subscriptions.update`. This aligns the provider with Mika's lifecycle: `subscriptionStatusAfterAction("cancel")` → `cancel_at_period_end`, which `entitlementStatusForSubscription` treats as still-active until period end. The subscription remains active at Stripe (now flagged to cancel at period end), so provider access and local entitlement stay consistent; when the period ends Stripe emits `customer.subscription.deleted`, which `updateSubscriptionFromEvent` reconciles to the terminal cancelled state and revokes the entitlement. The existing `if (!options.stripe.subscriptions || !input.providerSubscriptionId)` guard and the `completedAction` return are unchanged (message reworded to "set to cancel at period end"). No lifecycle/entitlement code changed — only the adapter call. Scope: Stripe provider subscription cancel. Evidence: a new Stripe-adapter test asserts cancel calls `subscriptions.update(id, { cancel_at_period_end: true })` and does NOT call `subscriptions.cancel`; it was confirmed to fail before the change. Full suite (357) and both tsc configs pass.
 
 DEVANA-KEY: src/stripe.ts:274 | stripe-cancel-semantics-mismatch
-DEVANA-SUMMARY: open | P1 | medium | Stripe immediate subscription cancel conflicts with Mika cancel_at_period_end status and active entitlement rules.
+DEVANA-SUMMARY: fixed | P1 | medium | Stripe cancelSubscription now schedules cancel-at-period-end via subscriptions.update instead of immediate subscriptions.cancel, matching Mika's cancel_at_period_end lifecycle so provider access and entitlement stay consistent until period end.

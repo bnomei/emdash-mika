@@ -1209,6 +1209,37 @@ describe("Mika Stripe provider", () => {
     expect(invoiceCalls).toEqual(["in_789"]);
   });
 
+  it("schedules a subscription cancel at period end instead of terminating immediately", async () => {
+    const updateCalls: Array<{ id: string; params: JsonObject }> = [];
+    const cancelCalls: string[] = [];
+    const stripe: MikaStripeClient = {
+      subscriptions: {
+        cancel: async (id) => {
+          cancelCalls.push(id);
+          return { id, status: "canceled" };
+        },
+        update: async (id, params) => {
+          updateCalls.push({ id, params });
+          return { id, status: "active" };
+        },
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe });
+
+    await expect(
+      provider.cancelSubscription?.({
+        subscriptionId: createMikaId("sub_1"),
+        providerSubscriptionId: "sub_123",
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+
+    // Mika maps subscription.cancel to cancel_at_period_end (entitlement stays
+    // active until period end), so the adapter must schedule via update, not
+    // terminate via cancel.
+    expect(cancelCalls).toEqual([]);
+    expect(updateCalls).toEqual([{ id: "sub_123", params: { cancel_at_period_end: true } }]);
+  });
+
   it("derives Stripe capabilities from the configured client by default", async () => {
     const stripe: MikaStripeClient = {
       checkout: {

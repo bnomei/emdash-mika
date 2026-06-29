@@ -292,11 +292,19 @@ export function createMikaStripeProvider(
         return unsupportedAction("subscription_cancel", "Stripe subscription id is required.");
       }
 
-      const subscription = await options.stripe.subscriptions.cancel(input.providerSubscriptionId);
+      // Schedule cancel-at-period-end rather than terminating immediately, so the
+      // provider state matches Mika's lifecycle: `subscription.cancel` maps to
+      // `cancel_at_period_end` and entitlements stay active until the period ends,
+      // when a `customer.subscription.deleted` webhook finalizes the cancellation.
+      // An immediate `subscriptions.cancel` would strip provider access while Mika
+      // still shows a pending-cancel subscription with an active entitlement.
+      const subscription = await options.stripe.subscriptions.update(input.providerSubscriptionId, {
+        cancel_at_period_end: true,
+      });
 
       return completedAction(
         "subscription_cancel",
-        `Stripe subscription ${subscription.id} canceled.`,
+        `Stripe subscription ${subscription.id} set to cancel at period end.`,
       );
     },
     changeSubscription: async (input) => changeStripeSubscription(options, input),
