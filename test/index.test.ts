@@ -583,7 +583,10 @@ describe("Mika native plugin package", () => {
 describe("Mika Astro helpers", () => {
   it("scales money by the currency's own fraction digits, not a fixed /100", () => {
     const fmt = (amount: number, currency: string) =>
-      formatMikaMoney({ amount, currency }, { locales: "en-US" }).replace(/[  ]/g, " ");
+      formatMikaMoney(
+        { amount, currency: createCurrencyCode(currency) },
+        { locales: "en-US" },
+      ).replace(/[  ]/g, " ");
 
     expect(fmt(1200, "USD")).toBe("$12.00");
     expect(fmt(1000, "JPY")).toBe("¥1,000");

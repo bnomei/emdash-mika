@@ -539,6 +539,13 @@ export interface CreateMikaBackendApiInput extends MikaBackendDependencies {
   readonly overrides?: MikaApiOverrides;
 }
 
+type MikaStockLifecycleDependencies = Pick<
+  MikaBackendDependencies,
+  "createId" | "isoNow" | "now"
+> & {
+  readonly repositories: Pick<MikaBackendRepositories, "stock">;
+};
+
 type MikaCartWishlistBackendRepositories = Pick<
   MikaBackendRepositories,
   "catalog" | "session" | "stock"
@@ -608,7 +615,7 @@ export interface MikaStockLifecycleService {
 
 /** Builds a stock lifecycle service bound to backend repositories and clocks. */
 export function createMikaStockLifecycleService(
-  input: MikaBackendDependencies,
+  input: MikaStockLifecycleDependencies,
 ): MikaStockLifecycleService {
   return {
     reserve: async (reservation) =>
@@ -5750,6 +5757,13 @@ async function reopenAbandonedCheckoutCart(
     return null;
   }
 
+  const reservationIds = pending.aggregate.items
+    .map((item) => item.reservationId)
+    .filter((id): id is MikaId => Boolean(id));
+  if (reservationIds.length > 0) {
+    await releaseCheckoutReservations(input, reservationIds, ctx.now);
+  }
+
   const reopened = reopenCartDocument(pending, ctx.now);
   await input.repositories.session.put(reopened);
 
@@ -6064,6 +6078,13 @@ async function startCheckout(
   );
   if (!persisted.ok) return persisted;
 
+  const checkoutRedirectUrl = checkoutStatusAllowsRedirect(
+    checkoutDocument.status,
+    providerSession.status,
+  )
+    ? providerSession.redirectUrl
+    : undefined;
+
   return {
     ok: true,
     status: 200,
@@ -6072,14 +6093,12 @@ async function startCheckout(
       status: providerSession.status,
       mode: providerSession.mode,
       provider: providerSession.provider,
-      redirectUrl: providerSession.redirectUrl,
+      redirectUrl: checkoutRedirectUrl,
       statusToken,
       expiresAt: providerSession.expiresAt ?? checkoutDocument.expiresAt,
       paymentPending: providerSession.status === "pending" ? true : undefined,
     },
-    effects: providerSession.redirectUrl
-      ? [{ type: "redirect", url: providerSession.redirectUrl }]
-      : undefined,
+    effects: checkoutRedirectUrl ? [{ type: "redirect", url: checkoutRedirectUrl }] : undefined,
   };
 }
 
@@ -6390,7 +6409,7 @@ async function markCheckoutPersistenceFailed(
 }
 
 async function releaseCheckoutReservations(
-  input: CreateMikaBackendApiInput,
+  input: MikaStockLifecycleDependencies,
   reservationIds: readonly MikaId[],
   now: ISODateTime,
 ): Promise<void> {
@@ -6607,12 +6626,16 @@ function withHydratedCustomerContext<TApi extends Record<string, unknown>>(api: 
 function checkoutDocumentSuccessResult(
   document: CheckoutDocument,
 ): MikaApiResult<CheckoutSessionDTO> {
-  const redirectUrl =
+  const rawRedirectUrl =
     document.redirectUrl ?? metadataString(document.aggregate.metadata, "checkoutRedirectUrl");
   const status =
     document.providerStatus ??
     metadataString(document.aggregate.metadata, "checkoutProviderStatus") ??
     checkoutSessionStatus(document.status);
+  const sessionStatus = checkoutSessionStatus(status);
+  const redirectUrl = checkoutStatusAllowsRedirect(document.status, sessionStatus)
+    ? rawRedirectUrl
+    : undefined;
   const orderId =
     document.orderId ?? metadataMikaId(document.aggregate.metadata, "checkoutOrderId");
 
@@ -6621,7 +6644,7 @@ function checkoutDocumentSuccessResult(
     status: 200,
     data: {
       id: document.id,
-      status: checkoutSessionStatus(status),
+      status: sessionStatus,
       mode: document.aggregate.mode,
       provider: document.provider,
       redirectUrl,
@@ -6631,6 +6654,26 @@ function checkoutDocumentSuccessResult(
     },
     effects: redirectUrl ? [{ type: "redirect", url: redirectUrl }] : undefined,
   };
+}
+
+function checkoutStatusAllowsRedirect(
+  documentStatus: CheckoutStatus,
+  sessionStatus: CheckoutSessionDTO["status"],
+): boolean {
+  if (
+    documentStatus === "cancelled" ||
+    documentStatus === "expired" ||
+    documentStatus === "failed"
+  ) {
+    return false;
+  }
+
+  return (
+    sessionStatus === "created" ||
+    sessionStatus === "redirected" ||
+    sessionStatus === "pending" ||
+    sessionStatus === "completed"
+  );
 }
 
 function checkoutBindingError(document: CheckoutDocument): MikaApiFailure | null {

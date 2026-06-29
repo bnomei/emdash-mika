@@ -141,12 +141,12 @@ describe("isJsonValue / isJsonObject", () => {
 
   it("still rejects true cycles", () => {
     const cyclic: Record<string, unknown> = {};
-    cyclic.self = cyclic;
+    cyclic["self"] = cyclic;
     expect(isJsonValue(cyclic)).toBe(false);
 
     const a: Record<string, unknown> = {};
     const b: Record<string, unknown> = { a };
-    a.b = b;
+    a["b"] = b;
     expect(isJsonValue({ a, b })).toBe(false);
   });
 
@@ -497,7 +497,7 @@ describe("backend test storage helpers", () => {
       if (due.items.length === 0) break;
       for (const item of due.items) {
         const result = await ops.tryLeaseEmail({
-          emailId: item.id,
+          emailId: createMikaId(item.id),
           leaseKey: `worker_${round}`,
           now: TEST_NOW,
           leaseExpiresAt: clock.isoAt(300_000),
@@ -10240,7 +10240,11 @@ describe("backend API composition", () => {
         providers: createMikaProviderRegistry([fake.provider]),
       }),
     );
-    const ctx = createTestRequestContext({ sessionId: "session_abandon", customerId: false, userId: false });
+    const ctx = createTestRequestContext({
+      sessionId: "session_abandon",
+      customerId: false,
+      userId: false,
+    });
 
     const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
     if (!added.ok) throw new Error("Expected cart.add to succeed.");
@@ -10250,6 +10254,9 @@ describe("backend API composition", () => {
     if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
     await expect(repositories.session.findById(cartId)).resolves.toMatchObject({
       status: "checkout_pending",
+    });
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 2,
     });
 
     const checkoutDoc = await repositories.session.findCheckoutById(createMikaId("checkout_1"));
@@ -10264,10 +10271,18 @@ describe("backend API composition", () => {
     await expect(repositories.session.findById(cartId)).resolves.toMatchObject({
       status: "open",
     });
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 0,
+    });
+    await expect(
+      repositories.stock.findEventById(createTestMikaId("stock_event", 1)),
+    ).resolves.toMatchObject({
+      status: "released",
+    });
 
-    await expect(api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 })).resolves.toMatchObject(
-      { ok: true, data: { id: cartId } },
-    );
+    await expect(
+      api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 }),
+    ).resolves.toMatchObject({ ok: true, data: { id: cartId } });
   });
 
   it("rejects checkout start for providers without hosted checkout support", async () => {
@@ -10567,6 +10582,122 @@ describe("backend API composition", () => {
           cancelPath: "/checkout/cancel",
         },
       },
+    });
+  });
+
+  it("does not redirect when the provider creates a cancelled checkout", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider({
+      overrides: {
+        createCheckoutSession: async () => ({
+          id: createMikaId("checkout_fake"),
+          status: "cancelled",
+          mode: "payment",
+          provider: TEST_PROVIDER,
+          redirectUrl: "https://checkout.example.test/session/cancelled",
+          expiresAt: createTestClock().isoAt(60 * 60_000),
+          providerCheckoutId: "provider_checkout_cancelled",
+        }),
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+
+    const checkout = await api.checkout.start(ctx, { cartId: added.data.id });
+    expect(checkout).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "checkout_1",
+        status: "cancelled",
+        mode: "payment",
+        provider: TEST_PROVIDER,
+      },
+    });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+    expect(checkout.data.redirectUrl).toBeUndefined();
+    expect(checkout.effects).toBeUndefined();
+  });
+
+  it("cancels a hosted checkout without redirecting back to the provider", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+
+    await expect(api.checkout.start(ctx, { cartId: added.data.id })).resolves.toMatchObject({
+      ok: true,
+      data: {
+        id: "checkout_1",
+        redirectUrl: "https://checkout.example.test/session/checkout_fake",
+      },
+      effects: [{ type: "redirect", url: "https://checkout.example.test/session/checkout_fake" }],
+    });
+
+    const cancelled = await api.checkout.cancel(ctx, {
+      checkoutId: createTestMikaId("checkout", 1),
+    });
+    expect(cancelled).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "checkout_1",
+        status: "cancelled",
+        mode: "payment",
+        provider: TEST_PROVIDER,
+      },
+    });
+    if (!cancelled.ok) throw new Error("Expected checkout.cancel to succeed.");
+    expect(cancelled.data.redirectUrl).toBeUndefined();
+    expect(cancelled.effects).toBeUndefined();
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 0,
+    });
+    await expect(repositories.session.findById(added.data.id)).resolves.toMatchObject({
+      type: "cart",
+      status: "open",
     });
   });
 
@@ -11065,8 +11196,12 @@ describe("backend API composition", () => {
         sessionId: "session_1",
         providerCheckoutId: "provider_checkout_3",
         status: "cancelled",
+        redirectUrl: "https://checkout.example.test/cancelled",
         expiresAt: createTestClock().isoAt(-1),
-        metadata: { checkoutProviderStatus: "cancelled" },
+        metadata: {
+          checkoutProviderStatus: "cancelled",
+          checkoutRedirectUrl: "https://checkout.example.test/cancelled-stale",
+        },
       }),
     );
 
@@ -11115,6 +11250,39 @@ describe("backend API composition", () => {
         provider: TEST_PROVIDER,
       },
     });
+    const cancelledStatus = await api.checkout.status(createTestRequestContext(), {
+      checkoutId: createTestMikaId("checkout", 3),
+    });
+    expect(cancelledStatus).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "checkout_3",
+        status: "cancelled",
+        mode: "payment",
+        provider: TEST_PROVIDER,
+      },
+    });
+    if (!cancelledStatus.ok) throw new Error("Expected cancelled checkout status to succeed.");
+    expect(cancelledStatus.data.redirectUrl).toBeUndefined();
+    expect(cancelledStatus.effects).toBeUndefined();
+
+    const cancelledAgain = await api.checkout.cancel(createTestRequestContext(), {
+      checkoutId: createTestMikaId("checkout", 3),
+    });
+    expect(cancelledAgain).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "checkout_3",
+        status: "cancelled",
+        mode: "payment",
+        provider: TEST_PROVIDER,
+      },
+    });
+    if (!cancelledAgain.ok) throw new Error("Expected cancelled checkout cancel to succeed.");
+    expect(cancelledAgain.data.redirectUrl).toBeUndefined();
+    expect(cancelledAgain.effects).toBeUndefined();
   });
 
   it("compensates stock when local checkout persistence fails after provider success", async () => {
