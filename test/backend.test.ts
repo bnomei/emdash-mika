@@ -5878,6 +5878,173 @@ describe("backend API composition", () => {
     ).resolves.toBeNull();
   });
 
+  it("rejects a reused refund idempotency key carrying different input", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["refundPayment"],
+    });
+    const orderA = createOrderDocument();
+    const orderB = createOrderDocument({
+      id: createTestMikaId("order", 2),
+      orderNumber: "M-1002",
+      providerPaymentId: "payment_2",
+      providerOrderId: "provider_order_2",
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.ledger.put(orderA);
+    await repositories.ledger.put(orderB);
+
+    const first = await api.admin.orderRefund({
+      orderId: orderA.id,
+      amount: 500,
+      idempotencyKey: "refund_shared_key",
+    });
+    expect(first).toMatchObject({ ok: true, status: 200, data: { status: "completed" } });
+
+    // Same key, different target order: must not replay order A's refund snapshot.
+    const differentTarget = await api.admin.orderRefund({
+      orderId: orderB.id,
+      amount: 500,
+      idempotencyKey: "refund_shared_key",
+    });
+    expect(differentTarget).toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "CONFLICT" },
+    });
+
+    // Same key and target but a different amount is also a different input.
+    const differentAmount = await api.admin.orderRefund({
+      orderId: orderA.id,
+      amount: 700,
+      idempotencyKey: "refund_shared_key",
+    });
+    expect(differentAmount).toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "CONFLICT" },
+    });
+
+    // Only order A's original 500 refund reached the provider; B is untouched.
+    expect(fake.getCalls().refundPayment).toEqual([
+      {
+        orderId: orderA.id,
+        providerPaymentId: "payment_1",
+        amount: 500,
+      },
+    ]);
+    await expect(repositories.ledger.findOrderById(orderB.id)).resolves.toMatchObject({
+      status: orderB.status,
+      paymentStatus: orderB.paymentStatus,
+    });
+  });
+
+  it("replays an entitlement grant retried with the same idempotency key and input", async () => {
+    const repositories = createTestBackendRepositories();
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+
+    const grantArgs = {
+      entitlementKey: "course.pro",
+      customerId: createTestMikaId("customer", 1),
+      idempotencyKey: "grant_shared_key",
+    };
+
+    const first = await api.admin.entitlementGrant(grantArgs);
+    expect(first).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: createTestMikaId("entitlement", 1),
+        status: "completed",
+        affected: { entitlements: 1 },
+      },
+    });
+
+    // The retry mints a fresh entitlement id internally (the server-side target
+    // id differs every call), but identical client input must still replay the
+    // original grant rather than conflicting on that non-deterministic id.
+    const second = await api.admin.entitlementGrant(grantArgs);
+    expect(second).toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: createTestMikaId("entitlement", 1), status: "completed" },
+    });
+
+    // No second entitlement persisted and no second audit created (pure replay).
+    await expect(
+      repositories.account.findEntitlementById(createTestMikaId("entitlement", 2)),
+    ).resolves.toBeNull();
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 2)),
+    ).resolves.toBeNull();
+  });
+
+  it("replays a download issue retried with the same input after the clock advances", async () => {
+    const repositories = createTestBackendRepositories();
+    const clock = createTestClock();
+    let offsetMs = 0;
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        now: () => new Date(clock.now.getTime() + offsetMs),
+        isoNow: () => clock.isoAt(offsetMs),
+      }),
+    );
+
+    const baseOrder = createOrderDocument();
+    const baseLine = baseOrder.aggregate.lines[0]!;
+    const order = createOrderDocument({
+      aggregate: {
+        ...baseOrder.aggregate,
+        lines: [
+          { ...baseLine, entitlementId: createTestMikaId("entitlement", 2), downloadRefs: [] },
+        ],
+      },
+    });
+    const baseEntitlement = createEntitlementDocument({ id: createTestMikaId("entitlement", 2) });
+    const entitlement = createEntitlementDocument({
+      id: createTestMikaId("entitlement", 2),
+      orderId: order.id,
+      record: { ...baseEntitlement.record, orderId: order.id },
+    });
+    await repositories.ledger.put(order);
+    await repositories.account.put(entitlement);
+
+    const issueArgs = {
+      entitlementId: entitlement.id,
+      orderId: order.id,
+      orderLineId: createTestMikaId("order_line", 1),
+      idempotencyKey: "download_shared_key",
+    };
+
+    const first = await api.admin.downloadIssue(issueArgs);
+    expect(first).toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "download:order_1:order_line_1", status: "completed" },
+    });
+
+    // The default download expiry is wall-clock derived, so it differs on the
+    // retry; the client input is unchanged, so the second issue must replay the
+    // first rather than conflicting on that time-derived value.
+    offsetMs = 600_000;
+    const second = await api.admin.downloadIssue(issueArgs);
+    expect(second).toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "download:order_1:order_line_1", status: "completed" },
+    });
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 2)),
+    ).resolves.toBeNull();
+  });
+
   it("does not commit refund or cancel state when the provider returns a non-throwing failure", async () => {
     const repositories = createTestBackendRepositories();
     const fake = createFakeMikaProvider({

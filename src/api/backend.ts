@@ -213,6 +213,14 @@ type MikaAdminAuditStartRecord = Omit<
   "id" | "status" | "createdAt"
 > & {
   readonly createdAt?: ISODateTime;
+  /**
+   * Deterministic, client-supplied request input used only to compute the
+   * idempotency hash. Kept separate from (and not persisted with) the audit
+   * record so server-derived audit fields — a freshly minted `targetId`, a
+   * wall-clock `metadata.expiresAt` — do not make identical retries hash
+   * differently and force a false `same_key_same_input` conflict.
+   */
+  readonly idempotencyInput?: unknown;
 };
 
 const DEFAULT_BACKEND_CURRENCY = createCurrencyCode("EUR");
@@ -1848,6 +1856,7 @@ async function refundOrder(
       targetType: "order",
       targetId: order.id,
       idempotencyKey: refundInput.idempotencyKey,
+      idempotencyInput: refundInput,
       metadata: {
         provider: order.provider,
         orderId: order.id,
@@ -1905,6 +1914,7 @@ async function cancelOrder(
       targetType: "order",
       targetId: order.id,
       idempotencyKey: cancelInput.idempotencyKey,
+      idempotencyInput: cancelInput,
       metadata: {
         provider: order.provider,
         orderId: order.id,
@@ -2023,6 +2033,7 @@ async function grantEntitlement(
       targetType: "entitlement",
       targetId: entitlementId,
       idempotencyKey: grantInput.idempotencyKey,
+      idempotencyInput: grantInput,
       metadata: {
         entitlementKey: grantInput.entitlementKey,
         ...(grantInput.customerId ? { customerId: grantInput.customerId } : {}),
@@ -2078,6 +2089,7 @@ async function revokeEntitlement(
       targetType: "entitlement",
       targetId: entitlement.id,
       idempotencyKey: revokeInput.idempotencyKey,
+      idempotencyInput: revokeInput,
       metadata: {
         entitlementId: entitlement.id,
         entitlementKey: entitlement.entitlementKey,
@@ -2137,6 +2149,7 @@ async function resendEmail(
       targetType: "email",
       targetId: email.id,
       idempotencyKey: resendInput.idempotencyKey,
+      idempotencyInput: resendInput,
       metadata: {
         emailId: email.id,
         kind: email.kind,
@@ -2200,6 +2213,7 @@ async function revokeLicense(
       targetType: "license",
       targetId: license.id,
       idempotencyKey: revokeInput.idempotencyKey,
+      idempotencyInput: revokeInput,
       metadata: {
         licenseId: license.id,
         ...(license.customerId ? { customerId: license.customerId } : {}),
@@ -2270,6 +2284,7 @@ async function issueDownload(
       targetId: createMikaId(target.downloadRef),
       createdAt: now,
       idempotencyKey: issueInput.idempotencyKey,
+      idempotencyInput: issueInput,
       metadata: {
         orderId: target.order.id,
         orderLineId: target.line.id,
@@ -2470,6 +2485,7 @@ function addDownloadRefToOrder(
 }
 
 const ADMIN_AUDIT_RESULT_METADATA_KEY = "result";
+const ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY = "idempotencyInputHash";
 
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -2505,6 +2521,33 @@ function adminAuditReplayResult<TData>(audit: AdminAuditDocument): TData | null 
   const snapshot = audit.record.metadata?.[ADMIN_AUDIT_RESULT_METADATA_KEY];
 
   return isJsonObject(snapshot) ? (snapshot as TData) : null;
+}
+
+function adminAuditStoredIdempotencyInputHash(audit: AdminAuditDocument): string | undefined {
+  const value = audit.record.metadata?.[ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY];
+
+  return typeof value === "string" ? value : undefined;
+}
+
+async function adminActionIdempotencyInputHash(
+  input: CreateMikaBackendApiInput,
+  idempotencyInput: unknown,
+  record: Pick<MikaAdminAuditStartRecord, "action" | "targetType" | "targetId" | "metadata">,
+): Promise<string> {
+  // Prefer the explicit client-supplied input; it carries only the deterministic
+  // request fields. Fall back to the assembled record identity for actions that
+  // supply no explicit input (those have deterministic record fields only).
+  const hashedInput =
+    idempotencyInput !== undefined
+      ? idempotencyInput
+      : {
+          action: record.action,
+          targetType: record.targetType,
+          targetId: record.targetId,
+          metadata: record.metadata,
+        };
+
+  return input.hash(stableJsonStringify(hashedInput));
 }
 
 async function failAdminAudit(
@@ -2595,32 +2638,61 @@ async function runAdminAction<TData>(
   fallbackMessage: string,
   failure: (message: string) => MikaApiFailure,
 ): Promise<MikaApiResult<TData>> {
+  const { idempotencyInput, ...auditRecord } = record;
+  const idempotencyInputHash = record.idempotencyKey
+    ? await adminActionIdempotencyInputHash(input, idempotencyInput, auditRecord)
+    : undefined;
   if (record.idempotencyKey) {
     const prior = await input.repositories.ops.findAdminAuditByIdempotencyKey(
       record.action,
       record.idempotencyKey,
     );
-    if (prior?.record.status === "completed") {
-      const replay = adminAuditReplayResult<TData>(prior);
-      if (replay !== null) {
-        return { ok: true, status: 200, data: replay };
+    if (prior) {
+      // The declared idempotency scope is `same_key_same_input`: a prior audit may
+      // only be replayed (or block as in-progress) when this request carries the same
+      // input. A differing input under the same key — e.g. a refund retried with a new
+      // orderId — must not return the earlier snapshot, so surface a conflict instead.
+      // Audits written before this hash existed have no stored hash; fall back to the
+      // legacy replay-by-key behavior for them rather than rejecting.
+      const priorInputHash = adminAuditStoredIdempotencyInputHash(prior);
+      if (
+        priorInputHash !== undefined &&
+        idempotencyInputHash !== undefined &&
+        priorInputHash !== idempotencyInputHash
+      ) {
+        return adminIdempotencyInputMismatch(record.action);
       }
-    } else if (prior?.record.status === "started") {
-      return {
-        ok: false,
-        status: 409,
-        error: {
-          code: "CONFLICT",
-          message: `Admin action '${record.action}' is already in progress for this idempotency key.`,
-        },
-      };
+
+      if (prior.record.status === "completed") {
+        const replay = adminAuditReplayResult<TData>(prior);
+        if (replay !== null) {
+          return { ok: true, status: 200, data: replay };
+        }
+      } else if (prior.record.status === "started") {
+        return {
+          ok: false,
+          status: 409,
+          error: {
+            code: "CONFLICT",
+            message: `Admin action '${record.action}' is already in progress for this idempotency key.`,
+          },
+        };
+      }
     }
   }
 
   const audit = createAdminAuditDocument(input, {
-    ...record,
+    ...auditRecord,
     status: "started",
     createdAt: record.createdAt ?? currentBackendISODateTime(input),
+    ...(idempotencyInputHash
+      ? {
+          metadata: {
+            ...auditRecord.metadata,
+            [ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY]: idempotencyInputHash,
+          },
+        }
+      : {}),
   });
   await input.repositories.ops.writeAudit(audit);
 
@@ -7958,6 +8030,14 @@ function webhookProcessingDeferred(webhookId: MikaId): MikaApiFailure {
     409,
     "CONFLICT",
     `Webhook '${webhookId}' is awaiting fulfillment and was not processed; retry delivery.`,
+  );
+}
+
+function adminIdempotencyInputMismatch(action: string): MikaApiFailure {
+  return apiFailure(
+    409,
+    "CONFLICT",
+    `Admin action '${action}' idempotency key was reused with different input.`,
   );
 }
 
