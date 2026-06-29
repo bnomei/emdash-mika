@@ -29,6 +29,7 @@ import type {
   EmailFailureRepositoryInput,
   EmailLeaseRepositoryInput,
   EmailSkipRepositoryInput,
+  ExtendReservationsRepositoryInput,
   ReleaseExpiredReservationsRepositoryInput,
   ReleaseExpiredReservationsRepositoryResult,
   ReleaseActiveReservationsByCustomerRepositoryInput,
@@ -441,6 +442,7 @@ export interface MikaStockRepositoryPort {
   releaseActiveReservationsByCustomer(
     input: ReleaseActiveReservationsByCustomerRepositoryInput,
   ): Promise<ReleaseExpiredReservationsRepositoryResult>;
+  extendReservations(input: ExtendReservationsRepositoryInput): Promise<void>;
   adjustStock(input: AdjustStockRepositoryInput): Promise<AdjustStockRepositoryResult>;
 }
 
@@ -595,6 +597,13 @@ export interface ReleaseExpiredReservationsInput {
 
 export type ReleaseExpiredReservationsResult = ReleaseExpiredReservationsRepositoryResult;
 
+/** Input for extending active reservation expiry to match a longer checkout window. */
+export interface ExtendReservationsInput {
+  readonly reservationEventIds: readonly MikaId[];
+  readonly expiresAt: ISODateTime;
+  readonly now?: ISODateTime;
+}
+
 /** Admin stock adjustment with optional clock override. */
 export interface AdjustStockInput extends StockAdjustInput {
   readonly now?: ISODateTime;
@@ -610,6 +619,7 @@ export interface MikaStockLifecycleService {
   releaseExpiredReservations(
     input?: ReleaseExpiredReservationsInput,
   ): Promise<ReleaseExpiredReservationsResult>;
+  extendReservations(input: ExtendReservationsInput): Promise<void>;
   adjust(input: AdjustStockInput): Promise<AdjustStockResult>;
 }
 
@@ -637,6 +647,11 @@ export function createMikaStockLifecycleService(
     releaseExpiredReservations: async (reservation = {}) =>
       input.repositories.stock.releaseExpiredReservations({
         now: reservation.now ?? currentBackendISODateTime(input),
+      }),
+    extendReservations: async (extension) =>
+      input.repositories.stock.extendReservations({
+        ...extension,
+        now: extension.now ?? currentBackendISODateTime(input),
       }),
     adjust: async (adjustment) =>
       input.repositories.stock.adjustStock({
@@ -6012,6 +6027,17 @@ async function startCheckout(
   }
 
   const providerCheckoutId = providerSession.providerCheckoutId ?? providerSession.id;
+  const documentExpiresAt = providerSession.expiresAt ?? expiresAt;
+  // Reservations were created with the backend TTL before the provider session existed.
+  // When the provider grants a longer session window, extend the reservations so stock stays
+  // consumable for the entire period the checkout can still complete and fulfill.
+  if (new Date(documentExpiresAt).getTime() > new Date(expiresAt).getTime()) {
+    await createMikaStockLifecycleService(input).extendReservations({
+      reservationEventIds: reserved.reservationIds,
+      expiresAt: documentExpiresAt,
+      now: ctx.now,
+    });
+  }
   const checkoutDocument: CheckoutDocument = {
     id: checkoutId,
     type: "checkout",
@@ -6026,7 +6052,7 @@ async function startCheckout(
     providerStatus: providerSession.status,
     redirectUrl: providerSession.redirectUrl,
     status: checkoutDocumentStatus(providerSession.status),
-    expiresAt: providerSession.expiresAt ?? expiresAt,
+    expiresAt: documentExpiresAt,
     aggregate: createCheckoutAggregate({
       mode: resolved.mode,
       currency: resolved.currency,

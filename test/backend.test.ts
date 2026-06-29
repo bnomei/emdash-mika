@@ -2106,6 +2106,57 @@ describe("backend test Kysely stock database harness", () => {
       );
     });
 
+    it(`${repositoryKind} stock repository contract extends active reservation expiry without shortening`, async () => {
+      const stockItem = createStockRecord({
+        quantityOnHand: 5,
+        quantityReserved: 0,
+      });
+
+      await withStockRepositoryContractHarness(
+        repositoryKind,
+        stockItem,
+        async ({ repository, service }) => {
+          const clock = createTestClock();
+          const reservation = await service.reserve({
+            stockItemId: stockItem.id,
+            quantity: 2,
+            expiresAt: clock.isoAt(15 * 60_000),
+            idempotencyKey: `${repositoryKind}_extend_contract_1`,
+          });
+          if (reservation.status !== "reserved") {
+            throw new Error("Expected reservation to be created.");
+          }
+
+          // Extend to a longer provider window (e.g. 24h) and never shorten back below it.
+          await service.extendReservations({
+            reservationEventIds: [reservation.event.id],
+            expiresAt: clock.isoAt(24 * 60 * 60_000),
+            now: clock.isoAt(1_000),
+          });
+          await service.extendReservations({
+            reservationEventIds: [reservation.event.id],
+            expiresAt: clock.isoAt(5 * 60_000),
+            now: clock.isoAt(2_000),
+          });
+          await expect(repository.findEventById(reservation.event.id)).resolves.toMatchObject({
+            status: "active",
+            expiresAt: clock.isoAt(24 * 60 * 60_000),
+          });
+
+          // Maintenance sweep past the original 15m TTL must NOT release the extended reservation.
+          await expect(
+            service.releaseExpiredReservations({ now: clock.isoAt(16 * 60_000) }),
+          ).resolves.toMatchObject({ releasedCount: 0 });
+          await expect(repository.findEventById(reservation.event.id)).resolves.toMatchObject({
+            status: "active",
+          });
+          await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+            quantityReserved: 2,
+          });
+        },
+      );
+    });
+
     it(`${repositoryKind} stock repository contract consumes an expired reservation for late paid fulfillment`, async () => {
       const stockItem = createStockRecord({
         quantityOnHand: 5,
@@ -10207,6 +10258,55 @@ describe("backend API composition", () => {
     });
   });
 
+  it("extends checkout reservations to the persisted provider session expiry", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const stock = createStockRecord({
+      sellableId: sellable.id,
+      quantityOnHand: 5,
+      quantityReserved: 0,
+    });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([[sellable.id, stock]]),
+    });
+    // Default fake checkout session expires at 2026-01-01T01:00:00Z — an hour out,
+    // well beyond the 15m backend reservation TTL.
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) throw new Error("Expected cart.add to succeed.");
+    const checkout = await api.checkout.start(ctx, { cartId: added.data.id });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+
+    // The checkout document persists the longer provider window...
+    const checkoutDocument = await repositories.session.findById(
+      createTestMikaId("checkout", 1),
+    );
+    expect(checkoutDocument).toMatchObject({
+      expiresAt: createISODateTime("2026-01-01T01:00:00.000Z"),
+    });
+    // ...and the reservation created during checkout.start must be extended to match it,
+    // so a maintenance sweep cannot release stock while the session is still payable.
+    const reservation = await repositories.stock.findEventById(
+      createTestMikaId("stock_event", 1),
+    );
+    expect(reservation).toMatchObject({
+      kind: "reservation",
+      status: "active",
+      expiresAt: createISODateTime("2026-01-01T01:00:00.000Z"),
+    });
+  });
+
   it("reopens an abandoned checkout_pending cart so its items are not trapped", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();
@@ -12807,6 +12907,23 @@ function createTestStockRepository(
       }
 
       return { scannedCount, releasedCount, stockItemsAffected: stockItemsAffected.size };
+    },
+    async extendReservations(input) {
+      for (const id of input.reservationEventIds) {
+        const event = eventsById.get(id);
+        if (!event || event.kind !== "reservation" || event.status !== "active") continue;
+        if (event.expiresAt && event.expiresAt >= input.expiresAt) continue;
+
+        const extended: StockEventRecord = {
+          ...event,
+          expiresAt: input.expiresAt,
+          updatedAt: input.now,
+        };
+        eventsById.set(extended.id, extended);
+        if (extended.idempotencyKey) {
+          eventsByIdempotencyKey.set(extended.idempotencyKey, extended);
+        }
+      }
     },
     async adjustStock(adjustment) {
       if (!Number.isInteger(adjustment.quantityDelta) || adjustment.quantityDelta === 0) {

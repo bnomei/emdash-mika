@@ -136,6 +136,13 @@ export interface ReleaseActiveReservationsByCustomerRepositoryInput {
   readonly now: ISODateTime;
 }
 
+/** Input for extending the expiry of active reservation events. */
+export interface ExtendReservationsRepositoryInput {
+  readonly reservationEventIds: readonly MikaId[];
+  readonly expiresAt: ISODateTime;
+  readonly now: ISODateTime;
+}
+
 /** Input for recording a manual or audited stock movement event. */
 export interface AdjustStockRepositoryInput {
   readonly movementEventId: MikaId;
@@ -1853,6 +1860,21 @@ export class StockRepository {
         stockItemsAffected: affectedStockItemIds.size,
       };
     });
+  }
+
+  async extendReservations(input: ExtendReservationsRepositoryInput): Promise<void> {
+    if (input.reservationEventIds.length === 0) return;
+
+    await this.db
+      .updateTable("mika_stock_events")
+      .set({ expires_at: input.expiresAt, updated_at: input.now })
+      .where("id", "in", [...input.reservationEventIds])
+      .where("kind", "=", "reservation")
+      .where("status", "=", "active")
+      .where((eb) =>
+        eb.or([eb("expires_at", "is", null), eb("expires_at", "<", input.expiresAt)]),
+      )
+      .execute();
   }
 
   async releaseActiveReservationsByCustomer(
