@@ -5948,6 +5948,57 @@ type CheckoutStartResolution = {
   readonly lines: readonly CheckoutStartLineResolution[];
 };
 
+// Delegated-payment (ACP shared payment token) metadata keys. These must mirror the provider
+// dispatch contract in src/stripe.ts (MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY, which
+// switches Stripe to a delegated charge) and the ACP authorization handoff in src/acp.ts.
+const DELEGATED_PAYMENT_TOKEN_METADATA_KEY = "acpPaymentToken";
+const DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY = "acpPaymentAuthorizationInputHash";
+
+/**
+ * Gates delegated-payment handoff at checkout start.
+ *
+ * `checkout.start` forwards `customFields` to the provider as metadata, and the Stripe adapter
+ * begins a delegated charge whenever the shared payment token key is present. Without this gate any
+ * caller holding a leaked/intercepted token could trigger a charge for an attacker-chosen cart,
+ * bypassing the `checkout.preview` payment-authorization contract. We require the caller to present
+ * the `payment_authorization` input hash that a fresh preview of this exact cart produces (the same
+ * hash `checkout.preview` returns and the ACP complete handler forwards), binding the delegated
+ * payment to a current, previewed quote.
+ */
+async function requireDelegatedPaymentAuthorization(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  checkoutInput: StartCheckoutInput,
+  providerName: ProviderName,
+): Promise<{ readonly ok: true } | MikaApiFailure> {
+  const customFields = checkoutInput.customFields;
+  const token = customFields?.[DELEGATED_PAYMENT_TOKEN_METADATA_KEY];
+  if (typeof token !== "string" || token.length === 0) return { ok: true };
+
+  if (!checkoutInput.cartId) {
+    return forbidden("Delegated payment requires a previewed cart checkout.");
+  }
+  const providedHash = customFields?.[DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY];
+  if (typeof providedHash !== "string" || providedHash.length === 0) {
+    return forbidden("Delegated payment requires a checkout.preview payment authorization.");
+  }
+
+  const previewInput: CheckoutPreviewInput = {
+    cartId: checkoutInput.cartId,
+    provider: providerName,
+  };
+  const quote = await createCartQuote(input, ctx, previewInput);
+  const mode = await resolveCheckoutPreviewMode(input, ctx, previewInput);
+  const expectedHash = await input.hash(
+    JSON.stringify(checkoutPreviewProofProjection(previewInput, quote, mode, providerName)),
+  );
+  if (expectedHash !== providedHash) {
+    return forbidden("Delegated payment authorization does not match the current checkout.");
+  }
+
+  return { ok: true };
+}
+
 async function startCheckout(
   input: CreateMikaBackendApiInput,
   ctx: MikaRequestContext,
@@ -5989,6 +6040,14 @@ async function startCheckout(
   });
   if (!providerFeature.ok) return providerFeature;
   if (!ctx.url) return validationFailed("url", "Checkout requires a request URL.");
+
+  const delegatedPaymentAuth = await requireDelegatedPaymentAuthorization(
+    input,
+    ctx,
+    checkoutInput,
+    providerName,
+  );
+  if (!delegatedPaymentAuth.ok) return delegatedPaymentAuth;
 
   const checkoutId = input.createId("checkout");
   const expiresAt = checkoutExpiresAt(input, ctx);

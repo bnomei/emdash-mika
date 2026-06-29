@@ -11090,6 +11090,116 @@ describe("backend API composition", () => {
     });
   });
 
+  it("rejects checkout start with a delegated payment token but no preview authorization", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      idempotencyKey: false,
+    });
+
+    const cart = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    if (!cart.ok) throw new Error("Expected cart.add to succeed.");
+
+    // A leaked shared payment token alone must not trigger delegated payment.
+    await expect(
+      api.checkout.start(ctx, {
+        cartId: cart.data.id,
+        provider: TEST_PROVIDER,
+        customFields: { acpPaymentToken: "spt_leaked_123" },
+      }),
+    ).resolves.toMatchObject({ ok: false, status: 403, error: { code: "FORBIDDEN" } });
+
+    // A forged or stale authorization hash that does not match a fresh preview is rejected too.
+    await expect(
+      api.checkout.start(ctx, {
+        cartId: cart.data.id,
+        provider: TEST_PROVIDER,
+        customFields: {
+          acpPaymentToken: "spt_leaked_123",
+          acpPaymentAuthorizationInputHash: "not_a_real_preview_hash",
+        },
+      }),
+    ).resolves.toMatchObject({ ok: false, status: 403, error: { code: "FORBIDDEN" } });
+
+    // The provider was never asked to create a (delegated) session, and no stock was reserved.
+    expect(fake.getCalls().createCheckoutSession).toEqual([]);
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 0,
+    });
+  });
+
+  it("allows checkout start with a delegated payment token authorized by a fresh preview", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      idempotencyKey: false,
+    });
+
+    const cart = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    if (!cart.ok) throw new Error("Expected cart.add to succeed.");
+
+    // The ACP-authorized path: preview the cart to obtain the payment-authorization input hash...
+    const preview = await api.checkout.preview(ctx, {
+      cartId: cart.data.id,
+      provider: TEST_PROVIDER,
+    });
+    if (!preview.ok) throw new Error("Expected checkout.preview to succeed.");
+    const inputHash = preview.data.inputHash;
+    if (!inputHash) throw new Error("Expected checkout.preview to return an input hash.");
+
+    // ...then start with the token bound to that proof. The delegated payment is authorized.
+    const started = await api.checkout.start(ctx, {
+      cartId: cart.data.id,
+      provider: TEST_PROVIDER,
+      customFields: {
+        acpPaymentToken: "spt_authorized_123",
+        acpPaymentAuthorizationInputHash: inputHash,
+      },
+    });
+    expect(started).toMatchObject({ ok: true });
+    expect(fake.getCalls().createCheckoutSession).toHaveLength(1);
+  });
+
   it("ignores caller-controlled checkout metadata keys for idempotency replay", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();

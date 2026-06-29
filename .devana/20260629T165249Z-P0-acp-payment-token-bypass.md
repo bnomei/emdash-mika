@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P0 | high | security=yes
+DEVANA-STATE: fixed | P0 | high | security=yes
 DEVANA-KEY: src/api/backend.ts:5990 | acp-payment-token-bypass
 
 # checkout.start accepts delegated payment token without authorization proof
@@ -46,6 +46,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-29: open by Devana. Initial report written from static source inspection.
+- 2026-06-29: fixed. `startCheckout` now gates delegated-payment handoff: when the delegated payment token metadata key (`acpPaymentToken`) is present in `customFields`, it requires a cart-based checkout and a `acpPaymentAuthorizationInputHash` that matches the `payment_authorization` input hash a fresh `checkout.preview` of that exact cart produces (the same hash `checkout.preview` returns and `handleAcpComplete` forwards). The check runs before any stock reservation or provider call and returns `403 FORBIDDEN` on a missing/forged/stale proof. The quote inputHash is derived from the cart's stored `expiresAt` (not wall-clock), so the legitimate preview→start handoff hashes deterministically and is accepted. Evidence: added backend tests asserting (a) a token with no/forged hash is rejected with no provider call and no reservation, and (b) a token bound to a fresh preview inputHash is accepted and dispatches one provider session. Residual: the proof binds the payment to a current previewed cart/quote; Stripe still enforces the shared payment token's own amount/merchant binding at charge time.
 
 DEVANA-KEY: src/api/backend.ts:5990 | acp-payment-token-bypass
-DEVANA-SUMMARY: open | P0 | high | checkout.start can trigger Stripe delegated payment from acpPaymentToken alone, bypassing checkout.preview payment_authorization proof.
+DEVANA-SUMMARY: fixed | P0 | high | checkout.start now rejects delegated-payment metadata unless acpPaymentAuthorizationInputHash matches a fresh checkout.preview of the cart, so a leaked shared payment token can no longer trigger an unauthorized delegated charge.
