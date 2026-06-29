@@ -9589,6 +9589,86 @@ describe("backend API composition", () => {
     });
   });
 
+  it("passes the applied cart coupon discount to the checkout provider", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) throw new Error("Expected cart.add to succeed.");
+    await expect(api.cart.applyCoupon(ctx, { code: "SAVE10" })).resolves.toMatchObject({
+      ok: true,
+      data: {
+        subtotal: { amount: 2400 },
+        discount: { amount: 240, currency: TEST_CURRENCY },
+        total: { amount: 2160 },
+      },
+    });
+
+    const checkout = await api.checkout.start(ctx, { cartId: added.data.id });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+
+    // The provider must receive the order-level discount so it charges the discounted total (2160),
+    // not the undiscounted subtotal (2400) the line items sum to.
+    const call = fake.getCalls().createCheckoutSession[0];
+    expect(call?.discount).toMatchObject({ amount: 240, currency: TEST_CURRENCY });
+    const lineSubtotal = (call?.lines ?? []).reduce(
+      (sum, line) => sum + line.unitAmount * line.quantity,
+      0,
+    );
+    expect(lineSubtotal).toBe(2400);
+    expect(lineSubtotal - (call?.discount?.amount ?? 0)).toBe(2160);
+  });
+
+  it("omits a provider discount when no coupon is applied", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) throw new Error("Expected cart.add to succeed.");
+    const checkout = await api.checkout.start(ctx, { cartId: added.data.id });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+
+    expect(fake.getCalls().createCheckoutSession[0]?.discount).toBeUndefined();
+  });
+
   it("recomputes a percentage coupon against the current subtotal after line changes", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();
@@ -10889,7 +10969,10 @@ describe("backend API composition", () => {
     // Buy-now: no cart, so the reservation lives only on the checkout document's lines.
     const checkout = await api.checkout.start(ctx, { sellableId: sellable.id, quantity: 1 });
     if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
-    expect(checkout.data.cartId).toBeUndefined();
+    const storedCheckout = await repositories.session.findCheckoutById(
+      createTestMikaId("checkout", 1),
+    );
+    expect(storedCheckout?.cartId).toBeUndefined();
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
       quantityReserved: 1,
     });

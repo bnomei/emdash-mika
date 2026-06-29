@@ -6055,6 +6055,15 @@ async function startCheckout(
   const reserved = await reserveCheckoutLines(input, ctx, checkoutId, resolved, expiresAt);
   if (!reserved.ok) return reserved;
 
+  // Provider lines carry undiscounted catalog amounts, so an applied cart coupon must be passed to
+  // the provider as an order-level discount — otherwise the provider charges the full subtotal while
+  // Mika records the discounted total, overcharging the shopper.
+  const checkoutSubtotal = reserved.lines.reduce(
+    (sum, line) => sum + line.item.unitAmount * line.quantity,
+    0,
+  );
+  const checkoutDiscountAmount = couponDiscountAmount(resolved.coupon, checkoutSubtotal);
+
   const providerSession = await (async () => {
     try {
       return await providerFeature.method.call(providerFeature.provider, {
@@ -6063,6 +6072,9 @@ async function startCheckout(
         provider: providerName,
         customer: checkoutInput.customer,
         lines: reserved.lines.map((line) => checkoutLineToProviderLine(providerName, line)),
+        ...(checkoutDiscountAmount > 0
+          ? { discount: moneyDTO(checkoutDiscountAmount, resolved.currency) }
+          : {}),
         successUrl: checkoutSuccessUrl(input, ctx, checkoutInput, checkoutId, statusToken),
         cancelUrl: checkoutCancelUrl(input, ctx, checkoutInput, checkoutId, statusToken),
         metadata: checkoutInput.customFields,

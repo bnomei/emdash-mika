@@ -998,6 +998,144 @@ describe("Mika Stripe provider", () => {
     });
   });
 
+  it("applies an order-level discount as a one-time Stripe coupon on hosted checkout", async () => {
+    const sessionCalls: unknown[] = [];
+    const couponCalls: unknown[] = [];
+    const stripe: MikaStripeClient = {
+      checkout: {
+        sessions: {
+          create: async (params) => {
+            sessionCalls.push({ params });
+            return {
+              id: "cs_disc_1",
+              status: "open",
+              mode: "payment",
+              url: "https://checkout.stripe.test/cs_disc_1",
+            };
+          },
+          retrieve: async () => ({ id: "cs_disc_1", status: "open", mode: "payment" }),
+        },
+      },
+      coupons: {
+        create: async (params, options) => {
+          couponCalls.push({ params, options });
+          return { id: "coupon_test_1" };
+        },
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe });
+
+    await provider.createCheckoutSession({
+      idempotencyKey: "idem_disc_1",
+      mode: "payment",
+      provider: createProviderName("stripe"),
+      successUrl: "https://shop.example.test/success",
+      cancelUrl: "https://shop.example.test/cancel",
+      discount: { amount: 240, currency: createCurrencyCode("EUR") },
+      lines: [
+        {
+          sellableId: createMikaId("sellable_1"),
+          priceId: createMikaId("price_1"),
+          contentRef: { collection: "products", id: "print" },
+          title: "Limited print",
+          providerPriceId: "price_stripe_123",
+          quantity: 2,
+          unitAmount: 1200,
+          currency: createCurrencyCode("EUR"),
+          mode: "payment",
+          fulfillmentKind: "download",
+        },
+      ],
+    });
+
+    // The discount becomes a one-time coupon (idempotent on retry) attached to the session, so the
+    // fixed-price line items are charged at the discounted total.
+    expect(couponCalls[0]).toMatchObject({
+      params: { amount_off: 240, currency: "eur", duration: "once" },
+      options: { idempotencyKey: "idem_disc_1_coupon" },
+    });
+    expect(sessionCalls[0]).toMatchObject({
+      params: { discounts: [{ coupon: "coupon_test_1" }] },
+    });
+  });
+
+  it("fails a discounted hosted checkout when Stripe coupons are unavailable", async () => {
+    const stripe: MikaStripeClient = {
+      checkout: {
+        sessions: {
+          create: async () => ({ id: "cs_x", status: "open", mode: "payment" }),
+          retrieve: async () => ({ id: "cs_x", status: "open", mode: "payment" }),
+        },
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe });
+
+    // Fail closed rather than charge the full subtotal while Mika records the discounted total.
+    await expect(
+      provider.createCheckoutSession({
+        idempotencyKey: "idem_disc_fail",
+        mode: "payment",
+        provider: createProviderName("stripe"),
+        successUrl: "https://shop.example.test/success",
+        cancelUrl: "https://shop.example.test/cancel",
+        discount: { amount: 240, currency: createCurrencyCode("EUR") },
+        lines: [
+          {
+            sellableId: createMikaId("sellable_1"),
+            priceId: createMikaId("price_1"),
+            contentRef: { collection: "products", id: "print" },
+            title: "Limited print",
+            providerPriceId: "price_stripe_123",
+            quantity: 2,
+            unitAmount: 1200,
+            currency: createCurrencyCode("EUR"),
+            mode: "payment",
+            fulfillmentKind: "download",
+          },
+        ],
+      }),
+    ).rejects.toThrow(/coupons are required/i);
+  });
+
+  it("subtracts an order-level discount from the delegated payment amount", async () => {
+    const intentCalls: unknown[] = [];
+    const stripe: MikaStripeClient = {
+      paymentIntents: {
+        create: async (params) => {
+          intentCalls.push({ params });
+          return { id: "pi_disc_1", status: "succeeded", amount: 2160, currency: "eur" };
+        },
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe });
+
+    await provider.createCheckoutSession({
+      idempotencyKey: "idem_spt_disc_1",
+      mode: "payment",
+      provider: createProviderName("stripe"),
+      successUrl: "https://shop.example.test/success",
+      cancelUrl: "https://shop.example.test/cancel",
+      metadata: { [MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY]: "spt_test_123" },
+      discount: { amount: 240, currency: createCurrencyCode("EUR") },
+      lines: [
+        {
+          sellableId: createMikaId("sellable_1"),
+          priceId: createMikaId("price_1"),
+          contentRef: { collection: "products", id: "print" },
+          title: "Limited print",
+          quantity: 2,
+          unitAmount: 1200,
+          currency: createCurrencyCode("EUR"),
+          mode: "payment",
+          fulfillmentKind: "download",
+        },
+      ],
+    });
+
+    // 2 x 1200 = 2400 subtotal, minus the 240 discount = 2160 charged.
+    expect(intentCalls[0]).toMatchObject({ params: { amount: 2160, currency: "eur" } });
+  });
+
   it("resolves the invoice id from a payment-intent id before retrieving the invoice", async () => {
     const invoiceCalls: string[] = [];
     const intentCalls: string[] = [];

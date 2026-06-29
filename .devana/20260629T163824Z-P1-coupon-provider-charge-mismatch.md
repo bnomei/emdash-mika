@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P1 | high | security=no
+DEVANA-STATE: fixed | P1 | high | security=no
 DEVANA-KEY: src/api/backend.ts:5987 | coupon-provider-charge-mismatch
 
 # Cart coupon discount applied to Mika totals but not provider charge
@@ -48,6 +48,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-29: open by Devana. Initial report written from static source inspection across inside-out-paths and invariants-contracts trails.
+- 2026-06-29: fixed. `startCheckout` now computes the applied cart coupon's discount (`couponDiscountAmount` over the reserved-line subtotal) and passes it to the provider via a new `MikaProviderCheckoutInput.discount` (MoneyDTO). Provider lines still carry undiscounted catalog amounts (and may reference fixed Stripe Price ids, which cannot be re-priced), so the Stripe adapter applies the order-level discount itself: hosted checkout sessions get a one-time `amount_off` Stripe coupon attached via `discounts` (idempotent on retry via a derived key), and delegated payment subtracts the discount from the charged PaymentIntent amount. When a discount is present but the Stripe client exposes no `coupons` API, the adapter fails closed (the caller releases reservations and reports a provider failure) rather than charge the full subtotal. Evidence: backend test asserts the discount reaches the provider (line subtotal 2400, discount 240 → 2160) and is omitted with no coupon; Stripe-adapter tests assert the coupon is created and attached, the delegated amount is reduced to 2160, and a discounted checkout fails closed without coupon support.
 
 DEVANA-KEY: src/api/backend.ts:5987 | coupon-provider-charge-mismatch
-DEVANA-SUMMARY: open | P1 | high | Coupons reduce Mika checkout/order totals but provider sessions are created from undiscounted line prices.
+DEVANA-SUMMARY: fixed | P1 | high | The applied cart coupon discount is now passed to the provider (Stripe coupon for hosted checkout, reduced amount for delegated payment), so the provider charge matches the discounted Mika total.

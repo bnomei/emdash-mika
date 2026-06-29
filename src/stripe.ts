@@ -102,6 +102,12 @@ export interface MikaStripeClient {
       readonly status?: string | null;
     }>;
   };
+  readonly coupons?: {
+    create(
+      params: MikaStripeCouponCreateParams,
+      options?: MikaStripeRequestOptions,
+    ): Promise<{ readonly id: string }>;
+  };
   readonly subscriptions?: {
     cancel(
       id: string,
@@ -146,6 +152,16 @@ export interface MikaStripeCheckoutSessionCreateParams {
   readonly customer_email?: string;
   readonly client_reference_id?: string;
   readonly metadata?: Record<string, string>;
+  readonly discounts?: readonly { readonly coupon: string }[];
+}
+
+/** Parameters for creating a one-time Stripe coupon used to apply a checkout discount. */
+export interface MikaStripeCouponCreateParams {
+  readonly amount_off: number;
+  readonly currency: string;
+  readonly duration: "once";
+  readonly name?: string;
+  readonly max_redemptions?: number;
 }
 
 export interface MikaStripeCheckoutSession {
@@ -356,6 +372,10 @@ async function createStripeCheckoutSession(
     throw new Error("Stripe checkout sessions are not available.");
   }
 
+  // Line items carry undiscounted catalog amounts (and may reference fixed Stripe Prices), so an
+  // order-level discount is applied as a one-time Stripe coupon rather than by mutating line totals.
+  const discounts = await stripeCheckoutDiscounts(options, input);
+
   const session = await options.stripe.checkout.sessions.create(
     {
       mode: input.mode === "subscription" ? "subscription" : "payment",
@@ -364,6 +384,7 @@ async function createStripeCheckoutSession(
       cancel_url: input.cancelUrl,
       ...(input.customer?.email ? { customer_email: input.customer.email } : {}),
       ...(input.idempotencyKey ? { client_reference_id: input.idempotencyKey } : {}),
+      ...(discounts ? { discounts } : {}),
       metadata: stripeMetadata({
         ...input.metadata,
         mikaProvider: provider,
@@ -376,6 +397,39 @@ async function createStripeCheckoutSession(
   return stripeCheckoutSessionToMika(provider, session);
 }
 
+async function stripeCheckoutDiscounts(
+  options: CreateMikaStripeProviderOptions,
+  input: MikaProviderCheckoutInput,
+): Promise<readonly { readonly coupon: string }[] | undefined> {
+  const amountOff = input.discount?.amount ?? 0;
+  if (amountOff <= 0) return undefined;
+
+  if (!options.stripe.coupons?.create) {
+    // Fail closed: never create a session that charges the full subtotal while Mika records the
+    // discounted total. The caller releases reservations and reports a provider failure.
+    throw new Error("Stripe coupons are required to apply a checkout discount.");
+  }
+
+  const currency = (input.discount?.currency ?? input.lines[0]?.currency)?.toLowerCase();
+  if (!currency) {
+    throw new Error("A checkout discount requires a currency.");
+  }
+
+  const coupon = await options.stripe.coupons.create(
+    {
+      amount_off: amountOff,
+      currency,
+      duration: "once",
+      name: "Mika checkout discount",
+      // Single-use: the coupon is only ever attached server-side to this one checkout session.
+      max_redemptions: 1,
+    },
+    requestOptions(input.idempotencyKey ? `${input.idempotencyKey}_coupon` : undefined),
+  );
+
+  return [{ coupon: coupon.id }];
+}
+
 async function createStripeDelegatedPayment(
   provider: ProviderName,
   options: CreateMikaStripeProviderOptions,
@@ -386,7 +440,12 @@ async function createStripeDelegatedPayment(
     throw new Error("Stripe payment intents are required for delegated payments.");
   }
 
-  const total = input.lines.reduce((amount, line) => amount + line.unitAmount * line.quantity, 0);
+  const subtotal = input.lines.reduce(
+    (amount, line) => amount + line.unitAmount * line.quantity,
+    0,
+  );
+  // Subtract the order-level discount so the delegated charge matches the Mika checkout total.
+  const total = Math.max(0, subtotal - (input.discount?.amount ?? 0));
   const currency = input.lines[0]?.currency;
   if (!currency) {
     throw new Error("Delegated Stripe checkout requires at least one line item.");

@@ -57,6 +57,12 @@ export interface MikaProviderCheckoutInput {
   readonly provider: ProviderName;
   readonly customer?: CheckoutCustomerInput;
   readonly lines: readonly MikaProviderLineItem[];
+  /**
+   * Order-level discount (e.g. an applied cart coupon) that the provider must subtract from the
+   * amount it charges. `lines` always carry undiscounted catalog amounts; adapters apply this on
+   * top so the provider charge matches the Mika checkout/order total.
+   */
+  readonly discount?: MoneyDTO;
   readonly successUrl: string;
   readonly cancelUrl: string;
   readonly metadata?: JsonObject;
