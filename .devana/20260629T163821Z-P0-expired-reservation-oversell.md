@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: resolved | P0 | high | security=no
+DEVANA-STATE: fixed | P0 | high | security=no
 DEVANA-KEY: src/storage/repositories.ts:1739 | expired-reservation-oversell
 
 # Expired reservation release plus late consume can oversell stock
@@ -50,7 +50,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-29: open by Devana. Initial report written from static source inspection across cache-persistence and inside-out-paths trails.
-- 2026-06-29: resolved. `consumeOnHandStatement` (the expired-reservation consume path) now carries the same atomic availability guard as `reserveStockStatement`: for finite, non-backorder items it only decrements on-hand when `quantity_on_hand - quantity_reserved >= quantity`, so it can never dip into units already committed to other active reservations. When the guard blocks, `consume` throws (rolling back the transaction so the expired event stays expired and the late fulfillment can be retried once stock frees up) instead of silently overselling. The legitimate late-fulfillment path (enough free on-hand) is unchanged. Added a contract test across both repository kinds reproducing the oversell counterexample and asserting it is refused with stock left intact.
+- 2026-06-29: fixed. `consumeOnHandStatement` (the expired-reservation consume path) now carries the same atomic availability guard as `reserveStockStatement`: for finite, non-backorder items it only decrements on-hand when `quantity_on_hand - quantity_reserved >= quantity`, so it can never dip into units already committed to other active reservations. When the guard blocks, `consume` throws (rolling back the transaction so the expired event stays expired and the late fulfillment can be retried once stock frees up) instead of silently overselling. The legitimate late-fulfillment path (enough free on-hand) is unchanged. Added a contract test across both repository kinds reproducing the oversell counterexample and asserting it is refused with stock left intact.
 
 DEVANA-KEY: src/storage/repositories.ts:1739 | expired-reservation-oversell
-DEVANA-SUMMARY: resolved | P0 | high | The expired-reservation consume path is now reserved-aware (same guard as reserve), so a late payment can no longer consume units re-committed to another active reservation; an unfulfillable late consume rolls back instead of overselling.
+DEVANA-SUMMARY: fixed | P0 | high | The expired-reservation consume path is now reserved-aware (same guard as reserve), so a late payment can no longer consume units re-committed to another active reservation; an unfulfillable late consume rolls back instead of overselling.

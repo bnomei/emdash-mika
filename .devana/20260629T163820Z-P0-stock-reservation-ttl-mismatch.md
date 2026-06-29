@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: resolved | P0 | high | security=no
+DEVANA-STATE: fixed | P0 | high | security=no
 DEVANA-KEY: src/api/backend.ts:5975 | stock-reservation-ttl-mismatch
 
 # Stock reservations expire before hosted checkout session
@@ -57,7 +57,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-29: open by Devana. Initial report written from static source inspection across inside-out-paths, state-lifecycle, and cache-persistence trails.
-- 2026-06-29: resolved. `startCheckout` now extends reservation expiry to the persisted checkout document expiry (`providerSession.expiresAt ?? backend TTL`) via a new `StockRepository.extendReservations`, so reservations remain consumable for the whole provider session window. Extension only lengthens (never shortens) reservation expiry. Added stock-repository contract test covering extend + maintenance sweep across both repository kinds.
+- 2026-06-29: fixed. `startCheckout` now extends reservation expiry to the persisted checkout document expiry (`providerSession.expiresAt ?? backend TTL`) via a new `StockRepository.extendReservations`, so reservations remain consumable for the whole provider session window. Extension only lengthens (never shortens) reservation expiry. Added stock-repository contract test covering extend + maintenance sweep across both repository kinds.
 
 DEVANA-KEY: src/api/backend.ts:5975 | stock-reservation-ttl-mismatch
-DEVANA-SUMMARY: resolved | P0 | high | Reservation expiry is now extended to match the persisted checkout window (provider session expiry), so maintenance no longer releases stock before late payments can fulfill.
+DEVANA-SUMMARY: fixed | P0 | high | Reservation expiry is now extended to match the persisted checkout window (provider session expiry), so maintenance no longer releases stock before late payments can fulfill.
