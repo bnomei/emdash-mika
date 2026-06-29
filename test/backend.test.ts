@@ -5924,6 +5924,129 @@ describe("backend API composition", () => {
     });
   });
 
+  function createFulfilledRefundOrder(): {
+    order: OrderDocument;
+    entitlement: EntitlementDocument;
+    license: LicenseDocument;
+  } {
+    const base = createOrderDocument();
+    const order: OrderDocument = {
+      ...base,
+      aggregate: {
+        ...base.aggregate,
+        lines: [
+          {
+            id: createTestMikaId("order_line", 1),
+            item: createPurchasableSnapshot({ fulfillmentKind: "entitlement" }),
+            quantity: 1,
+            subtotalAmount: 600,
+            totalAmount: 600,
+            entitlementId: createMikaId("entitlement_order_1_order_line_1"),
+          },
+          {
+            id: createTestMikaId("order_line", 2),
+            item: createPurchasableSnapshot({
+              fulfillmentKind: "license",
+              sellableId: createTestMikaId("sellable", 2),
+            }),
+            quantity: 1,
+            subtotalAmount: 600,
+            totalAmount: 600,
+            licenseKeySuffix: "ABC123",
+          },
+        ],
+      },
+    };
+    // Fulfillment ids are deterministic: fulfillmentDocumentId("<kind>", order.id, line.id).
+    const entitlement = createEntitlementDocument({
+      id: createMikaId("entitlement_order_1_order_line_1"),
+    });
+    const license = createLicenseDocument({
+      id: createMikaId("license_order_1_order_line_2"),
+      orderLineId: createTestMikaId("order_line", 2),
+    });
+    return { order, entitlement, license };
+  }
+
+  it("revokes order-line entitlements and licenses when an order is fully refunded", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({ optionalMethods: ["refundPayment"] });
+    const { order, entitlement, license } = createFulfilledRefundOrder();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.ledger.put(order);
+    await repositories.account.put(entitlement);
+    await repositories.account.put(license);
+
+    // No amount => full refund.
+    await expect(api.admin.orderRefund({ orderId: order.id })).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { status: "completed" },
+    });
+
+    await expect(repositories.ledger.findOrderById(order.id)).resolves.toMatchObject({
+      status: "refunded",
+      paymentStatus: "refunded",
+    });
+    await expect(
+      repositories.account.findEntitlementById(createMikaId("entitlement_order_1_order_line_1")),
+    ).resolves.toMatchObject({
+      status: "revoked",
+      record: {
+        status: "revoked",
+        revokedAt: TEST_NOW,
+        metadata: { revokeReason: "order_refunded" },
+      },
+    });
+    await expect(
+      repositories.account.findLicenseById(createMikaId("license_order_1_order_line_2")),
+    ).resolves.toMatchObject({
+      status: "revoked",
+      record: {
+        status: "revoked",
+        revokedAt: TEST_NOW,
+        metadata: { revokeReason: "order_refunded" },
+      },
+    });
+  });
+
+  it("leaves order-line entitlements and licenses active on a partial refund", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({ optionalMethods: ["refundPayment"] });
+    const { order, entitlement, license } = createFulfilledRefundOrder();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.ledger.put(order);
+    await repositories.account.put(entitlement);
+    await repositories.account.put(license);
+
+    // Partial refund (amount < totalAmount of 1200) retains net payment, so access stays.
+    await expect(
+      api.admin.orderRefund({ orderId: order.id, amount: 500 }),
+    ).resolves.toMatchObject({ ok: true, data: { status: "completed" } });
+
+    await expect(repositories.ledger.findOrderById(order.id)).resolves.toMatchObject({
+      status: "partially_refunded",
+    });
+    await expect(
+      repositories.account.findEntitlementById(createMikaId("entitlement_order_1_order_line_1")),
+    ).resolves.toMatchObject({ status: "active", record: { status: "active" } });
+    await expect(
+      repositories.account.findLicenseById(createMikaId("license_order_1_order_line_2")),
+    ).resolves.toMatchObject({ status: "active", record: { status: "active" } });
+  });
+
   it("deduplicates a retried order refund by idempotency key without refunding twice", async () => {
     const repositories = createTestBackendRepositories();
     const fake = createFakeMikaProvider({

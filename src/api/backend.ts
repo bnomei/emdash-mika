@@ -1887,8 +1887,12 @@ async function refundOrder(
         return { ...result, id: result.id ?? order.id };
       }
 
-      const updated = updateOrderAfterRefund(order, refundInput, currentBackendISODateTime(input));
+      const now = currentBackendISODateTime(input);
+      const updated = updateOrderAfterRefund(order, refundInput, now);
       await input.repositories.ledger.put(updated);
+      if (updated.status === "refunded") {
+        await revokeOrderFulfillmentAccess(input, updated, now);
+      }
 
       return {
         ...result,
@@ -1898,6 +1902,69 @@ async function refundOrder(
     },
     "Provider order refund failed.",
   );
+}
+
+/**
+ * Revokes entitlements and licenses created by order fulfillment when an order is
+ * fully refunded. Fulfillment documents use deterministic ids derived from the order
+ * and line id, so each line's entitlement/license is recomputed and revoked in place.
+ * Only `entitlement` and `license` fulfillment kinds create revocable access; other
+ * kinds (`download`, `external`, `none`) have nothing to revoke. Already-revoked or
+ * missing documents are skipped. Partial refunds intentionally retain access.
+ */
+async function revokeOrderFulfillmentAccess(
+  input: CreateMikaBackendApiInput,
+  order: OrderDocument,
+  now: ISODateTime,
+): Promise<void> {
+  for (const line of order.aggregate.lines) {
+    switch (line.item.fulfillmentKind) {
+      case "entitlement": {
+        const entitlement = await input.repositories.account.findEntitlementById(
+          fulfillmentDocumentId("entitlement", order.id, line.id),
+        );
+        if (entitlement && entitlement.status === "active") {
+          await input.repositories.account.put({
+            ...entitlement,
+            status: "revoked",
+            updatedAt: now,
+            record: {
+              ...entitlement.record,
+              status: "revoked",
+              revokedAt: now,
+              metadata: {
+                ...entitlement.record.metadata,
+                revokeReason: "order_refunded",
+              },
+            },
+          });
+        }
+        break;
+      }
+      case "license": {
+        const license = await input.repositories.account.findLicenseById(
+          fulfillmentDocumentId("license", order.id, line.id),
+        );
+        if (license && license.status === "active") {
+          await input.repositories.account.put({
+            ...license,
+            status: "revoked",
+            updatedAt: now,
+            record: {
+              ...license.record,
+              status: "revoked",
+              revokedAt: now,
+              metadata: {
+                ...license.record.metadata,
+                revokeReason: "order_refunded",
+              },
+            },
+          });
+        }
+        break;
+      }
+    }
+  }
 }
 
 async function cancelOrder(
