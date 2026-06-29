@@ -29,6 +29,7 @@ import type {
   EmailFailureRepositoryInput,
   EmailLeaseRepositoryInput,
   EmailSkipRepositoryInput,
+  ExpireReservedStockRepositoryResult,
   ExtendReservationsRepositoryInput,
   ReleaseExpiredReservationsRepositoryInput,
   ReleaseExpiredReservationsRepositoryResult,
@@ -433,6 +434,9 @@ export interface MikaStockRepositoryPort {
   release(
     input: ReleaseReservedStockRepositoryInput,
   ): Promise<ReleaseReservedStockRepositoryResult>;
+  expire(
+    input: ReleaseReservedStockRepositoryInput,
+  ): Promise<ExpireReservedStockRepositoryResult>;
   consume(
     input: ConsumeReservedStockRepositoryInput,
   ): Promise<ConsumeReservedStockRepositoryResult>;
@@ -580,6 +584,9 @@ export interface ReleaseReservedStockInput {
 
 export type ReleaseReservedStockResult = ReleaseReservedStockRepositoryResult;
 
+/** Result of expiring a reservation (frees stock while leaving it consumable for late fulfillment). */
+export type ExpireReservedStockResult = ExpireReservedStockRepositoryResult;
+
 /** Input for consuming a reservation at order fulfillment. */
 export interface ConsumeReservedStockInput {
   readonly reservationEventId: MikaId;
@@ -615,6 +622,7 @@ export type AdjustStockResult = AdjustStockRepositoryResult;
 export interface MikaStockLifecycleService {
   reserve(input: ReserveStockInput): Promise<ReserveStockResult>;
   release(input: ReleaseReservedStockInput): Promise<ReleaseReservedStockResult>;
+  expire(input: ReleaseReservedStockInput): Promise<ExpireReservedStockResult>;
   consume(input: ConsumeReservedStockInput): Promise<ConsumeReservedStockResult>;
   releaseExpiredReservations(
     input?: ReleaseExpiredReservationsInput,
@@ -636,6 +644,11 @@ export function createMikaStockLifecycleService(
       }),
     release: async (reservation) =>
       input.repositories.stock.release({
+        ...reservation,
+        now: reservation.now ?? currentBackendISODateTime(input),
+      }),
+    expire: async (reservation) =>
+      input.repositories.stock.expire({
         ...reservation,
         now: reservation.now ?? currentBackendISODateTime(input),
       }),
@@ -6521,6 +6534,18 @@ async function releaseCheckoutReservations(
   }
 }
 
+async function expireCheckoutReservations(
+  input: MikaStockLifecycleDependencies,
+  reservationIds: readonly MikaId[],
+  now: ISODateTime,
+): Promise<void> {
+  const stock = createMikaStockLifecycleService(input);
+
+  for (const reservationEventId of reservationIds) {
+    await stock.expire({ reservationEventId, now });
+  }
+}
+
 function checkoutMetadata(input: {
   readonly customFields: JsonObject | undefined;
   readonly idempotencyInputHash?: string;
@@ -6647,15 +6672,16 @@ async function cancelCheckout(
     return checkoutDocumentSuccessResult(document);
   }
 
-  // Release every reservation created for this checkout from the checkout document's own lines.
-  // This is the authoritative source for both cart-based and buy-now checkouts (sellableId with no
-  // cartId), whose reservations live only on document.aggregate.lines — the cart-only path missed
-  // buy-now reservations and left stock locked until TTL expiry.
+  // Return every reservation created for this checkout (from the checkout document's own lines —
+  // authoritative for both cart-based and buy-now checkouts) to availability so other shoppers are
+  // not blocked. They are EXPIRED rather than RELEASED: a provider payment that completed just
+  // before this cancel (its webhook still in flight) must still be able to fulfill, and an expired
+  // reservation stays consumable via the guarded on-hand path while a released one does not.
   const reservationIds = document.aggregate.lines
     .map((line) => line.reservationId)
     .filter((id): id is MikaId => Boolean(id));
   if (reservationIds.length > 0) {
-    await releaseCheckoutReservations(input, reservationIds, ctx.now);
+    await expireCheckoutReservations(input, reservationIds, ctx.now);
   }
 
   const cartDocument = document.cartId

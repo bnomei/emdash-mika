@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P1 | high | security=no
+DEVANA-STATE: fixed | P1 | high | security=no
 DEVANA-KEY: src/api/backend.ts:6553 | checkout-cancel-unfulfilled-paid
 
 # checkout.cancel can release reservations before paid-webhook fulfillment
@@ -49,6 +49,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-29: open by Devana. Initial report written from static source inspection across inside-out-paths and state-lifecycle trails.
+- 2026-06-29: fixed. `cancelCheckout` now EXPIRES the checkout's reservations instead of RELEASING them (new `StockRepository.expire` + lifecycle/port wiring). Both return the held quantity to availability immediately (so other shoppers are not blocked), but an `expired` reservation — unlike a `released` one — stays consumable through the guarded on-hand consume path. So a provider payment that completed just before the local cancel (its webhook still in flight) can still fulfill from available stock; if that stock was meanwhile taken by another shopper, the oversell guard refuses rather than overselling. This implements the report's second suggested approach ("allow fulfillment to consume on the paid webhook regardless of local cancel") without weakening the deliberate `released`-is-terminal contract. Scope: the explicit `checkout.cancel` path. Evidence: a test asserts cancel leaves the reservation `expired` with stock freed, and that a subsequent consume fulfills from on-hand; existing cancel tests (stock returned to 0) still pass.
 
 DEVANA-KEY: src/api/backend.ts:6553 | checkout-cancel-unfulfilled-paid
-DEVANA-SUMMARY: open | P1 | high | Local checkout.cancel releases stock reservations while provider payment can still succeed, blocking webhook fulfillment.
+DEVANA-SUMMARY: fixed | P1 | high | checkout.cancel now expires reservations (frees stock but keeps them consumable) instead of releasing them, so a payment that completes around cancel time can still fulfill from available stock without overselling.

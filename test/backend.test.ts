@@ -10943,7 +10943,7 @@ describe("backend API composition", () => {
     });
   });
 
-  it("releases buy-now checkout reservations on cancel", async () => {
+  it("frees buy-now checkout reservations on cancel", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();
     const repositories = createTestBackendRepositories({
@@ -10984,6 +10984,59 @@ describe("backend API composition", () => {
 
     // The reservation must be released immediately on cancel, not left until TTL expiry.
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 0,
+    });
+  });
+
+  it("expires checkout reservations on cancel so a late paid webhook can still fulfill", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const deps = createIncrementingBackendDependencies({
+      repositories,
+      providers: createMikaProviderRegistry([fake.provider]),
+    });
+    const api = createMikaBackendApi(deps);
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const cart = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    if (!cart.ok) throw new Error("Expected cart.add to succeed.");
+    const checkout = await api.checkout.start(ctx, { cartId: cart.data.id });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+
+    const reservationId = createTestMikaId("stock_event", 1);
+    await api.checkout.cancel(ctx, { checkoutId: createTestMikaId("checkout", 1) });
+
+    // Cancel returns the stock to availability but marks the reservation EXPIRED (not released),
+    // so it stays consumable for a payment that completed just before the cancel.
+    await expect(repositories.stock.findEventById(reservationId)).resolves.toMatchObject({
+      status: "expired",
+    });
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 0,
+    });
+
+    // A late provider payment fulfills by consuming the expired reservation from on-hand stock.
+    await expect(
+      createMikaStockLifecycleService(deps).consume({
+        reservationEventId: reservationId,
+        orderId: createTestMikaId("order", 1),
+        orderLineId: createTestMikaId("order_line", 1),
+      }),
+    ).resolves.toMatchObject({ status: "consumed", event: { status: "consumed" } });
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityOnHand: 4,
       quantityReserved: 0,
     });
   });
@@ -13139,6 +13192,41 @@ function createTestStockRepository(
       return stock
         ? { status: "released", event: releasedEvent, stock }
         : { status: "not_active", event: releasedEvent, stock };
+    },
+    async expire(expire) {
+      const event = eventsById.get(expire.reservationEventId);
+      if (!event) return { status: "not_found" };
+
+      const current =
+        Array.from(stockItems.values()).find((stock) => stock.id === event.stockItemId) ?? null;
+      if (event.status !== "active") {
+        return { status: "not_active", event, stock: current };
+      }
+
+      const expiredEvent: StockEventRecord = {
+        ...event,
+        status: "expired",
+        idempotencyKey: undefined,
+        updatedAt: expire.now,
+      };
+      const stock = current
+        ? {
+            ...current,
+            quantityReserved: Math.max(0, current.quantityReserved - event.quantityDelta),
+            updatedAt: expire.now,
+          }
+        : null;
+      eventsById.set(expiredEvent.id, expiredEvent);
+      if (event.idempotencyKey) {
+        eventsByIdempotencyKey.delete(event.idempotencyKey);
+      }
+      if (stock) {
+        stockItems.set(stock.sellableId, stock);
+      }
+
+      return stock
+        ? { status: "expired", event: expiredEvent, stock }
+        : { status: "not_active", event: expiredEvent, stock };
     },
     async consume(consume) {
       const event = eventsById.get(consume.reservationEventId);

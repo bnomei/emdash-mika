@@ -266,7 +266,9 @@ export interface AccountDeleteEmailRedactionRepositoryInput {
   readonly emailHash?: string;
 }
 
-type ReservationEventMutationRepositoryResult<TStatus extends "released" | "consumed"> =
+type ReservationEventMutationRepositoryResult<
+  TStatus extends "released" | "consumed" | "expired",
+> =
   | {
       readonly status: TStatus;
       readonly event: StockEventRecord;
@@ -284,6 +286,9 @@ type ReservationEventMutationRepositoryResult<TStatus extends "released" | "cons
 /** Result of releasing an active reservation event. */
 export type ReleaseReservedStockRepositoryResult =
   ReservationEventMutationRepositoryResult<"released">;
+/** Result of expiring an active reservation event (frees stock, stays consumable). */
+export type ExpireReservedStockRepositoryResult =
+  ReservationEventMutationRepositoryResult<"expired">;
 /** Result of consuming a reservation event into fulfillment. */
 export type ConsumeReservedStockRepositoryResult =
   ReservationEventMutationRepositoryResult<"consumed">;
@@ -1734,6 +1739,30 @@ export class StockRepository {
     });
   }
 
+  /**
+   * Returns a reservation's held quantity to availability (like {@link release}) but marks the
+   * event `expired` rather than `released`. Unlike a released reservation, an expired one can still
+   * be consumed via the guarded on-hand path, so a provider payment that completes after a local
+   * checkout cancel can still fulfill from available stock instead of failing outright.
+   */
+  async expire(
+    input: ReleaseReservedStockRepositoryInput,
+  ): Promise<ExpireReservedStockRepositoryResult> {
+    return mutateActiveReservationEvent({
+      executor: this.db,
+      reservationEventId: input.reservationEventId,
+      now: input.now,
+      targetStatus: "expired",
+      eventPatch: { idempotency_key: null },
+      applyStockMutation: (executor, event) =>
+        releaseStockStatement({
+          stockItemId: event.stockItemId,
+          quantity: event.quantityDelta,
+          now: input.now,
+        }).execute(executor),
+    });
+  }
+
   async consume(
     input: ConsumeReservedStockRepositoryInput,
   ): Promise<ConsumeReservedStockRepositoryResult> {
@@ -2042,7 +2071,7 @@ async function mutateStockWithEvent<
   return { status: input.successStatus, event, stock };
 }
 
-async function mutateActiveReservationEvent<TStatus extends "released" | "consumed">(input: {
+async function mutateActiveReservationEvent<TStatus extends "released" | "consumed" | "expired">(input: {
   readonly executor: MikaDbExecutor;
   readonly reservationEventId: MikaId;
   readonly now: ISODateTime;
