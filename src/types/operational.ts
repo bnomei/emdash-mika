@@ -162,6 +162,7 @@ export interface AccountExportRecord {
   readonly id: MikaId;
   readonly customerId?: MikaId;
   readonly userId?: string;
+  readonly emailHash?: string;
   readonly status: "queued" | "running" | "ready" | "expired" | "failed";
   readonly requestedAt: ISODateTime;
   readonly finishedAt?: ISODateTime;

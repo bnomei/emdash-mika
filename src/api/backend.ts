@@ -1400,10 +1400,12 @@ async function requestAccountExport(
     },
   });
 
+  const identityEmailHash = identity.customer?.emailHash ?? identity.emailHash;
   const record = {
     id: exportId,
     customerId: identity.customer?.customerId,
     userId: identity.customer?.userId ?? identity.userId,
+    ...(identityEmailHash ? { emailHash: identityEmailHash } : {}),
     status: "ready" as const,
     requestedAt: now,
     finishedAt: now,
@@ -3188,7 +3190,13 @@ function accountExportBelongsToIdentity(
   identity: NonNullable<Awaited<ReturnType<typeof resolveAccountIdentity>>>,
 ): boolean {
   if (identity.customer && document.customerId === identity.customer.customerId) return true;
-  return Boolean(identity.userId && document.userId === identity.userId);
+  if (identity.userId && document.userId === identity.userId) return true;
+  // An emailHash-only magic-link identity (no customer/user row) can create an
+  // export but has no customerId/userId on the document to match, so also match
+  // the persisted emailHash. A later-created customer for the same email keeps
+  // access because identity.customer.emailHash equals the document's emailHash.
+  const identityEmailHash = identity.customer?.emailHash ?? identity.emailHash;
+  return Boolean(identityEmailHash && document.record.emailHash === identityEmailHash);
 }
 
 function accountExportSubjectHash(

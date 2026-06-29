@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P2 | medium | security=no
+DEVANA-STATE: fixed | P2 | medium | security=no
 DEVANA-KEY: src/api/backend.ts:3082 | account-export-emailhash-forbidden
 
 # account.exportStatus rejects emailHash-only session identity
@@ -47,6 +47,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-29: open by Devana. Initial report written from static source inspection across dataflow-boundaries and invariants-contracts trails.
+- 2026-06-29: fixed. `accountExportBelongsToIdentity` now also authorizes by `emailHash`, mirroring the `AccountDeleteRequestRecord` precedent (which already carries `emailHash`). Two coordinated changes: (1) `AccountExportRecord` gains an optional `emailHash` field and `requestAccountExport` persists `identity.customer?.emailHash ?? identity.emailHash` onto the export record; (2) the ownership check returns true when that persisted `document.record.emailHash` equals the requester's `identity.customer?.emailHash ?? identity.emailHash`. Previously an emailHash-only magic-link session (no customer/user row) could create an export — `resolveAccountIdentity` treats session `mika.emailHash` as authenticated and `account.export` accepts it — but the resulting document had no `customerId`/`userId` and no emailHash, so `accountExportStatus` always returned 403. Now the same session can poll status. Because the match uses `identity.customer?.emailHash` too, a customer row later created for that email keeps access to the earlier emailHash-only export. Migration-free: `emailHash` lives on the record JSON (read via `document.record.emailHash`, exactly like the existing `downloadTokenHash`), not added to the indexed top-level keys, so no storage migration is needed; and `accountExportDTO` selects fields explicitly so the hash is not exposed in responses. Scope: export ownership only; token-based `exportDownload` is unchanged. Evidence: a new test has an emailHash-only session (entitlement keyed by emailHash, `mika.emailHash` on session) create an export and then successfully poll `exportStatus` (200); it was confirmed to 403 before the belongs-check change. The existing unrelated-identity 403 test still passes. Full suite (358) and both tsc configs pass.
 
 DEVANA-KEY: src/api/backend.ts:3082 | account-export-emailhash-forbidden
-DEVANA-SUMMARY: open | P2 | medium | Magic-link emailHash sessions can create account exports but cannot poll exportStatus for them.
+DEVANA-SUMMARY: fixed | P2 | medium | Account exports now persist emailHash and accountExportBelongsToIdentity matches it, so emailHash-only magic-link sessions can poll exportStatus for exports they created (was always 403).

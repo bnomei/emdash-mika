@@ -3880,6 +3880,42 @@ describe("backend API composition", () => {
     }
   });
 
+  it("authorizes account export status for an emailHash-only magic-link identity", async () => {
+    const emailHash = createTestHash("email:exporter@example.test");
+    const repositories = createTestBackendRepositories();
+    const baseEntitlement = createEntitlementDocument({ id: createTestMikaId("entitlement", 1) });
+    await repositories.account.put({
+      ...baseEntitlement,
+      customerId: undefined,
+      userId: undefined,
+      emailHash,
+      entitlementKey: "downloads.email",
+      record: {
+        ...baseEntitlement.record,
+        customerId: undefined,
+        userId: undefined,
+        emailHash,
+        entitlementKey: "downloads.email",
+      },
+    });
+
+    const api = createMikaBackendApi(createTestBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+    await ctx.session?.set("mika.emailHash", emailHash);
+
+    const created = await api.account.export(ctx, {});
+    if (!created.ok) throw new Error("Expected emailHash account export to be created.");
+
+    // Same emailHash-only session must be able to poll the export it created.
+    await expect(
+      api.account.exportStatus(ctx, { exportId: created.data.id }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: created.data.id, status: "ready" },
+    });
+  });
+
   it("returns stable account export download token errors", async () => {
     const expiredHarness = await createAccountServicesHarness({ exportTtlMs: 1 });
 
