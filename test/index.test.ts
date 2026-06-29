@@ -1568,6 +1568,52 @@ describe("Mika client", () => {
     ]);
   });
 
+  it("forwards the Idempotency-Key header into direct admin route input", async () => {
+    const received: unknown[] = [];
+    const routes = createMikaPluginRoutes(
+      createMikaApi({
+        admin: {
+          stockAdjust: async (adjustment) => {
+            received.push(adjustment);
+
+            return {
+              ok: true,
+              status: 200,
+              data: {
+                id: id("stock_event_1"),
+                status: "completed",
+                affected: { stockItems: 1, movements: 1 },
+              },
+            };
+          },
+        },
+      } satisfies MikaApiOverrides),
+    );
+
+    const adjustInput = { stockItemId: "stock_item_1", quantityDelta: 4 };
+    const adjustUrl = "https://shop.test/_emdash/api/plugins/mika/admin/stock/adjust";
+
+    await routes[mikaPluginRoutes.adminStockAdjust].handler({
+      input: adjustInput,
+      request: new Request(adjustUrl, {
+        method: "POST",
+        headers: { [MIKA_AGENT_IDEMPOTENCY_KEY_HEADER]: "adjust_header_key" },
+      }),
+    });
+
+    // Without the header, no idempotency key is injected (so the per-request
+    // header is the only source on direct routes, matching the action runner).
+    await routes[mikaPluginRoutes.adminStockAdjust].handler({
+      input: adjustInput,
+      request: new Request(adjustUrl, { method: "POST" }),
+    });
+
+    expect(received).toEqual([
+      expect.objectContaining({ idempotencyKey: "adjust_header_key" }),
+      expect.not.objectContaining({ idempotencyKey: expect.anything() }),
+    ]);
+  });
+
   it("pins action descriptors to their operation metadata", () => {
     expect(
       Object.entries(mikaActionDefinitions).map(([key, definition]) =>

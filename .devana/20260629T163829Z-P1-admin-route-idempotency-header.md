@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P1 | medium | security=no
+DEVANA-STATE: fixed | P1 | medium | security=no
 DEVANA-KEY: src/api/route-handlers.ts:164 | admin-route-idempotency-header
 
 # Direct admin plugin routes drop Idempotency-Key header
@@ -45,6 +45,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-29: open by Devana. Initial report written from static source inspection across outside-in-entrypoints and contracts-errors trails.
+- 2026-06-29: fixed. `handleRouteOperation` now passes the operation input through `adminRunnerInputWithContext(operation, parsedInput.data, mikaContext.idempotencyKey)` before invoking `runMikaOperation`, exactly as `handleActionRunner` already did. Admin operations are registered with `requiresRequestContext: false`, so the backend reads `input.idempotencyKey` (not `ctx`); previously the `Idempotency-Key` header was hydrated onto `mikaContext` but dropped on direct plugin routes, so two header-only POSTs with identical bodies re-executed the mutation instead of replaying. `adminRunnerInputWithContext` only injects when the operation is in `ADMIN_IDEMPOTENT_OPERATIONS`, the input is a record, and no `idempotencyKey` is already present in the body — so non-admin and non-idempotent routes, and callers that put the key in the JSON body, are unaffected. Combined with the admin idempotency-replay fix, the header now reaches the same replay-safe path the action runner uses. Scope: direct admin plugin routes only. Evidence: a new test posts to `admin/stock/adjust` and asserts the admin method receives `idempotencyKey` from the header, and that omitting the header injects nothing; the test was confirmed to fail before the change. Full suite (356) and both tsc configs pass.
 
 DEVANA-KEY: src/api/route-handlers.ts:164 | admin-route-idempotency-header
-DEVANA-SUMMARY: open | P1 | medium | Idempotency-Key header is read on direct admin plugin routes but not forwarded into admin API input.
+DEVANA-SUMMARY: fixed | P1 | medium | handleRouteOperation now forwards the Idempotency-Key header into admin operation input via adminRunnerInputWithContext (mirroring the action runner), so direct admin plugin-route retries replay instead of re-executing.
