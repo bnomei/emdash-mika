@@ -10863,6 +10863,48 @@ describe("backend API composition", () => {
     });
   });
 
+  it("releases buy-now checkout reservations on cancel", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    // Buy-now: no cart, so the reservation lives only on the checkout document's lines.
+    const checkout = await api.checkout.start(ctx, { sellableId: sellable.id, quantity: 1 });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+    expect(checkout.data.cartId).toBeUndefined();
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 1,
+    });
+
+    const cancelled = await api.checkout.cancel(ctx, {
+      checkoutId: createTestMikaId("checkout", 1),
+    });
+    expect(cancelled).toMatchObject({ ok: true, data: { status: "cancelled" } });
+
+    // The reservation must be released immediately on cancel, not left until TTL expiry.
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 0,
+    });
+  });
+
   it("replays duplicate checkout starts locally without another provider handoff", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();

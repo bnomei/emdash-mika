@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P1 | high | security=no
+DEVANA-STATE: fixed | P1 | high | security=no
 DEVANA-KEY: src/api/backend.ts:6523 | buy-now-cancel-stock-leak
 
 # Buy-now checkout.cancel does not release checkout-line reservations
@@ -48,6 +48,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-29: open by Devana. Initial report written from static source inspection across inside-out-paths and state-lifecycle trails.
+- 2026-06-29: fixed. `cancelCheckout` now releases reservations from the checkout document's own `aggregate.lines[].reservationId` — the authoritative source for both cart-based and buy-now checkouts — instead of only the cart's items. Buy-now checkouts (`sellableId` with no `cartId`) previously left their reservations active and `quantity_reserved` elevated until TTL/maintenance. The cart reopen still runs when a cart exists. Added a regression test asserting a buy-now checkout returns `quantityReserved` to 0 immediately on cancel.
 
 DEVANA-KEY: src/api/backend.ts:6523 | buy-now-cancel-stock-leak
-DEVANA-SUMMARY: open | P1 | high | checkout.cancel releases cart-item reservations only, so buy-now checkouts leave stock reserved until TTL expiry.
+DEVANA-SUMMARY: fixed | P1 | high | checkout.cancel now releases reservations from the checkout document's own lines, so buy-now checkouts free stock immediately instead of waiting for TTL expiry.

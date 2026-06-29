@@ -6635,16 +6635,21 @@ async function cancelCheckout(
     return checkoutDocumentSuccessResult(document);
   }
 
+  // Release every reservation created for this checkout from the checkout document's own lines.
+  // This is the authoritative source for both cart-based and buy-now checkouts (sellableId with no
+  // cartId), whose reservations live only on document.aggregate.lines — the cart-only path missed
+  // buy-now reservations and left stock locked until TTL expiry.
+  const reservationIds = document.aggregate.lines
+    .map((line) => line.reservationId)
+    .filter((id): id is MikaId => Boolean(id));
+  if (reservationIds.length > 0) {
+    await releaseCheckoutReservations(input, reservationIds, ctx.now);
+  }
+
   const cartDocument = document.cartId
     ? await input.repositories.session.findById(document.cartId)
     : null;
   if (cartDocument && cartDocument.type === "cart") {
-    const reservationIds = cartDocument.aggregate.items
-      .map((item) => item.reservationId)
-      .filter((id): id is MikaId => Boolean(id));
-    if (reservationIds.length > 0) {
-      await releaseCheckoutReservations(input, reservationIds, ctx.now);
-    }
     await input.repositories.session.put(reopenCartDocument(cartDocument, ctx.now));
   }
 
