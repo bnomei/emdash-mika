@@ -1789,6 +1789,18 @@ export class StockRepository {
               now: input.now,
             }).execute(executor);
       if (!mutationAffected(stockMutation)) {
+        // For an expired reservation the on-hand consume is guarded so it cannot dip into units
+        // already promised to other active reservations. A no-op here means honoring this late
+        // fulfillment would oversell; roll back (so it can be retried once stock frees up) rather
+        // than commit an oversell. The guard is intentionally conservative: it counts every active
+        // reservation (including any that are expired-but-not-yet-swept), so it may briefly refuse a
+        // consume that the next maintenance sweep would make room for. That fails safe and the
+        // workflow retry self-heals once the sweep runs.
+        if (current.status === "expired") {
+          throw new Error(
+            `Reservation event '${current.id}' cannot be consumed: insufficient available stock to fulfill the expired reservation without overselling.`,
+          );
+        }
         throw new Error(
           `Stock item '${current.stockItemId}' for reservation event '${current.id}' could not be updated.`,
         );

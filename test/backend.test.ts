@@ -2223,6 +2223,68 @@ describe("backend test Kysely stock database harness", () => {
       );
     });
 
+    it(`${repositoryKind} stock repository contract refuses an expired-reservation consume that would oversell`, async () => {
+      const stockItem = createStockRecord({
+        quantityOnHand: 5,
+        quantityReserved: 0,
+      });
+
+      await withStockRepositoryContractHarness(
+        repositoryKind,
+        stockItem,
+        async ({ repository, service }) => {
+          const clock = createTestClock();
+          // Reservation A takes all 5 units, then expires.
+          const expiredReservation = await service.reserve({
+            stockItemId: stockItem.id,
+            quantity: 5,
+            expiresAt: clock.isoAt(30_000),
+            idempotencyKey: `${repositoryKind}_oversell_contract_1`,
+          });
+          if (expiredReservation.status !== "reserved") {
+            throw new Error("Expected reservation to be created.");
+          }
+
+          // Maintenance releases A's units back to availability.
+          await service.releaseExpiredReservations({ now: clock.isoAt(60_000) });
+
+          // Reservation B re-reserves the freed units while A's payment is still in flight.
+          const activeReservation = await service.reserve({
+            stockItemId: stockItem.id,
+            quantity: 5,
+            expiresAt: clock.isoAt(15 * 60_000),
+            idempotencyKey: `${repositoryKind}_oversell_contract_2`,
+          });
+          if (activeReservation.status !== "reserved") {
+            throw new Error("Expected re-reservation to succeed.");
+          }
+          await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+            quantityOnHand: 5,
+            quantityReserved: 5,
+          });
+
+          // A late payment for A must NOT consume on-hand units already committed to B.
+          await expect(
+            service.consume({
+              reservationEventId: expiredReservation.event.id,
+              orderId: createTestMikaId("order", 1),
+              orderLineId: createTestMikaId("order_line", 1),
+              now: clock.isoAt(90_000),
+            }),
+          ).rejects.toThrow(/oversell/i);
+
+          // Stock and the expired reservation are left untouched (rolled back, retryable).
+          await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
+            quantityOnHand: 5,
+            quantityReserved: 5,
+          });
+          await expect(
+            repository.findEventById(expiredReservation.event.id),
+          ).resolves.toMatchObject({ status: "expired" });
+        },
+      );
+    });
+
     it(`${repositoryKind} stock repository contract re-reserves with the same idempotency key after release`, async () => {
       const stockItem = createStockRecord({
         quantityOnHand: 5,
@@ -12795,6 +12857,20 @@ function createTestStockRepository(
       }
 
       const fromActive = event.status === "active";
+      // Mirror consumeOnHandStatement's oversell guard: an expired reservation's quantity was
+      // already returned to availability, so it can only be consumed when enough un-reserved
+      // on-hand units remain for finite, non-backorder items.
+      if (
+        !fromActive &&
+        current &&
+        current.policy === "finite" &&
+        !current.allowBackorder &&
+        current.quantityOnHand - current.quantityReserved < event.quantityDelta
+      ) {
+        throw new Error(
+          `Reservation event '${event.id}' cannot be consumed: insufficient available stock to fulfill the expired reservation without overselling.`,
+        );
+      }
       const consumedEvent: StockEventRecord = {
         ...event,
         status: "consumed",

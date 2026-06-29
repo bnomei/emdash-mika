@@ -69,7 +69,15 @@ export function consumeReservedStockStatement(
   `;
 }
 
-/** SQL update that consumes on-hand quantity for expired reservation fulfillment. */
+/**
+ * SQL update that consumes on-hand quantity for expired reservation fulfillment.
+ *
+ * The expired reservation's quantity was already returned to availability by the maintenance
+ * sweep, so it is no longer part of `quantity_reserved`. To avoid overselling, only consume when
+ * enough un-reserved on-hand units remain (`quantity_on_hand - quantity_reserved >= quantity`) for
+ * finite, non-backorder items — otherwise the units are committed to other active reservations and
+ * the update affects no rows so the caller can reject the late fulfillment.
+ */
 export function consumeOnHandStatement(input: ReleaseStockStatementInput): RawBuilder<unknown> {
   return sql`
     UPDATE mika_stock_items
@@ -80,6 +88,11 @@ export function consumeOnHandStatement(input: ReleaseStockStatementInput): RawBu
       END,
       updated_at = ${input.now}
     WHERE id = ${input.stockItemId}
+      AND (
+        policy != 'finite'
+        OR allow_backorder = 1
+        OR quantity_on_hand - quantity_reserved >= ${input.quantity}
+      )
   `;
 }
 
