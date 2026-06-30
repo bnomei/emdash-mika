@@ -5562,19 +5562,21 @@ async function fulfillPaidOrder(
     for (const line of originalLines) {
       const fulfilled = await fulfillPaidOrderLine(input, ctx, order, line);
       fulfilledLines.push(fulfilled);
-      changed = changed || fulfilled !== line;
+      const lineChanged = fulfilled !== line;
+      changed = changed || lineChanged;
+      if (lineChanged) {
+        const progressedLines = [...fulfilledLines, ...originalLines.slice(fulfilledLines.length)];
+        await input.repositories.ledger.put(
+          orderWithFulfilledLines(order, progressedLines, ctx.now),
+        );
+      }
     }
   } catch (error) {
     // Forward-progress persistence. Each line's side effects (stock consume, entitlement/license
-    // writes) commit to their own stores as the loop runs, but the order ledger is written only once
-    // at the end. So a later line throwing — e.g. an oversold/expired reservation that trips the stock
-    // fail-safe, or any deterministic per-line failure — would otherwise strand the goods the earlier
-    // lines already committed with NO matching order record; and because the payment-webhook workflow
-    // bounds its retries, a deterministically-failing line makes that orphaning PERMANENT once attempts
-    // exhaust. Persist the progress made so far (the fulfilled lines, carrying their
-    // stockMovementId/entitlementId, merged with the lines not yet reached) WITHOUT a `fulfilledAt`
-    // marker, so committed side effects are always reflected in a durable, reconcilable order record,
-    // then rethrow so the workflow still records the failure and retries the remaining lines.
+    // writes) commit to their own stores as the loop runs. If a later line throws before the current
+    // progress write completes, persist the progress made so far (fulfilled lines carrying their
+    // stockMovementId/entitlementId, merged with lines not yet reached) WITHOUT a `fulfilledAt`
+    // marker, then rethrow so the workflow still records the failure and retries the remaining lines.
     if (changed) {
       const progressedLines = [...fulfilledLines, ...originalLines.slice(fulfilledLines.length)];
       // Swallow a failure to persist forward progress so the ORIGINAL per-line error below — the root
@@ -5587,14 +5589,25 @@ async function fulfillPaidOrder(
     throw error;
   }
 
-  await queueOrderConfirmationEmail(input, ctx, order, fulfilledLines);
+  const orderAlreadyMarkedFulfilled = typeof order.aggregate.metadata?.["fulfilledAt"] === "string";
 
-  if (!changed) return order;
+  if (!changed && orderAlreadyMarkedFulfilled) {
+    await queueOrderConfirmationEmail(input, ctx, order, fulfilledLines);
+    return order;
+  }
 
-  const fulfilledOrder = orderWithFulfilledLines(order, fulfilledLines, ctx.now, ctx.now);
+  const fulfilledOrder = orderWithFulfilledLines(
+    order,
+    fulfilledLines,
+    ctx.now,
+    orderAlreadyMarkedFulfilled ? undefined : ctx.now,
+  );
 
   await input.repositories.ledger.put(fulfilledOrder);
-  await emitOrderDownloadReadyNotifications(input, ctx, fulfilledOrder, originalLines);
+  await queueOrderConfirmationEmail(input, ctx, fulfilledOrder, fulfilledLines);
+  await emitOrderDownloadReadyNotifications(input, ctx, fulfilledOrder, originalLines, {
+    includeExistingRefs: !orderAlreadyMarkedFulfilled,
+  });
 
   return fulfilledOrder;
 }
@@ -5939,14 +5952,15 @@ async function emitOrderDownloadReadyNotifications(
   ctx: MikaRequestContext,
   order: OrderDocument,
   originalLines: readonly OrderLine[],
+  options: { readonly includeExistingRefs?: boolean } = {},
 ): Promise<void> {
   const originalById = new Map(originalLines.map((line) => [line.id, line]));
 
   for (const line of order.aggregate.lines) {
     const originalRefs = new Set(originalById.get(line.id)?.downloadRefs ?? []);
-    const addedRefs = (line.downloadRefs ?? []).filter(
-      (downloadRef) => !originalRefs.has(downloadRef),
-    );
+    const addedRefs = options.includeExistingRefs
+      ? (line.downloadRefs ?? [])
+      : (line.downloadRefs ?? []).filter((downloadRef) => !originalRefs.has(downloadRef));
 
     for (const downloadRef of addedRefs) {
       await emitFulfillmentNotificationOnce(

@@ -9737,6 +9737,112 @@ describe("backend API composition", () => {
     ).resolves.toMatchObject({ type: "entitlement", status: "active" });
   });
 
+  it("persists line progress before a final fulfilled-order ledger write failure", async () => {
+    const stripe = createProviderName("stripe");
+    const accountCollection = createStorageCollection("account");
+    const sessionCollection = createStorageCollection("session");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const sellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 1),
+      prices: [
+        createPriceDefinition({
+          id: createTestMikaId("price", 1),
+          fulfillmentKind: "entitlement",
+          entitlementKey: "course:final-write",
+          providerRefs: [{ provider: stripe, productId: "prod_final", priceId: "price_final" }],
+        }),
+      ],
+    });
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      session: new SessionRepository(sessionCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+      stock: createTestStockRepository(
+        new Map([
+          [
+            sellable.id,
+            createStockRecord({
+              id: createTestMikaId("stock", 1),
+              sellableId: sellable.id,
+              quantityOnHand: 5,
+              quantityReserved: 0,
+            }),
+          ],
+        ]),
+      ),
+    };
+    const baseLedgerPut = repositories.ledger.put.bind(repositories.ledger);
+    let finalWriteFailures = 0;
+    repositories.ledger.put = async (document) => {
+      const finalFulfilledOrderWrite =
+        document.type === "order" &&
+        document.id === "order_1" &&
+        typeof document.aggregate.metadata?.["fulfilledAt"] === "string";
+      if (finalFulfilledOrderWrite && finalWriteFailures === 0) {
+        finalWriteFailures += 1;
+        throw new Error("Simulated final fulfilled-order ledger write failure.");
+      }
+      return baseLedgerPut(document);
+    };
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "final_fulfillment_hash",
+            parsed: { delivery: "event_final_fulfillment" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createPaymentWebhookEvent(verified, {
+            providerEventId: "event_final_fulfillment",
+            providerCheckoutId: "provider_checkout_fake",
+            providerPaymentId: "payment_final_1",
+            providerOrderId: "provider_order_final_1",
+            customer: { email: "Final@Example.test", name: "Final Shopper" },
+          }),
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef: createTestContentRef(), sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const shopperCtx = createTestRequestContext({
+      sessionId: "session_final",
+      customerId: createTestMikaId("customer", 1),
+      userId: "user_final",
+      idempotencyKey: "checkout_final_1",
+    });
+
+    const cart = await api.cart.add(shopperCtx, { sellableId: sellable.id, quantity: 1 });
+    if (!cart.ok) throw new Error("Expected cart.add to succeed.");
+    const checkout = await api.checkout.start(shopperCtx, {
+      cartId: cart.data.id,
+      provider: stripe,
+    });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+
+    await receiveWebhook(api, "final-fulfillment", stripe).catch(() => undefined);
+
+    expect(finalWriteFailures).toBe(1);
+    const persistedOrder = await ledgerCollection.get("order_1");
+    if (!persistedOrder) throw new Error("Expected order_1 to be persisted.");
+    const [line] = persistedOrder.aggregate.lines;
+    expect(line?.entitlementId).toBe("entitlement_order_1_order_line_1");
+    expect(persistedOrder.aggregate.metadata?.["fulfilledAt"]).toBeUndefined();
+    await expect(opsCollection.count({ type: "email" })).resolves.toBe(0);
+    await expect(
+      accountCollection.get("entitlement_order_1_order_line_1"),
+    ).resolves.toMatchObject({ type: "entitlement", status: "active" });
+  });
+
   it("creates fulfillment side effects once from replayed payment webhook events", async () => {
     const stripe = createProviderName("stripe");
     const accountCollection = createStorageCollection("account");
