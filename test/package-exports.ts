@@ -17,7 +17,14 @@ import type {
   MikaAgentManifestJsonSchema,
 } from "@bnomei/emdash-mika/agent";
 import type { createMikaAdminActionsManifest } from "@bnomei/emdash-mika/admin";
-import type { createMika, MikaAstroClient, MikaPurchaseModel } from "@bnomei/emdash-mika/astro";
+import type {
+  createMika,
+  MikaAstroClient,
+  MikaPurchaseModel,
+  mikaHiddenInput,
+  mikaRedirectInputs,
+  mikaReturnToInput,
+} from "@bnomei/emdash-mika/astro";
 import type {
   createMikaActions,
   MikaActionName,
@@ -95,6 +102,9 @@ export type PackageEntryContract = {
   readonly astro: typeof createMika;
   readonly astroClient: MikaAstroClient;
   readonly purchase: MikaPurchaseModel;
+  readonly hiddenInput: typeof mikaHiddenInput;
+  readonly returnToInput: typeof mikaReturnToInput;
+  readonly redirectInputs: typeof mikaRedirectInputs;
   readonly actions: typeof createMikaActions;
   readonly actionsClient: MikaActions;
   readonly actionName: MikaActionName;

@@ -33,6 +33,9 @@ import type { createMikaAdminActionsManifest as PackageCreateMikaAdminActionsMan
 import type {
   createMika as PackageCreateMika,
   MikaAstroClientOptions as PackageMikaAstroClientOptions,
+  mikaHiddenInput as PackageMikaHiddenInput,
+  mikaRedirectInputs as PackageMikaRedirectInputs,
+  mikaReturnToInput as PackageMikaReturnToInput,
   mikaSafeReturnTo as PackageMikaSafeReturnTo,
 } from "@bnomei/emdash-mika/astro";
 import type { createMikaClient as PackageCreateMikaClient } from "@bnomei/emdash-mika/client";
@@ -132,8 +135,11 @@ import {
   formatMikaMoney,
   isMikaPurchasable,
   type MikaAstroClientOptions,
+  mikaHiddenInput,
   mikaMaxPurchaseQuantity,
+  mikaRedirectInputs,
   mikaReturnTo,
+  mikaReturnToInput,
   mikaSafeReturnTo,
 } from "../src/astro";
 import {
@@ -615,6 +621,53 @@ describe("Mika Astro helpers", () => {
     expect(mikaSafeReturnTo("account", options)).toBe("/fallback");
     expect(mikaSafeReturnTo("/account/../admin", options)).toBe("/fallback");
     expect(mikaSafeReturnTo("/account/%2e%2e/admin", options)).toBe("/fallback");
+  });
+
+  it("serializes nullish hidden input values as empty strings", () => {
+    expect(mikaHiddenInput("sellableId", null)).toEqual({ name: "sellableId", value: "" });
+    expect(mikaHiddenInput("priceId", undefined)).toEqual({ name: "priceId", value: "" });
+    expect(mikaHiddenInput("quantity", 2)).toEqual({ name: "quantity", value: "2" });
+  });
+
+  it("rejects open redirects in returnTo hidden inputs", () => {
+    expect(
+      mikaReturnToInput("https://evil.test/account", {
+        origin: "https://shop.test",
+        fallback: "/account",
+      }),
+    ).toEqual({ name: "returnTo", value: "/account" });
+    expect(
+      mikaReturnToInput("https://shop.test/account/orders", {
+        origin: "https://shop.test",
+        fallback: "/account",
+      }),
+    ).toEqual({ name: "returnTo", value: "/account/orders" });
+  });
+
+  it("applies separate checkout redirect fallbacks", () => {
+    const redirectInputs = mikaRedirectInputs(
+      {
+        successPath: "https://evil.test/thanks",
+        cancelPath: "//evil.test/cancel",
+        returnTo: "/cart",
+      },
+      {
+        origin: "https://shop.test",
+        successFallback: "/checkout/success",
+        cancelFallback: "/checkout/cancel",
+        returnToFallback: "/products",
+      },
+    );
+
+    expect(redirectInputs.successPath).toEqual({
+      name: "successPath",
+      value: "/checkout/success",
+    });
+    expect(redirectInputs.cancelPath).toEqual({
+      name: "cancelPath",
+      value: "/checkout/cancel",
+    });
+    expect(redirectInputs.returnTo).toEqual({ name: "returnTo", value: "/cart" });
   });
 
   it("uses native plugin API overrides for direct Astro helpers by default", async () => {
@@ -3805,6 +3858,18 @@ describe("public types", () => {
     expectTypeOf<MikaAstroClientOptions["operationPolicy"]>().toEqualTypeOf<
       MikaOperationPolicy | undefined
     >();
+    expectTypeOf<ReturnType<typeof mikaHiddenInput>>().toEqualTypeOf<{
+      name: string;
+      value: string;
+    }>();
+    expectTypeOf<ReturnType<typeof mikaReturnToInput>>().toEqualTypeOf<
+      ReturnType<typeof mikaHiddenInput>
+    >();
+    expectTypeOf<ReturnType<typeof mikaRedirectInputs>>().toEqualTypeOf<{
+      successPath: ReturnType<typeof mikaHiddenInput>;
+      cancelPath: ReturnType<typeof mikaHiddenInput>;
+      returnTo: ReturnType<typeof mikaHiddenInput>;
+    }>();
     expectTypeOf<string>().not.toMatchTypeOf<MikaId>();
     expectTypeOf<string>().not.toMatchTypeOf<CurrencyCode>();
     expectTypeOf<string>().not.toMatchTypeOf<ProviderName>();
@@ -3829,6 +3894,9 @@ describe("public types", () => {
     expectTypeOf<typeof PackageCreateMikaAdminActionsManifest>().toBeFunction();
     expectTypeOf<typeof PackageCreateMika>().toBeFunction();
     expectTypeOf<typeof PackageMikaSafeReturnTo>().toEqualTypeOf<typeof mikaSafeReturnTo>();
+    expectTypeOf<typeof PackageMikaHiddenInput>().toEqualTypeOf<typeof mikaHiddenInput>();
+    expectTypeOf<typeof PackageMikaReturnToInput>().toEqualTypeOf<typeof mikaReturnToInput>();
+    expectTypeOf<typeof PackageMikaRedirectInputs>().toEqualTypeOf<typeof mikaRedirectInputs>();
     expectTypeOf<typeof PackageCreateMikaActions>().toBeFunction();
     expectTypeOf<typeof PackageCreateMikaClient>().toBeFunction();
     expectTypeOf<typeof PackageRenderMikaEmail>().toBeFunction();

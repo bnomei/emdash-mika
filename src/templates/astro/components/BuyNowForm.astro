@@ -1,8 +1,7 @@
 ---
 import { actions } from "astro:actions";
 import { Button } from "@cloudflare/kumo";
-import { mikaReturnTo } from "@bnomei/emdash-mika/astro";
-import { mikaHiddenInput, mikaRedirectInputs } from "../lib/form";
+import { mikaHiddenInput, mikaRedirectInputs, mikaReturnTo } from "@bnomei/emdash-mika/astro";
 import { mikaTemplateRoutes } from "../lib/routes";
 
 interface Props {
@@ -32,7 +31,13 @@ const {
   class: className,
   ...attrs
 } = Astro.props;
-const redirectInputs = mikaRedirectInputs({ successPath, cancelPath, returnTo });
+const redirectInputs = mikaRedirectInputs(
+  { successPath, cancelPath, returnTo },
+  {
+    successFallback: mikaTemplateRoutes.checkoutSuccess,
+    cancelFallback: mikaTemplateRoutes.checkoutCancel,
+  },
+);
 ---
 
 <form

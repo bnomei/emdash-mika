@@ -5,10 +5,11 @@ import type { CartDTO } from "@bnomei/emdash-mika/types";
 import {
   formatMikaMoney,
   formatMikaVariant,
+  mikaHiddenInput,
   mikaMaxPurchaseQuantity,
-  mikaReturnTo
+  mikaReturnTo,
+  mikaReturnToInput
 } from "@bnomei/emdash-mika/astro";
-import { mikaHiddenInput, mikaReturnToInput } from "../lib/form";
 
 interface Props {
   cart?: CartDTO | null;

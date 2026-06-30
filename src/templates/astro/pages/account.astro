@@ -1,11 +1,10 @@
 ---
 import { actions, isInputError } from "astro:actions";
 import { Button, Text } from "@cloudflare/kumo";
-import { createMika } from "@bnomei/emdash-mika/astro";
+import { createMika, mikaReturnToInput } from "@bnomei/emdash-mika/astro";
 import AccountSignInPanel from "../components/AccountSignInPanel.astro";
 import MikaKumoPage from "../components/MikaKumoPage.astro";
 import { mikaTemplateCurrentCartItemCount } from "../lib/cart";
-import { mikaReturnToInput } from "../lib/form";
 import { mikaTemplateRoutes } from "../lib/routes";
 
 export const prerender = false;

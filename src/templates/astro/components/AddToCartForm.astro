@@ -4,10 +4,11 @@ import { Button } from "@cloudflare/kumo";
 import type { SellableDTO } from "@bnomei/emdash-mika/types";
 import {
   createMikaPurchaseModel,
-  mikaReturnTo
+  mikaHiddenInput,
+  mikaReturnTo,
+  mikaReturnToInput
 } from "@bnomei/emdash-mika/astro";
 import type { MikaPurchaseModel } from "@bnomei/emdash-mika/astro";
-import { mikaHiddenInput, mikaReturnToInput } from "../lib/form";
 import AddToCartFormSync from "./AddToCartFormSync.astro";
 import LowStockNotice from "./LowStockNotice.astro";
 import StockBadge from "./StockBadge.astro";

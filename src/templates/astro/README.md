@@ -82,6 +82,9 @@ examples/
   agent-ready-storefront.md
 ```
 
+`lib/form.ts` is a compatibility shim for older copied templates. New copies
+should import hidden-input helpers from `@bnomei/emdash-mika/astro`.
+
 ## Copy Paths
 
 Core product flow:
@@ -220,8 +223,9 @@ module needs different wiring.
 Use the small public subpaths in copied code:
 
 - `@bnomei/emdash-mika/astro` for Astro helpers like `createMika()`,
-  `formatMikaMoney()`, `mikaReturnTo()`, `mikaSafeReturnTo()`, and purchase
-  option selection.
+  `formatMikaMoney()`, `mikaReturnTo()`, `mikaSafeReturnTo()`,
+  `mikaHiddenInput()`, `mikaReturnToInput()`, `mikaRedirectInputs()`, and
+  purchase option selection.
 - `@bnomei/emdash-mika/astro-actions` from `src/actions/mika.ts`.
 - `@bnomei/emdash-mika/acp` for host-owned ACP product-feed and checkout
   endpoint projections.
@@ -324,7 +328,7 @@ redirects, wire that endpoint to a server-only Mika service rather than the
 browser-safe JSON client.
 
 Use `mikaSafeReturnTo()` for host-owned return fields that are not produced by
-the copied helpers. Mika treats form-provided `returnTo`, checkout success, and
+the public helper functions. Mika treats form-provided `returnTo`, checkout success, and
 checkout cancel values as same-origin local paths; backend checkout config is
 trusted deployment configuration.
 

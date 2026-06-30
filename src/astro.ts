@@ -154,6 +154,66 @@ export function mikaSafeReturnTo(
   return mikaSafeReturnPath(candidate, options);
 }
 
+export type MikaHiddenInputValue = string | number | boolean | null | undefined;
+
+/** Name/value pair for a hidden form input; nullish values become empty strings. */
+export function mikaHiddenInput(name: string, value: MikaHiddenInputValue) {
+  return {
+    name,
+    value: value === null || value === undefined ? "" : String(value),
+  };
+}
+
+export type MikaReturnToInputOptions = MikaSafeReturnToOptions;
+
+/** Hidden `returnTo` input attrs validated through {@link mikaSafeReturnTo}. */
+export function mikaReturnToInput(
+  returnTo: string | URL | null | undefined,
+  options: MikaReturnToInputOptions = {},
+) {
+  return mikaHiddenInput("returnTo", mikaSafeReturnTo(returnTo, options));
+}
+
+export interface MikaRedirectInputsInput {
+  readonly successPath: string | URL | null | undefined;
+  readonly cancelPath: string | URL | null | undefined;
+  readonly returnTo: string | URL | null | undefined;
+}
+
+export interface MikaRedirectInputsOptions {
+  readonly successFallback?: string;
+  readonly cancelFallback?: string;
+  readonly returnToFallback?: string;
+  readonly origin?: string | URL;
+}
+
+/** Checkout redirect hidden input attrs with caller-controlled fallback paths. */
+export function mikaRedirectInputs(
+  input: MikaRedirectInputsInput,
+  options: MikaRedirectInputsOptions = {},
+) {
+  return {
+    successPath: mikaHiddenInput(
+      "successPath",
+      mikaSafeReturnTo(input.successPath, {
+        origin: options.origin,
+        fallback: options.successFallback,
+      }),
+    ),
+    cancelPath: mikaHiddenInput(
+      "cancelPath",
+      mikaSafeReturnTo(input.cancelPath, {
+        origin: options.origin,
+        fallback: options.cancelFallback,
+      }),
+    ),
+    returnTo: mikaReturnToInput(input.returnTo, {
+      origin: options.origin,
+      fallback: options.returnToFallback,
+    }),
+  };
+}
+
 /** Locale-aware currency formatter for Mika `MoneyDTO` minor-unit amounts. */
 export function formatMikaMoney(value?: MoneyDTO | null, options: MikaFormatOptions = {}): string {
   if (!value) return "";
