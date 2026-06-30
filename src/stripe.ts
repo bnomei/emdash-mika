@@ -662,11 +662,18 @@ async function refundStripePayment(
     return unsupportedAction("refund", "Stripe payment intent id is required.");
   }
 
-  const refund = await options.stripe.refunds.create({
-    payment_intent: input.providerPaymentId,
-    ...(input.amount !== undefined ? { amount: input.amount } : {}),
-    ...(input.reason ? { reason: input.reason } : {}),
-  });
+  const refund = await options.stripe.refunds.create(
+    {
+      payment_intent: input.providerPaymentId,
+      ...(input.amount !== undefined ? { amount: input.amount } : {}),
+      ...(input.reason ? { reason: input.reason } : {}),
+    },
+    // Pass the admin idempotency key to Stripe so a retry after a local ledger.put failure (which
+    // marks the admin audit failed and bypasses replay) does not create a SECOND refund — Stripe
+    // returns the original. Namespaced (`_refund`) because Stripe idempotency keys are account-wide,
+    // so the same admin key must not collide with another endpoint (mirrors the `_coupon` suffix).
+    requestOptions(input.idempotencyKey ? `${input.idempotencyKey}_refund` : undefined),
+  );
 
   return {
     id: createMikaId(refund.id),

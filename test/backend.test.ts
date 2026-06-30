@@ -6056,6 +6056,100 @@ describe("backend API composition", () => {
     });
   });
 
+  it("forwards the admin idempotency key to the provider refund call", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({ optionalMethods: ["refundPayment"] });
+    const order = createOrderDocument();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    await repositories.ledger.put(order);
+
+    await expect(
+      api.admin.orderRefund({
+        orderId: order.id,
+        amount: 500,
+        reason: "duplicate",
+        idempotencyKey: "refund-1",
+      }),
+    ).resolves.toMatchObject({ ok: true, status: 200, data: { status: "completed" } });
+
+    // The admin idempotency key reaches the provider so a retry (after e.g. a ledger.put failure)
+    // can dedupe the refund provider-side instead of issuing a second one.
+    expect(fake.getCalls().refundPayment).toEqual([
+      {
+        orderId: order.id,
+        providerPaymentId: "payment_1",
+        amount: 500,
+        reason: "duplicate",
+        idempotencyKey: "refund-1",
+      },
+    ]);
+  });
+
+  it("retries a refund with the same provider idempotency key after a ledger persistence failure", async () => {
+    const repositories = createTestBackendRepositories();
+    const ledgerPut = repositories.ledger.put.bind(repositories.ledger);
+    let failNextOrderPut = false;
+    repositories.ledger.put = async (document) => {
+      // Transient storage failure on the refund's order write: this marks the admin audit failed and
+      // bypasses replay, so a same-key retry re-invokes the provider.
+      if (failNextOrderPut) {
+        failNextOrderPut = false;
+        throw new Error("ledger storage error");
+      }
+      await ledgerPut(document);
+    };
+    const fake = createFakeMikaProvider({ optionalMethods: ["refundPayment"] });
+    const order = createOrderDocument();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    await repositories.ledger.put(order);
+
+    failNextOrderPut = true;
+    const first = await api.admin.orderRefund({
+      orderId: order.id,
+      amount: 500,
+      reason: "duplicate",
+      idempotencyKey: "refund_retry_1",
+    });
+    expect(first.ok).toBe(false);
+
+    const second = await api.admin.orderRefund({
+      orderId: order.id,
+      amount: 500,
+      reason: "duplicate",
+      idempotencyKey: "refund_retry_1",
+    });
+    expect(second).toMatchObject({ ok: true, status: 200, data: { status: "completed" } });
+
+    // Both the failed first attempt and the retry called the provider with the SAME idempotency key,
+    // so Stripe dedupes the second refunds.create (returns the original) — no double refund.
+    expect(fake.getCalls().refundPayment).toEqual([
+      {
+        orderId: order.id,
+        providerPaymentId: "payment_1",
+        amount: 500,
+        reason: "duplicate",
+        idempotencyKey: "refund_retry_1",
+      },
+      {
+        orderId: order.id,
+        providerPaymentId: "payment_1",
+        amount: 500,
+        reason: "duplicate",
+        idempotencyKey: "refund_retry_1",
+      },
+    ]);
+  });
+
   it("cumulates successive partial refunds and reaches refunded when the total is covered", async () => {
     const repositories = createTestBackendRepositories();
     const fake = createFakeMikaProvider({ optionalMethods: ["refundPayment"] });
@@ -6243,6 +6337,7 @@ describe("backend API composition", () => {
         providerPaymentId: "payment_1",
         amount: 500,
         reason: "duplicate",
+        idempotencyKey: "refund_invocation_1",
       },
     ]);
 
@@ -6313,6 +6408,7 @@ describe("backend API composition", () => {
         orderId: orderA.id,
         providerPaymentId: "payment_1",
         amount: 500,
+        idempotencyKey: "refund_shared_key",
       },
     ]);
     await expect(repositories.ledger.findOrderById(orderB.id)).resolves.toMatchObject({

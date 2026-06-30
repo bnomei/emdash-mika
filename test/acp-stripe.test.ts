@@ -980,6 +980,29 @@ describe("Mika Stripe provider", () => {
     expect(await refundActionStatus(null)).toBe("running");
   });
 
+  it("forwards the admin idempotency key to Stripe refunds.create so retries dedupe", async () => {
+    let capturedIdempotencyKey: string | undefined;
+    const stripe: MikaStripeClient = {
+      refunds: {
+        create: async (_params, options) => {
+          capturedIdempotencyKey = options?.idempotencyKey;
+
+          return { id: "re_test_1", status: "succeeded" };
+        },
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe });
+    await provider.refundPayment?.({
+      orderId: createMikaId("order_1"),
+      providerPaymentId: "pi_test_1",
+      idempotencyKey: "refund-1",
+    });
+
+    // Namespaced so a retry (same admin key) yields the same Stripe key and Stripe returns the
+    // original refund instead of creating a second one.
+    expect(capturedIdempotencyKey).toBe("refund-1_refund");
+  });
+
   it("creates hosted checkout sessions from provider price ids", async () => {
     const createCalls: unknown[] = [];
     const stripe: MikaStripeClient = {

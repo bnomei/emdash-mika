@@ -1869,6 +1869,10 @@ async function refundOrder(
     ...(order.providerPaymentId ? { providerPaymentId: order.providerPaymentId } : {}),
     ...(refundInput.amount !== undefined ? { amount: refundInput.amount } : {}),
     ...(refundInput.reason ? { reason: refundInput.reason } : {}),
+    // Forward the admin idempotency key so the provider can dedupe a retried refund: if the provider
+    // refund succeeds but the subsequent ledger.put throws, the audit is marked failed and a same-key
+    // retry re-invokes the provider — which must not create a second refund.
+    ...(refundInput.idempotencyKey ? { idempotencyKey: refundInput.idempotencyKey } : {}),
   };
 
   return runAdminProviderAction(

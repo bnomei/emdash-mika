@@ -110,6 +110,8 @@ export interface MikaProviderRefundInput {
   readonly providerPaymentId?: string;
   readonly amount?: number;
   readonly reason?: string;
+  /** Admin idempotency key, forwarded to the provider so a retried refund dedupes provider-side. */
+  readonly idempotencyKey?: string;
 }
 
 export interface MikaProviderOrderCancelInput {
