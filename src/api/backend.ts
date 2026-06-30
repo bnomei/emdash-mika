@@ -3391,6 +3391,11 @@ function accountExportDownloadResult(
   };
 }
 
+function orderAccessRevokedForAccountDelete(order: OrderDocument): boolean {
+  const orderEmailHash = order.emailHash ?? order.aggregate.customer.emailHash;
+  return orderEmailHash?.startsWith("account-deleted") ?? false;
+}
+
 async function resolveDownload(
   input: CreateMikaBackendApiInput,
   downloadInput: { readonly token: string },
@@ -3413,6 +3418,9 @@ async function resolveDownload(
   );
   if (!order || !line || order.status !== "paid" || order.paymentStatus !== "paid") {
     return tokenResult("TOKEN_INVALID", "Download token is invalid.");
+  }
+  if (orderAccessRevokedForAccountDelete(order)) {
+    return tokenResult("DOWNLOAD_REVOKED", "Download access has been revoked.");
   }
 
   const orderId = stringChild(data, "orderId");

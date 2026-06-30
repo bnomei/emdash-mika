@@ -5333,6 +5333,11 @@ describe("backend API composition", () => {
       // the guest drives account.delete from exactly that emailHash-only identity.
       const guestCtx = createTestRequestContext({ customerId: false, userId: false });
       await guestCtx.session?.set("mika.emailHash", guestHash);
+      const preDeleteAccount = await api.account.get(guestCtx);
+      if (!preDeleteAccount.ok) throw new Error("Expected pre-delete guest account access.");
+      const preDeleteDownloadToken = preDeleteAccount.data.downloads[0]?.href.split("/").pop();
+      expect(preDeleteDownloadToken).toBe("download_token_1");
+
       await expect(api.account.delete(guestCtx, {})).resolves.toMatchObject({
         ok: true,
         status: 202,
@@ -5377,6 +5382,13 @@ describe("backend API composition", () => {
       expect(
         (await repositories.account.listEntitlementsByEmailHash(sentinel)).items,
       ).toHaveLength(1);
+      await expect(
+        api.download.confirm({ token: preDeleteDownloadToken ?? "" }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 410,
+        error: { code: "DOWNLOAD_REVOKED" },
+      });
 
       // End-to-end: a FRESH magic link to the deleted guest email re-authenticates as a
       // guest, but the subsequent account.get resolves no orders/entitlements/downloads.
