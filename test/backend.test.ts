@@ -3907,12 +3907,52 @@ describe("backend API composition", () => {
     expect(download.expiresAt).toBe("2026-01-01T00:15:00.000Z");
     const token = download.href.split("/").pop();
     expect(token).toBe("download_token_1");
+    await expect(
+      repositories.ephemeral.get(createTestHash("download-token:download_token_1")),
+    ).resolves.toMatchObject({ subjectHash: `customer:${customer.customerId}` });
 
     await expect(api.download.confirm({ token: token ?? "" })).resolves.toMatchObject({
       ok: true,
       status: 200,
       data: { redirectUrl: "download:order_1:order_line_1" },
     });
+  });
+
+  it("mints guest account download tokens with an email subject hash", async () => {
+    const accountCollection = createStorageCollection("account");
+    const ledgerCollection = createStorageCollection("ledger");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+    } satisfies MikaBackendRepositories;
+    const emailHash = createTestHash("email:guest-download@example.test");
+    const baseOrder = createOrderDocument();
+    const guestOrder = createOrderDocument({
+      customerId: undefined,
+      emailHash,
+      aggregate: {
+        ...baseOrder.aggregate,
+        customer: {
+          ...baseOrder.aggregate.customer,
+          customerId: undefined,
+          userId: undefined,
+          email: "guest-download@example.test",
+          emailHash,
+        },
+      },
+    });
+    await repositories.ledger.put(guestOrder);
+    const api = createMikaBackendApi(createTestBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+    await ctx.session?.set("mika.emailHash", emailHash);
+
+    const account = await api.account.get(ctx);
+    if (!account.ok) throw new Error("Expected guest account.get to succeed.");
+    expect(account.data.downloads[0]?.href).toBe("/download/download_token_1");
+    await expect(
+      repositories.ephemeral.get(createTestHash("download-token:download_token_1")),
+    ).resolves.toMatchObject({ subjectHash: `email:${emailHash}` });
   });
 
   it("does not return account data for conflicting customer and user identity", async () => {

@@ -2493,10 +2493,11 @@ async function issueDownload(
         );
       }
 
+      const subjectHash = orderDownloadSubjectHash(target.order);
       await input.repositories.ephemeral.put({
         key: downloadTokenHash,
         kind: "token",
-        ...(target.order.customerId ? { subjectHash: target.order.customerId } : {}),
+        ...(subjectHash ? { subjectHash } : {}),
         status: "pending",
         count: 0,
         expiresAt,
@@ -3318,10 +3319,11 @@ async function createOrderLineDownloadToken(
 ): Promise<{ token: string; expiresAt: ISODateTime }> {
   const token = input.createId("download_token");
   const expiresAt = addMilliseconds(ctx.now, input.config?.download?.tokenTtlMs ?? 15 * 60_000);
+  const subjectHash = orderDownloadSubjectHash(order);
   await input.repositories.ephemeral.put({
     key: await hashDownloadToken(input, token),
     kind: "token",
-    ...(order.customerId ? { subjectHash: order.customerId } : {}),
+    ...(subjectHash ? { subjectHash } : {}),
     status: "pending",
     count: 0,
     expiresAt,
@@ -3340,6 +3342,15 @@ async function createOrderLineDownloadToken(
     },
   });
   return { token, expiresAt };
+}
+
+function orderDownloadSubjectHash(order: OrderDocument): string | undefined {
+  const customerId = order.customerId ?? order.aggregate.customer.customerId;
+  if (customerId) return `customer:${customerId}`;
+  const userId = order.aggregate.customer.userId;
+  if (userId) return `user:${userId}`;
+  const emailHash = order.emailHash ?? order.aggregate.customer.emailHash;
+  return emailHash ? `email:${emailHash}` : undefined;
 }
 
 function accountExportDTO(
