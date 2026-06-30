@@ -17,6 +17,7 @@ export interface MikaMaintenanceRunOptions {
   readonly now?: ISODateTime;
   readonly emailLimit?: number;
   readonly accountDeleteLimit?: number;
+  readonly stuckWorkflowLimit?: number;
 }
 
 type MikaMaintenanceTaskResult<TResult> =
@@ -65,6 +66,11 @@ export type MikaMaintenanceAccountDeleteRequestItem =
       readonly error: string;
     };
 
+export interface MikaMaintenanceStuckWorkflowsResult {
+  readonly scanned: number;
+  readonly reclaimed: number;
+}
+
 /** Outcome of a single maintenance sweep across all configured tasks. */
 export interface MikaMaintenanceRunResult {
   readonly now: ISODateTime;
@@ -72,6 +78,7 @@ export interface MikaMaintenanceRunResult {
   readonly stockReservations: MikaMaintenanceTaskResult<MikaMaintenanceStockReservationsResult>;
   readonly ephemeralRecords: MikaMaintenanceTaskResult<MikaMaintenanceEphemeralRecordsResult>;
   readonly accountDeleteRequests: MikaMaintenanceTaskResult<MikaMaintenanceAccountDeleteRequestsResult>;
+  readonly stuckWorkflows: MikaMaintenanceTaskResult<MikaMaintenanceStuckWorkflowsResult>;
 }
 
 /** Runs background hygiene tasks; skips tasks when dependencies are not configured. */
@@ -97,6 +104,7 @@ interface MikaMaintenanceRunnerInput {
 }
 
 const DEFAULT_ACCOUNT_DELETE_BATCH_SIZE = 25;
+const DEFAULT_STUCK_WORKFLOW_BATCH_SIZE = 50;
 
 /** Composes optional outbox, stock, ephemeral, and account-delete processors. */
 export function createMikaMaintenanceRunner(
@@ -173,6 +181,18 @@ export function createMikaMaintenanceRunner(
           }),
         };
       });
+      const stuckWorkflows = await runMaintenanceTask(async () => {
+        if (!input.repositories) {
+          return { status: "skipped" as const, reason: "Workflow repositories are not configured." };
+        }
+        return {
+          status: "completed" as const,
+          result: await input.repositories.ops.reclaimExhaustedWorkflows(
+            now,
+            options.stuckWorkflowLimit ?? DEFAULT_STUCK_WORKFLOW_BATCH_SIZE,
+          ),
+        };
+      });
 
       return {
         now,
@@ -180,6 +200,7 @@ export function createMikaMaintenanceRunner(
         stockReservations,
         ephemeralRecords,
         accountDeleteRequests,
+        stuckWorkflows,
       };
     },
   };

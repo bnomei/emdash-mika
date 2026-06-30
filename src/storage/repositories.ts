@@ -1039,6 +1039,51 @@ export class OpsRepository {
     };
   }
 
+  async reclaimExhaustedWorkflows(
+    now: ISODateTime,
+    limit = 50,
+    kind?: WorkflowDocument["kind"],
+  ): Promise<{ readonly scanned: number; readonly reclaimed: number }> {
+    const candidates = await listByTypeCandidates(
+      this.documents,
+      "workflow",
+      limit + 1,
+      {
+        where: {
+          ...(kind ? { kind } : {}),
+          status: "running",
+          leaseExpiresAt: { lte: now },
+        },
+        orderBy: { leaseExpiresAt: "asc" },
+      },
+      (workflow) => workflowIsExhausted(workflow, now),
+    );
+
+    const stuck = candidates.items.slice(0, limit);
+    let reclaimed = 0;
+    for (const candidate of stuck) {
+      const updated = await this.documents.update(candidate.id, (current) => {
+        const workflow = documentOfType(current, "workflow");
+        // Re-check under the write guard: only fail a workflow that is STILL stuck. If a concurrent
+        // force-lease revived it, leave it alone.
+        if (!workflow || !workflowIsExhausted(workflow, now)) return null;
+
+        return workflowDocumentWithRecord(workflow, now, {
+          status: "failed",
+          leaseKey: undefined,
+          leaseExpiresAt: undefined,
+          nextAttemptAt: undefined,
+          lastError:
+            workflow.record.lastError ??
+            "Workflow exhausted its lease attempts without completing; marked failed for replay.",
+        });
+      });
+      if (documentOfType(updated, "workflow")) reclaimed += 1;
+    }
+
+    return { scanned: stuck.length, reclaimed };
+  }
+
   async tryLeaseWorkflow(input: WorkflowLeaseRepositoryInput): Promise<WorkflowDocument | null> {
     const updated = await this.documents.update(input.workflowId, (current) => {
       const workflow = documentOfType(current, "workflow");
@@ -1471,6 +1516,15 @@ function workflowIsDueForLease(
   if (workflow.record.attemptCount >= workflow.record.maxAttempts) return false;
 
   return !workflow.nextAttemptAt || workflow.nextAttemptAt <= now;
+}
+
+function workflowIsExhausted(workflow: WorkflowDocument, now: ISODateTime): boolean {
+  return (
+    workflow.status === "running" &&
+    workflow.record.leaseExpiresAt !== undefined &&
+    workflow.record.leaseExpiresAt <= now &&
+    workflow.record.attemptCount >= workflow.record.maxAttempts
+  );
 }
 
 function workflowDueSortKey(workflow: WorkflowDocument): ISODateTime {

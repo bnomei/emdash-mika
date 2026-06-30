@@ -387,6 +387,11 @@ export interface MikaOpsRepositoryPort {
     limit?: number,
     kind?: WorkflowDocument["kind"],
   ): Promise<MikaDocumentList<WorkflowDocument>>;
+  reclaimExhaustedWorkflows(
+    now: ISODateTime,
+    limit?: number,
+    kind?: WorkflowDocument["kind"],
+  ): Promise<{ readonly scanned: number; readonly reclaimed: number }>;
   tryLeaseWorkflow(input: WorkflowLeaseRepositoryInput): Promise<WorkflowDocument | null>;
   startWorkflowStep(input: WorkflowStepRepositoryInput): Promise<WorkflowDocument | null>;
   completeWorkflowStep(input: WorkflowStepRepositoryInput): Promise<WorkflowDocument | null>;

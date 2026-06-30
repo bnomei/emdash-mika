@@ -377,6 +377,57 @@ describe("backend test storage helpers", () => {
     });
   });
 
+  it("reclaims stuck workflows whose lease expired after exhausting attempts", async () => {
+    const clock = createTestClock();
+    const ops = new OpsRepository(createStorageCollection("ops"));
+    const stuck = createWorkflowDocument({
+      status: "running",
+      nextAttemptAt: undefined,
+      leaseKey: "worker_1",
+      leasedAt: clock.isoAt(-600_000),
+      leaseExpiresAt: clock.isoAt(-60_000),
+      attemptCount: 5,
+      maxAttempts: 5,
+    });
+    const active = createWorkflowDocument({
+      id: createTestMikaId("workflow", 2),
+      subjectId: createTestMikaId("webhook", 2),
+      idempotencyKey: "event_2",
+      status: "running",
+      leaseKey: "worker_2",
+      leaseExpiresAt: clock.isoAt(300_000),
+      attemptCount: 5,
+      maxAttempts: 5,
+    });
+    await ops.put(stuck);
+    await ops.put(active);
+
+    await expect(
+      ops.tryLeaseWorkflow({
+        workflowId: stuck.id,
+        leaseKey: "w",
+        now: TEST_NOW,
+        leaseExpiresAt: clock.isoAt(300_000),
+      }),
+    ).resolves.toBeNull();
+
+    await expect(ops.reclaimExhaustedWorkflows(TEST_NOW)).resolves.toEqual({
+      scanned: 1,
+      reclaimed: 1,
+    });
+
+    const reclaimed = await ops.findWorkflow(stuck.id);
+    expect(reclaimed).toMatchObject({
+      status: "failed",
+      record: { leaseKey: undefined },
+    });
+    expect(reclaimed?.record.lastError).toBeTruthy();
+
+    await expect(ops.findWorkflow(active.id)).resolves.toMatchObject({
+      status: "running",
+    });
+  });
+
   it("lists due emails and requires an active delivery lease for terminal mutations", async () => {
     const clock = createTestClock();
     const ops = new OpsRepository(createStorageCollection("ops"));
