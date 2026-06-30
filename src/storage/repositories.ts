@@ -1880,6 +1880,14 @@ export class StockRepository {
           .updateTable("mika_stock_events")
           .set({
             status: "expired",
+            // Free the idempotency key on bulk expiry, mirroring the single-event expire()/release()
+            // eventPatch. Otherwise a checkout.start that reserved stock then died before persisting
+            // its checkout document stays stuck: retries with the same Idempotency-Key keep replaying
+            // the (now expired) reservation and get 409, even though the held stock has already been
+            // returned to availability. The unique idempotency_key index also means a stale non-null
+            // key would block a fresh reserve with the same key, so clearing it is required, not just
+            // tidy.
+            idempotency_key: null,
             updated_at: input.now,
           })
           .where("id", "=", event.id)
@@ -1950,6 +1958,9 @@ export class StockRepository {
           .updateTable("mika_stock_events")
           .set({
             status: "released",
+            // Free the idempotency key on bulk release too (same reasoning as expiry), so a released
+            // reservation never keeps an Idempotency-Key bound to a dead hold.
+            idempotency_key: null,
             updated_at: input.now,
           })
           .where("id", "=", event.id)

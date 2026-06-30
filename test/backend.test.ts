@@ -2106,6 +2106,55 @@ describe("backend test Kysely stock database harness", () => {
       );
     });
 
+    it(`${repositoryKind} stock repository contract frees the idempotency key when a reservation expires`, async () => {
+      const stockItem = createStockRecord({
+        quantityOnHand: 5,
+        quantityReserved: 0,
+      });
+
+      await withStockRepositoryContractHarness(
+        repositoryKind,
+        stockItem,
+        async ({ repository, service }) => {
+          const clock = createTestClock();
+          const key = `${repositoryKind}_stuck_replay_key`;
+          const reservation = await service.reserve({
+            stockItemId: stockItem.id,
+            quantity: 2,
+            expiresAt: clock.isoAt(30_000),
+            idempotencyKey: key,
+          });
+          if (reservation.status !== "reserved") {
+            throw new Error("Expected reservation to be created.");
+          }
+
+          // While active, the key replays the reservation (a concurrent retry is genuinely in progress).
+          await expect(repository.findEventByIdempotencyKey(key)).resolves.toMatchObject({
+            id: reservation.event.id,
+            status: "active",
+          });
+
+          await service.releaseExpiredReservations({ now: clock.isoAt(60_000) });
+
+          // After expiry the key is freed, so a checkout that died after reserving but before
+          // persisting its checkout document is no longer stuck replaying the dead reservation.
+          await expect(repository.findEventByIdempotencyKey(key)).resolves.toBeNull();
+
+          // A fresh reserve with the same key now creates a new active reservation, not a replay.
+          const retry = await service.reserve({
+            stockItemId: stockItem.id,
+            quantity: 1,
+            expiresAt: clock.isoAt(20 * 60_000),
+            idempotencyKey: key,
+          });
+          expect(retry.status).toBe("reserved");
+          if (retry.status === "reserved") {
+            expect(retry.event.id).not.toBe(reservation.event.id);
+          }
+        },
+      );
+    });
+
     it(`${repositoryKind} stock repository contract extends active reservation expiry without shortening`, async () => {
       const stockItem = createStockRecord({
         quantityOnHand: 5,
@@ -13866,13 +13915,14 @@ function createTestStockRepository(
         const expiredEvent: StockEventRecord = {
           ...event,
           status: "expired",
+          idempotencyKey: undefined,
           updatedAt: input.now,
         };
         const current =
           Array.from(stockItems.values()).find((stock) => stock.id === event.stockItemId) ?? null;
         eventsById.set(expiredEvent.id, expiredEvent);
-        if (expiredEvent.idempotencyKey) {
-          eventsByIdempotencyKey.set(expiredEvent.idempotencyKey, expiredEvent);
+        if (event.idempotencyKey) {
+          eventsByIdempotencyKey.delete(event.idempotencyKey);
         }
         if (!current) continue;
 
@@ -13906,13 +13956,14 @@ function createTestStockRepository(
         const releasedEvent: StockEventRecord = {
           ...event,
           status: "released",
+          idempotencyKey: undefined,
           updatedAt: input.now,
         };
         const current =
           Array.from(stockItems.values()).find((stock) => stock.id === event.stockItemId) ?? null;
         eventsById.set(releasedEvent.id, releasedEvent);
-        if (releasedEvent.idempotencyKey) {
-          eventsByIdempotencyKey.set(releasedEvent.idempotencyKey, releasedEvent);
+        if (event.idempotencyKey) {
+          eventsByIdempotencyKey.delete(event.idempotencyKey);
         }
         if (!current) continue;
 
