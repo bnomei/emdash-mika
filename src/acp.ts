@@ -761,7 +761,19 @@ async function handleAcpComplete(
 
   const record = await options.store.get(checkoutSessionId);
   if (!record) return acpError(request, 404, "invalid_request", "Checkout session was not found.");
-  const idempotency = await beginAcpIdempotency(options, request, checkoutSessionId, 200);
+  // Serialize completion on the SESSION, not the per-request Idempotency-Key. The `record.checkoutId`
+  // re-entry guard below is read before it is persisted (after the `checkout.start` payment-auth side
+  // effect), so two concurrent completes with distinct keys would otherwise both pass the guard and
+  // both authorize. A session-scoped atomic claim makes a second concurrent complete return 409
+  // (replay in progress) before reaching checkout.start.
+  const idempotency = await beginAcpIdempotency(
+    options,
+    request,
+    checkoutSessionId,
+    200,
+    false,
+    `acp_complete:${checkoutSessionId}`,
+  );
   if (!idempotency.ok) return idempotency.response;
   const terminalStatus = await acpTerminalStatus(options, record);
   if (terminalStatus === "completed") {
@@ -946,8 +958,11 @@ async function beginAcpIdempotency(
   checkoutSessionId: string,
   replayStatus: number,
   replayExistingBinding = false,
+  storeKeyOverride?: string,
 ): Promise<MikaAcpIdempotencyBegin> {
-  const key = acpIdempotencyStoreKey(request);
+  // `storeKeyOverride` lets a verb serialize on something other than the per-request Idempotency-Key
+  // — complete keys on the session id so two concurrent completes can't both authorize payment.
+  const key = storeKeyOverride ?? acpIdempotencyStoreKey(request);
   if (!key) return { ok: true };
 
   if (options.store.claimIdempotencyKey) {

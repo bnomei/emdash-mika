@@ -392,6 +392,74 @@ describe("Mika ACP projection", () => {
     expect(checkoutStartCount).toBe(1);
   });
 
+  it("does not double-authorize when two completes race with distinct idempotency keys", async () => {
+    let cart = createCart([]);
+    let startCount = 0;
+    let releaseGate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    let signalStarted: () => void = () => {};
+    const firstStarted = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+        onCheckoutStart: async () => {
+          startCount += 1;
+          if (startCount === 1) {
+            // Hold the first complete INSIDE checkout.start — after it claimed the session but
+            // before it persists checkoutId — so a second complete can race the re-entry guard.
+            signalStarted();
+            await gate;
+          }
+        },
+        checkoutSessionStatus: "pending",
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      createSessionId: () => "checkout_session_acp_race",
+    });
+
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_race", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+      }),
+    );
+
+    const complete = (key: string) =>
+      handlers.complete(
+        acpRequest(
+          "https://shop.example.test/checkout_sessions/checkout_session_acp_race/complete",
+          key,
+          { payment_data: { provider: "stripe", token: "spt_test_123" } },
+        ),
+        "checkout_session_acp_race",
+      );
+
+    // First complete claims the session, then blocks inside checkout.start (mid-authorization).
+    const first = complete("idem_complete_a");
+    await firstStarted;
+
+    // Second complete with a DISTINCT key races in while the first is still authorizing.
+    const second = await complete("idem_complete_b");
+    expect(second.status).toBe(409);
+    expect(startCount).toBe(1); // the racing complete never reached checkout.start
+
+    releaseGate();
+    const firstResponse = await first;
+    expect(firstResponse.status).toBe(200);
+    expect(startCount).toBe(1); // exactly one delegated-payment authorization for the session
+  });
+
   it("refuses to build ACP handlers without an apiKey or signatureSecret", () => {
     let cart = createCart([]);
     const baseOptions = {
