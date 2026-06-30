@@ -4461,8 +4461,10 @@ async function processPaymentReversalWebhook(
     return markWebhookProcessed(input, webhook, ctx.now, {}, { strict: true });
   }
 
-  // Already fully refunded: a duplicate/late reversal must not re-revoke or churn the order.
+  // Already fully refunded may mean a prior attempt updated the ledger but failed while revoking
+  // fulfillment access. Re-run the idempotent revocation before acknowledging the redelivery.
   if (order.paymentStatus === "refunded") {
+    await revokeOrderFulfillmentAccess(input, order, ctx.now);
     return markWebhookProcessedForOrder(input, webhook, ctx.now, order);
   }
 

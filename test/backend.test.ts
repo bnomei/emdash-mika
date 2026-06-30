@@ -7477,6 +7477,76 @@ describe("backend API composition", () => {
     ).resolves.toMatchObject({ status: "revoked", record: { status: "revoked" } });
   });
 
+  it("finishes revocation when a provider refund webhook is redelivered after a revoke failure", async () => {
+    const repositories = createTestBackendRepositories();
+    const { order, entitlement, license } = createFulfilledRefundOrder();
+    const baseAccountPut = repositories.account.put.bind(repositories.account);
+    let revokeFailures = 0;
+    repositories.account.put = async (document) => {
+      if (
+        document.type === "entitlement" &&
+        document.status === "revoked" &&
+        revokeFailures === 0
+      ) {
+        revokeFailures += 1;
+        throw new Error("Simulated entitlement revocation failure.");
+      }
+      return baseAccountPut(document);
+    };
+    const fake = createFakeMikaProvider({
+      id: TEST_PROVIDER,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "charge_refunded_revoke_retry_hash",
+            parsed: { delivery: "event_charge_refunded_revoke_retry" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createPaymentWebhookEvent(verified, {
+            providerEventId: "event_charge_refunded_revoke_retry",
+            type: "charge.refunded",
+            providerPaymentId: "payment_1",
+            providerOrderId: "provider_order_1",
+            paymentStatus: "refunded",
+          }),
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await repositories.ledger.put(order);
+    await repositories.account.put(entitlement);
+    await repositories.account.put(license);
+
+    await receiveWebhook(api, "charge-refunded-revoke-fails").catch(() => undefined);
+    expect(revokeFailures).toBe(1);
+    await expect(repositories.ledger.findOrderById(order.id)).resolves.toMatchObject({
+      status: "refunded",
+      paymentStatus: "refunded",
+    });
+    await expect(
+      repositories.account.findEntitlementById(createMikaId("entitlement_order_1_order_line_1")),
+    ).resolves.toMatchObject({ status: "active" });
+
+    await expect(receiveWebhook(api, "charge-refunded-redelivery")).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+    });
+    await expect(
+      repositories.account.findEntitlementById(createMikaId("entitlement_order_1_order_line_1")),
+    ).resolves.toMatchObject({
+      status: "revoked",
+      record: { status: "revoked", metadata: { revokeReason: "order_refunded" } },
+    });
+    await expect(
+      repositories.account.findLicenseById(createMikaId("license_order_1_order_line_2")),
+    ).resolves.toMatchObject({ status: "revoked", record: { status: "revoked" } });
+  });
+
   it("partially refunds an order and retains access on a partial provider refund webhook", async () => {
     const repositories = createTestBackendRepositories();
     const { order, entitlement, license } = createFulfilledRefundOrder();
