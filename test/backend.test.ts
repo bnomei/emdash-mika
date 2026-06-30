@@ -14061,6 +14061,64 @@ describe("backend API composition", () => {
     expect(fake.getCalls().createCheckoutSession).toHaveLength(1);
   });
 
+  it("allows delegated checkout with a couponCode authorized by checkout preview", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      idempotencyKey: false,
+    });
+
+    const cart = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!cart.ok) throw new Error("Expected cart.add to succeed.");
+
+    const preview = await api.checkout.preview(ctx, {
+      cartId: cart.data.id,
+      provider: TEST_PROVIDER,
+      couponCode: "SAVE10",
+    });
+    if (!preview.ok) throw new Error("Expected checkout.preview to succeed.");
+    const inputHash = preview.data.inputHash;
+    if (!inputHash) throw new Error("Expected checkout.preview to return an input hash.");
+
+    const started = await api.checkout.start(ctx, {
+      cartId: cart.data.id,
+      provider: TEST_PROVIDER,
+      couponCode: "SAVE10",
+      customFields: {
+        acpPaymentToken: "spt_coupon_authorized_123",
+        acpPaymentAuthorizationInputHash: inputHash,
+      },
+    });
+
+    expect(started).toMatchObject({ ok: true });
+    if (!started.ok) throw new Error("Expected checkout.start to succeed.");
+    const call = fake.getCalls().createCheckoutSession[0];
+    expect(call?.discount).toMatchObject({ amount: 240, currency: TEST_CURRENCY });
+    await expect(repositories.session.findCheckoutById(started.data.id)).resolves.toMatchObject({
+      aggregate: { coupon: { label: "SAVE10" } },
+    });
+  });
+
   it("ignores caller-controlled checkout metadata keys for idempotency replay", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();

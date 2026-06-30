@@ -6570,12 +6570,15 @@ async function requireDelegatedPaymentAuthorization(
   input: CreateMikaBackendApiInput,
   ctx: MikaRequestContext,
   checkoutInput: StartCheckoutInput,
-  providerName: ProviderName,
+  providerName: ProviderName | undefined,
 ): Promise<{ readonly ok: true } | MikaApiFailure> {
   const customFields = checkoutInput.customFields;
   const token = customFields?.[DELEGATED_PAYMENT_TOKEN_METADATA_KEY];
   if (typeof token !== "string" || token.length === 0) return { ok: true };
 
+  if (!providerName) {
+    return validationFailed("provider", "A checkout provider is required.");
+  }
   if (!checkoutInput.cartId) {
     return forbidden("Delegated payment requires a previewed cart checkout.");
   }
@@ -6587,6 +6590,7 @@ async function requireDelegatedPaymentAuthorization(
   const previewInput: CheckoutPreviewInput = {
     cartId: checkoutInput.cartId,
     provider: providerName,
+    ...(checkoutInput.couponCode !== undefined ? { couponCode: checkoutInput.couponCode } : {}),
   };
   const quote = await createCartQuote(input, ctx, previewInput);
   const mode = await resolveCheckoutPreviewMode(input, ctx, previewInput);
@@ -6624,10 +6628,18 @@ async function startCheckout(
     return checkoutDocumentResult(replayedCheckout);
   }
 
+  const providerName = checkoutInput.provider ?? input.defaults?.provider;
+  const delegatedPaymentAuth = await requireDelegatedPaymentAuthorization(
+    input,
+    ctx,
+    checkoutInput,
+    providerName,
+  );
+  if (!delegatedPaymentAuth.ok) return delegatedPaymentAuth;
+
   const resolved = await resolveCheckoutStart(input, ctx, checkoutInput);
   if (!resolved.ok) return resolved;
 
-  const providerName = checkoutInput.provider ?? input.defaults?.provider;
   if (!providerName) {
     return validationFailed("provider", "A checkout provider is required.");
   }
@@ -6641,14 +6653,6 @@ async function startCheckout(
   });
   if (!providerFeature.ok) return providerFeature;
   if (!ctx.url) return validationFailed("url", "Checkout requires a request URL.");
-
-  const delegatedPaymentAuth = await requireDelegatedPaymentAuthorization(
-    input,
-    ctx,
-    checkoutInput,
-    providerName,
-  );
-  if (!delegatedPaymentAuth.ok) return delegatedPaymentAuth;
 
   const checkoutId = input.createId("checkout");
   const expiresAt = checkoutExpiresAt(input, ctx);
