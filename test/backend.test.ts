@@ -6162,6 +6162,101 @@ describe("backend API composition", () => {
     });
   });
 
+  it("rejects a subscription change to a price outside the current plan (different sellable, one-time, or foreign currency)", async () => {
+    const contentRef = createTestContentRef();
+    // The subscription's own plan: a recurring EUR price on sellable_1.
+    const ownSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 1),
+      prices: [
+        createPriceDefinition({
+          id: createTestMikaId("price", 1),
+          mode: "subscription",
+          fulfillmentKind: "entitlement",
+          providerRefs: [{ provider: TEST_PROVIDER, productId: "prod_sub", priceId: "price_self" }],
+        }),
+        // A one-time (payment-mode) price ON THE SAME sellable — still not a valid change target.
+        createPriceDefinition({
+          id: createTestMikaId("price", 3),
+          mode: "payment",
+          providerRefs: [
+            { provider: TEST_PROVIDER, productId: "prod_sub", priceId: "price_onetime" },
+          ],
+        }),
+        // A recurring price on the same sellable but in a DIFFERENT currency.
+        createPriceDefinition({
+          id: createTestMikaId("price", 4),
+          mode: "subscription",
+          fulfillmentKind: "entitlement",
+          currency: createCurrencyCode("USD"),
+          providerRefs: [{ provider: TEST_PROVIDER, productId: "prod_sub", priceId: "price_usd" }],
+        }),
+      ],
+    });
+    // A different product's recurring price, provider-mapped — the cross-product repoint surface.
+    const crossSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 2),
+      prices: [
+        createPriceDefinition({
+          id: createTestMikaId("price", 2),
+          mode: "subscription",
+          fulfillmentKind: "entitlement",
+          providerRefs: [
+            { provider: TEST_PROVIDER, productId: "prod_other", priceId: "price_cross" },
+          ],
+        }),
+      ],
+    });
+
+    const cases = [
+      { label: "different sellable (cross-product)", priceId: createTestMikaId("price", 2) },
+      { label: "one-time payment-mode price", priceId: createTestMikaId("price", 3) },
+      { label: "foreign-currency price", priceId: createTestMikaId("price", 4) },
+    ];
+
+    for (const target of cases) {
+      const repositories = createTestBackendRepositories();
+      // Provider supports changeSubscription and every target is provider-mapped, so a 422 proves
+      // the plan-family guard fired (which runs BEFORE the provider-mapping check), not a missing
+      // mapping — and that the provider was never asked to repoint the subscription.
+      const fake = createFakeMikaProvider({ optionalMethods: ["changeSubscription"] });
+      const subscription = createSubscriptionDocument();
+      const api = createMikaBackendApi(
+        createIncrementingBackendDependencies({
+          repositories,
+          providers: createMikaProviderRegistry([fake.provider]),
+        }),
+      );
+
+      await repositories.catalog.put(
+        createCatalogItemDocument({ contentRef, sellables: [ownSellable, crossSellable] }),
+      );
+      await repositories.account.put(createCustomerDocument());
+      await repositories.account.put(subscription);
+
+      await expect(
+        api.subscription.change(createTestRequestContext(), {
+          subscriptionId: subscription.id,
+          priceId: target.priceId,
+        }),
+        `${target.label} must be rejected`,
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 422,
+        error: {
+          code: "VALIDATION_FAILED",
+          fieldErrors: {
+            priceId: `Price '${target.priceId}' is not a valid change target for this subscription.`,
+          },
+        },
+      });
+
+      expect(fake.getCalls().changeSubscription).toEqual([]);
+      await expect(repositories.account.findSubscriptionById(subscription.id)).resolves.toEqual(
+        subscription,
+      );
+    }
+  });
+
   it("checks provider health with adapter health and capability fallback", async () => {
     const stripe = createTestProviderName("stripe");
     const healthProvider = createFakeMikaProvider({

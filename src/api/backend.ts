@@ -1745,6 +1745,24 @@ async function runSubscriptionAction(
   if (action === "change" && actionInput.priceId && !priceMatch) {
     return validationFailed("priceId", `Price '${actionInput.priceId}' was not found.`);
   }
+  if (action === "change" && actionInput.priceId && priceMatch) {
+    // The change target must stay within the SAME plan family: a recurring (subscription)
+    // price on the subscription's current sellable, in the same currency. A sellable owns its
+    // whole price list, so this still allows legitimate interval/amount switches (e.g.
+    // monthly -> annual of the same plan) while blocking a self-serve repoint to an unrelated,
+    // cheaper, one-time (payment-mode), or foreign-currency price elsewhere in the catalog.
+    const current = subscription.aggregate.sellable;
+    if (
+      priceMatch.sellable.id !== current.sellableId ||
+      priceMatch.price.mode !== "subscription" ||
+      priceMatch.price.currency !== current.currency
+    ) {
+      return validationFailed(
+        "priceId",
+        `Price '${actionInput.priceId}' is not a valid change target for this subscription.`,
+      );
+    }
+  }
 
   const providerPriceId =
     priceMatch?.price.providerRefs.find((ref) => ref.provider === subscription.provider)?.priceId ??
