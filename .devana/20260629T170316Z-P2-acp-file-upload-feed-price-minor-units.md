@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P2 | high | security=no
+DEVANA-STATE: fixed | P2 | high | security=no
 DEVANA-KEY: src/acp.ts:474 | acp-file-upload-feed-price-minor-units
 
 # ACP file-upload feed emits the `price` string from raw minor units, overstating prices ~100×
@@ -55,6 +55,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-29: open by Devana. Confirmed by two independent reviews; verified line 474 vs the dividing formatters at `astro.ts:167`, `email.ts:181`, `ProductStructuredData.astro:408`, and the integer-amount validator at `acp.ts:525-528`.
+- 2026-06-30: fixed (chosen approach exactly as the Suggested Next Step). The file-upload row's `price` string was built as `` `${price.amount} ${price.currency}` `` straight from the integer minor-unit amount, emitting `"1200 EUR"` for a €12.00 item — a ~100x overstatement on the agent/crawler-facing price surface, inconsistent with every other money→string renderer in the package (JSON-LD/email/UI all divide by the minor-unit factor). Fix: a new `acpFeedPriceString(amount, currency)` helper formats the DECIMAL major-unit value with the currency's fraction digits — `(amount / 10 ** fractionDigits).toFixed(fractionDigits)` where `fractionDigits = new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2` — and the row now uses it, yielding `"12.00 EUR"` (and the correct 0-fraction form for currencies like JPY). Only the human/agent-readable `price` STRING changed; the structured ACP feed's numeric `amount` (integer minor units) and checkout totals are untouched (correct, per the report). Evidence: the existing file-upload test (`test/acp-stripe.test.ts`, amount `1200` EUR) now asserts `price: "12.00 EUR"` — it previously asserted no price string at all. Mutation-verified: reverting to the raw-minor-units interpolation emits `"1200 EUR"` and fails the test (cp-backup + restore, no git). Full suite (403) and both tsc configs pass.
 
 DEVANA-KEY: src/acp.ts:474 | acp-file-upload-feed-price-minor-units
-DEVANA-SUMMARY: open | P2 | high | The ACP file-upload feed serializes the `price` string from raw minor units (`"1200 EUR"` for a €12.00 item), a ~100× overstatement inconsistent with the package's JSON-LD/email/UI formatters that all divide by the minor-unit factor.
+DEVANA-SUMMARY: fixed | P2 | high | The ACP file-upload feed `price` string is now formatted as a decimal major-unit value via acpFeedPriceString (amount / 10**fractionDigits, toFixed) — `"12.00 EUR"` for a €12.00 item, not the raw `"1200 EUR"` (~100x overstatement). Matches the package's JSON-LD/email/UI money renderers; the structured feed's numeric amount (integer minor units) is unchanged. Existing file-upload test now pins the price string; mutation-verified.

@@ -115,6 +115,9 @@ describe("Mika ACP projection", () => {
       is_eligible_search: true,
       is_eligible_checkout: true,
       item_id: "sellable_print:price_1",
+      // €12.00 (amount 1200 minor units) must render as the decimal major-unit feed string "12.00 EUR",
+      // not the raw integer "1200 EUR" (a 100x overstatement on the agent-facing price surface).
+      price: "12.00 EUR",
       seller_privacy_policy: "https://shop.example.test/privacy",
       seller_tos: "https://shop.example.test/terms",
     });

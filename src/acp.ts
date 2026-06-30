@@ -454,6 +454,19 @@ export function createMikaAcpProductFeed(input: {
   };
 }
 
+/**
+ * Format a minor-unit amount as the merchant-feed `price` string `"<decimal> <ISO currency>"`
+ * (e.g. `"12.00 EUR"`). The file-upload / Google-Merchant catalog convention is a DECIMAL major-unit
+ * value, not the raw integer minor units, so divide by the currency's fraction digits — matching the
+ * package's other money→string renderers (astro.ts, email.ts, ProductStructuredData.astro).
+ */
+function acpFeedPriceString(amount: number, currency: string): string {
+  const fractionDigits =
+    new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions()
+      .maximumFractionDigits ?? 2;
+  return `${(amount / 10 ** fractionDigits).toFixed(fractionDigits)} ${currency}`;
+}
+
 /** Flattens sellables into ACP file-upload catalog rows for merchant feed ingestion. */
 export function createMikaAcpFileUploadRows(
   input: MikaAcpFileUploadRowsInput,
@@ -474,7 +487,7 @@ export function createMikaAcpFileUploadRows(
             sellable.imageRef ?? product.media?.[0]?.url,
             "image_url",
           ),
-          price: `${price.amount} ${price.currency}`,
+          price: acpFeedPriceString(price.amount, price.currency),
           availability: acpFileAvailability(sellable),
           seller_name: input.sellerName,
           seller_url: input.sellerUrl,
