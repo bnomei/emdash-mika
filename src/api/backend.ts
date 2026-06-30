@@ -913,6 +913,10 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
     },
     download: {
       resolve: async (downloadInput) => resolveDownload(input, downloadInput),
+      // Same single-use consume-and-redirect as `resolve`, exposed as a POST action so the bundled
+      // storefront's download interstitial only burns the token on a user-initiated submit (not on a
+      // GET prefetch/link-scan). `resolve` stays the GET surface for agents/programmatic callers.
+      confirm: async (downloadInput) => resolveDownload(input, downloadInput),
       ...input.overrides?.download,
     },
     order: {
@@ -3229,11 +3233,13 @@ async function orderDownloadDTOs(
   const downloads: DownloadDTO[] = [];
   for (const line of order.aggregate.lines) {
     for (const downloadRef of line.downloadRefs ?? []) {
-      // Mirror the invoice DTO (orderSummaryDTO): mint a short-lived, consumable capability token and
-      // expose a NAVIGABLE plugin route (`/download?token=...`) instead of the bare internal ref, so
-      // the bundled account download link resolves without the host first calling `admin.downloadIssue`.
-      // The token's redirectUrl is the ref — a host-mapped placeholder; actual asset delivery stays
-      // host-wired (the storefront download endpoint maps the ref to the real file).
+      // Mint a short-lived, single-use capability token and expose a NAVIGABLE link instead of the
+      // bare internal ref, so the bundled account download link works without the host first calling
+      // `admin.downloadIssue`. The href targets the storefront's GET-validate / POST-consume download
+      // INTERSTITIAL (`/download/<token>`), NOT the consuming `download.resolve` GET plugin route, so a
+      // browser prefetch of the account link cannot burn the single-use token (the token is spent only
+      // on the user-initiated POST inside the interstitial). The token's redirectUrl is the ref — a
+      // host-mapped placeholder; actual asset delivery stays host-wired.
       const { token, expiresAt } = await createOrderLineDownloadToken(
         input,
         ctx,
@@ -3244,7 +3250,7 @@ async function orderDownloadDTOs(
       downloads.push({
         id: createMikaId(downloadRef),
         title: line.item.titleSnapshot,
-        href: mikaPluginRoute("download", { origin: ctx.url, search: { token } }),
+        href: `/download/${token}`,
         expiresAt,
       });
     }

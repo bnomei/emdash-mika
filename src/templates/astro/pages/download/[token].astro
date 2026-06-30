@@ -1,0 +1,44 @@
+---
+import { actions, isInputError } from "astro:actions";
+import { Button, Text } from "@cloudflare/kumo";
+import MikaKumoPage from "../../components/MikaKumoPage.astro";
+import { mikaHiddenInput } from "@bnomei/emdash-mika/astro";
+import { mikaTemplateCurrentCartItemCount } from "../../lib/cart";
+
+export const prerender = false;
+
+const token = Astro.params.token;
+const confirmResult = Astro.getActionResult(actions.mika.download.confirm);
+
+// GET-validate / POST-consume (mirrors account/magic-link.astro). Opening this page does NOT consume
+// the single-use download token, so email scanners, link previews, and browser prefetch cannot burn
+// it. The token is spent only on a user-initiated submit of the form below, which posts
+// `actions.mika.download.confirm`. Agents/programmatic callers keep using `download.resolve` (GET).
+if (confirmResult?.data?.redirectUrl) {
+  return Astro.redirect(confirmResult.data.redirectUrl);
+}
+
+const confirmError =
+  confirmResult?.error && !isInputError(confirmResult.error)
+    ? confirmResult.error.message
+    : null;
+const cartItemCount = await mikaTemplateCurrentCartItemCount(Astro);
+---
+
+<MikaKumoPage title="Download" pageSize="narrow" cartItemCount={cartItemCount} data-mika-download-page>
+  <section class="mika-kumo-panel mika-kumo-stack">
+    {confirmError && <Text as="p" variant="error" role="alert">{confirmError}</Text>}
+
+    {token ? (
+      <>
+        <Text as="p">Your download is ready. Select continue to start it.</Text>
+        <form class="mika-kumo-form" action={actions.mika.download.confirm} method="post">
+          <input type="hidden" {...mikaHiddenInput("token", token)} />
+          <Button type="submit" variant="primary">Download</Button>
+        </form>
+      </>
+    ) : (
+      <Text as="p" variant="error" role="alert">Missing download token.</Text>
+    )}
+  </section>
+</MikaKumoPage>

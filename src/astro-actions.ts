@@ -34,6 +34,7 @@ import type {
   CartDTO,
   CheckoutSessionDTO,
   ContentRefDTO,
+  DownloadResolutionDTO,
   MikaApiResult,
   SellableDTO,
   WishlistDTO,
@@ -127,6 +128,9 @@ export interface MikaActions {
     readonly cancel: MikaFormActionClient<AccountDTO>;
     readonly change: MikaFormActionClient<AccountDTO>;
     readonly renew: MikaFormActionClient<AccountDTO>;
+  };
+  readonly download: {
+    readonly confirm: MikaFormActionClient<DownloadResolutionDTO>;
   };
 }
 

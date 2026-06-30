@@ -158,7 +158,7 @@ pages/checkout/success.astro
 pages/checkout/cancel.astro
 pages/account.astro
 pages/account/magic-link.astro
-pages/download/[token].ts
+pages/download/[token].astro
 pages/api/mika-webhook/[provider].ts
 ```
 

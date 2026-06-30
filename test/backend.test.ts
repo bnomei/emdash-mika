@@ -3766,7 +3766,7 @@ describe("backend API composition", () => {
           {
             id: "download:order_1:order_line_1",
             title: "Test download",
-            href: "https://shop.example.test/_emdash/api/plugins/mika/download?token=download_token_1",
+            href: "/download/download_token_1",
             expiresAt: "2026-01-01T00:15:00.000Z",
           },
         ],
@@ -3794,17 +3794,18 @@ describe("backend API composition", () => {
     );
     if (!account.ok) throw new Error("Expected account.get to succeed.");
 
-    // The bundled storefront links download.href directly, so it must be a NAVIGABLE plugin route
-    // carrying a freshly-minted capability token (not the bare internal ref) that download.resolve
-    // accepts — so a customer can download from their account without any host admin.downloadIssue call.
+    // The bundled storefront links download.href directly, so it must be a NAVIGABLE link carrying a
+    // freshly-minted capability token (not the bare internal ref) — pointing at the GET-validate /
+    // POST-consume interstitial (`/download/<token>`), so a browser prefetch cannot burn it and the
+    // token still resolves on the user-initiated confirm. No host admin.downloadIssue call needed.
     const download = account.data.downloads[0];
     if (!download) throw new Error("Expected an account download.");
-    expect(download.href).toContain("/_emdash/api/plugins/mika/download?");
+    expect(download.href).toBe("/download/download_token_1");
     expect(download.expiresAt).toBe("2026-01-01T00:15:00.000Z");
-    const token = new URL(download.href).searchParams.get("token");
+    const token = download.href.split("/").pop();
     expect(token).toBe("download_token_1");
 
-    await expect(api.download.resolve({ token: token ?? "" })).resolves.toMatchObject({
+    await expect(api.download.confirm({ token: token ?? "" })).resolves.toMatchObject({
       ok: true,
       status: 200,
       data: { redirectUrl: "download:order_1:order_line_1" },
@@ -4538,6 +4539,63 @@ describe("backend API composition", () => {
         ok: false,
         status: 400,
         error: { code: "TOKEN_INVALID" },
+      });
+    } finally {
+      await harness.destroy();
+    }
+  });
+
+  it("consumes a single-use download token via download.confirm exactly like download.resolve", async () => {
+    const harness = await createAccountServicesHarness();
+
+    try {
+      await harness.repositories.ledger.put(createOrderDocument());
+      await harness.repositories.account.put(createEntitlementDocument());
+      await harness.repositories.account.put(createLicenseDocument());
+      await issueDownloadToken(harness.repositories, {
+        token: "download_token_1",
+        expiresAt: createTestClock().isoAt(60_000),
+        data: {
+          downloadRef: "download:order_1:order_line_1",
+          orderId: createTestMikaId("order", 1),
+          orderLineId: createTestMikaId("order_line", 1),
+          entitlementId: createTestMikaId("entitlement", 1),
+          licenseId: createTestMikaId("license", 1),
+          redirectUrl: "https://files.example.test/downloads/order_1/order_line_1",
+          title: "Private download",
+        },
+      });
+
+      // The user-initiated POST confirm returns the same redirect payload the GET resolver did and
+      // burns the token, so the interstitial only spends it on submit (not on a GET prefetch/scan).
+      const confirmed = await harness.api.download.confirm({ token: "download_token_1" });
+      expect(confirmed).toMatchObject({
+        ok: true,
+        status: 200,
+        data: {
+          title: "Private download",
+          redirectUrl: "https://files.example.test/downloads/order_1/order_line_1",
+          expiresAt: "2026-01-01T00:01:00.000Z",
+        },
+      });
+      await expect(
+        harness.repositories.ephemeral.get(createTestHash("download-token:download_token_1")),
+      ).resolves.toMatchObject({ status: "consumed" });
+
+      // Still single-use: a second confirm — and the GET resolver — must both reject the spent token.
+      await expect(
+        harness.api.download.confirm({ token: "download_token_1" }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 410,
+        error: { code: "TOKEN_USED" },
+      });
+      await expect(
+        harness.api.download.resolve({ token: "download_token_1" }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 410,
+        error: { code: "TOKEN_USED" },
       });
     } finally {
       await harness.destroy();

@@ -166,6 +166,7 @@ export interface MikaOperationFacade {
   };
   readonly download: {
     resolve(token: string): MikaFacadeResult<"download", "resolve">;
+    confirm(token: string): MikaFacadeResult<"download", "confirm">;
   };
   readonly order: {
     invoice(input: OrderInvoiceInput): MikaFacadeResult<"order", "invoice">;
@@ -300,6 +301,7 @@ export function createMikaOperationFacade<
     },
     download: {
       resolve: (token: string) => invoke(mikaOperationFacadeSpec.download.resolve, { token }),
+      confirm: (token: string) => invoke(mikaOperationFacadeSpec.download.confirm, { token }),
     },
     order: {
       invoice: (input) => invoke(mikaOperationFacadeSpec.order.invoice, input),

@@ -70,7 +70,7 @@ pages/
   account/magic-link.astro
   checkout/success.astro
   checkout/cancel.astro
-  download/[token].ts
+  download/[token].astro
   api/mika-webhook/[provider].ts
   llms.txt.ts
   .well-known/mika-agent.json.ts
@@ -130,7 +130,7 @@ pages/account/downloads.astro
 pages/account/magic-link.astro
 pages/checkout/success.astro
 pages/checkout/cancel.astro
-pages/download/[token].ts
+pages/download/[token].astro
 pages/api/mika-webhook/[provider].ts
 ```
 
@@ -322,10 +322,14 @@ carts, checkout, accounts, exports, deletes, webhooks, admin actions, or
 subscriptions until the route is explicitly designed with the right EmDash auth,
 CSRF, rate-limit, and method gates.
 
-The copied `download/[token].ts` endpoint uses the request-bound Mika helper as
-a redirect resolver. If a site needs private file streaming instead of signed
-redirects, wire that endpoint to a server-only Mika service rather than the
-browser-safe JSON client.
+The copied `download/[token].astro` page is a GET-validate / POST-consume
+interstitial (same shape as `account/magic-link.astro`): opening the link does
+NOT consume the single-use token, so email scanners, link previews, and browser
+prefetch cannot burn it. The buyer's submit posts `actions.mika.download.confirm`,
+which consumes the token atomically and redirects. Agents and programmatic
+callers keep using the `download.resolve` (GET) plugin route. If a site needs
+private file streaming instead of signed redirects, wire the confirm step to a
+server-only Mika service rather than the browser-safe JSON client.
 
 Use `mikaSafeReturnTo()` for host-owned return fields that are not produced by
 the public helper functions. Mika treats form-provided `returnTo`, checkout success, and

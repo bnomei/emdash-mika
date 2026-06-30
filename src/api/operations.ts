@@ -885,6 +885,22 @@ export const mikaOperationDefinitions = defineMikaOperations({
     schema: downloadResolveInputSchema,
     searchKeys: ["token"],
   }),
+  // POST sibling of `downloadResolve` that consumes the single-use token via a user-initiated form
+  // submit (mirrors `magicLinkVerify`). The bundled download interstitial posts this so a GET
+  // prefetch/link-scan cannot burn the token; `downloadResolve` (GET) stays for agents.
+  downloadConfirm: defineMikaOperation({
+    namespace: "download",
+    method: "confirm",
+    routeKey: "downloadConfirm",
+    routePath: "download/confirm",
+    httpMethod: "POST",
+    transport: "body",
+    public: false,
+    requiresRequestContext: false,
+    agent: agentOperationMetadata.downloadRead,
+    schema: downloadResolveInputSchema,
+    action: formAction(),
+  }),
   orderInvoice: defineMikaOperation({
     namespace: "order",
     method: "invoice",

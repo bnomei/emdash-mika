@@ -228,6 +228,7 @@ const expectedOperationContracts = [
   ["subscriptionChange", "subscription", "change", "subscriptionChange"],
   ["subscriptionRenew", "subscription", "renew", "subscriptionRenew"],
   ["downloadResolve", "download", "resolve", ""],
+  ["downloadConfirm", "download", "confirm", "downloadConfirm"],
   ["orderInvoice", "order", "invoice", ""],
   ["webhookReceive", "webhook", "receive", ""],
   ["adminProviderHealth", "admin", "providerHealth", ""],
@@ -1322,6 +1323,7 @@ describe("Mika client", () => {
       subscriptionChange: "subscriptions/change",
       subscriptionRenew: "subscriptions/renew",
       download: "download",
+      downloadConfirm: "download/confirm",
       orderInvoice: "orders/invoice",
       webhook: "webhooks",
       adminProviderHealth: "admin/provider/health",
@@ -1347,7 +1349,7 @@ describe("Mika client", () => {
       magicLink: ["request", "verify"],
       account: ["get", "export", "exportStatus", "exportDownload", "delete", "portal"],
       subscription: ["cancel", "change", "renew"],
-      download: ["resolve"],
+      download: ["resolve", "confirm"],
       order: ["invoice"],
       webhook: ["receive"],
       admin: [
@@ -1390,6 +1392,7 @@ describe("Mika client", () => {
       "subscription.cancel",
       "subscription.change",
       "subscription.renew",
+      "download.confirm",
     ]);
   });
 
@@ -1442,6 +1445,7 @@ describe("Mika client", () => {
       "subscriptionChange|subscription.change|subscription.change|subscriptionChange|POST|body|trusted|ctx||form",
       "subscriptionRenew|subscription.renew|subscription.renew|subscriptionRenew|POST|body|trusted|ctx||form",
       "downloadResolve|download.resolve|download.resolve|download|GET|search|trusted|noctx|token|",
+      "downloadConfirm|download.confirm|download.confirm|downloadConfirm|POST|body|trusted|noctx||form",
       "orderInvoice|order.invoice|order.invoice|orderInvoice|GET|search|trusted|ctx|orderId,token,returnTo|",
       "webhookReceive|webhook.receive|webhook.receive|webhook|POST|body|trusted|ctx||",
       "adminProviderHealth|admin.providerHealth|admin.providerHealth|adminProviderHealth|POST|body|trusted|noctx||",
@@ -1706,6 +1710,7 @@ describe("Mika client", () => {
       "subscriptionCancel|subscription.cancel|form|subscription.cancel|subscriptionCancel|body",
       "subscriptionChange|subscription.change|form|subscription.change|subscriptionChange|body",
       "subscriptionRenew|subscription.renew|form|subscription.renew|subscriptionRenew|body",
+      "downloadConfirm|download.confirm|form|download.confirm|downloadConfirm|body",
     ]);
   });
 
@@ -3853,6 +3858,7 @@ describe("public types", () => {
       | "subscription.cancel"
       | "subscription.change"
       | "subscription.renew"
+      | "download.confirm"
     >();
     expectTypeOf<Parameters<ReturnType<typeof createMika>["routes"]>[0]>().toEqualTypeOf<
       (typeof publicMikaPluginRouteNames)[number]

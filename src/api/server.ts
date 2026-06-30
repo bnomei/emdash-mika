@@ -169,6 +169,7 @@ export interface MikaApi {
   };
   readonly download: {
     resolve(input: { readonly token: string }): Promise<MikaApiResult<DownloadResolutionDTO>>;
+    confirm(input: { readonly token: string }): Promise<MikaApiResult<DownloadResolutionDTO>>;
   };
   readonly order: {
     invoice(
