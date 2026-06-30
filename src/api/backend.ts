@@ -1436,6 +1436,11 @@ async function resolveAccountIdentity(
     if (entitlements.items.length > 0) {
       return { customer: null, entitlements: entitlements.items, emailHash: sessionEmailHash };
     }
+
+    const orders = await input.repositories.ledger.listOrdersByEmailHash(sessionEmailHash, 1);
+    if (orders.items.length > 0) {
+      return { customer: null, entitlements: entitlements.items, emailHash: sessionEmailHash };
+    }
   }
 
   return null;

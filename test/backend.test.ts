@@ -4106,6 +4106,45 @@ describe("backend API composition", () => {
     expect(account.data.orders).toHaveLength(1);
   });
 
+  it("lists guest orders for an emailHash-only magic-link identity without entitlements", async () => {
+    const emailHash = createTestHash("email:guest-orders-only@example.test");
+    const repositories = createTestBackendRepositories();
+
+    const baseOrder = createOrderDocument();
+    const guestOrder = createOrderDocument({
+      orderNumber: "M-2002",
+      customerId: undefined,
+      emailHash,
+      aggregate: {
+        ...baseOrder.aggregate,
+        customer: {
+          ...baseOrder.aggregate.customer,
+          customerId: undefined,
+          userId: undefined,
+          email: "guest-orders-only@example.test",
+          emailHash,
+        },
+      },
+    });
+    await repositories.ledger.put(guestOrder);
+
+    const api = createMikaBackendApi(createTestBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+    await ctx.session?.set("mika.emailHash", emailHash);
+
+    const account = await api.account.get(ctx);
+    expect(account).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        orders: [{ id: guestOrder.id, orderNumber: "M-2002", status: "paid" }],
+        entitlements: [],
+      },
+    });
+    if (!account.ok) throw new Error("Expected guest order-only account lookup to succeed.");
+    expect(account.data.orders).toHaveLength(1);
+  });
+
   it("requires identity for account overview", async () => {
     const api = createMikaBackendApi(createTestBackendDependencies());
 
