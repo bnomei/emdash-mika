@@ -10452,6 +10452,82 @@ describe("backend API composition", () => {
     ).resolves.toBeNull();
   });
 
+  it("does not orphan a checkout_pending cart's reservation when its owner triggers a cart.merge", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const stock = createStockRecord({
+      sellableId: sellable.id,
+      quantityOnHand: 5,
+      quantityReserved: 0,
+    });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([[sellable.id, stock]]),
+    });
+    const fake = createFakeMikaProvider({
+      overrides: {
+        createCheckoutSession: async () => ({
+          id: createMikaId("checkout_fake"),
+          status: "created",
+          mode: "payment",
+          provider: TEST_PROVIDER,
+          redirectUrl: "https://checkout.example.test/session/pending",
+          expiresAt: createTestClock().isoAt(60 * 60_000),
+          providerCheckoutId: "provider_checkout_pending",
+        }),
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    // The source cart is OWNED by a customer; the merge caller is the SAME customer in a different
+    // session — so callerOwnsMergeSource passes and the ONLY thing that prevents the merge from
+    // touching the source is the status:"open" filter in findOpenCartBySession. If a regression let
+    // that query return checkout_pending carts, this merge would proceed and abandon the source /
+    // orphan its reservation — and this test would catch it.
+    const customerId = createTestMikaId("customer", 1);
+    const sourceCtx = createTestRequestContext({
+      sessionId: "session_source",
+      customerId,
+      userId: false,
+    });
+
+    // Drive the customer's cart to checkout_pending with an active stock reservation (the checkout is
+    // "created"/resumable, so it is not reopened on subsequent cart access).
+    const added = await api.cart.add(sourceCtx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) throw new Error("Expected cart.add to succeed.");
+    const cartId = added.data.id;
+    const checkout = await api.checkout.start(sourceCtx, { cartId });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+    await expect(repositories.session.findById(cartId)).resolves.toMatchObject({
+      status: "checkout_pending",
+    });
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 2,
+    });
+
+    const callerCtx = createTestRequestContext({
+      sessionId: "session_caller",
+      customerId,
+      userId: false,
+    });
+    const merged = await api.cart.merge(callerCtx, { sourceSessionId: "session_source" });
+    expect(merged.ok).toBe(true);
+
+    // The checkout_pending cart is NOT abandoned and its reservation is NOT orphaned.
+    await expect(repositories.session.findById(cartId)).resolves.toMatchObject({
+      status: "checkout_pending",
+    });
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 2,
+    });
+  });
+
   it("refuses to merge a source cart the caller does not own (cross-session IDOR)", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition({ maxPerOrder: 5 });
