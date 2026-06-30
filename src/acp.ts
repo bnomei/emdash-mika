@@ -200,6 +200,9 @@ export interface MikaAcpSessionStore {
 export type MikaAcpIdempotencyClaim =
   | { readonly status: "claimed" }
   | { readonly status: "replayed"; readonly record: MikaAcpSessionRecord }
+  // For `conflict`/`in_progress`, `id` MUST be the bound (existing) session id — never the rejected
+  // candidate. `beginAcpIdempotency` resolves it via `store.get(id)` to replay the original session
+  // on an idempotent create retry, so a custom store returning the wrong id would mis-replay.
   | { readonly status: "conflict"; readonly id: string }
   | { readonly status: "in_progress"; readonly id: string };
 
@@ -674,7 +677,7 @@ async function handleAcpCreate(
     createdAt: now,
     updatedAt: now,
   };
-  const idempotency = await beginAcpIdempotency(options, request, session.id, 201);
+  const idempotency = await beginAcpIdempotency(options, request, session.id, 201, true);
   if (!idempotency.ok) return idempotency.response;
 
   const reconciled = await reconcileAcpCart(options, request, session, body.data.items);
@@ -942,6 +945,7 @@ async function beginAcpIdempotency(
   request: Request,
   checkoutSessionId: string,
   replayStatus: number,
+  replayExistingBinding = false,
 ): Promise<MikaAcpIdempotencyBegin> {
   const key = acpIdempotencyStoreKey(request);
   if (!key) return { ok: true };
@@ -962,6 +966,26 @@ async function beginAcpIdempotency(
       };
     }
 
+    // Create mints a fresh server-side id before claiming, so a same-key retry surfaces as a
+    // "conflict" against the original binding rather than a "replayed" id match. The id is never
+    // client-chosen for create, so an existing binding can only be the original call: replay its
+    // response. If the bound session is not yet persisted, the original call is still in progress.
+    if (replayExistingBinding && claim.status === "conflict") {
+      const bound = await options.store.get(claim.id);
+
+      return {
+        ok: false,
+        response: bound
+          ? acpJson(request, await recordToAcpSession(options, request, bound), replayStatus)
+          : acpError(
+              request,
+              409,
+              "request_not_idempotent",
+              "Idempotency-Key replay is already in progress.",
+            ),
+      };
+    }
+
     return {
       ok: false,
       response: acpError(
@@ -977,7 +1001,9 @@ async function beginAcpIdempotency(
 
   const replayed = await options.store.getByIdempotencyKey?.(key);
   if (!replayed) return { ok: true, lease: { key, id: checkoutSessionId, claimed: false } };
-  if (replayed.id !== checkoutSessionId) {
+  // For create the candidate id is freshly minted, so do not require it to match the bound id — any
+  // existing binding for this key is the original session and must be replayed, not 409'd.
+  if (!replayExistingBinding && replayed.id !== checkoutSessionId) {
     return {
       ok: false,
       response: acpError(

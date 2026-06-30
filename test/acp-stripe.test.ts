@@ -278,6 +278,63 @@ describe("Mika ACP projection", () => {
     expect(checkoutStartCount).toBe(1);
   });
 
+  it("replays the original session on an idempotent ACP create retry instead of returning 409", async () => {
+    let cart = createCart([]);
+    let mintedIds = 0;
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      // Production mints a fresh id on every call; the other tests' constant id hid this retry bug.
+      createSessionId: () => `checkout_session_acp_retry_${(mintedIds += 1)}`,
+    });
+
+    const body = {
+      items: [{ id: "sellable_1:price_1", quantity: 2 }],
+      buyer: { name: "Ada Buyer", email: "ada@example.test" },
+    };
+
+    const first = await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_retry", body),
+    );
+    expect(first.status).toBe(201);
+    const firstBody = (await first.json()) as {
+      readonly id: string;
+      readonly status: string;
+      readonly line_items: unknown;
+    };
+    expect(firstBody).toMatchObject({ id: "checkout_session_acp_retry_1" });
+
+    // The 201 was lost in transit; the agent retries the identical request with the same key.
+    const retry = await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_retry", body),
+    );
+    expect(retry.status).toBe(201);
+    // Replays the ORIGINAL session body (id _1, same status + line items) even though the retry
+    // minted a fresh candidate id (_2, proven by the counter below).
+    await expect(retry.json()).resolves.toMatchObject({
+      id: firstBody.id,
+      status: firstBody.status,
+      line_items: firstBody.line_items,
+    });
+    expect(mintedIds).toBe(2);
+
+    // A different Idempotency-Key still creates a brand-new session.
+    const fresh = await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_fresh", body),
+    );
+    expect(fresh.status).toBe(201);
+    await expect(fresh.json()).resolves.toMatchObject({ id: "checkout_session_acp_retry_3" });
+  });
+
   it("does not start a second Mika checkout when completing a pending ACP session again", async () => {
     let cart = createCart([]);
     let checkoutStartCount = 0;
