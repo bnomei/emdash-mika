@@ -1297,7 +1297,9 @@ async function getAccount(
       orders,
       subscriptions: [],
       entitlements: identity.entitlements.map((item) => entitlementDTO(item.data)),
-      downloads: orderItems.flatMap((item) => orderDownloadDTOs(item.data)),
+      downloads: (
+        await Promise.all(orderItems.map((item) => orderDownloadDTOs(input, ctx, item.data)))
+      ).flat(),
     },
   };
 }
@@ -3117,7 +3119,9 @@ async function accountDTOForCustomer(
     orders: orderSummaries,
     subscriptions: subscriptions.items.map((item) => subscriptionDTO(item.data)),
     entitlements: entitlements.items.map((item) => entitlementDTO(item.data)),
-    downloads: orders.items.flatMap((item) => orderDownloadDTOs(item.data)),
+    downloads: (
+      await Promise.all(orders.items.map((item) => orderDownloadDTOs(input, ctx, item.data)))
+    ).flat(),
   };
 }
 
@@ -3161,14 +3165,71 @@ function entitlementDTO(entitlement: EntitlementDocument): EntitlementDTO {
   };
 }
 
-function orderDownloadDTOs(order: OrderDocument): readonly DownloadDTO[] {
-  return order.aggregate.lines.flatMap((line) =>
-    (line.downloadRefs ?? []).map((downloadRef) => ({
-      id: createMikaId(downloadRef),
+async function orderDownloadDTOs(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  order: OrderDocument,
+): Promise<readonly DownloadDTO[]> {
+  const downloads: DownloadDTO[] = [];
+  for (const line of order.aggregate.lines) {
+    for (const downloadRef of line.downloadRefs ?? []) {
+      // Mirror the invoice DTO (orderSummaryDTO): mint a short-lived, consumable capability token and
+      // expose a NAVIGABLE plugin route (`/download?token=...`) instead of the bare internal ref, so
+      // the bundled account download link resolves without the host first calling `admin.downloadIssue`.
+      // The token's redirectUrl is the ref — a host-mapped placeholder; actual asset delivery stays
+      // host-wired (the storefront download endpoint maps the ref to the real file).
+      const { token, expiresAt } = await createOrderLineDownloadToken(
+        input,
+        ctx,
+        order,
+        line,
+        downloadRef,
+      );
+      downloads.push({
+        id: createMikaId(downloadRef),
+        title: line.item.titleSnapshot,
+        href: mikaPluginRoute("download", { origin: ctx.url, search: { token } }),
+        expiresAt,
+      });
+    }
+  }
+  return downloads;
+}
+
+// Mint a single-use download capability token bound to an order line's download ref (the same token
+// shape `issueDownload` writes, minus the admin audit), so `download.resolve` validates and consumes
+// it identically. Called per account view, so each page render yields a fresh navigable link.
+async function createOrderLineDownloadToken(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  order: OrderDocument,
+  line: OrderLine,
+  downloadRef: string,
+): Promise<{ token: string; expiresAt: ISODateTime }> {
+  const token = input.createId("download_token");
+  const expiresAt = addMilliseconds(ctx.now, input.config?.download?.tokenTtlMs ?? 15 * 60_000);
+  await input.repositories.ephemeral.put({
+    key: await hashDownloadToken(input, token),
+    kind: "token",
+    ...(order.customerId ? { subjectHash: order.customerId } : {}),
+    status: "pending",
+    count: 0,
+    expiresAt,
+    version: 1,
+    createdAt: ctx.now,
+    updatedAt: ctx.now,
+    data: {
+      purpose: "download",
+      tokenId: token,
+      downloadRef,
+      orderId: order.id,
+      orderLineId: line.id,
+      ...(line.entitlementId ? { entitlementId: line.entitlementId } : {}),
       title: line.item.titleSnapshot,
-      href: downloadRef,
-    })),
-  );
+      redirectUrl: downloadRef,
+    },
+  });
+  return { token, expiresAt };
 }
 
 function accountExportDTO(

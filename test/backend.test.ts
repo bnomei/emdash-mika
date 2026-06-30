@@ -3674,13 +3674,49 @@ describe("backend API composition", () => {
           {
             id: "download:order_1:order_line_1",
             title: "Test download",
-            href: "download:order_1:order_line_1",
+            href: "https://shop.example.test/_emdash/api/plugins/mika/download?token=download_token_1",
+            expiresAt: "2026-01-01T00:15:00.000Z",
           },
         ],
       },
     });
     if (!account.ok) throw new Error("Expected account.get to succeed.");
     expect(account.data.orders[0]).not.toHaveProperty("invoiceUrl");
+  });
+
+  it("mints a resolvable capability token for each account download link", async () => {
+    const accountCollection = createStorageCollection("account");
+    const ledgerCollection = createStorageCollection("ledger");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+    } satisfies MikaBackendRepositories;
+    const customer = createCustomerDocument();
+    await repositories.account.put(customer);
+    await repositories.ledger.put(createOrderDocument());
+    const api = createMikaBackendApi(createTestBackendDependencies({ repositories }));
+
+    const account = await api.account.get(
+      createTestRequestContext({ customerId: customer.customerId }),
+    );
+    if (!account.ok) throw new Error("Expected account.get to succeed.");
+
+    // The bundled storefront links download.href directly, so it must be a NAVIGABLE plugin route
+    // carrying a freshly-minted capability token (not the bare internal ref) that download.resolve
+    // accepts — so a customer can download from their account without any host admin.downloadIssue call.
+    const download = account.data.downloads[0];
+    if (!download) throw new Error("Expected an account download.");
+    expect(download.href).toContain("/_emdash/api/plugins/mika/download?");
+    expect(download.expiresAt).toBe("2026-01-01T00:15:00.000Z");
+    const token = new URL(download.href).searchParams.get("token");
+    expect(token).toBe("download_token_1");
+
+    await expect(api.download.resolve({ token: token ?? "" })).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { redirectUrl: "download:order_1:order_line_1" },
+    });
   });
 
   it("does not return account data for conflicting customer and user identity", async () => {
