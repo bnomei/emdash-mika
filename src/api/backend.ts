@@ -4764,11 +4764,34 @@ async function updateSubscriptionFromEvent(
     return subscription;
   }
 
+  // A locally-applied period-end cancel must not be reactivated by an equal- or unknown-period
+  // "active" event. Admin cancel sets status "cancel_at_period_end" without advancing the billing
+  // period, so the period-based staleness check above cannot protect it. This covers both a
+  // replayed pre-cancel webhook ({ active, cancelAtPeriodEnd: false }) and the provider's own
+  // routine echo, which Stripe represents as { status: "active", cancel_at_period_end: true }.
+  // Only a period-ADVANCING event (a genuine renewal) or a non-active (terminal) status may move
+  // the subscription off cancel_at_period_end.
+  const eventStart = event.currentPeriodStart;
+  const appliedStart = subscription.aggregate.currentPeriodStart;
+  const eventAdvancesPeriod = Boolean(
+    eventStart &&
+      appliedStart &&
+      new Date(eventStart).getTime() > new Date(appliedStart).getTime(),
+  );
+  const preserveLocalCancel =
+    subscription.status === "cancel_at_period_end" &&
+    event.status === "active" &&
+    !eventAdvancesPeriod;
+  const status = preserveLocalCancel ? "cancel_at_period_end" : event.status;
+  const cancelAtPeriodEnd = preserveLocalCancel
+    ? true
+    : (event.cancelAtPeriodEnd ?? subscription.aggregate.cancelAtPeriodEnd ?? false);
+
   const updated: SubscriptionDocument = {
     ...subscription,
     providerCustomerId: event.providerCustomerId ?? subscription.providerCustomerId,
     providerSubscriptionId: event.providerSubscriptionId ?? subscription.providerSubscriptionId,
-    status: event.status,
+    status,
     currentPeriodEnd: event.currentPeriodEnd ?? subscription.currentPeriodEnd,
     updatedAt: ctx.now,
     aggregate: {
@@ -4781,9 +4804,8 @@ async function updateSubscriptionFromEvent(
         customerId: event.providerCustomerId ?? subscription.aggregate.providerRef.customerId,
         priceId: event.providerPriceId ?? subscription.aggregate.providerRef.priceId,
       },
-      status: event.status,
-      cancelAtPeriodEnd:
-        event.cancelAtPeriodEnd ?? subscription.aggregate.cancelAtPeriodEnd ?? false,
+      status,
+      cancelAtPeriodEnd,
       currentPeriodStart: event.currentPeriodStart ?? subscription.aggregate.currentPeriodStart,
       currentPeriodEnd: event.currentPeriodEnd ?? subscription.aggregate.currentPeriodEnd,
       metadata: {

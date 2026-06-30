@@ -8936,6 +8936,162 @@ describe("backend API composition", () => {
     ).resolves.toMatchObject({ status: "expired" });
   });
 
+  it("keeps a locally-applied cancel_at_period_end against an equal-period active webhook", async () => {
+    const accountCollection = createStorageCollection("account");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+    };
+    // Local state after a successful admin subscription.cancel: a period-end cancel is persisted
+    // without advancing the billing period.
+    const periodStart = createISODateTime("2026-02-01T00:00:00.000Z");
+    const periodEnd = createISODateTime("2026-03-01T00:00:00.000Z");
+    const baseSubscription = createSubscriptionDocument();
+    const subscription: SubscriptionDocument = {
+      ...baseSubscription,
+      status: "cancel_at_period_end",
+      aggregate: {
+        ...baseSubscription.aggregate,
+        status: "cancel_at_period_end",
+        cancelAtPeriodEnd: true,
+        currentPeriodStart: periodStart,
+        currentPeriodEnd: periodEnd,
+      },
+    };
+    // Two equal-period redeliveries Stripe can send after the cancel is recorded: a replay of the
+    // pre-cancel event that still reports cancelAtPeriodEnd:false, then the provider's own routine
+    // active+cancel_at_period_end echo. Neither advances the period, so the staleness check cannot
+    // reject them; the sticky-cancel guard must.
+    const deliveries = [
+      { payloadHash: "sub_replay_hash", providerEventId: "event_replay", cancelAtPeriodEnd: false },
+      { payloadHash: "sub_echo_hash", providerEventId: "event_echo", cancelAtPeriodEnd: true },
+    ];
+    const fake = createFakeMikaProvider({
+      overrides: {
+        verifyWebhook: async (webhookInput) => {
+          const delivery = deliveries[0];
+          if (!delivery) throw new Error("Unexpected webhook verification call.");
+
+          return createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: delivery.payloadHash,
+            parsed: { delivery: delivery.providerEventId },
+          });
+        },
+        parseWebhookEvent: async (verified) => {
+          const delivery = deliveries.shift();
+          if (!delivery) throw new Error("Unexpected webhook parse call.");
+
+          return createSubscriptionWebhookEvent(verified, {
+            providerEventId: delivery.providerEventId,
+            providerSubscriptionId: "provider_subscription_1",
+            providerCustomerId: "provider_customer_1",
+            status: "active",
+            currentPeriodStart: periodStart,
+            currentPeriodEnd: periodEnd,
+            cancelAtPeriodEnd: delivery.cancelAtPeriodEnd,
+          });
+        },
+      },
+    });
+    await repositories.account.put(createCustomerDocument());
+    await repositories.account.put(subscription);
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(receiveWebhook(api, "subscription-cancel-replay")).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { status: "received" },
+    });
+    await expect(accountCollection.get("subscription_1")).resolves.toMatchObject({
+      type: "subscription",
+      status: "cancel_at_period_end",
+      aggregate: {
+        status: "cancel_at_period_end",
+        cancelAtPeriodEnd: true,
+        currentPeriodStart: "2026-02-01T00:00:00.000Z",
+      },
+    });
+
+    await expect(receiveWebhook(api, "subscription-cancel-echo")).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { status: "received" },
+    });
+    await expect(accountCollection.get("subscription_1")).resolves.toMatchObject({
+      type: "subscription",
+      status: "cancel_at_period_end",
+      aggregate: { status: "cancel_at_period_end", cancelAtPeriodEnd: true },
+    });
+  });
+
+  it("reactivates a cancel_at_period_end subscription when a newer-period active webhook arrives", async () => {
+    const accountCollection = createStorageCollection("account");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+    };
+    const baseSubscription = createSubscriptionDocument();
+    const subscription: SubscriptionDocument = {
+      ...baseSubscription,
+      status: "cancel_at_period_end",
+      aggregate: {
+        ...baseSubscription.aggregate,
+        status: "cancel_at_period_end",
+        cancelAtPeriodEnd: true,
+        currentPeriodStart: createISODateTime("2026-02-01T00:00:00.000Z"),
+        currentPeriodEnd: createISODateTime("2026-03-01T00:00:00.000Z"),
+      },
+    };
+    // A genuine renewal advances the billing period, so the guard must let it reactivate the sub.
+    const fake = createFakeMikaProvider({
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "sub_renewal_hash",
+            parsed: { delivery: "event_renewal" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createSubscriptionWebhookEvent(verified, {
+            providerEventId: "event_renewal",
+            providerSubscriptionId: "provider_subscription_1",
+            providerCustomerId: "provider_customer_1",
+            status: "active",
+            currentPeriodStart: createISODateTime("2026-03-01T00:00:00.000Z"),
+            currentPeriodEnd: createISODateTime("2026-04-01T00:00:00.000Z"),
+            cancelAtPeriodEnd: false,
+          }),
+      },
+    });
+    await repositories.account.put(createCustomerDocument());
+    await repositories.account.put(subscription);
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+
+    await expect(receiveWebhook(api, "subscription-renewal")).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { status: "received" },
+    });
+    await expect(accountCollection.get("subscription_1")).resolves.toMatchObject({
+      type: "subscription",
+      status: "active",
+      aggregate: {
+        status: "active",
+        cancelAtPeriodEnd: false,
+        currentPeriodStart: "2026-03-01T00:00:00.000Z",
+      },
+    });
+  });
+
   it("emits subscription renewal-failed notifications from past-due webhooks", async () => {
     const stripe = createProviderName("stripe");
     const accountCollection = createStorageCollection("account");
