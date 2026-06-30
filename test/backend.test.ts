@@ -8421,6 +8421,140 @@ describe("backend API composition", () => {
     }
   });
 
+  it("persists forward progress when a later line fails mid-fulfillment", async () => {
+    const stripe = createProviderName("stripe");
+    const accountCollection = createStorageCollection("account");
+    const sessionCollection = createStorageCollection("session");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const firstSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 1),
+      prices: [
+        createPriceDefinition({
+          id: createTestMikaId("price", 1),
+          fulfillmentKind: "entitlement",
+          entitlementKey: "course:first",
+          providerRefs: [{ provider: stripe, productId: "prod_first", priceId: "price_first" }],
+        }),
+      ],
+    });
+    const secondSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 2),
+      prices: [
+        createPriceDefinition({
+          id: createTestMikaId("price", 2),
+          fulfillmentKind: "entitlement",
+          entitlementKey: "course:second",
+          providerRefs: [{ provider: stripe, productId: "prod_second", priceId: "price_second" }],
+        }),
+      ],
+    });
+    const stockRepository = createTestStockRepository(
+      new Map([
+        [
+          firstSellable.id,
+          createStockRecord({
+            id: createTestMikaId("stock", 1),
+            sellableId: firstSellable.id,
+            quantityOnHand: 5,
+            quantityReserved: 0,
+          }),
+        ],
+        [
+          secondSellable.id,
+          createStockRecord({
+            id: createTestMikaId("stock", 2),
+            sellableId: secondSellable.id,
+            quantityOnHand: 5,
+            quantityReserved: 0,
+          }),
+        ],
+      ]),
+    );
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      session: new SessionRepository(sessionCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+      stock: stockRepository,
+    };
+    // Make the SECOND line's entitlement write fail deterministically, after the first line's stock and
+    // entitlement have already committed. This is the multi-line "poison line" shape: a later line that
+    // throws on every attempt while earlier lines' goods are already committed.
+    const baseAccountPut = repositories.account.put.bind(repositories.account);
+    repositories.account.put = async (document) => {
+      if (document.id === "entitlement_order_1_order_line_2") {
+        throw new Error("Simulated entitlement persistence failure for order_line_2.");
+      }
+      return baseAccountPut(document);
+    };
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "partial_fulfillment_hash",
+            parsed: { delivery: "event_partial_fulfillment" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createPaymentWebhookEvent(verified, {
+            providerEventId: "event_partial_fulfillment",
+            providerCheckoutId: "provider_checkout_fake",
+            providerPaymentId: "payment_partial_1",
+            providerOrderId: "provider_order_partial_1",
+            customer: { email: "Partial@Example.test", name: "Partial Shopper" },
+          }),
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({
+        contentRef: createTestContentRef(),
+        sellables: [firstSellable, secondSellable],
+      }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const shopperCtx = createTestRequestContext({
+      sessionId: "session_partial",
+      customerId: createTestMikaId("customer", 1),
+      userId: "user_partial",
+      idempotencyKey: "checkout_partial_1",
+    });
+
+    const firstCart = await api.cart.add(shopperCtx, { sellableId: firstSellable.id, quantity: 1 });
+    if (!firstCart.ok) throw new Error("Expected first cart.add to succeed.");
+    const cart = await api.cart.add(shopperCtx, { sellableId: secondSellable.id, quantity: 1 });
+    if (!cart.ok) throw new Error("Expected second cart.add to succeed.");
+    const checkout = await api.checkout.start(shopperCtx, { cartId: cart.data.id, provider: stripe });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+
+    // The webhook fulfillment throws on the second line. Tolerate either a rejected promise or an
+    // error result — the assertion is on the durable ledger state afterwards.
+    await receiveWebhook(api, "partial-fulfillment", stripe).catch(() => undefined);
+
+    // The first line's entitlement (its committed goods) must be reflected in the order ledger even
+    // though fulfillment did not complete: line 1 carries its entitlementId, the order is NOT marked
+    // fulfilled (no fulfilledAt), and the entitlement document itself exists — so the committed goods
+    // are never orphaned from the order record.
+    const persistedOrder = await ledgerCollection.get("order_1");
+    if (!persistedOrder) throw new Error("Expected order_1 to be persisted by forward progress.");
+    const [line1, line2] = persistedOrder.aggregate.lines;
+    expect(line1?.id).toBe("order_line_1");
+    expect(line1?.entitlementId).toBe("entitlement_order_1_order_line_1");
+    expect(line2?.id).toBe("order_line_2");
+    expect(line2?.entitlementId).toBeUndefined();
+    expect(persistedOrder.aggregate.metadata?.["fulfilledAt"]).toBeUndefined();
+    expect(persistedOrder.status).toBe("paid");
+    await expect(
+      accountCollection.get("entitlement_order_1_order_line_1"),
+    ).resolves.toMatchObject({ type: "entitlement", status: "active" });
+  });
+
   it("creates fulfillment side effects once from replayed payment webhook events", async () => {
     const stripe = createProviderName("stripe");
     const accountCollection = createStorageCollection("account");

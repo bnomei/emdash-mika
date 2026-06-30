@@ -5295,33 +5295,68 @@ async function fulfillPaidOrder(
   const originalLines = order.aggregate.lines;
   let changed = false;
 
-  for (const line of originalLines) {
-    const fulfilled = await fulfillPaidOrderLine(input, ctx, order, line);
-    fulfilledLines.push(fulfilled);
-    changed = changed || fulfilled !== line;
+  try {
+    for (const line of originalLines) {
+      const fulfilled = await fulfillPaidOrderLine(input, ctx, order, line);
+      fulfilledLines.push(fulfilled);
+      changed = changed || fulfilled !== line;
+    }
+  } catch (error) {
+    // Forward-progress persistence. Each line's side effects (stock consume, entitlement/license
+    // writes) commit to their own stores as the loop runs, but the order ledger is written only once
+    // at the end. So a later line throwing — e.g. an oversold/expired reservation that trips the stock
+    // fail-safe, or any deterministic per-line failure — would otherwise strand the goods the earlier
+    // lines already committed with NO matching order record; and because the payment-webhook workflow
+    // bounds its retries, a deterministically-failing line makes that orphaning PERMANENT once attempts
+    // exhaust. Persist the progress made so far (the fulfilled lines, carrying their
+    // stockMovementId/entitlementId, merged with the lines not yet reached) WITHOUT a `fulfilledAt`
+    // marker, so committed side effects are always reflected in a durable, reconcilable order record,
+    // then rethrow so the workflow still records the failure and retries the remaining lines.
+    if (changed) {
+      const progressedLines = [...fulfilledLines, ...originalLines.slice(fulfilledLines.length)];
+      // Swallow a failure to persist forward progress so the ORIGINAL per-line error below — the root
+      // cause the workflow should record and retry on — is the one that propagates, never masked by a
+      // secondary ledger error. `ledger.put` is a deterministic-id upsert, so this never double-writes.
+      await input.repositories.ledger
+        .put(orderWithFulfilledLines(order, progressedLines, ctx.now))
+        .catch(() => undefined);
+    }
+    throw error;
   }
 
   await queueOrderConfirmationEmail(input, ctx, order, fulfilledLines);
 
   if (!changed) return order;
 
-  const fulfilledOrder: OrderDocument = {
-    ...order,
-    updatedAt: ctx.now,
-    aggregate: {
-      ...order.aggregate,
-      lines: fulfilledLines,
-      metadata: {
-        ...order.aggregate.metadata,
-        fulfilledAt: ctx.now,
-      },
-    },
-  };
+  const fulfilledOrder = orderWithFulfilledLines(order, fulfilledLines, ctx.now, ctx.now);
 
   await input.repositories.ledger.put(fulfilledOrder);
   await emitOrderDownloadReadyNotifications(input, ctx, fulfilledOrder, originalLines);
 
   return fulfilledOrder;
+}
+
+// Build an order document with the given (possibly partially) fulfilled lines. `fulfilledAt` is set
+// only when the order is fully fulfilled; partial forward-progress writes pass it undefined so the
+// order stays paid-but-not-fulfilled while still durably recording the committed per-line goods.
+function orderWithFulfilledLines(
+  order: OrderDocument,
+  lines: readonly OrderLine[],
+  now: ISODateTime,
+  fulfilledAt?: ISODateTime,
+): OrderDocument {
+  return {
+    ...order,
+    updatedAt: now,
+    aggregate: {
+      ...order.aggregate,
+      lines,
+      metadata: {
+        ...order.aggregate.metadata,
+        ...(fulfilledAt ? { fulfilledAt } : {}),
+      },
+    },
+  };
 }
 
 async function fulfillPaidOrderLine(
