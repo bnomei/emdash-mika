@@ -2,18 +2,23 @@
  * Default Mika backend: repository ports, stock lifecycle, and full {@link MikaApi} wiring.
  * Implements cart, checkout, order, subscription, wishlist, webhook fulfillment, and admin flows.
  */
-import type {
-  MikaProviderAdapter,
-  MikaProviderInvoiceInput,
-  MikaProviderLineItem,
-  MikaProviderPaymentEvent,
-  MikaProviderOrderCancelInput,
-  MikaProviderRegistry,
-  MikaProviderRefundInput,
-  MikaProviderSubscriptionActionInput,
-  MikaProviderSubscriptionEvent,
-  MikaProviderWebhookEvent,
-  MikaVerifiedWebhookPayload,
+import {
+  MIKA_DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY,
+  MIKA_DELEGATED_PAYMENT_AUTHORIZATION_METADATA_KEY,
+  MIKA_DELEGATED_PAYMENT_CHECKOUT_SESSION_ID_METADATA_KEY,
+  MIKA_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY,
+  MIKA_DELEGATED_PAYMENT_TOKEN_METADATA_KEY,
+  type MikaProviderAdapter,
+  type MikaProviderInvoiceInput,
+  type MikaProviderLineItem,
+  type MikaProviderPaymentEvent,
+  type MikaProviderOrderCancelInput,
+  type MikaProviderRegistry,
+  type MikaProviderRefundInput,
+  type MikaProviderSubscriptionActionInput,
+  type MikaProviderSubscriptionEvent,
+  type MikaProviderWebhookEvent,
+  type MikaVerifiedWebhookPayload,
 } from "../provider";
 import type {
   AdjustStockRepositoryResult,
@@ -6631,20 +6636,12 @@ type CheckoutStartResolution = {
   readonly lines: readonly CheckoutStartLineResolution[];
 };
 
-// Delegated-payment (ACP shared payment token) metadata keys. These must mirror the provider
-// dispatch contract in src/stripe.ts (MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY, which
-// switches Stripe to a delegated charge) and the ACP authorization handoff in src/acp.ts.
-const DELEGATED_PAYMENT_TOKEN_METADATA_KEY = "acpPaymentToken";
-const DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY = "acpPaymentAuthorizationInputHash";
-const DELEGATED_PAYMENT_PROVIDER_METADATA_KEY = "acpPaymentProvider";
-const DELEGATED_PAYMENT_AUTHORIZATION_ID_METADATA_KEY = "acpPaymentAuthorizationId";
-const DELEGATED_PAYMENT_CHECKOUT_SESSION_ID_METADATA_KEY = "acpCheckoutSessionId";
 const DELEGATED_PAYMENT_PROOF_VOLATILE_METADATA_KEYS = new Set<string>([
-  DELEGATED_PAYMENT_TOKEN_METADATA_KEY,
-  DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY,
-  DELEGATED_PAYMENT_PROVIDER_METADATA_KEY,
-  DELEGATED_PAYMENT_AUTHORIZATION_ID_METADATA_KEY,
-  DELEGATED_PAYMENT_CHECKOUT_SESSION_ID_METADATA_KEY,
+  MIKA_DELEGATED_PAYMENT_TOKEN_METADATA_KEY,
+  MIKA_DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY,
+  MIKA_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY,
+  MIKA_DELEGATED_PAYMENT_AUTHORIZATION_METADATA_KEY,
+  MIKA_DELEGATED_PAYMENT_CHECKOUT_SESSION_ID_METADATA_KEY,
 ]);
 
 /**
@@ -6665,7 +6662,7 @@ async function requireDelegatedPaymentAuthorization(
   providerName: ProviderName | undefined,
 ): Promise<{ readonly ok: true } | MikaApiFailure> {
   const customFields = checkoutInput.customFields;
-  const token = customFields?.[DELEGATED_PAYMENT_TOKEN_METADATA_KEY];
+  const token = customFields?.[MIKA_DELEGATED_PAYMENT_TOKEN_METADATA_KEY];
   if (typeof token !== "string" || token.length === 0) return { ok: true };
 
   if (!providerName) {
@@ -6674,7 +6671,8 @@ async function requireDelegatedPaymentAuthorization(
   if (!checkoutInput.cartId) {
     return forbidden("Delegated payment requires a previewed cart checkout.");
   }
-  const providedHash = customFields?.[DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY];
+  const providedHash =
+    customFields?.[MIKA_DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY];
   if (typeof providedHash !== "string" || providedHash.length === 0) {
     return forbidden("Delegated payment requires a checkout.preview payment authorization.");
   }
@@ -7291,9 +7289,21 @@ function checkoutMetadata(input: {
 }
 
 function checkoutCustomMetadata(customFields: JsonObject | undefined): JsonObject {
-  return Object.fromEntries(
-    Object.entries(customFields ?? {}).filter(([key]) => !CHECKOUT_INTERNAL_METADATA_KEYS.has(key)),
-  ) as JsonObject;
+  return filterJsonObject(customFields, CHECKOUT_INTERNAL_METADATA_KEYS);
+}
+
+function filterJsonObject(
+  value: JsonObject | undefined,
+  omittedKeys: ReadonlySet<string>,
+): JsonObject {
+  const filtered: Record<string, JsonValue> = {};
+  for (const [key, child] of Object.entries(value ?? {})) {
+    if (!omittedKeys.has(key)) {
+      filtered[key] = child;
+    }
+  }
+
+  return filtered;
 }
 
 async function checkoutIdempotencyInputHash(
@@ -7865,7 +7875,7 @@ function delegatedPaymentProofProjection(
   quote: CartQuoteDTO,
   mode: PurchaseMode | undefined,
   provider: ProviderName | undefined,
-): JsonObject {
+): unknown {
   return {
     cartId: checkoutInput.cartId ?? quote.cartId,
     sellableId: checkoutInput.sellableId,
@@ -7895,17 +7905,16 @@ function delegatedPaymentProofProjection(
       warnings: quote.warnings,
       errors: quote.errors,
     },
-  } as unknown as JsonObject;
+  } satisfies Record<string, unknown>;
 }
 
 function delegatedPaymentProofCustomFields(
   customFields: JsonObject | undefined,
 ): JsonObject | undefined {
-  const filtered = Object.fromEntries(
-    Object.entries(checkoutCustomMetadata(customFields)).filter(
-      ([key]) => !DELEGATED_PAYMENT_PROOF_VOLATILE_METADATA_KEYS.has(key),
-    ),
-  ) as JsonObject;
+  const filtered = filterJsonObject(
+    checkoutCustomMetadata(customFields),
+    DELEGATED_PAYMENT_PROOF_VOLATILE_METADATA_KEYS,
+  );
 
   return Object.keys(filtered).length > 0 ? filtered : undefined;
 }

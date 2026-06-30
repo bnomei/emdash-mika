@@ -24,10 +24,12 @@ import type {
 } from "./api/types";
 import type { MikaApi } from "./server";
 import {
-  MIKA_STRIPE_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY,
-  MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY,
-  MIKA_STRIPE_PAYMENT_AUTHORIZATION_METADATA_KEY,
-} from "./stripe";
+  MIKA_DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY,
+  MIKA_DELEGATED_PAYMENT_AUTHORIZATION_METADATA_KEY,
+  MIKA_DELEGATED_PAYMENT_CHECKOUT_SESSION_ID_METADATA_KEY,
+  MIKA_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY,
+  MIKA_DELEGATED_PAYMENT_TOKEN_METADATA_KEY,
+} from "./provider";
 import {
   createCurrencyCode,
   createISODateTime,
@@ -867,11 +869,11 @@ async function handleAcpComplete(
     provider: record.provider,
     customer,
     customFields: {
-      [MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY]: body.data.payment_data.token,
-      [MIKA_STRIPE_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY]: body.data.payment_data.provider,
-      [MIKA_STRIPE_PAYMENT_AUTHORIZATION_METADATA_KEY]: proofId,
-      acpCheckoutSessionId: record.id,
-      acpPaymentAuthorizationInputHash: preview.data.inputHash,
+      [MIKA_DELEGATED_PAYMENT_TOKEN_METADATA_KEY]: body.data.payment_data.token,
+      [MIKA_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY]: body.data.payment_data.provider,
+      [MIKA_DELEGATED_PAYMENT_AUTHORIZATION_METADATA_KEY]: proofId,
+      [MIKA_DELEGATED_PAYMENT_CHECKOUT_SESSION_ID_METADATA_KEY]: record.id,
+      [MIKA_DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY]: preview.data.inputHash,
     },
   });
   if (!checkout.ok) {

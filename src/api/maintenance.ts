@@ -10,7 +10,7 @@ import type {
   MikaEmailOutboxRunOptions,
   MikaEmailOutboxRunResult,
 } from "./email-outbox";
-import { formatSubjectRef } from "./subject-ref";
+import { subjectHashCandidates } from "./subject-ref";
 import { createISODateTime, type ISODateTime, type MikaId } from "../types/primitives";
 
 /** Per-run limits and clock override for maintenance sweeps. */
@@ -98,13 +98,15 @@ type MikaMaintenancePurgeExpiredEphemeralRecords = (input: {
   readonly now: ISODateTime;
 }) => Promise<MikaMaintenanceEphemeralRecordsResult>;
 
+type MikaMaintenanceRepositories = Pick<
+  MikaBackendRepositories,
+  "account" | "ephemeral" | "ledger" | "ops" | "stock"
+>;
+
 interface MikaMaintenanceRunnerInput {
   readonly api?: Pick<MikaApi, "admin">;
   readonly emailOutboxRunner?: MikaEmailOutboxRunner;
-  readonly repositories?: Pick<
-    MikaBackendRepositories,
-    "account" | "ephemeral" | "ledger" | "ops" | "stock"
-  >;
+  readonly repositories?: MikaMaintenanceRepositories;
   readonly now?: MikaBackendNow;
   readonly releaseExpiredReservations?: MikaMaintenanceReleaseExpiredReservations;
   readonly purgeExpiredEphemeralRecords?: MikaMaintenancePurgeExpiredEphemeralRecords;
@@ -214,10 +216,7 @@ export function createMikaMaintenanceRunner(
 }
 
 async function processQueuedAccountDeleteRequests(input: {
-  readonly repositories: Pick<
-    MikaBackendRepositories,
-    "account" | "ephemeral" | "ledger" | "ops" | "stock"
-  >;
+  readonly repositories: MikaMaintenanceRepositories;
   readonly now: ISODateTime;
   readonly limit: number;
 }): Promise<MikaMaintenanceAccountDeleteRequestsResult> {
@@ -229,7 +228,7 @@ async function processQueuedAccountDeleteRequests(input: {
 
     try {
       const tokensDeleted = await input.repositories.ephemeral.deleteTokensBySubjectHashes(
-        accountDeleteSubjectHashes(request),
+        subjectHashCandidates(request),
       );
       const stockResult = request.customerId
         ? await input.repositories.stock.releaseActiveReservationsByCustomer({
@@ -335,22 +334,6 @@ async function processQueuedAccountDeleteRequests(input: {
     hasMore: queued.hasMore,
     items,
   };
-}
-
-function accountDeleteSubjectHashes(input: {
-  readonly customerId?: MikaId;
-  readonly userId?: string;
-  readonly emailHash?: string;
-}): readonly string[] {
-  return [
-    ...(input.customerId
-      ? [input.customerId, formatSubjectRef({ kind: "customer", id: input.customerId })]
-      : []),
-    ...(input.userId ? [formatSubjectRef({ kind: "user", id: input.userId })] : []),
-    ...(input.emailHash
-      ? [input.emailHash, formatSubjectRef({ kind: "email", id: input.emailHash })]
-      : []),
-  ];
 }
 
 async function runMaintenanceTask<TResult>(

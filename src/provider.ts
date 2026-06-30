@@ -25,6 +25,22 @@ import type {
   SubscriptionStatus,
 } from "./types/primitives";
 
+/** Checkout metadata key carrying an ACP delegated payment token for provider handoff. */
+export const MIKA_DELEGATED_PAYMENT_TOKEN_METADATA_KEY = "acpPaymentToken";
+
+/** Checkout metadata key naming the ACP payment provider (stripe, adyen, braintree). */
+export const MIKA_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY = "acpPaymentProvider";
+
+/** Checkout metadata key storing the ACP payment authorization id after completion. */
+export const MIKA_DELEGATED_PAYMENT_AUTHORIZATION_METADATA_KEY = "acpPaymentAuthorizationId";
+
+/** Checkout metadata key binding delegated checkout start to the preview payment authorization. */
+export const MIKA_DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY =
+  "acpPaymentAuthorizationInputHash";
+
+/** Checkout metadata key linking a delegated provider charge back to the ACP checkout session. */
+export const MIKA_DELEGATED_PAYMENT_CHECKOUT_SESSION_ID_METADATA_KEY = "acpCheckoutSessionId";
+
 /** Contract implemented by payment providers (Stripe, etc.) for checkout and fulfillment hooks. */
 export interface MikaProviderAdapter {
   readonly id: ProviderName;

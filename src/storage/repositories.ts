@@ -2314,11 +2314,7 @@ async function mutateActiveReservationEvent<TStatus extends "released" | "consum
   readonly applyStockMutation: (
     executor: MikaDbExecutor,
     event: StockEventRecord,
-  ) => Promise<{
-    readonly numAffectedRows?: bigint | number;
-    readonly numUpdatedRows?: bigint | number;
-    readonly numChangedRows?: bigint | number;
-  }>;
+  ) => Promise<StockMutationResult>;
 }): Promise<ReservationEventMutationRepositoryResult<TStatus>> {
   return withTransaction(input.executor, async (executor) => {
     const current = await findStockEventById(executor, input.reservationEventId);

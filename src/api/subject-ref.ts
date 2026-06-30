@@ -13,6 +13,22 @@ export function formatSubjectRef(ref: SubjectRef): string {
   return `${ref.kind}:${ref.id}`;
 }
 
+export function subjectHashCandidates(input: {
+  readonly customerId?: MikaId;
+  readonly userId?: string;
+  readonly emailHash?: string;
+}): readonly string[] {
+  return [
+    ...(input.customerId
+      ? [input.customerId, formatSubjectRef({ kind: "customer", id: input.customerId })]
+      : []),
+    ...(input.userId ? [formatSubjectRef({ kind: "user", id: input.userId })] : []),
+    ...(input.emailHash
+      ? [input.emailHash, formatSubjectRef({ kind: "email", id: input.emailHash })]
+      : []),
+  ];
+}
+
 export function parseSubjectRef(value: string): SubjectRef | null {
   const separator = value.indexOf(":");
   if (separator <= 0) return null;

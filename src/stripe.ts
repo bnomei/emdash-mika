@@ -13,6 +13,9 @@ import type {
   ProviderHealthDTO,
 } from "./api/types";
 import {
+  MIKA_DELEGATED_PAYMENT_AUTHORIZATION_METADATA_KEY,
+  MIKA_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY,
+  MIKA_DELEGATED_PAYMENT_TOKEN_METADATA_KEY,
   defineMikaProvider,
   type MikaProviderAdapter,
   type MikaProviderCheckoutInput,
@@ -39,13 +42,16 @@ import {
 export const MIKA_STRIPE_PROVIDER_ID = createProviderName("stripe");
 
 /** Checkout metadata key carrying an ACP delegated payment token for PaymentIntent creation. */
-export const MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY = "acpPaymentToken";
+export const MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY =
+  MIKA_DELEGATED_PAYMENT_TOKEN_METADATA_KEY;
 
 /** Checkout metadata key naming the ACP payment provider (stripe, adyen, braintree). */
-export const MIKA_STRIPE_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY = "acpPaymentProvider";
+export const MIKA_STRIPE_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY =
+  MIKA_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY;
 
 /** Checkout metadata key storing the ACP payment authorization id after completion. */
-export const MIKA_STRIPE_PAYMENT_AUTHORIZATION_METADATA_KEY = "acpPaymentAuthorizationId";
+export const MIKA_STRIPE_PAYMENT_AUTHORIZATION_METADATA_KEY =
+  MIKA_DELEGATED_PAYMENT_AUTHORIZATION_METADATA_KEY;
 
 /** Minimal Stripe SDK surface required by `createMikaStripeProvider`; inject a real or mock client. */
 export interface MikaStripeClient {

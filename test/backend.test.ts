@@ -28,7 +28,7 @@ import { MIKA_AGENT_IDEMPOTENCY_KEY_HEADER } from "../src/api/agent-types";
 import { callMikaOperation, mikaActionDefinitions } from "../src/api/operations";
 import { createMikaPluginRoutes } from "../src/api/route-handlers";
 import { mikaPluginRoutes } from "../src/api/routes";
-import { formatSubjectRef, parseSubjectRef } from "../src/api/subject-ref";
+import { formatSubjectRef, parseSubjectRef, subjectHashCandidates } from "../src/api/subject-ref";
 import { createMikaStorageConfig, type StorageCollection } from "../src/storage/collections";
 import {
   MIKA_ERROR_CODES,
@@ -5057,6 +5057,19 @@ describe("backend API composition", () => {
     expect(parseSubjectRef(createTestHash("email:subscriber@example.test"))).toBeNull();
     expect(parseSubjectRef("customer:")).toBeNull();
     expect(parseSubjectRef("unknown:value")).toBeNull();
+    expect(
+      subjectHashCandidates({
+        customerId: createTestMikaId("customer", 1),
+        userId: "user_1",
+        emailHash: createTestHash("email:subscriber@example.test"),
+      }),
+    ).toEqual([
+      createTestMikaId("customer", 1),
+      formatSubjectRef({ kind: "customer", id: createTestMikaId("customer", 1) }),
+      formatSubjectRef({ kind: "user", id: "user_1" }),
+      createTestHash("email:subscriber@example.test"),
+      formatSubjectRef({ kind: "email", id: createTestHash("email:subscriber@example.test") }),
+    ]);
   });
 
   it("re-keys a userId-only entitlement on account delete (no customer doc, no emailHash)", async () => {
