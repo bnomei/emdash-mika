@@ -1714,6 +1714,21 @@ async function runSubscriptionAction(
     };
   }
 
+  if (subscription.status === "cancelled" || subscription.status === "expired") {
+    // A cancelled/expired subscription is TERMINAL: cancel/change/renew must not run, because
+    // subscriptionStatusAfterAction would otherwise REVIVE it (renew -> active, cancel ->
+    // cancel_at_period_end) or mutate a dead record's price.
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "VALIDATION_FAILED",
+        message: `Subscription '${actionInput.subscriptionId}' is ${subscription.status} and cannot be modified.`,
+        fieldErrors: { subscriptionId: `Subscription is ${subscription.status}.` },
+      },
+    };
+  }
+
   const methodName = subscriptionActionMethods[action];
   const providerFeature = await requireProviderFeature(input, {
     providerName: subscription.provider,

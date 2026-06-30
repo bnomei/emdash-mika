@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P2 | medium | security=no
+DEVANA-STATE: fixed | P2 | medium | security=no
 DEVANA-KEY: src/api/lifecycle.ts:138 | subscription-renew-revives-terminal
 
 # `subscription.renew` revives a terminal (cancelled/expired) subscription to `active` with a stale period and re-granted entitlement
@@ -55,6 +55,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-29: open by Devana. Verified no status guard in `runSubscriptionAction` (backend.ts:1569-1659), `renew → "active"` unconditional (lifecycle.ts:138), stale `currentPeriodEnd` copy (backend.ts:1687), entitlement re-grant (1706).
+- 2026-06-30: fixed (chosen approach: source-status guard, the report's Suggested Next Step). `runSubscriptionAction` had only an owner check and a provider-capability check — no `subscription.status` precondition — so any owned terminal subscription could be acted on. Added a guard immediately after the found+owned check (before the provider-feature call and before any price validation): if `subscription.status` is `"cancelled"` or `"expired"`, return `409 VALIDATION_FAILED` (`Subscription '<id>' is <status> and cannot be modified.`) and do nothing else. This blocks the headline `renew → active` revival AND the symmetric `cancel` revival I confirmed while fixing: `subscriptionStatusAfterAction("cancelled"/"expired", "cancel")` returns `"cancel_at_period_end"`, which would resurrect a dead sub to active-until-period-end; `change` would mutate a dead record's price. The guard fires before the provider is contacted, so no provider call is made and the stored subscription is left byte-for-byte unchanged. Scope: only the terminal-state path is rejected; active/trialing/past_due/cancel_at_period_end renew/change/cancel are untouched. Evidence: a new test seeds cancelled+expired subscriptions with a provider that fully supports cancel/change/renew (so a 409 proves the TERMINAL guard fired, not PROVIDER_UNSUPPORTED) and asserts 409 + the message, that the provider method was never called, and that the persisted document is unchanged. Mutation-verified: replacing the guard condition with `if (false)` lets the action proceed and the test fails (cp-backup + restore, no git). Full suite (404) and both tsc configs pass.
 
 DEVANA-KEY: src/api/lifecycle.ts:138 | subscription-renew-revives-terminal
-DEVANA-SUMMARY: open | P2 | medium | `subscription.renew` has no source-status guard, so renewing a terminal (expired/cancelled) subscription sets it back to `active` with a past `currentPeriodEnd` and re-grants the entitlement.
+DEVANA-SUMMARY: fixed | P2 | medium | `runSubscriptionAction` now guards on source status: a `cancelled`/`expired` subscription rejects cancel/change/renew with 409 before any provider call, so a terminal subscription can no longer be revived (renew → active, or cancel → cancel_at_period_end) or have its dead record's price changed. Active/trialing/past_due/cancel_at_period_end paths are untouched. New cancelled+expired test (provider supports the actions, so 409 proves the guard, not unsupported); mutation-verified; stored doc left unchanged.

@@ -5766,6 +5766,59 @@ describe("backend API composition", () => {
     });
   });
 
+  it("rejects cancel/change/renew on a terminal (cancelled/expired) subscription without reviving it", async () => {
+    const terminalCases = [
+      { status: "cancelled" as const, action: "renew" as const, method: "renewSubscription" as const },
+      { status: "cancelled" as const, action: "cancel" as const, method: "cancelSubscription" as const },
+      { status: "expired" as const, action: "renew" as const, method: "renewSubscription" as const },
+      { status: "expired" as const, action: "change" as const, method: "changeSubscription" as const },
+    ];
+
+    for (const terminal of terminalCases) {
+      const repositories = createTestBackendRepositories();
+      // Provider fully supports the action, so a 409 proves the TERMINAL guard fired — not
+      // PROVIDER_UNSUPPORTED — and that the provider was never asked to revive a dead subscription.
+      const fake = createFakeMikaProvider({
+        optionalMethods: ["cancelSubscription", "changeSubscription", "renewSubscription"],
+      });
+      const subscription = createSubscriptionDocument({
+        status: terminal.status,
+        aggregate: {
+          ...createSubscriptionDocument().aggregate,
+          status: terminal.status,
+        },
+      });
+      const api = createMikaBackendApi(
+        createIncrementingBackendDependencies({
+          repositories,
+          providers: createMikaProviderRegistry([fake.provider]),
+        }),
+      );
+
+      await repositories.account.put(createCustomerDocument());
+      await repositories.account.put(subscription);
+
+      await expect(
+        api.subscription[terminal.action](createTestRequestContext(), {
+          subscriptionId: subscription.id,
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 409,
+        error: {
+          code: "VALIDATION_FAILED",
+          message: `Subscription '${subscription.id}' is ${terminal.status} and cannot be modified.`,
+        },
+      });
+
+      // The provider action never ran, and the terminal subscription is byte-for-byte unchanged.
+      expect(fake.getCalls()[terminal.method]).toEqual([]);
+      await expect(repositories.account.findSubscriptionById(subscription.id)).resolves.toEqual(
+        subscription,
+      );
+    }
+  });
+
   it("does not mutate subscription state when the provider returns a non-throwing failure", async () => {
     const repositories = createTestBackendRepositories();
     const fake = createFakeMikaProvider({
