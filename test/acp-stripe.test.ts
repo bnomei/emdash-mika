@@ -18,6 +18,7 @@ import type { MikaProviderWebhookEvent } from "../src/provider";
 import type {
   CartDTO,
   CartQuoteDTO,
+  CheckoutPreviewInput,
   CheckoutPreviewDTO,
   CheckoutSessionDTO,
   MikaApiResult,
@@ -189,12 +190,16 @@ describe("Mika ACP projection", () => {
 
   it("creates and completes ACP checkout sessions with Stripe SPT metadata", async () => {
     let cart = createCart([]);
+    let checkoutPreviewInput: CheckoutPreviewInput | undefined;
     let checkoutStartMetadata: JsonObject | undefined;
     let checkoutStartCount = 0;
     const api = createAcpTestApi({
       getCart: () => cart,
       setCart: (next) => {
         cart = next;
+      },
+      onCheckoutPreview: (previewInput) => {
+        checkoutPreviewInput = previewInput;
       },
       onCheckoutStart: (metadata) => {
         checkoutStartCount += 1;
@@ -250,6 +255,11 @@ describe("Mika ACP projection", () => {
         checkout_session_id: "checkout_session_acp_1",
         permalink_url: "https://shop.example.test/account/orders/checkout_1",
       },
+    });
+    expect(checkoutPreviewInput).toMatchObject({
+      cartId: "cart_1",
+      provider: "stripe",
+      customer: { name: "Ada Buyer", email: "ada@example.test" },
     });
     expect(checkoutStartMetadata).toMatchObject({
       [MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY]: "spt_test_123",
@@ -1879,6 +1889,10 @@ function createAcpTestApi(input: {
     readonly priceId?: MikaIdLike;
     readonly quantity?: number;
   }) => MikaApiResult<CartDTO> | undefined;
+  readonly onCheckoutPreview?: (
+    previewInput: CheckoutPreviewInput,
+    ctx: MikaRequestContext,
+  ) => void | Promise<void>;
   readonly onCheckoutStart?: (
     metadata: JsonObject | undefined,
     ctx: MikaRequestContext,
@@ -1928,8 +1942,13 @@ function createAcpTestApi(input: {
       },
     },
     checkout: {
-      preview: async (): Promise<MikaApiResult<CheckoutPreviewDTO>> =>
-        ok({
+      preview: async (
+        ctx: MikaRequestContext,
+        previewInput: CheckoutPreviewInput,
+      ): Promise<MikaApiResult<CheckoutPreviewDTO>> => {
+        await input.onCheckoutPreview?.(previewInput, ctx);
+
+        return ok({
           id: createMikaId("checkout_preview_1"),
           quoteId: createMikaId("cart_quote_1"),
           status: "requires_payment_authorization",
@@ -1944,7 +1963,8 @@ function createAcpTestApi(input: {
             },
           ],
           inputHash: "hash_quote_1",
-        }),
+        });
+      },
       start: async (
         ctx: MikaRequestContext,
         checkoutInput: { readonly customFields?: JsonObject },

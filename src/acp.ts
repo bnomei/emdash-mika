@@ -847,7 +847,8 @@ async function handleAcpComplete(
     );
   }
 
-  const preview = await previewAcpCheckout(options, request, record);
+  const customer = buyerToCustomer(body.data.buyer ?? record.buyer);
+  const preview = await previewAcpCheckout(options, request, record, customer);
   if (!preview.ok) {
     await releaseAcpIdempotency(options, idempotency.lease);
 
@@ -864,7 +865,7 @@ async function handleAcpComplete(
   const checkout = await options.api.checkout.start(ctx, {
     cartId: record.cartId,
     provider: record.provider,
-    customer: buyerToCustomer(body.data.buyer ?? record.buyer),
+    customer,
     customFields: {
       [MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY]: body.data.payment_data.token,
       [MIKA_STRIPE_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY]: body.data.payment_data.provider,
@@ -1406,10 +1407,12 @@ async function previewAcpCheckout(
   options: CreateMikaAcpCheckoutHandlersOptions,
   request: Request,
   record: MikaAcpSessionRecord,
+  customer: CheckoutCustomerInput | undefined,
 ): Promise<MikaApiResult<CheckoutPreviewDTO>> {
   return options.api.checkout.preview(acpContext(options, request, record.sessionId), {
     cartId: record.cartId,
     provider: record.provider,
+    customer,
   });
 }
 

@@ -14760,6 +14760,9 @@ describe("backend API composition", () => {
         customFields: {
           publicNote: "changed after preview",
           acpPaymentToken: "spt_authorized_123",
+          acpPaymentProvider: "stripe",
+          acpPaymentAuthorizationId: "acp_payment_authorization_generated_after_preview",
+          acpCheckoutSessionId: "checkout_session_acp_1",
           acpPaymentAuthorizationInputHash: inputHash,
         },
       }),
@@ -14773,6 +14776,9 @@ describe("backend API composition", () => {
       customFields: {
         ...previewInput.customFields,
         acpPaymentToken: "spt_authorized_123",
+        acpPaymentProvider: "stripe",
+        acpPaymentAuthorizationId: "acp_payment_authorization_generated_after_preview",
+        acpCheckoutSessionId: "checkout_session_acp_1",
         acpPaymentAuthorizationInputHash: inputHash,
       },
     });
@@ -14784,6 +14790,9 @@ describe("backend API composition", () => {
       metadata: {
         publicNote: "deliver after 5pm",
         acpPaymentToken: "spt_authorized_123",
+        acpPaymentProvider: "stripe",
+        acpPaymentAuthorizationId: "acp_payment_authorization_generated_after_preview",
+        acpCheckoutSessionId: "checkout_session_acp_1",
         acpPaymentAuthorizationInputHash: inputHash,
       },
       successUrl:
