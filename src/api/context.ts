@@ -33,6 +33,13 @@ export interface MikaSessionAccess {
     value: T,
     options?: { readonly ttl?: number },
   ): Promise<void> | void;
+  /**
+   * Rotate the underlying session id, discarding the pre-rotation id. Mika calls this on a successful
+   * magic-link verification, BEFORE binding identity, to defeat session fixation (an attacker who
+   * planted a known session id in the victim's browser cannot reuse it after login). If a host omits
+   * this method the call is a silent no-op and magic-link authentication remains fixation-exposed —
+   * implement it (or rotate at the framework layer) to get that protection.
+   */
   regenerate?(): Promise<void> | void;
   destroy?(): Promise<void> | void;
   load?(id: string): Promise<void> | void;

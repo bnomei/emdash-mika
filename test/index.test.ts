@@ -519,6 +519,7 @@ describe("Mika native plugin package", () => {
           },
           ops: {
             listQueuedAccountDeleteRequests: async () => ({ items: [], hasMore: false }),
+            reclaimExhaustedWorkflows: async () => ({ scanned: 0, reclaimed: 0 }),
           },
           stock: {},
         } as never,
@@ -541,6 +542,7 @@ describe("Mika native plugin package", () => {
             emailOutbox: expect.objectContaining({ status: "completed", sent: 2 }),
             ephemeralRecords: expect.objectContaining({ status: "completed", purged: 4 }),
             accountDeleteRequests: expect.objectContaining({ status: "completed" }),
+            stuckWorkflows: expect.objectContaining({ status: "completed" }),
           }),
         }),
       ],

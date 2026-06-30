@@ -189,6 +189,10 @@ function summarizeMikaMaintenanceResult(result: MikaMaintenanceRunResult) {
         failed: taskResult.failed,
         hasMore: taskResult.hasMore,
       })),
+      stuckWorkflows: summarizeTask(result.stuckWorkflows, (taskResult) => ({
+        scanned: taskResult.scanned,
+        reclaimed: taskResult.reclaimed,
+      })),
     },
   };
 }
