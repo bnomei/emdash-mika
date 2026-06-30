@@ -1748,6 +1748,113 @@ describe("Mika Stripe provider", () => {
       providerOrderId: "in_failed",
     });
   });
+
+  it("normalizes Stripe refund/chargeback/uncollectible webhooks as reversal payment events", async () => {
+    const stripe: MikaStripeClient = {
+      webhooks: {
+        constructEvent: (body) => JSON.parse(body) as JsonObject,
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe, webhookSecret: "whsec_test" });
+    const parse = async (payload: JsonObject): Promise<MikaProviderWebhookEvent> => {
+      const rawBody = new TextEncoder().encode(JSON.stringify(payload));
+      const verified = await provider.verifyWebhook?.({
+        provider: createProviderName("stripe"),
+        request: new Request("https://shop.example.test/api/stripe", {
+          method: "POST",
+          headers: { "stripe-signature": "sig_test" },
+          body: rawBody,
+        }),
+        rawBody,
+      });
+      const event = await provider.parseWebhookEvent?.(verified!);
+      if (!event) throw new Error("Expected Stripe webhook event.");
+
+      return event;
+    };
+
+    // A FULL refund: `refunded: true`, amount_refunded covers the whole charge.
+    const fullRefund = await parse({
+      id: "evt_charge_refunded",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_refunded",
+          payment_intent: "pi_refunded",
+          refunded: true,
+          amount: 2400,
+          amount_refunded: 2400,
+          currency: "eur",
+        },
+      },
+    });
+    expectNonFulfillingProviderEvent(fullRefund);
+    expect(fullRefund).toMatchObject({
+      kind: "payment",
+      paymentStatus: "refunded",
+      provider: "stripe",
+      providerEventId: "evt_charge_refunded",
+      type: "charge.refunded",
+      providerPaymentId: "pi_refunded",
+      providerOrderId: "pi_refunded",
+      totals: { total: { amount: 2400, currency: "EUR" } },
+    });
+
+    // A PARTIAL refund: amount_refunded < amount -> partially_refunded, cumulative amount carried.
+    const partialRefund = await parse({
+      id: "evt_charge_partial",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_partial",
+          payment_intent: "pi_partial",
+          refunded: false,
+          amount: 2400,
+          amount_refunded: 600,
+          currency: "eur",
+        },
+      },
+    });
+    expectNonFulfillingProviderEvent(partialRefund);
+    expect(partialRefund).toMatchObject({
+      kind: "payment",
+      paymentStatus: "partially_refunded",
+      type: "charge.refunded",
+      providerPaymentId: "pi_partial",
+      totals: { total: { amount: 600, currency: "EUR" } },
+    });
+
+    // An involuntary chargeback is a FULL reversal of the disputed payment.
+    const dispute = await parse({
+      id: "evt_dispute",
+      type: "charge.dispute.created",
+      data: {
+        object: { id: "dp_1", payment_intent: "pi_disputed", amount: 2400, currency: "eur" },
+      },
+    });
+    expectNonFulfillingProviderEvent(dispute);
+    expect(dispute).toMatchObject({
+      kind: "payment",
+      paymentStatus: "refunded",
+      type: "charge.dispute.created",
+      providerPaymentId: "pi_disputed",
+      providerOrderId: "pi_disputed",
+    });
+
+    // An uncollectible invoice will never be paid -> full reversal.
+    const uncollectible = await parse({
+      id: "evt_uncollectible",
+      type: "invoice.marked_uncollectible",
+      data: { object: { id: "in_unc", payment_intent: "pi_unc", amount: 2400, currency: "eur" } },
+    });
+    expectNonFulfillingProviderEvent(uncollectible);
+    expect(uncollectible).toMatchObject({
+      kind: "payment",
+      paymentStatus: "refunded",
+      type: "invoice.marked_uncollectible",
+      providerPaymentId: "pi_unc",
+    });
+  });
 });
 
 function acpRequest(url: string, idempotencyKey: string, body: JsonObject): Request {

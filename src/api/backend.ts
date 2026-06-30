@@ -71,6 +71,7 @@ import {
   applyOrderRefund,
   applyPaymentEventToOrder,
   orderIsPaymentTerminal,
+  orderRefundedAmount,
   subscriptionCancelAtPeriodEndAfterAction,
   subscriptionStatusAfterAction,
 } from "./lifecycle";
@@ -4353,6 +4354,27 @@ async function processStoredWebhook(
 ): Promise<WebhookDocument> {
   switch (event.kind) {
     case "payment":
+      if (
+        event.paymentStatus === "refunded" ||
+        event.paymentStatus === "partially_refunded"
+      ) {
+        // A provider-initiated reversal (refund / chargeback / uncollectible) downgrades the order
+        // away from `paid` and revokes access on a full reversal — it is NOT a checkout failure.
+        try {
+          return await processPaymentReversalWebhook(input, ctx, webhook, event);
+        } catch (error) {
+          if (error instanceof WorkflowRunnerLeaseLostError) return webhook;
+
+          return markWebhookFailed(
+            input,
+            webhook,
+            ctx.now,
+            "Refund webhook could not be processed.",
+            { strict: true },
+          );
+        }
+      }
+
       if (event.paymentStatus !== "paid") {
         const failed = await markWebhookFailed(
           input,
@@ -4393,6 +4415,58 @@ async function processStoredWebhook(
     case "unknown":
       return webhook;
   }
+}
+
+/**
+ * Applies a provider-initiated payment reversal (refund / chargeback / uncollectible invoice) to
+ * the matching order: downgrades it to `refunded`/`partially_refunded` and, on a FULL reversal,
+ * revokes the order's entitlements/licenses (a partial refund intentionally retains access). Idem-
+ * potent: a re-delivered reversal for an already fully-refunded order is a no-op, and a reversal
+ * with no matching Mika order is acknowledged rather than failed.
+ */
+async function processPaymentReversalWebhook(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  webhook: WebhookDocument,
+  event: MikaProviderPaymentEvent,
+): Promise<WebhookDocument> {
+  const order = await findExistingPaymentOrder(input, event);
+  if (!order) {
+    // A reversal for a charge Mika has no order for (e.g. a non-Mika charge, or one never
+    // persisted). There is nothing to downgrade — acknowledge so it is not retried forever.
+    return markWebhookProcessed(input, webhook, ctx.now, {}, { strict: true });
+  }
+
+  // Already fully refunded: a duplicate/late reversal must not re-revoke or churn the order.
+  if (order.paymentStatus === "refunded") {
+    return markWebhookProcessedForOrder(input, webhook, ctx.now, order);
+  }
+
+  const now = ctx.now;
+  // `partially_refunded` carries Stripe's CUMULATIVE refunded amount; convert it to this event's
+  // delta so applyOrderRefund's cumulative tracking stays correct across repeated partial webhooks.
+  // A full reversal passes no amount, so applyOrderRefund resolves the status to `refunded`.
+  const cumulativeReversed = event.totals?.total?.amount;
+  const refundAmount =
+    event.paymentStatus === "partially_refunded" && cumulativeReversed !== undefined
+      ? Math.max(0, cumulativeReversed - orderRefundedAmount(order))
+      : undefined;
+
+  const updated = updateOrderAfterRefund(
+    order,
+    {
+      orderId: order.id,
+      reason: event.type,
+      ...(refundAmount !== undefined ? { amount: refundAmount } : {}),
+    },
+    now,
+  );
+  await input.repositories.ledger.put(updated);
+  if (updated.status === "refunded") {
+    await revokeOrderFulfillmentAccess(input, updated, now);
+  }
+
+  return markWebhookProcessedForOrder(input, webhook, now, updated);
 }
 
 type PaymentFailureWebhookEvent = Omit<MikaProviderPaymentEvent, "paymentStatus"> & {

@@ -764,6 +764,14 @@ function parseStripeWebhookEvent(
     return stripePaymentFailureEvent(provider, providerEventId, type, object, input.parsed);
   }
 
+  // Provider-initiated reversals of an already-captured payment: a dashboard/API refund
+  // (`charge.refunded`, possibly partial), an involuntary chargeback (`charge.dispute.created`),
+  // or an uncollectible invoice. Checked before the `invoice.` branch so
+  // `invoice.marked_uncollectible` is not swallowed as a non-paid invoice -> unknown.
+  if (STRIPE_PAYMENT_REVERSAL_TYPES.has(type)) {
+    return stripePaymentReversalEvent(provider, providerEventId, type, object, input.parsed);
+  }
+
   if (type.startsWith("invoice.")) {
     if (!stripeInvoiceEventIsPaid(type, object)) {
       return unknownStripeWebhookEvent(provider, providerEventId, type, input.parsed);
@@ -870,6 +878,62 @@ function stripePaymentFailureEvent(
     ...(email ? { customer: { email } } : {}),
     lines: [],
     totals: moneyTotalsFromStripeAmount(object),
+    raw,
+  };
+}
+
+const STRIPE_PAYMENT_REVERSAL_TYPES = new Set([
+  "charge.refunded",
+  "charge.dispute.created",
+  "invoice.marked_uncollectible",
+]);
+
+function stripePaymentReversalEvent(
+  provider: ProviderName,
+  providerEventId: string | undefined,
+  type: string,
+  object: JsonObject,
+  raw: JsonObject | undefined,
+): MikaProviderWebhookEvent {
+  // `charge.refunded` may be partial (amount_refunded < amount); a chargeback and an uncollectible
+  // invoice fully reverse the captured payment. Stripe sets `refunded: true` on a fully-refunded
+  // charge; otherwise compare the cumulative refunded amount against the captured amount.
+  const amount = numberChild(object, "amount");
+  const amountRefunded = numberChild(object, "amount_refunded");
+  const fullyReversed =
+    type !== "charge.refunded" ||
+    booleanChild(object, "refunded") === true ||
+    (amountRefunded !== undefined && amount !== undefined && amountRefunded >= amount);
+  const paymentStatus = fullyReversed ? "refunded" : "partially_refunded";
+
+  // The charge/dispute/invoice all link back to the order's payment intent; fall back to the
+  // charge id, then the object id, so the dispatcher can locate the order to downgrade.
+  const linkedId =
+    stripeObjectId(object["payment_intent"]) ?? stripeObjectId(object["charge"]);
+  const objectId = stringChild(object, "id");
+  const providerPaymentId = linkedId ?? objectId;
+  const providerOrderId = linkedId ?? objectId;
+  const email = stringChild(object, "customer_email") ?? stringChild(object, "receipt_email");
+
+  // Carry the CUMULATIVE reversed amount so the dispatcher can derive this event's delta.
+  const reversedAmount = type === "charge.refunded" ? amountRefunded : amount;
+  const currency = stringChild(object, "currency")?.toUpperCase();
+  const totals =
+    reversedAmount !== undefined && currency
+      ? { total: { amount: reversedAmount, currency: currency as MoneyDTO["currency"] } }
+      : undefined;
+
+  return {
+    kind: "payment",
+    paymentStatus,
+    provider,
+    providerEventId,
+    type,
+    ...(providerPaymentId ? { providerPaymentId } : {}),
+    ...(providerOrderId ? { providerOrderId } : {}),
+    ...(email ? { customer: { email } } : {}),
+    lines: [],
+    ...(totals ? { totals } : {}),
     raw,
   };
 }
