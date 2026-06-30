@@ -665,6 +665,49 @@ describe("backend test storage helpers", () => {
     await expect(repositories.ops.findEmail(healthy.id)).resolves.toMatchObject({ status: "sent" });
   });
 
+  it("does not re-queue an email for resend when recording the successful send fails", async () => {
+    const repositories = createTestBackendRepositories();
+    const email = createEmailDocument({
+      id: createTestMikaId("email", 1),
+      record: {
+        id: createTestMikaId("email", 1),
+        kind: "magic_link",
+        toEmail: "a@example.test",
+        templateKey: "magic_link",
+        attemptCount: 0,
+        nextAttemptAt: TEST_NOW,
+        metadata: {
+          link: "https://shop.example.test/x?token=t1",
+          purpose: "checkout",
+          expiresAt: createTestClock().isoAt(15 * 60_000),
+        },
+      },
+    });
+    await repositories.ops.put(email);
+    // The success-recording write throws AFTER the provider already accepted the send.
+    repositories.ops.completeEmail = async () => {
+      throw new Error("ops write outage after a successful send");
+    };
+
+    let sendCount = 0;
+    const runner = createMikaEmailOutboxRunner({
+      repositories,
+      now: () => new Date(TEST_NOW),
+      createId: createIncrementingIdFactory("email_lease"),
+      sender: async () => {
+        sendCount += 1;
+        return { providerMessageId: `pm_${sendCount}` };
+      },
+    });
+
+    await runner.runOnce();
+
+    // The send succeeded once; a completeEmail throw must NOT re-queue the email (which would re-send a
+    // duplicate). It is recorded delivered via the best-effort fallback, so it ends `sent`, not failed.
+    expect(sendCount).toBe(1);
+    await expect(repositories.ops.findEmail(email.id)).resolves.toMatchObject({ status: "sent" });
+  });
+
   it("delivers queued magic-link email through the outbox runner", async () => {
     const repositories = createTestBackendRepositories();
     const sent: MikaEmailDeliveryMessage[] = [];
@@ -1071,6 +1114,7 @@ describe("backend test storage helpers", () => {
       subject: "Sign in",
       text: "Use this link",
       html: "<p>Use this link</p>",
+      idempotencyKey: "magic-link:email_1",
     });
 
     expect(calls).toEqual([
@@ -1081,6 +1125,8 @@ describe("backend test storage helpers", () => {
           subject: "Sign in",
           text: "Use this link",
           html: "<p>Use this link</p>",
+          // The idempotency key is forwarded so the host pipeline/provider can dedup a re-send.
+          idempotencyKey: "magic-link:email_1",
         },
       },
     ]);

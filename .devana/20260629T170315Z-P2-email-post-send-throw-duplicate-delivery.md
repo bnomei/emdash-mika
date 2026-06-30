@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P2 | medium | security=no
+DEVANA-STATE: fixed | P2 | medium | security=no
 DEVANA-KEY: src/api/email-outbox.ts:224 | email-post-send-throw-duplicate-delivery
 
 # A post-send `completeEmail` throw re-queues an already-delivered email, and the bundled EmDash sender drops `idempotencyKey` so the provider cannot dedup
@@ -66,6 +66,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-29: open by Devana. Verified the throw→`failLeasedEmail` path (lines 222-255), the recovery-only-on-falsy-return distinction (239), and the dropped `idempotencyKey` in `createEmDashMikaEmailSender` (185-193) / `MikaEmDashEmailMessage` (110-121).
+- 2026-06-30: fixed (both parts). (1) The provider send and the success-recording write shared ONE try in `deliverLeasedEmail`, so if `completeEmail` THREW after the provider already accepted the send, the catch ran `failLeasedEmail`, re-queueing the email for a later sweep that RE-SENT it (duplicate). Separated the two phases: the send now runs in its OWN try (a send failure → `failLeasedEmail`, safe to retry — nothing was delivered), and after the provider accepts, the recording is BEST-EFFORT (`completeEmail` under the lease, else `markEmailDelivered`, each `.catch(() => false)`) and NEVER falls back to `failLeasedEmail` — so a recording throw records the delivery (or reports `lease_lost`) but does not re-queue/re-send. (2) Defense-in-depth for the inherent at-least-once window (a crash between send and record): added `idempotencyKey` to `MikaEmDashEmailMessage` and forwarded `message.idempotencyKey` in `createEmDashMikaEmailSender` (it was dropped, so a retry had no provider-side dedup key; `MikaEmailDeliveryMessage` already carried it from `email.record.idempotencyKey`). Evidence: a new test makes `completeEmail` throw after a successful send and asserts the sender ran once and the email ends `sent` (not re-queued) — mutation-verified (removing the `completeEmail` best-effort `.catch` lets the throw escape and the test fails); and the adapter test now asserts the `idempotencyKey` is forwarded to `email.send`. Full suite (403) and both tsc configs pass.
 
 DEVANA-KEY: src/api/email-outbox.ts:224 | email-post-send-throw-duplicate-delivery
-DEVANA-SUMMARY: open | P2 | medium | If `completeEmail` throws after a successful provider send, the email is re-queued and re-sent, and the bundled EmDash sender drops `idempotencyKey`, so customers get duplicate transactional emails with no provider-side dedup.
+DEVANA-SUMMARY: fixed | P2 | medium | deliverLeasedEmail now separates the provider send (own try → fail-and-retry) from the success-recording (best-effort completeEmail/markEmailDelivered, never failLeasedEmail), so a recording throw after a successful send no longer re-queues and re-sends the email. Plus createEmDashMikaEmailSender now forwards idempotencyKey (added to MikaEmDashEmailMessage) so the host pipeline/provider can dedup the inherent at-least-once retry window. New test + adapter-forward test, mutation-verified.

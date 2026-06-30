@@ -112,6 +112,7 @@ export interface MikaEmDashEmailMessage {
   readonly subject: string;
   readonly text: string;
   readonly html?: string;
+  readonly idempotencyKey?: string;
 }
 
 /** EmDash host email pipeline (`locals.emdash.email`). */
@@ -188,6 +189,9 @@ export function createEmDashMikaEmailSender(
         subject: message.subject,
         text: message.text,
         html: message.html,
+        // Forward the email's idempotency key so the host pipeline / provider can dedup a re-send
+        // (e.g. an at-least-once retry after a crash), complementing the in-runner send/record split.
+        ...(message.idempotencyKey ? { idempotencyKey: message.idempotencyKey } : {}),
       },
       source,
     );
@@ -226,40 +230,38 @@ async function deliverLeasedEmail(
     return failLeasedEmail(input, email, leaseKey, now, prepared.error);
   }
 
+  let result: Awaited<ReturnType<typeof input.sender>>;
   try {
-    const result = await input.sender(prepared.message);
-    const completed = await input.repositories.ops.completeEmail({
-      emailId: email.id,
-      leaseKey,
-      now,
-      providerMessageId: result?.providerMessageId,
-    });
-
-    if (completed) {
-      return {
-        emailId: email.id,
-        status: "sent",
-        providerMessageId: result?.providerMessageId,
-      };
-    }
-
-    const recovered = await input.repositories.ops.markEmailDelivered({
-      emailId: email.id,
-      now,
-      providerMessageId: result?.providerMessageId,
-    });
-
-    return recovered
-      ? {
-          emailId: email.id,
-          status: "sent",
-          providerMessageId: result?.providerMessageId,
-          recoveredLeaseLost: true,
-        }
-      : { emailId: email.id, status: "lease_lost" };
+    result = await input.sender(prepared.message);
   } catch (error) {
+    // The send itself failed — nothing was delivered, so fail-and-retry is safe.
     return failLeasedEmail(input, email, leaseKey, now, error);
   }
+
+  // The provider ACCEPTED the email. From here a recording failure must NOT fail-and-retry (that would
+  // re-send a duplicate on the next sweep): record the delivery best-effort — complete under the lease,
+  // else mark delivered — and never fall back to failLeasedEmail.
+  const providerMessageId = result?.providerMessageId;
+  const completed = await input.repositories.ops
+    .completeEmail({ emailId: email.id, leaseKey, now, providerMessageId })
+    .catch(() => false);
+
+  if (completed) {
+    return { emailId: email.id, status: "sent", providerMessageId };
+  }
+
+  const recovered = await input.repositories.ops
+    .markEmailDelivered({ emailId: email.id, now, providerMessageId })
+    .catch(() => false);
+
+  return recovered
+    ? {
+        emailId: email.id,
+        status: "sent",
+        providerMessageId,
+        recoveredLeaseLost: true,
+      }
+    : { emailId: email.id, status: "lease_lost" };
 }
 
 async function failLeasedEmail(
