@@ -12057,6 +12057,47 @@ describe("backend API composition", () => {
     });
   });
 
+  it("strips internal Mika metadata keys from the provider checkout metadata", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    if (!added.ok) {
+      throw new Error("Expected cart.add to succeed.");
+    }
+
+    await expect(
+      api.checkout.start(ctx, {
+        cartId: added.data.id,
+        // A client tries to spoof an internal correlation key alongside a genuine custom field.
+        customFields: { checkoutOrderId: "spoofed", promo: "summer" },
+      }),
+    ).resolves.toMatchObject({ ok: true, status: 200 });
+
+    // The reserved internal key is stripped from the provider metadata (it cannot be spoofed into
+    // Stripe dashboards/webhooks), matching the persisted checkout metadata; the genuine custom field
+    // is forwarded unchanged.
+    expect(fake.getCalls().createCheckoutSession[0]?.metadata).toEqual({ promo: "summer" });
+  });
+
   it("normalizes unsafe checkout redirect overrides before provider handoff and storage", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();

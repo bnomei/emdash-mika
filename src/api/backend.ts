@@ -6390,7 +6390,12 @@ async function startCheckout(
           : {}),
         successUrl: checkoutSuccessUrl(input, ctx, checkoutInput, checkoutId, statusToken),
         cancelUrl: checkoutCancelUrl(input, ctx, checkoutInput, checkoutId, statusToken),
-        metadata: checkoutInput.customFields,
+        // Strip the same internal Mika keys we exclude from the persisted checkout metadata, so a
+        // client cannot spoof correlation keys (checkoutOrderId, checkoutIdempotencyKey, …) into the
+        // provider's metadata (Stripe dashboard/webhooks). The ACP delegated-payment keys
+        // (acpPaymentToken, …) are not internal keys, so they pass through and the provider's
+        // delegated charge still works.
+        metadata: checkoutCustomMetadata(checkoutInput.customFields),
       });
     } catch {
       await releaseCheckoutReservations(input, reserved.reservationIds, ctx.now);
