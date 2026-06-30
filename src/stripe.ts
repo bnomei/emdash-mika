@@ -791,7 +791,16 @@ function parseStripeWebhookEvent(
     };
   }
 
-  if (type === "checkout.session.completed" && stripeCheckoutSessionIsPaid(object)) {
+  // A paid Stripe Checkout: either `checkout.session.completed` whose payment already settled, or
+  // `checkout.session.async_payment_succeeded` — the delayed-notification (SEPA/ACH/bank transfer/
+  // BACS/boleto) success counterpart of `async_payment_failed`. The async success is authoritative
+  // by event TYPE (mirroring how the failure side keys off the type, not `payment_status`), so a
+  // genuinely-paid delayed order is never dropped as `unknown`; it carries `providerCheckoutId` so
+  // it links to its still-pending checkout session and fulfills, exactly like the settled case.
+  if (
+    (type === "checkout.session.completed" && stripeCheckoutSessionIsPaid(object)) ||
+    type === "checkout.session.async_payment_succeeded"
+  ) {
     return {
       kind: "payment",
       paymentStatus: "paid",

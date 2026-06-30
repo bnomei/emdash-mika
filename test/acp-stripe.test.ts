@@ -1325,6 +1325,61 @@ describe("Mika Stripe provider", () => {
     });
   });
 
+  it("normalizes Stripe async-payment-succeeded checkout webhooks as paid payment events", async () => {
+    // Delayed-notification flow (SEPA/ACH/etc.): the earlier checkout.session.completed arrived
+    // payment_status:"unpaid" (dropped as unknown), then the bank confirms and Stripe sends
+    // checkout.session.async_payment_succeeded. This must normalize as a paid payment carrying the
+    // checkout session id so the still-pending order links and fulfills — not silently dropped.
+    const payload = {
+      id: "evt_async_succeeded",
+      type: "checkout.session.async_payment_succeeded",
+      data: {
+        object: {
+          id: "cs_async_succeeded",
+          payment_intent: "pi_async",
+          customer: "cus_async",
+          customer_email: "ada@example.test",
+          payment_status: "paid",
+          amount_total: 2400,
+          currency: "eur",
+        },
+      },
+    };
+    const stripe: MikaStripeClient = {
+      webhooks: {
+        constructEvent: (body) => JSON.parse(body) as JsonObject,
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe, webhookSecret: "whsec_test" });
+    const rawBody = new TextEncoder().encode(JSON.stringify(payload));
+    const verified = await provider.verifyWebhook?.({
+      provider: createProviderName("stripe"),
+      request: new Request("https://shop.example.test/api/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig_test" },
+        body: rawBody,
+      }),
+      rawBody,
+    });
+
+    const event = await provider.parseWebhookEvent?.(verified!);
+    if (!event) throw new Error("Expected Stripe async-payment-succeeded webhook event.");
+
+    expectPaidProviderPaymentEvent(event);
+    expect(event).toMatchObject({
+      kind: "payment",
+      paymentStatus: "paid",
+      provider: "stripe",
+      providerEventId: "evt_async_succeeded",
+      type: "checkout.session.async_payment_succeeded",
+      providerCheckoutId: "cs_async_succeeded",
+      providerPaymentId: "pi_async",
+      providerOrderId: "pi_async",
+      customer: { email: "ada@example.test" },
+      totals: { total: { amount: 2400, currency: "EUR" } },
+    });
+  });
+
   it("normalizes explicitly paid Stripe invoice webhooks", async () => {
     const payload = {
       id: "evt_invoice_paid",
