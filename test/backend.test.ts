@@ -7744,6 +7744,94 @@ describe("backend API composition", () => {
     });
   });
 
+  it("promotes a guest checkout to the matching registered customer at payment fulfillment", async () => {
+    const stripe = createProviderName("stripe");
+    const sessionCollection = createStorageCollection("session");
+    const ledgerCollection = createStorageCollection("ledger");
+    const accountCollection = createStorageCollection("account");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      session: new SessionRepository(sessionCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      account: new AccountRepository(accountCollection),
+    };
+    const sellable = createSellableDefinition({
+      prices: [
+        createPriceDefinition({
+          fulfillmentKind: "entitlement",
+          entitlementKey: "course:guest-promotion",
+          providerRefs: [{ provider: stripe, productId: "prod_payment", priceId: "price_payment" }],
+        }),
+      ],
+    });
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "payment_guest_promotion_hash",
+            parsed: { delivery: "event_payment_guest_promotion" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createPaymentWebhookEvent(verified, {
+            providerEventId: "event_payment_guest_promotion",
+            providerCheckoutId: "provider_checkout_fake",
+            providerPaymentId: "payment_1",
+            providerOrderId: "provider_order_1",
+            // Mixed-case payer email matching the registered customer's normalized emailHash.
+            customer: { email: "Subscriber@Example.test", name: "Guest Buyer" },
+          }),
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef: createTestContentRef(), sellables: [sellable] }),
+    );
+    await repositories.account.put(createCustomerDocument());
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    // Guest checkout: the session is not bound to any customer (no customerId/userId).
+    const guestCtx = createTestRequestContext({
+      sessionId: "session_guest_promotion",
+      customerId: false,
+      userId: false,
+      idempotencyKey: "checkout_guest_promotion",
+    });
+
+    const cart = await api.cart.add(guestCtx, { sellableId: sellable.id, quantity: 1 });
+    if (!cart.ok) throw new Error("Expected cart.add to succeed.");
+    const checkout = await api.checkout.start(guestCtx, {
+      cartId: cart.data.id,
+      provider: stripe,
+    });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+
+    await receiveWebhook(api, "payment", stripe);
+
+    // The paid order attaches to the registered customer even though checkout was a guest:
+    // top-level customerId AND aggregate.customer.customerId are promoted.
+    const order = await repositories.ledger.findOrderByProviderPayment(stripe, "payment_1");
+    expect(order).toMatchObject({
+      customerId: "customer_1",
+      emailHash: createTestHash("email:subscriber@example.test"),
+      aggregate: {
+        customer: {
+          customerId: "customer_1",
+          email: "Subscriber@Example.test",
+          emailHash: createTestHash("email:subscriber@example.test"),
+        },
+      },
+    });
+    // ...and so does the fulfilled entitlement (it inherits order.customerId).
+    await expect(accountCollection.get("entitlement_order_1_order_line_1")).resolves.toMatchObject({
+      type: "entitlement",
+      customerId: "customer_1",
+    });
+  });
+
   it("returns a retryable conflict and runs no payment webhook side effects without the workflow lease", async () => {
     const stripe = createProviderName("stripe");
     const clock = createTestClock();

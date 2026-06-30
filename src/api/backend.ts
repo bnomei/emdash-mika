@@ -5060,9 +5060,10 @@ async function createPaymentOrderDocument(
       metadata: paymentOrderLineMetadata(line, event),
     }),
   );
-  // Snapshot the purchaser once so the order's top-level emailHash mirrors
-  // aggregate.customer.emailHash. Guest orders have no customerId, so the
-  // top-level emailHash is what lets a magic-link emailHash session find them.
+  // Snapshot the purchaser once so the order's top-level customerId/emailHash mirror
+  // aggregate.customer. A guest checkout whose payer email matches a registered account is promoted
+  // to that customerId here (via paymentCustomerSnapshot); a guest with no match keeps customerId
+  // undefined and is still found later by the top-level emailHash (e.g. a magic-link emailHash session).
   const customer = await paymentCustomerSnapshot(input, checkout, event);
 
   return {
@@ -5070,7 +5071,7 @@ async function createPaymentOrderDocument(
     type: "order",
     schemaVersion: 1,
     orderNumber: orderId,
-    customerId: checkout.customerId,
+    customerId: customer.customerId,
     ...(customer.emailHash ? { emailHash: customer.emailHash } : {}),
     provider: event.provider,
     providerCheckoutId:
@@ -5209,20 +5210,32 @@ async function paymentCustomerSnapshot(
   checkout: CheckoutDocument,
   event: MikaProviderPaymentEvent,
 ): Promise<CustomerSnapshot> {
-  const customer = checkout.customerId
+  const checkoutCustomer = checkout.customerId
     ? await input.repositories.account.findCustomerById(checkout.customerId)
     : null;
-  const email = customer?.aggregate.email ?? event.customer?.email;
+  const email = checkoutCustomer?.aggregate.email ?? event.customer?.email;
   const normalizedEmail = email?.trim().toLowerCase();
-  const canonicalEmailHash = customer?.emailHash ?? customer?.aggregate.emailHash;
+  const payerEmailHash = normalizedEmail
+    ? await input.hash(`email:${normalizedEmail}`)
+    : undefined;
+
+  // Guest checkout (no checkout.customerId): promote to the registered customer when the payer email
+  // matches an existing account, so paid orders and entitlements attach to that customer at fulfillment
+  // time instead of being written with an undefined customerId. The customer's emailHash is computed
+  // identically (`hash("email:" + normalized)`), so the payer-email hash matches a magic-link account.
+  // Gated on `!checkout.customerId` so a logged-in checkout whose customer was deleted between checkout
+  // and the webhook keeps its (dangling) customerId rather than being re-bound to a different account.
+  const customer =
+    checkoutCustomer ??
+    (!checkout.customerId && payerEmailHash
+      ? await input.repositories.account.findCustomerByEmailHash(payerEmailHash)
+      : null);
 
   return {
-    customerId: checkout.customerId,
+    customerId: customer?.customerId ?? checkout.customerId,
     ...(customer?.userId ? { userId: customer.userId } : {}),
-    email,
-    emailHash:
-      canonicalEmailHash ??
-      (normalizedEmail ? await input.hash(`email:${normalizedEmail}`) : undefined),
+    email: customer?.aggregate.email ?? email,
+    emailHash: customer?.emailHash ?? customer?.aggregate.emailHash ?? payerEmailHash,
     name: event.customer?.name,
     company: event.customer?.company,
     vatId: event.customer?.vatId,
