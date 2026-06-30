@@ -1395,7 +1395,7 @@ async function requestAccountExport(
   const tokenHash = await hashAccountExportDownloadToken(input, token);
   const expiresAt = addMilliseconds(now, input.config?.accountExport?.ttlMs ?? 24 * 60 * 60_000);
   const account = identity.customer
-    ? await accountDTOForCustomer(input, ctx, identity.customer)
+    ? await accountDTOForCustomer(input, ctx, identity.customer, ACCOUNT_EXPORT_LIMIT)
     : {
         orders: [],
         subscriptions: [],
@@ -3079,15 +3079,24 @@ async function verifyMagicLink(
   }
 }
 
+// The account export must contain the COMPLETE history. The list ports accept a limit but no cursor,
+// so an effectively-unbounded limit is the available "fetch all" (the storage returns every matching
+// row); no realistic account is silently truncated. True cursor pagination would require a port change.
+const ACCOUNT_EXPORT_LIMIT = Number.MAX_SAFE_INTEGER;
+
 async function accountDTOForCustomer(
   input: CreateMikaBackendApiInput,
   ctx: MikaRequestContext,
   customer: CustomerDocument,
+  // Default (undefined) keeps the account VIEW paginated at the repository defaults; the account
+  // EXPORT passes ACCOUNT_EXPORT_LIMIT so the artifact is the COMPLETE history, not a silently
+  // truncated first page.
+  limit?: number,
 ): Promise<AccountDTO> {
   const [orders, subscriptions, entitlements] = await Promise.all([
-    input.repositories.ledger.listOrdersByCustomer(customer.customerId),
-    input.repositories.account.listSubscriptionsByCustomer(customer.customerId),
-    input.repositories.account.listEntitlementsByCustomer(customer.customerId),
+    input.repositories.ledger.listOrdersByCustomer(customer.customerId, limit),
+    input.repositories.account.listSubscriptionsByCustomer(customer.customerId, limit),
+    input.repositories.account.listEntitlementsByCustomer(customer.customerId, limit),
   ]);
   await Promise.all([
     input.repositories.account.listProviderAccountsByCustomer(customer.customerId),

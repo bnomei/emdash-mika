@@ -3886,6 +3886,51 @@ describe("backend API composition", () => {
     });
   });
 
+  it("requests the complete order history for an account export, not the default page", async () => {
+    const harness = await createAccountServicesHarness();
+
+    try {
+      await harness.repositories.account.put(createCustomerDocument());
+      await harness.repositories.ledger.put(createOrderDocument());
+
+      // accountDTOForCustomer is the SOLE caller of listOrdersByCustomer and listSubscriptionsByCustomer
+      // (each a single call site), so capturing each limit isolates exactly the export's request, and
+      // asserting both catches a partial revert that drops the limit from only one of the list calls.
+      const exportLimits: { orders?: number; subscriptions?: number } = {};
+      const baseListOrders = harness.repositories.ledger.listOrdersByCustomer.bind(
+        harness.repositories.ledger,
+      );
+      harness.repositories.ledger.listOrdersByCustomer = async (customerId, limit) => {
+        exportLimits.orders = limit;
+        return baseListOrders(customerId, limit);
+      };
+      const baseListSubscriptions = harness.repositories.account.listSubscriptionsByCustomer.bind(
+        harness.repositories.account,
+      );
+      harness.repositories.account.listSubscriptionsByCustomer = async (customerId, limit) => {
+        exportLimits.subscriptions = limit;
+        return baseListSubscriptions(customerId, limit);
+      };
+
+      await expect(
+        harness.api.account.export(
+          createTestRequestContext({ customerId: createTestMikaId("customer", 1) }),
+          {},
+        ),
+      ).resolves.toMatchObject({ ok: true, data: { status: "ready" } });
+
+      // The export fetches the COMPLETE history (effectively unbounded), not the default-paginated
+      // page, so a customer with more than a default page is not silently truncated. Entitlements
+      // receive the same `limit` argument in the same accountDTOForCustomer call.
+      expect(exportLimits).toEqual({
+        orders: Number.MAX_SAFE_INTEGER,
+        subscriptions: Number.MAX_SAFE_INTEGER,
+      });
+    } finally {
+      await harness.destroy();
+    }
+  });
+
   it("creates, reports, and downloads an account export with a one-time token", async () => {
     const notificationIntents: MikaNotificationIntent[] = [];
     const harness = await createAccountServicesHarness({
