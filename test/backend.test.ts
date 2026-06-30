@@ -3621,6 +3621,47 @@ describe("backend API composition", () => {
     }
   });
 
+  it("rotates the session before binding identity on magic-link verify", async () => {
+    const harness = await createMagicLinkHarness();
+
+    try {
+      await harness.accountCollection.put("customer_document_1", createCustomerDocument());
+      await harness.api.magicLink.request(createTestRequestContext(), {
+        email: "subscriber@example.test",
+      });
+
+      // Record the order of session operations. A successful verify must rotate the session id
+      // (regenerate) BEFORE writing any identity key, so a session id an attacker planted in the
+      // victim's browser before login cannot be reused to read the account afterwards.
+      const calls: string[] = [];
+      const store: Record<string, unknown> = {};
+      const ctx = {
+        ...createTestRequestContext(),
+        session: {
+          get: async () => undefined,
+          set: async (key: string, value: unknown) => {
+            calls.push(`set:${key}`);
+            store[key] = value;
+          },
+          regenerate: async () => {
+            calls.push("regenerate");
+          },
+        },
+      };
+
+      await expect(
+        harness.api.magicLink.verify(ctx, { token: "magic_link_token_1" }),
+      ).resolves.toMatchObject({ ok: true, data: { customer: { id: "customer_1" } } });
+
+      expect(calls).toContain("regenerate");
+      expect(calls[0]).toBe("regenerate");
+      expect(calls.indexOf("regenerate")).toBeLessThan(calls.indexOf("set:mika.customerId"));
+      expect(store["mika.customerId"]).toBe("customer_1");
+    } finally {
+      await harness.destroy();
+    }
+  });
+
   it("restores the magic-link token when the account view fails, leaving the session unwritten", async () => {
     const harness = await createMagicLinkHarness();
 

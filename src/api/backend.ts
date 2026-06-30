@@ -3060,6 +3060,12 @@ async function verifyMagicLink(
       : null;
     if (customer) {
       const data = await accountDTOForCustomer(input, ctx, customer);
+      // Rotate the session id before binding identity, so a session id an attacker planted in the
+      // victim's browser BEFORE authentication cannot be reused to read the account afterwards
+      // (session fixation). regenerate() runs as the first of the final session writes — after the
+      // account view is assembled — so an assembly failure still reverts the token cleanly via the
+      // catch below, and a regenerate failure does too.
+      await ctx.session?.regenerate?.();
       await ctx.session?.set("mika.customerId", customer.customerId);
       if (customer.userId) await ctx.session?.set("mika.userId", customer.userId);
 
@@ -3067,7 +3073,12 @@ async function verifyMagicLink(
     }
 
     const email = record?.data ? stringChild(record.data, "email") : undefined;
-    if (record?.subjectHash) await ctx.session?.set("mika.emailHash", record.subjectHash);
+    if (record?.subjectHash) {
+      // Same session-fixation defense for the emailHash-only identity: rotate before binding, and
+      // only when an identity is actually bound (a no-subjectHash token authenticates no one).
+      await ctx.session?.regenerate?.();
+      await ctx.session?.set("mika.emailHash", record.subjectHash);
+    }
 
     return {
       ok: true,
