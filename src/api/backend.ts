@@ -5331,9 +5331,20 @@ async function fulfillPaidOrderLine(
     case "license": {
       const license = await createOrderLineLicenseDocument(input, order, line, ctx.now);
       const existing = await input.repositories.account.findLicenseById(license.id);
-      if (!existing) {
-        await input.repositories.account.put(license);
-        await emitBackendNotification(input, "license.issued", ctx.now, {
+      if (!existing) await input.repositories.account.put(license);
+      // The license document dedups via its deterministic id, but the host-hook notification needs
+      // its own exactly-once guard: a re-leased worker can re-enter before the license is persisted.
+      // Marker-gate the emission so `license.issued` fires at most once per line.
+      await emitFulfillmentNotificationOnce(
+        input,
+        ctx,
+        {
+          id: fulfillmentDocumentId("workflow", order.id, line.id, "notification_license_issued"),
+          kind: "license.issued",
+          subjectId: order.id,
+          idempotencyKey: `license.issued:${order.id}:${line.id}`,
+        },
+        {
           ...orderNotificationRecipient(order),
           ...(license.customerId ? { customerId: license.customerId } : {}),
           licenseId: license.id,
@@ -5343,8 +5354,8 @@ async function fulfillPaidOrderLine(
           displayKeySuffix: license.record.displayKeySuffix,
           sellableId: line.item.sellableId,
           fulfillmentKind: line.item.fulfillmentKind,
-        });
-      }
+        },
+      );
       return fulfilledLine.licenseKeySuffix === license.record.displayKeySuffix
         ? fulfilledLine
         : { ...fulfilledLine, licenseKeySuffix: license.record.displayKeySuffix };
@@ -5614,13 +5625,23 @@ async function emitOrderDownloadReadyNotifications(
     );
 
     for (const downloadRef of addedRefs) {
-      await emitBackendNotification(input, "download.ready", ctx.now, {
-        ...orderNotificationRecipient(order),
-        downloadRef,
-        orderId: order.id,
-        orderLineId: line.id,
-        title: line.item.titleSnapshot,
-      });
+      await emitFulfillmentNotificationOnce(
+        input,
+        ctx,
+        {
+          id: fulfillmentDocumentId("workflow", downloadRef, "notification_download_ready"),
+          kind: "download.ready",
+          subjectId: order.id,
+          idempotencyKey: `download.ready:${downloadRef}`,
+        },
+        {
+          ...orderNotificationRecipient(order),
+          downloadRef,
+          orderId: order.id,
+          orderLineId: line.id,
+          title: line.item.titleSnapshot,
+        },
+      );
     }
   }
 }
@@ -5710,6 +5731,43 @@ async function acquireNotificationMarker(
       stepFailureMessage: "Notification hook failed.",
     }),
   };
+}
+
+async function emitFulfillmentNotificationOnce<TKind extends MikaNotificationKind>(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  marker: {
+    readonly id: MikaId;
+    readonly kind: TKind;
+    readonly subjectId: MikaId;
+    readonly idempotencyKey: string;
+  },
+  context: MikaNotificationContextMap[TKind],
+): Promise<void> {
+  // Gate the host-hook emission behind a notification marker so a re-leased fulfillment worker (or a
+  // duplicate webhook) cannot double-fire it — the same exactly-once protection the order-confirmation
+  // email uses. Mirrors queueOrderConfirmationEmail: acquire → emit → complete (fail + rethrow).
+  const lease = await acquireNotificationMarker(input, ctx, {
+    id: marker.id,
+    kind: marker.kind,
+    subjectType: "order",
+    subjectId: marker.subjectId,
+    idempotencyKey: marker.idempotencyKey,
+  });
+  if (lease.status !== "acquired") return;
+
+  try {
+    await emitBackendNotification(input, marker.kind, ctx.now, context);
+    await lease.runner.complete({
+      notificationKind: marker.kind,
+      idempotencyKey: marker.idempotencyKey,
+    });
+  } catch (error) {
+    await lease.runner.fail(
+      error instanceof Error ? error.message : "Fulfillment notification hook failed.",
+    );
+    throw error;
+  }
 }
 
 function orderLineContentKey(line: OrderLine): string {

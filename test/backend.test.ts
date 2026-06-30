@@ -8519,6 +8519,156 @@ describe("backend API composition", () => {
     });
   });
 
+  it("routes license.issued and download.ready through exactly-once notification markers", async () => {
+    const stripe = createProviderName("stripe");
+    const accountCollection = createStorageCollection("account");
+    const sessionCollection = createStorageCollection("session");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const licenseSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 1),
+      prices: [
+        createPriceDefinition({
+          id: createTestMikaId("price", 1),
+          fulfillmentKind: "license",
+          providerRefs: [{ provider: stripe, productId: "prod_license", priceId: "price_license" }],
+        }),
+      ],
+    });
+    const downloadSellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 2),
+      prices: [
+        createPriceDefinition({
+          id: createTestMikaId("price", 2),
+          fulfillmentKind: "download",
+          providerRefs: [
+            { provider: stripe, productId: "prod_download", priceId: "price_download" },
+          ],
+        }),
+      ],
+    });
+    const stockRepository = createTestStockRepository(
+      new Map([
+        [
+          licenseSellable.id,
+          createStockRecord({
+            id: createTestMikaId("stock", 1),
+            sellableId: licenseSellable.id,
+            quantityOnHand: 5,
+            quantityReserved: 0,
+          }),
+        ],
+        [
+          downloadSellable.id,
+          createStockRecord({
+            id: createTestMikaId("stock", 2),
+            sellableId: downloadSellable.id,
+            quantityOnHand: 5,
+            quantityReserved: 0,
+          }),
+        ],
+      ]),
+    );
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      session: new SessionRepository(sessionCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+      stock: stockRepository,
+    };
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "license_marker_hash",
+            parsed: { delivery: "event_license_marker" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createPaymentWebhookEvent(verified, {
+            providerEventId: "event_license_marker",
+            providerCheckoutId: "provider_checkout_fake",
+            providerPaymentId: "payment_license_marker",
+            providerOrderId: "provider_order_license_marker",
+            customer: { email: "Fulfillment@Example.test", name: "Fulfillment Shopper" },
+          }),
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({
+        contentRef: createTestContentRef(),
+        sellables: [licenseSellable, downloadSellable],
+      }),
+    );
+    const notificationIntents: MikaNotificationIntent[] = [];
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+        notifications: {
+          handle: (intent) => {
+            notificationIntents.push(intent);
+          },
+        },
+      }),
+    );
+    const shopperCtx = createTestRequestContext({
+      sessionId: "session_license_marker",
+      customerId: createTestMikaId("customer", 1),
+      userId: "user_license_marker",
+      idempotencyKey: "checkout_license_marker",
+    });
+    const licenseCart = await api.cart.add(shopperCtx, {
+      sellableId: licenseSellable.id,
+      quantity: 1,
+    });
+    if (!licenseCart.ok) throw new Error("Expected license cart.add to succeed.");
+    const cart = await api.cart.add(shopperCtx, { sellableId: downloadSellable.id, quantity: 1 });
+    if (!cart.ok) throw new Error("Expected download cart.add to succeed.");
+    const checkout = await api.checkout.start(shopperCtx, {
+      cartId: cart.data.id,
+      provider: stripe,
+    });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+
+    await expect(receiveWebhook(api, "license-marker", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { status: "received" },
+    });
+
+    await expect(accountCollection.get("license_order_1_order_line_1")).resolves.toMatchObject({
+      type: "license",
+      status: "active",
+    });
+    // license.issued fired exactly once...
+    expect(notificationIntents.filter((intent) => intent.kind === "license.issued")).toHaveLength(1);
+    // ...and is now gated by a COMPLETED notification marker (id = fulfillmentDocumentId("workflow",
+    // order.id, line.id, "notification_license_issued")). A re-leased worker re-entering fulfillment
+    // gets acquireNotificationMarker -> "completed" and skips the duplicate emission — the same
+    // exactly-once protection the order-confirmation email uses. Before this fix the emission was a
+    // bare host-hook call with no marker, so no such workflow document would exist.
+    await expect(
+      opsCollection.get("workflow_order_1_order_line_1_notification_license_issued"),
+    ).resolves.toMatchObject({
+      type: "workflow",
+      status: "completed",
+      kind: "notification.license.issued",
+      idempotencyKey: "license.issued:order_1:order_line_1",
+    });
+    // download.ready is gated symmetrically by its own per-downloadRef marker.
+    expect(notificationIntents.filter((intent) => intent.kind === "download.ready")).toHaveLength(1);
+    await expect(
+      opsCollection.get("workflow_download_order_1_order_line_2_notification_download_ready"),
+    ).resolves.toMatchObject({
+      type: "workflow",
+      status: "completed",
+      kind: "notification.download.ready",
+      idempotencyKey: "download.ready:download:order_1:order_line_2",
+    });
+  });
+
   it("recovers payment webhook processing when a concurrent order insert wins", async () => {
     const stripe = createProviderName("stripe");
     const sessionCollection = createStorageCollection("session");
