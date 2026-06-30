@@ -755,7 +755,25 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
     },
     stock: {
       availability: async ({ sellableId }) => {
-        const stock = await input.repositories.stock.findBySellableId(createMikaId(sellableId));
+        const id = createMikaId(sellableId);
+        // Mirror the catalog.sellables policy: a delisted (inactive) or unknown sellable must NOT
+        // expose its live inventory on this public endpoint. Resolve the real catalog sellable and
+        // 404 unless it is active, instead of projecting a hardcoded `active: true` from the stock
+        // row alone (which leaked inventory for products hidden from the public catalog).
+        const catalog = await input.repositories.catalog.findItemBySellableId(id);
+        const sellable = catalog?.aggregate.sellables.find((item) => item.id === id);
+        if (!sellable?.active) {
+          return {
+            ok: false,
+            status: 404,
+            error: {
+              code: "SELLABLE_NOT_FOUND",
+              message: `Sellable '${sellableId}' was not found.`,
+            },
+          };
+        }
+
+        const stock = await input.repositories.stock.findBySellableId(id);
         if (!stock) {
           return {
             ok: false,
@@ -767,16 +785,7 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
           };
         }
 
-        const availability = stockAvailabilityToDTO(
-          {
-            id: stock.sellableId,
-            active: true,
-            sortOrder: 0,
-            variantOptions: [],
-            prices: [],
-          },
-          stock,
-        );
+        const availability = stockAvailabilityToDTO(sellable, stock);
 
         if (!availability) {
           return {

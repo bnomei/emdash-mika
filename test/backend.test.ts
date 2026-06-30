@@ -11160,6 +11160,14 @@ describe("backend API composition", () => {
     const repositories = createTestBackendRepositories({
       stockBySellableId: new Map(cases.map((testCase) => [testCase.id, testCase.stock])),
     });
+    // Public availability now requires an ACTIVE catalog sellable (it no longer projects a hardcoded
+    // active flag from the stock row), so seed the catalog with active sellables for each case.
+    await repositories.catalog.put(
+      createCatalogItemDocument({
+        contentRef: createTestContentRef(),
+        sellables: cases.map((testCase) => createSellableDefinition({ id: testCase.id })),
+      }),
+    );
     const api = createMikaBackendApi(createTestBackendDependencies({ repositories }));
 
     for (const testCase of cases) {
@@ -11196,6 +11204,15 @@ describe("backend API composition", () => {
         ],
       ]),
     });
+    await repositories.catalog.put(
+      createCatalogItemDocument({
+        contentRef: createTestContentRef(),
+        sellables: [
+          createSellableDefinition({ id: forcedOut }),
+          createSellableDefinition({ id: forcedAvailable }),
+        ],
+      }),
+    );
     const api = createMikaBackendApi(createTestBackendDependencies({ repositories }));
 
     await expect(api.stock.availability({ sellableId: forcedOut })).resolves.toMatchObject({
@@ -11217,6 +11234,30 @@ describe("backend API composition", () => {
         availableQuantity: 0,
         lowStock: false,
       },
+    });
+  });
+
+  it("returns not found for an inactive (delisted) sellable on public availability", async () => {
+    const sellableId = createTestMikaId("sellable", 1);
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [sellableId, createStockRecord({ sellableId, quantityOnHand: 9, quantityReserved: 0 })],
+      ]),
+    });
+    // The sellable HAS a stock row but is delisted from the public catalog (active: false). Public
+    // availability must not expose its inventory — matching catalog.sellables, which hides it.
+    await repositories.catalog.put(
+      createCatalogItemDocument({
+        contentRef: createTestContentRef(),
+        sellables: [createSellableDefinition({ id: sellableId, active: false })],
+      }),
+    );
+    const api = createMikaBackendApi(createTestBackendDependencies({ repositories }));
+
+    await expect(api.stock.availability({ sellableId })).resolves.toMatchObject({
+      ok: false,
+      status: 404,
+      error: { code: "SELLABLE_NOT_FOUND" },
     });
   });
 
