@@ -608,6 +608,63 @@ describe("backend test storage helpers", () => {
     ).resolves.toMatchObject({ status: "queued", record: { attemptCount: 1 } });
   });
 
+  it("fails one email and continues the outbox sweep when its prepare throws", async () => {
+    const repositories = createTestBackendRepositories();
+    // E1: an order-confirmation whose prepare will THROW (findOrderById raises mid-render).
+    const throwing = createEmailDocument({
+      id: createTestMikaId("email", 1),
+      record: {
+        id: createTestMikaId("email", 1),
+        kind: "order_confirmation",
+        toEmail: "a@example.test",
+        templateKey: "order_confirmation",
+        attemptCount: 0,
+        nextAttemptAt: TEST_NOW,
+        orderId: createTestMikaId("order", 1),
+        metadata: {},
+      },
+    });
+    // E2: a healthy magic-link email — it MUST still be delivered after E1 throws.
+    const healthy = createEmailDocument({
+      id: createTestMikaId("email", 2),
+      record: {
+        id: createTestMikaId("email", 2),
+        kind: "magic_link",
+        toEmail: "b@example.test",
+        templateKey: "magic_link",
+        attemptCount: 0,
+        nextAttemptAt: TEST_NOW,
+        metadata: {
+          link: "https://shop.example.test/x?token=t2",
+          purpose: "checkout",
+          expiresAt: createTestClock().isoAt(15 * 60_000),
+        },
+      },
+    });
+    await repositories.ops.put(throwing);
+    await repositories.ops.put(healthy);
+    repositories.ledger.findOrderById = async () => {
+      throw new Error("ledger read outage during render");
+    };
+
+    const sent: MikaEmailDeliveryMessage[] = [];
+    const runner = createMikaEmailOutboxRunner({
+      repositories,
+      now: () => new Date(TEST_NOW),
+      createId: createIncrementingIdFactory("email_lease"),
+      sender: async (message) => {
+        sent.push(message);
+        return { providerMessageId: "pm" };
+      },
+    });
+
+    // The prepare throw fails only E1; the sweep does NOT abort and still delivers E2.
+    await expect(runner.runOnce()).resolves.toMatchObject({ sent: 1, failed: 1 });
+    expect(sent.map((message) => message.emailId)).toEqual([healthy.id]);
+    await expect(repositories.ops.findEmail(throwing.id)).resolves.toMatchObject({ status: "failed" });
+    await expect(repositories.ops.findEmail(healthy.id)).resolves.toMatchObject({ status: "sent" });
+  });
+
   it("delivers queued magic-link email through the outbox runner", async () => {
     const repositories = createTestBackendRepositories();
     const sent: MikaEmailDeliveryMessage[] = [];

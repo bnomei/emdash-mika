@@ -200,7 +200,14 @@ async function deliverLeasedEmail(
   leaseKey: string,
   now: ISODateTime,
 ): Promise<MikaEmailOutboxRunItem> {
-  const prepared = await prepareEmailDelivery(input, email);
+  let prepared: Awaited<ReturnType<typeof prepareEmailDelivery>>;
+  try {
+    prepared = await prepareEmailDelivery(input, email);
+  } catch (error) {
+    // A render/prepare throw must fail only THIS email, not abort the whole outbox sweep. The runOnce
+    // loop has no per-iteration guard, so an unhandled throw here would strand every later due email.
+    return failLeasedEmail(input, email, leaseKey, now, error);
+  }
 
   if (prepared.status === "skip") {
     const skipped = await input.repositories.ops.skipEmail({

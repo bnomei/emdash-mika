@@ -1,5 +1,5 @@
 DEVANA-FINDING: v1
-DEVANA-STATE: open | P2 | medium | security=no
+DEVANA-STATE: fixed | P2 | medium | security=no
 DEVANA-KEY: src/api/email-outbox.ts:203 | email-prepare-throw-aborts-outbox-sweep
 
 # A prepare/render throw on one email aborts the entire outbox sweep and never dead-letters the poison email
@@ -61,6 +61,7 @@ After working this report, preserve the original finding body. Update line 2 `DE
 ## Status Notes
 
 - 2026-06-29: open by Devana. Verified directly in `src/api/email-outbox.ts`: prepare at line 203 outside the try (222), loop (144-161) unguarded, and `prepareEmailDelivery` storage/render calls (286-355).
+- 2026-06-30: fixed — wrapped the prepare/render phase of `deliverLeasedEmail` in try/catch so a thrown error (a storage read like `findOrderById`, or a render throw) fails ONLY that email via `failLeasedEmail` (dead-lettering it with its retry/terminal disposition) instead of escaping to the unguarded `runOnce` loop (`:144-161`) and rejecting the entire sweep. Evidence: a new test queues two due emails — an order-confirmation whose prepare throws (`findOrderById` raises mid-render) and a healthy magic-link — and asserts `runOnce` resolves `{ sent: 1, failed: 1 }`, the healthy email IS still delivered (the sweep continued past the poison one), and the poison email is `failed`. Mutation-verified: re-throwing in the new catch makes `runOnce` reject and the healthy email is never sent (cp-backup + restore, no git). Full suite (402) and both tsc configs pass.
 
 DEVANA-KEY: src/api/email-outbox.ts:203 | email-prepare-throw-aborts-outbox-sweep
-DEVANA-SUMMARY: open | P2 | medium | A thrown error while preparing/rendering one outbox email (storage read or render) escapes the only try/catch and rejects the whole sweep, head-of-line-blocking all queued emails and never dead-lettering the poison email.
+DEVANA-SUMMARY: fixed | P2 | medium | deliverLeasedEmail now wraps the prepare/render phase in try/catch, so a thrown error preparing one email fails only that email (failLeasedEmail) instead of rejecting the whole runOnce sweep and head-of-line-blocking every later queued email. New test (poison + healthy email → healthy still delivered) + mutation-verified.
