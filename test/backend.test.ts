@@ -5377,6 +5377,17 @@ describe("backend API composition", () => {
       if (!preDeleteAccount.ok) throw new Error("Expected pre-delete guest account access.");
       const preDeleteDownloadToken = preDeleteAccount.data.downloads[0]?.href.split("/").pop();
       expect(preDeleteDownloadToken).toBe("download_token_1");
+      await issueDownloadToken(repositories, {
+        token: "legacy_guest_download_token",
+        expiresAt: clock.isoAt(15 * 60_000),
+        data: {
+          downloadRef: "download:order_1:order_line_1",
+          orderId: guestOrder.id,
+          orderLineId: createTestMikaId("order_line", 1),
+          redirectUrl: "download:order_1:order_line_1",
+          title: "Legacy guest download",
+        },
+      });
 
       await expect(api.account.delete(guestCtx, {})).resolves.toMatchObject({
         ok: true,
@@ -5424,6 +5435,13 @@ describe("backend API composition", () => {
       ).toHaveLength(1);
       await expect(
         api.download.confirm({ token: preDeleteDownloadToken ?? "" }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 400,
+        error: { code: "TOKEN_INVALID" },
+      });
+      await expect(
+        api.download.confirm({ token: "legacy_guest_download_token" }),
       ).resolves.toMatchObject({
         ok: false,
         status: 410,
