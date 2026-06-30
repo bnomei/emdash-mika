@@ -7,8 +7,10 @@ import { createMika } from "@bnomei/emdash-mika/astro";
 import { createProviderName } from "@bnomei/emdash-mika/types";
 import type { APIRoute } from "astro";
 
+/** Webhook ingest must read the live request body and provider route param. */
 export const prerender = false;
 
+/** Verifies provider webhook metadata and forwards the payload to `webhook.receive`. */
 export const POST: APIRoute = async ({ params, request, url }) => {
   const provider = params["provider"];
   if (!provider) return new Response("Missing provider.", { status: 400 });

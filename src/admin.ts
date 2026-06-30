@@ -10,20 +10,28 @@ export const MIKA_ACTIONS_MANIFEST_ROUTE = ".well-known/actions";
 /** Well-known route executing Mika admin runner actions from the EmDash dashboard. */
 export const MIKA_ACTIONS_RUNNER_ROUTE = ".well-known/actions/run";
 
+/** Visual emphasis tier for admin action buttons in the EmDash dashboard. */
 export type MikaAdminActionTone = "default" | "positive" | "warning" | "danger" | "info";
+/** HTTP method allowed when a field action button invokes a custom route. */
 export type MikaAdminActionMethod = "POST" | "PUT" | "PATCH" | "DELETE";
+/** EmDash surface where an admin action may appear (dashboard, field editor, or extension). */
 export type MikaAdminActionPlacement = "dashboard" | "field" | (string & {});
+/** Whether an action runs inline or through the Mika actions runner. */
 export type MikaAdminActionMode = "direct" | "runner";
+/** EmDash UI surface that must supply context before an action can run. */
 export type MikaAdminActionTarget = "dashboard" | "entry" | "field" | "row";
+/** Structured target binding describing surfaces, entity kind, and required context. */
 export interface MikaAdminActionTargetMetadata {
   readonly surfaces?: readonly MikaAdminActionTarget[];
   readonly kind?: string;
   readonly required?: boolean;
 }
+/** Target requirement as a single surface, surface list, or structured metadata. */
 export type MikaAdminActionTargetRequirement =
   | MikaAdminActionTarget
   | readonly MikaAdminActionTarget[]
   | MikaAdminActionTargetMetadata;
+/** Supported input field types for inline admin action forms. */
 export type MikaAdminActionInputType =
   | "string"
   | "number"
@@ -32,13 +40,16 @@ export type MikaAdminActionInputType =
   | "datetime"
   | "select"
   | "json";
+/** Scalar value stored on a select option in an admin action form. */
 export type MikaAdminActionInputOptionValue = string | number | boolean;
 
+/** Labeled choice for a select input in an admin action form. */
 export interface MikaAdminActionInputOption {
   readonly value: MikaAdminActionInputOptionValue;
   readonly label?: string;
 }
 
+/** Single labeled field in an inline admin action form. */
 export interface MikaAdminActionInputField {
   readonly name: string;
   readonly label?: string;
@@ -49,15 +60,19 @@ export interface MikaAdminActionInputField {
   readonly options?: readonly MikaAdminActionInputOption[];
 }
 
+/** Inline form schema and submit label for runner-backed admin actions. */
 export interface MikaAdminActionInputMetadata {
   readonly mode?: "inline";
   readonly fields: readonly MikaAdminActionInputField[];
   readonly submitLabel?: string;
 }
 
+/** Alias for inline form metadata on admin action definitions. */
 export type MikaAdminActionFormMetadata = MikaAdminActionInputMetadata;
+/** Runner route binding when an admin action executes server-side. */
 export type MikaAdminActionRunnerMetadata = true | { readonly route?: string };
 
+/** Progress, success, and error copy shown while an admin action runs. */
 export interface MikaAdminActionFeedback {
   readonly progress?: string;
   readonly success?: string;
@@ -94,6 +109,7 @@ type MikaAdminActionDescriptorBase = Omit<MikaAdminActionDefinition, "id" | "inp
   readonly form?: MikaAdminActionFormMetadata;
 };
 
+/** Runner-mode admin action entry in the EmDash actions manifest. */
 export type MikaAdminActionDescriptor = MikaAdminActionDescriptorBase & {
   readonly mode: "runner";
   readonly runner: MikaAdminActionRunnerMetadata;

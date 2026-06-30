@@ -9,6 +9,7 @@ import {
 } from "@bnomei/emdash-mika/agent";
 import type { APIRoute } from "astro";
 
+/** Serve dynamically so the manifest reflects the host's current public operation set. */
 export const prerender = false;
 
 const agentManifestSchemaId =
@@ -17,6 +18,7 @@ const agentManifestSchemaId =
     : undefined;
 const mikaPluginRouteBasePath = "/_emdash/api/plugins/mika";
 
+/** Returns the storefront agent manifest JSON for `/.well-known/mika-agent.json`. */
 export const GET: APIRoute = () => {
   const manifest = createMikaAgentManifest({ include: ["public"] });
 

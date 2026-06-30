@@ -40,10 +40,6 @@ export function mikaSafeReturnPath(
   if (parsed.origin !== base.origin) return fallback;
 
   const safePath = `${parsed.pathname}${parsed.search}${parsed.hash}`;
-  // A same-origin absolute URL can still parse to a pathname beginning with "//"
-  // (e.g. "https://shop.test//evil.test/x" → pathname "//evil.test/x"). Returning that would let a
-  // downstream `new URL(path, origin)` reinterpret it as a protocol-relative URL to another origin,
-  // re-opening the redirect the leading-"//" input check is meant to close.
   if (safePath.startsWith("//")) return fallback;
 
   return safePath;

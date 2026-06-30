@@ -68,12 +68,14 @@ export type MikaValidationResult<T> =
   | { readonly ok: true; readonly data: T }
   | { readonly ok: false; readonly result: MikaApiResult<never> };
 
+/** Primitive string, branded id, quantity, and JSON object schemas shared across operations. */
 export const requiredStringSchema = z.string().trim().min(1);
 export const optionalStringSchema = z.preprocess(
   emptyToUndefined,
   z.string().trim().min(1).optional(),
 );
 
+/** Branded {@link MikaId} string validated through {@link createMikaId}. */
 export const mikaIdSchema = brandedStringSchema(createMikaId, "MikaId");
 export const optionalMikaIdSchema = z.preprocess(emptyToUndefined, mikaIdSchema.optional());
 export const isoDateTimeSchema = brandedStringSchema(createISODateTime, "ISODateTime");
@@ -126,6 +128,7 @@ export const variantOptionsSchema = z.preprocess(
   z.record(z.string(), z.string()).optional(),
 );
 
+/** Catalog content reference and stock availability lookup schemas. */
 export const contentRefInputSchema = z.object({
   collection: requiredStringSchema,
   id: requiredStringSchema,
@@ -136,6 +139,7 @@ export const stockAvailabilityInputSchema = z.object({
   sellableId: mikaIdSchema,
 }) satisfies z.ZodType<{ readonly sellableId: MikaId }>;
 
+/** Account export, checkout polling, invoice, and shared returnTo schemas. */
 export const checkoutStatusInputSchema = z.object({
   checkoutId: mikaIdSchema,
   token: optionalStringSchema,
@@ -168,6 +172,8 @@ export const returnToInputSchema = z.object({
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<AccountExportInput & AccountDeleteInput & AccountPortalInput>;
 
+/** Cart line mutations, coupons, and wishlist transfer schemas. */
+/** Sellable, price, quantity, and variant fields for {@link AddCartItemInput}. */
 export const addCartItemInputSchema = z.object({
   sellableId: mikaIdSchema,
   priceId: optionalMikaIdSchema,
@@ -250,6 +256,7 @@ const checkoutCustomerInputSchema = z.object({
   vatId: optionalStringSchema,
 });
 
+/** Quote, checkout start, preview, and HTML form transport schemas. */
 export const cartQuoteInputSchema = z.object({
   cartId: optionalMikaIdSchema,
   sellableId: optionalMikaIdSchema,
@@ -261,6 +268,7 @@ export const cartQuoteInputSchema = z.object({
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<CartQuoteInput>;
 
+/** Cart or direct purchase handoff fields for {@link StartCheckoutInput}. */
 export const startCheckoutInputSchema = z.object({
   cartId: optionalMikaIdSchema,
   sellableId: optionalMikaIdSchema,
@@ -335,6 +343,7 @@ export const checkoutStartFormInputSchema = z.object({
   returnTo: optionalStringSchema,
 });
 
+/** Account magic-link auth and subscription lifecycle action schemas. */
 export const magicLinkRequestInputSchema = z.object({
   email: z.string().trim().email(),
   returnTo: optionalStringSchema,
@@ -361,6 +370,7 @@ export const subscriptionRenewInputSchema = z.object({
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<SubscriptionActionInput>;
 
+/** Provider webhook ingest and replay schemas. */
 export const webhookReceiveInputSchema = z.object({
   provider: providerNameSchema,
   eventType: optionalStringSchema,
@@ -368,6 +378,7 @@ export const webhookReceiveInputSchema = z.object({
   providerEventId: optionalStringSchema,
 }) satisfies z.ZodType<WebhookReceiveInput>;
 
+/** Admin provider health, catalog sync, stock, and order mutation schemas. */
 export const providerHealthInputSchema = z.object({
   provider: optionalProviderNameSchema,
 }) satisfies z.ZodType<ProviderHealthInput>;
@@ -454,6 +465,8 @@ export const downloadIssueInputSchema = z.object({
   expiresAt: optionalISODateTimeSchema,
   idempotencyKey: optionalStringSchema,
 }) satisfies z.ZodType<DownloadIssueInput>;
+
+/** Shared parsers for operation handlers, URL search params, and HTML form posts. */
 
 /** Parses unknown input; returns a 422 {@link MikaApiResult} envelope on schema failure. */
 export function parseMikaInput<T>(schema: z.ZodType<T>, input: unknown): MikaValidationResult<T> {

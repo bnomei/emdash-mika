@@ -28,6 +28,7 @@ export interface MikaMagicLinkEmailInput {
   readonly brand?: MikaEmailBrand;
 }
 
+/** Single line item rendered in the order confirmation email template. */
 export interface MikaOrderConfirmationLine {
   readonly title: string;
   readonly quantity: number;

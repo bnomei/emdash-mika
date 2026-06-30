@@ -116,8 +116,6 @@ describe("Mika ACP projection", () => {
       is_eligible_search: true,
       is_eligible_checkout: true,
       item_id: "sellable_print:price_1",
-      // €12.00 (amount 1200 minor units) must render as the decimal major-unit feed string "12.00 EUR",
-      // not the raw integer "1200 EUR" (a 100x overstatement on the agent-facing price surface).
       price: "12.00 EUR",
       seller_privacy_policy: "https://shop.example.test/privacy",
       seller_tos: "https://shop.example.test/terms",
@@ -306,7 +304,6 @@ describe("Mika ACP projection", () => {
       apiKey: "acp_test_key",
       provider: createProviderName("stripe"),
       now: () => new Date("2026-01-01T00:00:00.000Z"),
-      // Production mints a fresh id on every call; the other tests' constant id hid this retry bug.
       createSessionId: () => `checkout_session_acp_retry_${(mintedIds += 1)}`,
     });
 
@@ -326,13 +323,10 @@ describe("Mika ACP projection", () => {
     };
     expect(firstBody).toMatchObject({ id: "checkout_session_acp_retry_1" });
 
-    // The 201 was lost in transit; the agent retries the identical request with the same key.
     const retry = await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_retry", body),
     );
     expect(retry.status).toBe(201);
-    // Replays the ORIGINAL session body (id _1, same status + line items) even though the retry
-    // minted a fresh candidate id (_2, proven by the counter below).
     await expect(retry.json()).resolves.toMatchObject({
       id: firstBody.id,
       status: firstBody.status,
@@ -340,7 +334,6 @@ describe("Mika ACP projection", () => {
     });
     expect(mintedIds).toBe(2);
 
-    // A different Idempotency-Key still creates a brand-new session.
     const fresh = await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_fresh", body),
     );
@@ -425,8 +418,6 @@ describe("Mika ACP projection", () => {
         onCheckoutStart: async () => {
           startCount += 1;
           if (startCount === 1) {
-            // Hold the first complete INSIDE checkout.start — after it claimed the session but
-            // before it persists checkoutId — so a second complete can race the re-entry guard.
             signalStarted();
             await gate;
           }
@@ -458,19 +449,17 @@ describe("Mika ACP projection", () => {
         "checkout_session_acp_race",
       );
 
-    // First complete claims the session, then blocks inside checkout.start (mid-authorization).
     const first = complete("idem_complete_a");
     await firstStarted;
 
-    // Second complete with a DISTINCT key races in while the first is still authorizing.
     const second = await complete("idem_complete_b");
     expect(second.status).toBe(409);
-    expect(startCount).toBe(1); // the racing complete never reached checkout.start
+    expect(startCount).toBe(1);
 
     releaseGate();
     const firstResponse = await first;
     expect(firstResponse.status).toBe(200);
-    expect(startCount).toBe(1); // exactly one delegated-payment authorization for the session
+    expect(startCount).toBe(1);
   });
 
   it("refuses to build ACP handlers without an apiKey or signatureSecret", () => {
@@ -983,8 +972,6 @@ describe("Mika Stripe provider", () => {
       return result?.status;
     };
 
-    // Only a confirmed `succeeded` is a completed refund; a pending/in-flight refund must defer the
-    // refunded ledger write, and failed/canceled are terminal failures.
     expect(await refundActionStatus("succeeded")).toBe("completed");
     expect(await refundActionStatus("pending")).toBe("running");
     expect(await refundActionStatus("requires_action")).toBe("running");
@@ -1011,8 +998,6 @@ describe("Mika Stripe provider", () => {
       idempotencyKey: "refund-1",
     });
 
-    // Namespaced so a retry (same admin key) yields the same Stripe key and Stripe returns the
-    // original refund instead of creating a second one.
     expect(capturedIdempotencyKey).toBe("refund-1_refund");
   });
 
@@ -1235,8 +1220,6 @@ describe("Mika Stripe provider", () => {
       ],
     });
 
-    // The discount becomes a one-time coupon (idempotent on retry) attached to the session, so the
-    // fixed-price line items are charged at the discounted total.
     expect(couponCalls[0]).toMatchObject({
       params: { amount_off: 240, currency: "eur", duration: "once" },
       options: { idempotencyKey: "idem_disc_1_coupon" },
@@ -1257,7 +1240,6 @@ describe("Mika Stripe provider", () => {
     };
     const provider = createMikaStripeProvider({ stripe });
 
-    // Fail closed rather than charge the full subtotal while Mika records the discounted total.
     await expect(
       provider.createCheckoutSession({
         idempotencyKey: "idem_disc_fail",
@@ -1319,7 +1301,6 @@ describe("Mika Stripe provider", () => {
       ],
     });
 
-    // 2 x 1200 = 2400 subtotal, minus the 240 discount = 2160 charged.
     expect(intentCalls[0]).toMatchObject({ params: { amount: 2160, currency: "eur" } });
   });
 
@@ -1420,9 +1401,6 @@ describe("Mika Stripe provider", () => {
       }),
     ).resolves.toMatchObject({ status: "completed" });
 
-    // Mika maps subscription.cancel to cancel_at_period_end (entitlement stays
-    // active until period end), so the adapter must schedule via update, not
-    // terminate via cancel.
     expect(cancelCalls).toEqual([]);
     expect(updateCalls).toEqual([{ id: "sub_123", params: { cancel_at_period_end: true } }]);
   });
@@ -1513,10 +1491,6 @@ describe("Mika Stripe provider", () => {
   });
 
   it("normalizes Stripe async-payment-succeeded checkout webhooks as paid payment events", async () => {
-    // Delayed-notification flow (SEPA/ACH/etc.): the earlier checkout.session.completed arrived
-    // payment_status:"unpaid" (dropped as unknown), then the bank confirms and Stripe sends
-    // checkout.session.async_payment_succeeded. This must normalize as a paid payment carrying the
-    // checkout session id so the still-pending order links and fulfills — not silently dropped.
     const payload = {
       id: "evt_async_succeeded",
       type: "checkout.session.async_payment_succeeded",
@@ -1783,7 +1757,6 @@ describe("Mika Stripe provider", () => {
       return event;
     };
 
-    // A FULL refund: `refunded: true`, amount_refunded covers the whole charge.
     const fullRefund = await parse({
       id: "evt_charge_refunded",
       type: "charge.refunded",
@@ -1810,7 +1783,6 @@ describe("Mika Stripe provider", () => {
       totals: { total: { amount: 2400, currency: "EUR" } },
     });
 
-    // A PARTIAL refund: amount_refunded < amount -> partially_refunded, cumulative amount carried.
     const partialRefund = await parse({
       id: "evt_charge_partial",
       type: "charge.refunded",
@@ -1834,7 +1806,6 @@ describe("Mika Stripe provider", () => {
       totals: { total: { amount: 600, currency: "EUR" } },
     });
 
-    // An involuntary chargeback is a FULL reversal of the disputed payment.
     const dispute = await parse({
       id: "evt_dispute",
       type: "charge.dispute.created",
@@ -1851,7 +1822,6 @@ describe("Mika Stripe provider", () => {
       providerOrderId: "pi_disputed",
     });
 
-    // An uncollectible invoice will never be paid -> full reversal.
     const uncollectible = await parse({
       id: "evt_uncollectible",
       type: "invoice.marked_uncollectible",

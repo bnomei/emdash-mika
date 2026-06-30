@@ -97,22 +97,26 @@ export interface MikaProviderCheckoutSession {
   readonly raw?: JsonObject;
 }
 
+/** Input for opening a provider-hosted customer billing portal from a stored customer id. */
 export interface MikaProviderPortalInput {
   readonly providerCustomerId: string;
   readonly returnUrl: string;
 }
 
+/** Redirect URL and optional expiry returned after creating a billing portal session. */
 export interface MikaProviderPortalSession {
   readonly redirectUrl: string;
   readonly expiresAt?: ISODateTime;
 }
 
+/** Lookup keys for resolving a hosted invoice URL from a Mika order and provider payment ids. */
 export interface MikaProviderInvoiceInput {
   readonly orderId: MikaId;
   readonly providerPaymentId?: string;
   readonly providerOrderId?: string;
 }
 
+/** Target subscription and optional new price for cancel, change, or renew provider actions. */
 export interface MikaProviderSubscriptionActionInput {
   readonly subscriptionId: MikaId;
   readonly providerSubscriptionId?: string;
@@ -121,6 +125,7 @@ export interface MikaProviderSubscriptionActionInput {
   readonly metadata?: JsonObject;
 }
 
+/** Refund request scoped to a Mika order with optional partial amount and provider payment id. */
 export interface MikaProviderRefundInput {
   readonly orderId: MikaId;
   readonly providerPaymentId?: string;
@@ -130,12 +135,14 @@ export interface MikaProviderRefundInput {
   readonly idempotencyKey?: string;
 }
 
+/** Cancel request for a provider-side order or payment intent tied to a Mika order. */
 export interface MikaProviderOrderCancelInput {
   readonly orderId: MikaId;
   readonly providerOrderId?: string;
   readonly reason?: string;
 }
 
+/** Catalog sync scope and dry-run mode for pushing Mika sellables to a provider catalog. */
 export interface MikaProviderSyncInput {
   readonly mode?: "dry_run" | "apply";
   readonly scope?: "all" | "entry";
@@ -224,6 +231,7 @@ export interface MikaProviderSubscriptionEvent {
   readonly raw?: JsonObject;
 }
 
+/** Fallback webhook event when a provider event type is not mapped to payment or subscription. */
 export interface MikaProviderUnknownWebhookEvent {
   readonly kind: "unknown";
   readonly provider: ProviderName;

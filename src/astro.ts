@@ -47,6 +47,7 @@ export type MikaAstroClient<TOptions extends MikaAstroClientOptions | undefined 
       readonly routes: MikaClientRoute;
     };
 
+/** Locale hints passed to Intl formatters for money and price labels. */
 export interface MikaFormatOptions {
   readonly locales?: Intl.LocalesArgument;
 }
@@ -65,6 +66,7 @@ export interface MikaPurchaseOption {
   readonly disabled: boolean;
 }
 
+/** Client-side variant control state for one sellable in grouped purchase pickers. */
 export interface MikaPurchaseVariantMapItem {
   readonly id: string;
   readonly priceId?: string;
@@ -73,6 +75,7 @@ export interface MikaPurchaseVariantMapItem {
   readonly options: Record<string, string>;
 }
 
+/** Pre-selected sellable or price and locale hints for purchase view-models. */
 export interface MikaPurchaseModelOptions extends MikaFormatOptions {
   readonly selectedSellableId?: string;
   readonly selectedPriceId?: string;
@@ -144,6 +147,7 @@ export function mikaReturnTo(url: URL): string {
   return `${url.pathname}${url.search}`;
 }
 
+/** Open-redirect guard options for post-action return paths. */
 export type MikaSafeReturnToOptions = MikaSafeReturnPathOptions;
 
 /** Validates and normalizes a post-checkout return path against open-redirect rules. */
@@ -154,6 +158,7 @@ export function mikaSafeReturnTo(
   return mikaSafeReturnPath(candidate, options);
 }
 
+/** Serializable scalar accepted by hidden form input helpers. */
 export type MikaHiddenInputValue = string | number | boolean | null | undefined;
 
 /** Name/value pair for a hidden form input; nullish values become empty strings. */
@@ -164,6 +169,7 @@ export function mikaHiddenInput(name: string, value: MikaHiddenInputValue) {
   };
 }
 
+/** Return-path validation options for hidden `returnTo` fields. */
 export type MikaReturnToInputOptions = MikaSafeReturnToOptions;
 
 /** Hidden `returnTo` input attrs validated through {@link mikaSafeReturnTo}. */
@@ -174,12 +180,14 @@ export function mikaReturnToInput(
   return mikaHiddenInput("returnTo", mikaSafeReturnTo(returnTo, options));
 }
 
+/** Checkout success, cancel, and return paths for redirect hidden inputs. */
 export interface MikaRedirectInputsInput {
   readonly successPath: string | URL | null | undefined;
   readonly cancelPath: string | URL | null | undefined;
   readonly returnTo: string | URL | null | undefined;
 }
 
+/** Fallback paths and origin for validating checkout redirect hidden inputs. */
 export interface MikaRedirectInputsOptions {
   readonly successFallback?: string;
   readonly cancelFallback?: string;
@@ -235,6 +243,7 @@ export function formatMikaPrice(price: PriceDTO, options: MikaFormatOptions = {}
   return `${amount} ${formatMikaBillingInterval(price)}`;
 }
 
+/** Human-readable label chain from variant option values. */
 export function formatMikaVariant(
   variantOptions: readonly VariantOptionValueDTO[],
   fallback = "",
@@ -244,6 +253,7 @@ export function formatMikaVariant(
   return values.length > 0 ? values.join(" / ") : fallback;
 }
 
+/** Display title preferring variant labels over the sellable title. */
 export function formatMikaSellable(sellable: SellableDTO): string {
   return formatMikaVariant(sellable.variantOptions, sellable.title);
 }
@@ -353,12 +363,14 @@ export function mikaMaxPurchaseQuantity(availability?: AvailabilityDTO): number 
   return limits.length > 0 ? Math.min(...limits) : undefined;
 }
 
+/** First enabled purchase option, or the first option when all are disabled. */
 export function firstAvailableMikaPurchaseOption(
   options: readonly MikaPurchaseOption[],
 ): MikaPurchaseOption | undefined {
   return options[firstAvailableMikaPurchaseIndex(options)];
 }
 
+/** Index of the first purchasable option for default selection. */
 export function firstAvailableMikaPurchaseIndex(options: readonly MikaPurchaseOption[]): number {
   const index = options.findIndex((option) => !option.disabled);
   return index === -1 ? 0 : index;

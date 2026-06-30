@@ -11,12 +11,14 @@ export const EMDASH_PLUGIN_API_BASE = "/_emdash/api/plugins";
 /** Re-exported operation route map keyed by stable route names. */
 export const mikaPluginRoutes = mikaOperationPluginRoutes;
 
+/** Union of stable plugin route keys from the operation route map. */
 export type MikaPluginRouteName = keyof typeof mikaPluginRoutes;
 
 /** Route names exposed without authentication requirements. */
 export const publicMikaPluginRouteNames =
   mikaOperationPublicRouteNames satisfies readonly MikaPluginRouteName[];
 
+/** Route keys for operations that do not require authentication. */
 export type MikaPublicPluginRouteName = (typeof publicMikaPluginRouteNames)[number];
 
 /** Options for resolving a plugin route to a URL string. */

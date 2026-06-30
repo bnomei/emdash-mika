@@ -146,10 +146,12 @@ export interface CreateMikaStripeProviderOptions {
   readonly now?: () => Date;
 }
 
+/** Per-request Stripe SDK options forwarded by the adapter, primarily for idempotency keys. */
 export interface MikaStripeRequestOptions {
   readonly idempotencyKey?: string;
 }
 
+/** Parameters for creating a Stripe Checkout Session from Mika cart lines and redirect URLs. */
 export interface MikaStripeCheckoutSessionCreateParams {
   readonly mode: string;
   readonly line_items: readonly MikaStripeJsonObject[];
@@ -170,6 +172,7 @@ export interface MikaStripeCouponCreateParams {
   readonly max_redemptions?: number;
 }
 
+/** Stripe Checkout Session resource shape used by the adapter for status and redirect mapping. */
 export interface MikaStripeCheckoutSession {
   readonly id: string;
   readonly object?: string;
@@ -185,6 +188,7 @@ export interface MikaStripeCheckoutSession {
   readonly [key: string]: unknown;
 }
 
+/** Parameters for creating a confirmed delegated PaymentIntent from an ACP shared payment token. */
 export interface MikaStripePaymentIntentCreateParams {
   readonly amount: number;
   readonly currency: string;
@@ -193,6 +197,7 @@ export interface MikaStripePaymentIntentCreateParams {
   readonly metadata?: Record<string, string>;
 }
 
+/** Stripe PaymentIntent resource shape used for delegated checkout and webhook normalization. */
 export interface MikaStripePaymentIntent {
   readonly id: string;
   readonly object?: string;
@@ -206,17 +211,20 @@ export interface MikaStripePaymentIntent {
   readonly [key: string]: unknown;
 }
 
+/** Parameters for creating a Stripe Billing Portal session for subscription self-service. */
 export interface MikaStripePortalSessionCreateParams {
   readonly customer: string;
   readonly return_url: string;
 }
 
+/** Stripe Billing Portal session resource with redirect URL and expiry timestamp. */
 export interface MikaStripePortalSession {
   readonly url?: string | null;
   readonly expires_at?: number | null;
   readonly [key: string]: unknown;
 }
 
+/** Stripe Invoice resource consulted when resolving hosted invoice URLs for orders. */
 export interface MikaStripeInvoice {
   readonly id: string;
   readonly hosted_invoice_url?: string | null;
@@ -224,6 +232,7 @@ export interface MikaStripeInvoice {
   readonly [key: string]: unknown;
 }
 
+/** Parameters for issuing a full or partial refund against a payment intent or charge. */
 export interface MikaStripeRefundCreateParams {
   readonly payment_intent?: string;
   readonly charge?: string;
@@ -231,6 +240,7 @@ export interface MikaStripeRefundCreateParams {
   readonly reason?: string;
 }
 
+/** Stripe Subscription resource shape used for lifecycle actions and webhook reconciliation. */
 export interface MikaStripeSubscription {
   readonly id: string;
   readonly status?: string | null;
@@ -246,6 +256,7 @@ export interface MikaStripeSubscription {
   readonly [key: string]: unknown;
 }
 
+/** Loose JSON object type for Stripe SDK payloads not modeled as dedicated interfaces. */
 export type MikaStripeJsonObject = JsonObject;
 
 /** Creates a `MikaProviderAdapter` backed by Stripe checkout, billing portal, and webhooks. */
@@ -298,12 +309,6 @@ export function createMikaStripeProvider(
         return unsupportedAction("subscription_cancel", "Stripe subscription id is required.");
       }
 
-      // Schedule cancel-at-period-end rather than terminating immediately, so the
-      // provider state matches Mika's lifecycle: `subscription.cancel` maps to
-      // `cancel_at_period_end` and entitlements stay active until the period ends,
-      // when a `customer.subscription.deleted` webhook finalizes the cancellation.
-      // An immediate `subscriptions.cancel` would strip provider access while Mika
-      // still shows a pending-cancel subscription with an active entitlement.
       const subscription = await options.stripe.subscriptions.update(input.providerSubscriptionId, {
         cancel_at_period_end: true,
       });
@@ -386,8 +391,6 @@ async function createStripeCheckoutSession(
     throw new Error("Stripe checkout sessions are not available.");
   }
 
-  // Line items carry undiscounted catalog amounts (and may reference fixed Stripe Prices), so an
-  // order-level discount is applied as a one-time Stripe coupon rather than by mutating line totals.
   const discounts = await stripeCheckoutDiscounts(options, input);
 
   const session = await options.stripe.checkout.sessions.create(
@@ -419,8 +422,6 @@ async function stripeCheckoutDiscounts(
   if (amountOff <= 0) return undefined;
 
   if (!options.stripe.coupons?.create) {
-    // Fail closed: never create a session that charges the full subtotal while Mika records the
-    // discounted total. The caller releases reservations and reports a provider failure.
     throw new Error("Stripe coupons are required to apply a checkout discount.");
   }
 
@@ -435,7 +436,6 @@ async function stripeCheckoutDiscounts(
       currency,
       duration: "once",
       name: "Mika checkout discount",
-      // Single-use: the coupon is only ever attached server-side to this one checkout session.
       max_redemptions: 1,
     },
     requestOptions(input.idempotencyKey ? `${input.idempotencyKey}_coupon` : undefined),
@@ -458,7 +458,6 @@ async function createStripeDelegatedPayment(
     (amount, line) => amount + line.unitAmount * line.quantity,
     0,
   );
-  // Subtract the order-level discount so the delegated charge matches the Mika checkout total.
   const total = Math.max(0, subtotal - (input.discount?.amount ?? 0));
   const currency = input.lines[0]?.currency;
   if (!currency) {
@@ -674,20 +673,11 @@ async function refundStripePayment(
       ...(input.amount !== undefined ? { amount: input.amount } : {}),
       ...(input.reason ? { reason: input.reason } : {}),
     },
-    // Pass the admin idempotency key to Stripe so a retry after a local ledger.put failure (which
-    // marks the admin audit failed and bypasses replay) does not create a SECOND refund — Stripe
-    // returns the original. Namespaced (`_refund`) because Stripe idempotency keys are account-wide,
-    // so the same admin key must not collide with another endpoint (mirrors the `_coupon` suffix).
     requestOptions(input.idempotencyKey ? `${input.idempotencyKey}_refund` : undefined),
   );
 
   return {
     id: createMikaId(refund.id),
-    // Only a confirmed `succeeded` maps to `completed`. Stripe refunds are frequently `pending` while
-    // processing (and can still `failed`/`canceled`), and `refundOrder` writes the refunded ledger
-    // state + revokes fulfillment access ONLY on `completed` — so a pending/in-flight refund must not
-    // report completed, or the order would be marked refunded before the money actually moves.
-    // Eventual settlement of a pending refund is reconciled by the refund webhook (separate concern).
     status: stripeRefundActionStatus(refund.status),
   };
 }
@@ -770,10 +760,6 @@ function parseStripeWebhookEvent(
     return stripePaymentFailureEvent(provider, providerEventId, type, object, input.parsed);
   }
 
-  // Provider-initiated reversals of an already-captured payment: a dashboard/API refund
-  // (`charge.refunded`, possibly partial), an involuntary chargeback (`charge.dispute.created`),
-  // or an uncollectible invoice. Checked before the `invoice.` branch so
-  // `invoice.marked_uncollectible` is not swallowed as a non-paid invoice -> unknown.
   if (STRIPE_PAYMENT_REVERSAL_TYPES.has(type)) {
     return stripePaymentReversalEvent(provider, providerEventId, type, object, input.parsed);
   }
@@ -817,12 +803,6 @@ function parseStripeWebhookEvent(
     };
   }
 
-  // A paid Stripe Checkout: either `checkout.session.completed` whose payment already settled, or
-  // `checkout.session.async_payment_succeeded` — the delayed-notification (SEPA/ACH/bank transfer/
-  // BACS/boleto) success counterpart of `async_payment_failed`. The async success is authoritative
-  // by event TYPE (mirroring how the failure side keys off the type, not `payment_status`), so a
-  // genuinely-paid delayed order is never dropped as `unknown`; it carries `providerCheckoutId` so
-  // it links to its still-pending checkout session and fulfills, exactly like the settled case.
   if (
     (type === "checkout.session.completed" && stripeCheckoutSessionIsPaid(object)) ||
     type === "checkout.session.async_payment_succeeded"
@@ -901,9 +881,6 @@ function stripePaymentReversalEvent(
   object: JsonObject,
   raw: JsonObject | undefined,
 ): MikaProviderWebhookEvent {
-  // `charge.refunded` may be partial (amount_refunded < amount); a chargeback and an uncollectible
-  // invoice fully reverse the captured payment. Stripe sets `refunded: true` on a fully-refunded
-  // charge; otherwise compare the cumulative refunded amount against the captured amount.
   const amount = numberChild(object, "amount");
   const amountRefunded = numberChild(object, "amount_refunded");
   const fullyReversed =
@@ -912,8 +889,6 @@ function stripePaymentReversalEvent(
     (amountRefunded !== undefined && amount !== undefined && amountRefunded >= amount);
   const paymentStatus = fullyReversed ? "refunded" : "partially_refunded";
 
-  // The charge/dispute/invoice all link back to the order's payment intent; fall back to the
-  // charge id, then the object id, so the dispatcher can locate the order to downgrade.
   const linkedId =
     stripeObjectId(object["payment_intent"]) ?? stripeObjectId(object["charge"]);
   const objectId = stringChild(object, "id");
@@ -921,7 +896,6 @@ function stripePaymentReversalEvent(
   const providerOrderId = linkedId ?? objectId;
   const email = stringChild(object, "customer_email") ?? stringChild(object, "receipt_email");
 
-  // Carry the CUMULATIVE reversed amount so the dispatcher can derive this event's delta.
   const reversedAmount = type === "charge.refunded" ? amountRefunded : amount;
   const currency = stringChild(object, "currency")?.toUpperCase();
   const totals =
@@ -993,7 +967,6 @@ function stripeRefundActionStatus(
     case "canceled":
       return "failed";
     default:
-      // `pending`, `requires_action`, or anything unrecognized: the refund is in flight, not settled.
       return "running";
   }
 }

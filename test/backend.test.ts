@@ -611,7 +611,6 @@ describe("backend test storage helpers", () => {
 
   it("fails one email and continues the outbox sweep when its prepare throws", async () => {
     const repositories = createTestBackendRepositories();
-    // E1: an order-confirmation whose prepare will THROW (findOrderById raises mid-render).
     const throwing = createEmailDocument({
       id: createTestMikaId("email", 1),
       record: {
@@ -625,7 +624,6 @@ describe("backend test storage helpers", () => {
         metadata: {},
       },
     });
-    // E2: a healthy magic-link email — it MUST still be delivered after E1 throws.
     const healthy = createEmailDocument({
       id: createTestMikaId("email", 2),
       record: {
@@ -659,7 +657,6 @@ describe("backend test storage helpers", () => {
       },
     });
 
-    // The prepare throw fails only E1; the sweep does NOT abort and still delivers E2.
     await expect(runner.runOnce()).resolves.toMatchObject({ sent: 1, failed: 1 });
     expect(sent.map((message) => message.emailId)).toEqual([healthy.id]);
     await expect(repositories.ops.findEmail(throwing.id)).resolves.toMatchObject({ status: "failed" });
@@ -685,7 +682,6 @@ describe("backend test storage helpers", () => {
       },
     });
     await repositories.ops.put(email);
-    // The success-recording write throws AFTER the provider already accepted the send.
     repositories.ops.completeEmail = async () => {
       throw new Error("ops write outage after a successful send");
     };
@@ -703,8 +699,6 @@ describe("backend test storage helpers", () => {
 
     await runner.runOnce();
 
-    // The send succeeded once; a completeEmail throw must NOT re-queue the email (which would re-send a
-    // duplicate). It is recorded delivered via the best-effort fallback, so it ends `sent`, not failed.
     expect(sendCount).toBe(1);
     await expect(repositories.ops.findEmail(email.id)).resolves.toMatchObject({ status: "sent" });
   });
@@ -1126,7 +1120,6 @@ describe("backend test storage helpers", () => {
           subject: "Sign in",
           text: "Use this link",
           html: "<p>Use this link</p>",
-          // The idempotency key is forwarded so the host pipeline/provider can dedup a re-send.
           idempotencyKey: "magic-link:email_1",
         },
       },
@@ -2283,7 +2276,6 @@ describe("backend test Kysely stock database harness", () => {
             throw new Error("Expected reservation to be created.");
           }
 
-          // While active, the key replays the reservation (a concurrent retry is genuinely in progress).
           await expect(repository.findEventByIdempotencyKey(key)).resolves.toMatchObject({
             id: reservation.event.id,
             status: "active",
@@ -2291,11 +2283,8 @@ describe("backend test Kysely stock database harness", () => {
 
           await service.releaseExpiredReservations({ now: clock.isoAt(60_000) });
 
-          // After expiry the key is freed, so a checkout that died after reserving but before
-          // persisting its checkout document is no longer stuck replaying the dead reservation.
           await expect(repository.findEventByIdempotencyKey(key)).resolves.toBeNull();
 
-          // A fresh reserve with the same key now creates a new active reservation, not a replay.
           const retry = await service.reserve({
             stockItemId: stockItem.id,
             quantity: 1,
@@ -2331,7 +2320,6 @@ describe("backend test Kysely stock database harness", () => {
             throw new Error("Expected reservation to be created.");
           }
 
-          // Extend to a longer provider window (e.g. 24h) and never shorten back below it.
           await service.extendReservations({
             reservationEventIds: [reservation.event.id],
             expiresAt: clock.isoAt(24 * 60 * 60_000),
@@ -2347,7 +2335,6 @@ describe("backend test Kysely stock database harness", () => {
             expiresAt: clock.isoAt(24 * 60 * 60_000),
           });
 
-          // Maintenance sweep past the original 15m TTL must NOT release the extended reservation.
           await expect(
             service.releaseExpiredReservations({ now: clock.isoAt(16 * 60_000) }),
           ).resolves.toMatchObject({ releasedCount: 0 });
@@ -2438,7 +2425,6 @@ describe("backend test Kysely stock database harness", () => {
         stockItem,
         async ({ repository, service }) => {
           const clock = createTestClock();
-          // Reservation A takes all 5 units, then expires.
           const expiredReservation = await service.reserve({
             stockItemId: stockItem.id,
             quantity: 5,
@@ -2449,10 +2435,8 @@ describe("backend test Kysely stock database harness", () => {
             throw new Error("Expected reservation to be created.");
           }
 
-          // Maintenance releases A's units back to availability.
           await service.releaseExpiredReservations({ now: clock.isoAt(60_000) });
 
-          // Reservation B re-reserves the freed units while A's payment is still in flight.
           const activeReservation = await service.reserve({
             stockItemId: stockItem.id,
             quantity: 5,
@@ -2467,7 +2451,6 @@ describe("backend test Kysely stock database harness", () => {
             quantityReserved: 5,
           });
 
-          // A late payment for A must NOT consume on-hand units already committed to B.
           await expect(
             service.consume({
               reservationEventId: expiredReservation.event.id,
@@ -2477,7 +2460,6 @@ describe("backend test Kysely stock database harness", () => {
             }),
           ).rejects.toThrow(/oversell/i);
 
-          // Stock and the expired reservation are left untouched (rolled back, retryable).
           await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toMatchObject({
             quantityOnHand: 5,
             quantityReserved: 5,
@@ -3691,7 +3673,6 @@ describe("backend API composition", () => {
       });
       const tokenHash = createTestHash("magic-link-token:magic_link_token_1");
 
-      // A session store whose write fails must NOT permanently spend the one-time token.
       const failingCtx = {
         ...createTestRequestContext(),
         session: {
@@ -3705,12 +3686,10 @@ describe("backend API composition", () => {
         harness.api.magicLink.verify(failingCtx, { token: "magic_link_token_1" }),
       ).rejects.toThrow("session store outage");
 
-      // The consume was reverted, so the token is pending again rather than stuck "consumed".
       await expect(harness.repositories.ephemeral.get(tokenHash)).resolves.toMatchObject({
         status: "pending",
       });
 
-      // The same link now verifies successfully against a working session.
       await expect(
         harness.api.magicLink.verify(createTestRequestContext(), {
           token: "magic_link_token_1",
@@ -3734,9 +3713,6 @@ describe("backend API composition", () => {
         email: "subscriber@example.test",
       });
 
-      // Record the order of session operations. A successful verify must rotate the session id
-      // (regenerate) BEFORE writing any identity key, so a session id an attacker planted in the
-      // victim's browser before login cannot be reused to read the account afterwards.
       const calls: string[] = [];
       const store: Record<string, unknown> = {};
       const ctx = {
@@ -3776,9 +3752,6 @@ describe("backend API composition", () => {
       });
       const tokenHash = createTestHash("magic-link-token:magic_link_token_1");
 
-      // Fail the account-view assembly (a customer-data read throws) after the token is consumed.
-      // Because the DTO is built before the session writes, this must revert the token AND leave the
-      // session unauthenticated, not half-authenticate while re-opening the one-time token.
       const originalListOrders = harness.repositories.ledger.listOrdersByCustomer;
       harness.repositories.ledger.listOrdersByCustomer = async () => {
         throw new Error("ledger read outage");
@@ -3793,7 +3766,6 @@ describe("backend API composition", () => {
         status: "pending",
       });
 
-      // With the read restored, the same link verifies successfully and binds the session.
       harness.repositories.ledger.listOrdersByCustomer = originalListOrders;
       const ctx2 = createTestRequestContext();
       await expect(
@@ -3898,10 +3870,6 @@ describe("backend API composition", () => {
     );
     if (!account.ok) throw new Error("Expected account.get to succeed.");
 
-    // The bundled storefront links download.href directly, so it must be a NAVIGABLE link carrying a
-    // freshly-minted capability token (not the bare internal ref) — pointing at the GET-validate /
-    // POST-consume interstitial (`/download/<token>`), so a browser prefetch cannot burn it and the
-    // token still resolves on the user-initiated confirm. No host admin.downloadIssue call needed.
     const download = account.data.downloads[0];
     if (!download) throw new Error("Expected an account download.");
     expect(download.href).toBe("/download/download_token_1");
@@ -4205,9 +4173,6 @@ describe("backend API composition", () => {
       await harness.repositories.account.put(createCustomerDocument());
       await harness.repositories.ledger.put(createOrderDocument());
 
-      // accountDTOForCustomer is the SOLE caller of listOrdersByCustomer and listSubscriptionsByCustomer
-      // (each a single call site), so capturing each limit isolates exactly the export's request, and
-      // asserting both catches a partial revert that drops the limit from only one of the list calls.
       const exportLimits: { orders?: number; subscriptions?: number } = {};
       const baseListOrders = harness.repositories.ledger.listOrdersByCustomer.bind(
         harness.repositories.ledger,
@@ -4231,9 +4196,6 @@ describe("backend API composition", () => {
         ),
       ).resolves.toMatchObject({ ok: true, data: { status: "ready" } });
 
-      // The export fetches the COMPLETE history (effectively unbounded), not the default-paginated
-      // page, so a customer with more than a default page is not silently truncated. Entitlements
-      // receive the same `limit` argument in the same accountDTOForCustomer call.
       expect(exportLimits).toEqual({
         orders: Number.MAX_SAFE_INTEGER,
         subscriptions: Number.MAX_SAFE_INTEGER,
@@ -4450,7 +4412,6 @@ describe("backend API composition", () => {
     const created = await api.account.export(ctx, {});
     if (!created.ok) throw new Error("Expected emailHash account export to be created.");
 
-    // Same emailHash-only session must be able to poll the export it created.
     await expect(
       api.account.exportStatus(ctx, { exportId: created.data.id }),
     ).resolves.toMatchObject({
@@ -4570,10 +4531,6 @@ describe("backend API composition", () => {
 
     try {
       await harness.repositories.ledger.put(createOrderDocument());
-      // 2026-01-01T13:00:00+14:00 is the instant 2025-12-31T23:00:00Z — already past `now`
-      // (TEST_NOW, 2026-01-01T00:00:00.000Z). Stored verbatim it sorts lexicographically AFTER now
-      // ("...T13..." > "...T00...") and would be served as still-valid; createISODateTime must
-      // canonicalize it to `Z` so the string expiry comparison matches the real instant.
       await issueDownloadToken(harness.repositories, {
         token: "noncanonical_expired_download_token",
         expiresAt: "2026-01-01T13:00:00+14:00",
@@ -4749,8 +4706,6 @@ describe("backend API composition", () => {
         },
       });
 
-      // The user-initiated POST confirm returns the same redirect payload the GET resolver did and
-      // burns the token, so the interstitial only spends it on submit (not on a GET prefetch/scan).
       const confirmed = await harness.api.download.confirm({ token: "download_token_1" });
       expect(confirmed).toMatchObject({
         ok: true,
@@ -4765,7 +4720,6 @@ describe("backend API composition", () => {
         harness.repositories.ephemeral.get(createTestHash("download-token:download_token_1")),
       ).resolves.toMatchObject({ status: "consumed" });
 
-      // Still single-use: a second confirm — and the GET resolver — must both reject the spent token.
       await expect(
         harness.api.download.confirm({ token: "download_token_1" }),
       ).resolves.toMatchObject({
@@ -5008,9 +4962,6 @@ describe("backend API composition", () => {
         quantityOnHand: 4,
         quantityReserved: 0,
       });
-      // The order is retained as a financial record but de-identified: identity PII is
-      // cleared and the email-hash index is neutralized to the sentinel, while the
-      // financial fields (totals, lines, ids, customerId) stay intact.
       const retainedOrder = await repositories.ledger.findOrderById(order.id);
       expect(retainedOrder?.customerId).toBe(order.customerId);
       expect(retainedOrder?.totalAmount).toBe(order.totalAmount);
@@ -5092,10 +5043,6 @@ describe("backend API composition", () => {
 
     try {
       await mikaInitialMigration.up(db);
-      // A userId-only identity (host SSO / manual grant): an entitlement keyed by userId ALONE — no
-      // customer doc, no customerId, no emailHash. This class previously made account-delete a no-op
-      // (the sentinel was undefined AND the anonymizer never collected by userId), leaving the grant
-      // re-authable forever via listEntitlementsByUser.
       const baseGrant = createEntitlementDocument();
       await repositories.account.put({
         ...baseGrant,
@@ -5123,8 +5070,6 @@ describe("backend API composition", () => {
         },
       });
 
-      // The userId index is neutralized: the original userId no longer resolves the grant, and
-      // re-authenticating with the same ctx.userId yields no identity.
       expect((await repositories.account.listEntitlementsByUser("user_only")).items).toHaveLength(0);
       expect((await repositories.account.listEntitlementsByUser(sentinel)).items).toHaveLength(1);
       await expect(
@@ -5161,7 +5106,6 @@ describe("backend API composition", () => {
       await mikaInitialMigration.up(db);
       await repositories.account.put(customer);
 
-      // The pre-delete customer is fully resolvable by its email hash (re-auth path).
       await expect(
         repositories.account.findCustomerByEmailHash(originalEmailHash),
       ).resolves.toMatchObject({ customerId: customer.customerId, aggregate: { name: "Subscriber One" } });
@@ -5190,25 +5134,18 @@ describe("backend API composition", () => {
         },
       });
 
-      // Identity PII is cleared on the persisted customer document.
       const anonymized = await repositories.account.findCustomerById(customer.customerId);
       expect(anonymized?.aggregate.email).toBeUndefined();
       expect(anonymized?.aggregate.name).toBeUndefined();
       expect(anonymized?.aggregate.company).toBeUndefined();
       expect(anonymized?.aggregate.vatId).toBeUndefined();
-      // Both email-hash indexes are neutralized to the opaque, non-resolvable sentinel.
       expect(anonymized?.aggregate.emailHash).toBe(sentinel);
       expect(anonymized?.emailHash).toBe(sentinel);
-      // The customerId (admin key) and an audit marker are retained; the userId index is
-      // neutralized to the SAME sentinel as the email hash so neither re-auth lookup can
-      // resolve the deleted account.
       expect(anonymized?.customerId).toBe(customer.customerId);
       expect(anonymized?.userId).toBe(sentinel);
       expect(anonymized?.aggregate.metadata?.["anonymizedAt"]).toBe(clock.isoAt(60_000));
       expect(anonymized?.updatedAt).toBe(clock.isoAt(60_000));
 
-      // Re-auth via the original email hash OR the original userId no longer resolves the
-      // deleted account (both indexes neutralized to the sentinel).
       await expect(
         repositories.account.findCustomerByEmailHash(originalEmailHash),
       ).resolves.toBeNull();
@@ -5256,8 +5193,6 @@ describe("backend API composition", () => {
     const customer = createCustomerDocument();
     const originalEmailHash = createTestHash("email:subscriber@example.test");
     const sentinel = `account-deleted:${customer.customerId}`;
-    // A paid order (with a download line) and an entitlement, both keyed by the
-    // customer's email hash, are the records a re-auth/guest path could otherwise reach.
     const order = createOrderDocument({ emailHash: originalEmailHash });
     const entitlement = createEntitlementDocument();
 
@@ -5267,7 +5202,6 @@ describe("backend API composition", () => {
       await repositories.account.put(entitlement);
       await repositories.ledger.put(order);
 
-      // Pre-delete, both records are reachable by the customer's email hash.
       expect((await repositories.ledger.listOrdersByEmailHash(originalEmailHash)).items).toHaveLength(
         1,
       );
@@ -5300,9 +5234,6 @@ describe("backend API composition", () => {
         },
       });
 
-      // GAP 1: the email-hash index on the retained order/entitlement is neutralized, so
-      // the original hash resolves nothing -- yet the records survive (re-keyed to the
-      // sentinel) with their financial fields intact.
       expect((await repositories.ledger.listOrdersByEmailHash(originalEmailHash)).items).toHaveLength(
         0,
       );
@@ -5322,20 +5253,12 @@ describe("backend API composition", () => {
       expect(retainedEntitlements[0]?.data.record.emailHash).toBe(sentinel);
       expect(retainedEntitlements[0]?.data.entitlementKey).toBe(entitlement.entitlementKey);
 
-      // The userId index is neutralized too: the customer doc's userId and the
-      // entitlement's userId both re-keyed to the sentinel, so neither re-auth lookup by
-      // the ORIGINAL userId resolves anything (defense-in-depth for the userId branch).
       const originalUserId = customer.userId as string;
       await expect(repositories.account.findCustomerByUserId(originalUserId)).resolves.toBeNull();
       expect((await repositories.account.listEntitlementsByUser(originalUserId)).items).toHaveLength(
         0,
       );
 
-      // GAP 1 end-to-end: a FRESH magic link to the deleted email re-authenticates only as
-      // a guest (the customer doc no longer matches the hash). verifyMagicLink's guest branch
-      // returns hardcoded empty arrays regardless of any retained record, so it proves
-      // nothing on its own -- the real check is the SUBSEQUENT account.get, which resolves
-      // identity from the bound mika.emailHash session and must be rejected outright.
       const guestCtx = createTestRequestContext({ customerId: false, userId: false });
       await expect(
         api.magicLink.request(guestCtx, { email: "subscriber@example.test" }),
@@ -5349,9 +5272,6 @@ describe("backend API composition", () => {
         error: { code: "AUTH_REQUIRED" },
       });
 
-      // GAP 2: a session opened BEFORE deletion still holds mika.customerId; identity
-      // resolution must now reject the anonymized customer outright instead of granting
-      // access (the order/entitlement are still keyed by the retained customerId).
       const staleSessionCtx = createTestRequestContext({ customerId: false, userId: false });
       staleSessionCtx.session?.set("mika.customerId", customer.customerId);
       expect(await api.account.get(staleSessionCtx)).toMatchObject({
@@ -5360,7 +5280,6 @@ describe("backend API composition", () => {
         error: { code: "AUTH_REQUIRED" },
       });
 
-      // Admin/accounting can still read the retained (anonymized) record by id.
       await expect(repositories.account.findCustomerById(customer.customerId)).resolves.toMatchObject(
         { customerId: customer.customerId, emailHash: sentinel },
       );
@@ -5388,13 +5307,8 @@ describe("backend API composition", () => {
     const api = createMikaBackendApi(dependencies);
     const clock = createTestClock();
 
-    // A GUEST who bought a digital product: the library NEVER provisions a customer doc,
-    // so the only records are an order + entitlement keyed ONLY by the email hash -- no
-    // customerId, no userId. A guest delete must still re-key these or a fresh magic link
-    // re-exposes them (orders, entitlements, fresh download/invoice tokens, account export).
     const guestEmail = "guest@example.test";
     const guestHash = createTestHash("email:guest@example.test");
-    // No customer doc and no customerId => the sentinel is derived from the request emailHash.
     const sentinel = `account-deleted-email:${guestHash}`;
     const baseOrder = createOrderDocument();
     const guestOrder = createOrderDocument({
@@ -5433,14 +5347,11 @@ describe("backend API composition", () => {
       await repositories.ledger.put(guestOrder);
       await repositories.account.put(guestEntitlement);
 
-      // Pre-delete, both records are reachable by the guest's email hash.
       expect((await repositories.ledger.listOrdersByEmailHash(guestHash)).items).toHaveLength(1);
       expect(
         (await repositories.account.listEntitlementsByEmailHash(guestHash)).items,
       ).toHaveLength(1);
 
-      // A magic-link-verified guest session carries mika.emailHash but no customerId/userId;
-      // the guest drives account.delete from exactly that emailHash-only identity.
       const guestCtx = createTestRequestContext({ customerId: false, userId: false });
       await guestCtx.session?.set("mika.emailHash", guestHash);
       const preDeleteAccount = await api.account.get(guestCtx);
@@ -5464,7 +5375,6 @@ describe("backend API composition", () => {
         status: 202,
       });
 
-      // The queued request carries ONLY the emailHash (no customerId, no userId).
       const queuedRequest = await repositories.ops.findAccountDeleteRequest(
         createTestMikaId("account_delete_request", 1),
       );
@@ -5483,7 +5393,6 @@ describe("backend API composition", () => {
               {
                 requestId: "account_delete_request_1",
                 status: "completed",
-                // No customer doc for a guest, but the email-hash-keyed records are still re-keyed.
                 customerAnonymized: false,
                 ordersAnonymized: 1,
                 entitlementsAnonymized: 1,
@@ -5493,8 +5402,6 @@ describe("backend API composition", () => {
         },
       });
 
-      // The original hash now resolves nothing; the records survive (re-keyed to the
-      // email sentinel) so financial history is retained without the re-auth vector.
       expect((await repositories.ledger.listOrdersByEmailHash(guestHash)).items).toHaveLength(0);
       expect(
         (await repositories.account.listEntitlementsByEmailHash(guestHash)).items,
@@ -5518,8 +5425,6 @@ describe("backend API composition", () => {
         error: { code: "DOWNLOAD_REVOKED" },
       });
 
-      // End-to-end: a FRESH magic link to the deleted guest email re-authenticates as a
-      // guest, but the subsequent account.get resolves no orders/entitlements/downloads.
       const freshCtx = createTestRequestContext({ customerId: false, userId: false });
       await expect(
         api.magicLink.request(freshCtx, { email: guestEmail }),
@@ -5559,8 +5464,6 @@ describe("backend API composition", () => {
     const originalUserId = customer.userId as string;
     const order = createOrderDocument();
     const entitlement = createEntitlementDocument();
-    // userId is an INDEPENDENT host-supplied context field (context.ts), distinct from
-    // customerId. A userId-only identity context exercises the userId resolution branch.
     const userIdCtx = () =>
       createTestRequestContext({ customerId: false, userId: originalUserId });
 
@@ -5570,8 +5473,6 @@ describe("backend API composition", () => {
       await repositories.account.put(entitlement);
       await repositories.ledger.put(order);
 
-      // Pre-delete, the userId-only identity resolves the FULL account (the leak surface:
-      // findCustomerByUserId -> accountDTOForCustomer with orders, entitlements, tokens).
       await expect(api.account.get(userIdCtx())).resolves.toMatchObject({
         ok: true,
         status: 200,
@@ -5585,7 +5486,6 @@ describe("backend API composition", () => {
         (await repositories.account.listEntitlementsByUser(originalUserId)).items,
       ).toHaveLength(1);
 
-      // Delete the registered customer (resolved by its customerId).
       await expect(api.account.delete(createTestRequestContext(), {})).resolves.toMatchObject({
         ok: true,
         status: 202,
@@ -5610,22 +5510,17 @@ describe("backend API composition", () => {
         },
       });
 
-      // The userId index is neutralized to the sentinel on BOTH the customer doc and the
-      // entitlement, so the original userId resolves neither a customer nor an entitlement.
       await expect(repositories.account.findCustomerByUserId(originalUserId)).resolves.toBeNull();
       expect(
         (await repositories.account.listEntitlementsByUser(originalUserId)).items,
       ).toHaveLength(0);
 
-      // The userId-only identity is now rejected outright -- closing the findCustomerByUserId
-      // DTO sink AND the listEntitlementsByUser fallthrough (no customer + no entitlements).
       expect(await api.account.get(userIdCtx())).toMatchObject({
         ok: false,
         status: 401,
         error: { code: "AUTH_REQUIRED" },
       });
 
-      // Admin/accounting still reads the retained record by its customerId (the admin key).
       await expect(
         repositories.account.findCustomerById(customer.customerId),
       ).resolves.toMatchObject({ customerId: customer.customerId });
@@ -5955,8 +5850,6 @@ describe("backend API composition", () => {
 
     for (const terminal of terminalCases) {
       const repositories = createTestBackendRepositories();
-      // Provider fully supports the action, so a 409 proves the TERMINAL guard fired — not
-      // PROVIDER_UNSUPPORTED — and that the provider was never asked to revive a dead subscription.
       const fake = createFakeMikaProvider({
         optionalMethods: ["cancelSubscription", "changeSubscription", "renewSubscription"],
       });
@@ -5990,7 +5883,6 @@ describe("backend API composition", () => {
         },
       });
 
-      // The provider action never ran, and the terminal subscription is byte-for-byte unchanged.
       expect(fake.getCalls()[terminal.method]).toEqual([]);
       await expect(repositories.account.findSubscriptionById(subscription.id)).resolves.toEqual(
         subscription,
@@ -6343,7 +6235,6 @@ describe("backend API composition", () => {
 
   it("rejects a subscription change to a price outside the current plan (different sellable, one-time, or foreign currency)", async () => {
     const contentRef = createTestContentRef();
-    // The subscription's own plan: a recurring EUR price on sellable_1.
     const ownSellable = createSellableDefinition({
       id: createTestMikaId("sellable", 1),
       prices: [
@@ -6353,7 +6244,6 @@ describe("backend API composition", () => {
           fulfillmentKind: "entitlement",
           providerRefs: [{ provider: TEST_PROVIDER, productId: "prod_sub", priceId: "price_self" }],
         }),
-        // A one-time (payment-mode) price ON THE SAME sellable — still not a valid change target.
         createPriceDefinition({
           id: createTestMikaId("price", 3),
           mode: "payment",
@@ -6361,7 +6251,6 @@ describe("backend API composition", () => {
             { provider: TEST_PROVIDER, productId: "prod_sub", priceId: "price_onetime" },
           ],
         }),
-        // A recurring price on the same sellable but in a DIFFERENT currency.
         createPriceDefinition({
           id: createTestMikaId("price", 4),
           mode: "subscription",
@@ -6371,7 +6260,6 @@ describe("backend API composition", () => {
         }),
       ],
     });
-    // A different product's recurring price, provider-mapped — the cross-product repoint surface.
     const crossSellable = createSellableDefinition({
       id: createTestMikaId("sellable", 2),
       prices: [
@@ -6394,9 +6282,6 @@ describe("backend API composition", () => {
 
     for (const target of cases) {
       const repositories = createTestBackendRepositories();
-      // Provider supports changeSubscription and every target is provider-mapped, so a 422 proves
-      // the plan-family guard fired (which runs BEFORE the provider-mapping check), not a missing
-      // mapping — and that the provider was never asked to repoint the subscription.
       const fake = createFakeMikaProvider({ optionalMethods: ["changeSubscription"] });
       const subscription = createSubscriptionDocument();
       const api = createMikaBackendApi(
@@ -7285,8 +7170,6 @@ describe("backend API composition", () => {
       }),
     ).resolves.toMatchObject({ ok: true, status: 200, data: { status: "completed" } });
 
-    // The admin idempotency key reaches the provider so a retry (after e.g. a ledger.put failure)
-    // can dedupe the refund provider-side instead of issuing a second one.
     expect(fake.getCalls().refundPayment).toEqual([
       {
         orderId: order.id,
@@ -7303,8 +7186,6 @@ describe("backend API composition", () => {
     const ledgerPut = repositories.ledger.put.bind(repositories.ledger);
     let failNextOrderPut = false;
     repositories.ledger.put = async (document) => {
-      // Transient storage failure on the refund's order write: this marks the admin audit failed and
-      // bypasses replay, so a same-key retry re-invokes the provider.
       if (failNextOrderPut) {
         failNextOrderPut = false;
         throw new Error("ledger storage error");
@@ -7338,8 +7219,6 @@ describe("backend API composition", () => {
     });
     expect(second).toMatchObject({ ok: true, status: 200, data: { status: "completed" } });
 
-    // Both the failed first attempt and the retry called the provider with the SAME idempotency key,
-    // so Stripe dedupes the second refunds.create (returns the original) — no double refund.
     expect(fake.getCalls().refundPayment).toEqual([
       {
         orderId: order.id,
@@ -7361,7 +7240,7 @@ describe("backend API composition", () => {
   it("cumulates successive partial refunds and reaches refunded when the total is covered", async () => {
     const repositories = createTestBackendRepositories();
     const fake = createFakeMikaProvider({ optionalMethods: ["refundPayment"] });
-    const order = createOrderDocument(); // totalAmount 1200
+    const order = createOrderDocument();
     const api = createMikaBackendApi(
       createIncrementingBackendDependencies({
         repositories,
@@ -7421,7 +7300,6 @@ describe("backend API composition", () => {
         ],
       },
     };
-    // Fulfillment ids are deterministic: fulfillmentDocumentId("<kind>", order.id, line.id).
     const entitlement = createEntitlementDocument({
       id: createMikaId("entitlement_order_1_order_line_1"),
     });
@@ -7447,7 +7325,6 @@ describe("backend API composition", () => {
     await repositories.account.put(entitlement);
     await repositories.account.put(license);
 
-    // No amount => full refund.
     await expect(api.admin.orderRefund({ orderId: order.id })).resolves.toMatchObject({
       ok: true,
       status: 200,
@@ -7495,7 +7372,6 @@ describe("backend API composition", () => {
     await repositories.account.put(entitlement);
     await repositories.account.put(license);
 
-    // Partial refund (amount < totalAmount of 1200) retains net payment, so access stays.
     await expect(
       api.admin.orderRefund({ orderId: order.id, amount: 500 }),
     ).resolves.toMatchObject({ ok: true, data: { status: "completed" } });
@@ -7514,7 +7390,6 @@ describe("backend API composition", () => {
   it("downgrades a paid order to refunded and revokes access on a provider refund/chargeback webhook", async () => {
     const repositories = createTestBackendRepositories();
     const { order, entitlement, license } = createFulfilledRefundOrder();
-    // A `charge.refunded` (full) reversal for the order's payment intent — no admin action involved.
     const fake = createFakeMikaProvider({
       id: TEST_PROVIDER,
       overrides: {
@@ -7549,7 +7424,6 @@ describe("backend API composition", () => {
       status: 200,
     });
 
-    // The order leaves `paid` (the report's core invariant) and full-reversal revokes access.
     await expect(repositories.ledger.findOrderById(order.id)).resolves.toMatchObject({
       status: "refunded",
       paymentStatus: "refunded",
@@ -7638,7 +7512,6 @@ describe("backend API composition", () => {
   it("partially refunds an order and retains access on a partial provider refund webhook", async () => {
     const repositories = createTestBackendRepositories();
     const { order, entitlement, license } = createFulfilledRefundOrder();
-    // A partial `charge.refunded`: cumulative refunded 500 of the 1200 total.
     const fake = createFakeMikaProvider({
       id: TEST_PROVIDER,
       overrides: {
@@ -7871,7 +7744,6 @@ describe("backend API composition", () => {
     });
     expect(first).toMatchObject({ ok: true, status: 200, data: { status: "completed" } });
 
-    // Same key, different target order: must not replay order A's refund snapshot.
     const differentTarget = await api.admin.orderRefund({
       orderId: orderB.id,
       amount: 500,
@@ -7883,7 +7755,6 @@ describe("backend API composition", () => {
       error: { code: "CONFLICT" },
     });
 
-    // Same key and target but a different amount is also a different input.
     const differentAmount = await api.admin.orderRefund({
       orderId: orderA.id,
       amount: 700,
@@ -7895,7 +7766,6 @@ describe("backend API composition", () => {
       error: { code: "CONFLICT" },
     });
 
-    // Only order A's original 500 refund reached the provider; B is untouched.
     expect(fake.getCalls().refundPayment).toEqual([
       {
         orderId: orderA.id,
@@ -7931,9 +7801,6 @@ describe("backend API composition", () => {
       },
     });
 
-    // The retry mints a fresh entitlement id internally (the server-side target
-    // id differs every call), but identical client input must still replay the
-    // original grant rather than conflicting on that non-deterministic id.
     const second = await api.admin.entitlementGrant(grantArgs);
     expect(second).toMatchObject({
       ok: true,
@@ -7941,7 +7808,6 @@ describe("backend API composition", () => {
       data: { id: createTestMikaId("entitlement", 1), status: "completed" },
     });
 
-    // No second entitlement persisted and no second audit created (pure replay).
     await expect(
       repositories.account.findEntitlementById(createTestMikaId("entitlement", 2)),
     ).resolves.toBeNull();
@@ -7995,9 +7861,6 @@ describe("backend API composition", () => {
       data: { id: "download:order_1:order_line_1", status: "completed" },
     });
 
-    // The default download expiry is wall-clock derived, so it differs on the
-    // retry; the client input is unchanged, so the second issue must replay the
-    // first rather than conflicting on that time-derived value.
     offsetMs = 600_000;
     const second = await api.admin.downloadIssue(issueArgs);
     expect(second).toMatchObject({
@@ -9271,7 +9134,6 @@ describe("backend API composition", () => {
             providerCheckoutId: "provider_checkout_fake",
             providerPaymentId: "payment_1",
             providerOrderId: "provider_order_1",
-            // Mixed-case payer email matching the registered customer's normalized emailHash.
             customer: { email: "Subscriber@Example.test", name: "Guest Buyer" },
           }),
       },
@@ -9286,7 +9148,6 @@ describe("backend API composition", () => {
         providers: createMikaProviderRegistry([fake.provider]),
       }),
     );
-    // Guest checkout: the session is not bound to any customer (no customerId/userId).
     const guestCtx = createTestRequestContext({
       sessionId: "session_guest_promotion",
       customerId: false,
@@ -9304,8 +9165,6 @@ describe("backend API composition", () => {
 
     await receiveWebhook(api, "payment", stripe);
 
-    // The paid order attaches to the registered customer even though checkout was a guest:
-    // top-level customerId AND aggregate.customer.customerId are promoted.
     const order = await repositories.ledger.findOrderByProviderPayment(stripe, "payment_1");
     expect(order).toMatchObject({
       customerId: "customer_1",
@@ -9318,7 +9177,6 @@ describe("backend API composition", () => {
         },
       },
     });
-    // ...and so does the fulfilled entitlement (it inherits order.customerId).
     await expect(accountCollection.get("entitlement_order_1_order_line_1")).resolves.toMatchObject({
       type: "entitlement",
       customerId: "customer_1",
@@ -9370,9 +9228,6 @@ describe("backend API composition", () => {
       }),
     );
 
-    // The paid webhook cannot acquire the lease (another worker holds it), so it
-    // stays `received`. The provider must be told to retry rather than receiving
-    // a 200 acknowledgement for an unfulfilled paid order.
     await expect(receiveWebhook(api, "payment-active-lease", stripe)).resolves.toMatchObject({
       ok: false,
       status: 409,
@@ -9735,8 +9590,6 @@ describe("backend API composition", () => {
       }),
     );
 
-    // First delivery cannot reclaim the not-yet-expired lease, so the webhook
-    // stays `received`. A retryable conflict tells the provider to redeliver.
     await expect(receiveWebhook(api, "payment-stuck-first", stripe)).resolves.toMatchObject({
       ok: false,
       status: 409,
@@ -10034,9 +9887,6 @@ describe("backend API composition", () => {
       ops: new OpsRepository(opsCollection),
       stock: stockRepository,
     };
-    // Make the SECOND line's entitlement write fail deterministically, after the first line's stock and
-    // entitlement have already committed. This is the multi-line "poison line" shape: a later line that
-    // throws on every attempt while earlier lines' goods are already committed.
     const baseAccountPut = repositories.account.put.bind(repositories.account);
     repositories.account.put = async (document) => {
       if (document.id === "entitlement_order_1_order_line_2") {
@@ -10088,14 +9938,8 @@ describe("backend API composition", () => {
     const checkout = await api.checkout.start(shopperCtx, { cartId: cart.data.id, provider: stripe });
     if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
 
-    // The webhook fulfillment throws on the second line. Tolerate either a rejected promise or an
-    // error result — the assertion is on the durable ledger state afterwards.
     await receiveWebhook(api, "partial-fulfillment", stripe).catch(() => undefined);
 
-    // The first line's entitlement (its committed goods) must be reflected in the order ledger even
-    // though fulfillment did not complete: line 1 carries its entitlementId, the order is NOT marked
-    // fulfilled (no fulfilledAt), and the entitlement document itself exists — so the committed goods
-    // are never orphaned from the order record.
     const persistedOrder = await ledgerCollection.get("order_1");
     if (!persistedOrder) throw new Error("Expected order_1 to be persisted by forward progress.");
     const [line1, line2] = persistedOrder.aggregate.lines;
@@ -10795,13 +10639,7 @@ describe("backend API composition", () => {
       type: "license",
       status: "active",
     });
-    // license.issued fired exactly once...
     expect(notificationIntents.filter((intent) => intent.kind === "license.issued")).toHaveLength(1);
-    // ...and is now gated by a COMPLETED notification marker (id = fulfillmentDocumentId("workflow",
-    // order.id, line.id, "notification_license_issued")). A re-leased worker re-entering fulfillment
-    // gets acquireNotificationMarker -> "completed" and skips the duplicate emission — the same
-    // exactly-once protection the order-confirmation email uses. Before this fix the emission was a
-    // bare host-hook call with no marker, so no such workflow document would exist.
     await expect(
       opsCollection.get("workflow_order_1_order_line_1_notification_license_issued"),
     ).resolves.toMatchObject({
@@ -10810,7 +10648,6 @@ describe("backend API composition", () => {
       kind: "notification.license.issued",
       idempotencyKey: "license.issued:order_1:order_line_1",
     });
-    // download.ready is gated symmetrically by its own per-downloadRef marker.
     expect(notificationIntents.filter((intent) => intent.kind === "download.ready")).toHaveLength(1);
     await expect(
       opsCollection.get("workflow_download_order_1_order_line_2_notification_download_ready"),
@@ -11274,8 +11111,6 @@ describe("backend API composition", () => {
       ...createTestBackendRepositories(),
       account: new AccountRepository(accountCollection),
     };
-    // Local state after a successful admin subscription.cancel: a period-end cancel is persisted
-    // without advancing the billing period.
     const periodStart = createISODateTime("2026-02-01T00:00:00.000Z");
     const periodEnd = createISODateTime("2026-03-01T00:00:00.000Z");
     const baseSubscription = createSubscriptionDocument();
@@ -11290,10 +11125,6 @@ describe("backend API composition", () => {
         currentPeriodEnd: periodEnd,
       },
     };
-    // Two equal-period redeliveries Stripe can send after the cancel is recorded: a replay of the
-    // pre-cancel event that still reports cancelAtPeriodEnd:false, then the provider's own routine
-    // active+cancel_at_period_end echo. Neither advances the period, so the staleness check cannot
-    // reject them; the sticky-cancel guard must.
     const deliveries = [
       { payloadHash: "sub_replay_hash", providerEventId: "event_replay", cancelAtPeriodEnd: false },
       { payloadHash: "sub_echo_hash", providerEventId: "event_echo", cancelAtPeriodEnd: true },
@@ -11379,7 +11210,6 @@ describe("backend API composition", () => {
         currentPeriodEnd: createISODateTime("2026-03-01T00:00:00.000Z"),
       },
     };
-    // A genuine renewal advances the billing period, so the guard must let it reactivate the sub.
     const fake = createFakeMikaProvider({
       overrides: {
         verifyWebhook: async (webhookInput) =>
@@ -12217,8 +12047,6 @@ describe("backend API composition", () => {
     const repositories = createTestBackendRepositories({
       stockBySellableId: new Map(cases.map((testCase) => [testCase.id, testCase.stock])),
     });
-    // Public availability now requires an ACTIVE catalog sellable (it no longer projects a hardcoded
-    // active flag from the stock row), so seed the catalog with active sellables for each case.
     await repositories.catalog.put(
       createCatalogItemDocument({
         contentRef: createTestContentRef(),
@@ -12301,8 +12129,6 @@ describe("backend API composition", () => {
         [sellableId, createStockRecord({ sellableId, quantityOnHand: 9, quantityReserved: 0 })],
       ]),
     });
-    // The sellable HAS a stock row but is delisted from the public catalog (active: false). Public
-    // availability must not expose its inventory — matching catalog.sellables, which hides it.
     await repositories.catalog.put(
       createCatalogItemDocument({
         contentRef: createTestContentRef(),
@@ -12585,11 +12411,6 @@ describe("backend API composition", () => {
         providers: createMikaProviderRegistry([fake.provider]),
       }),
     );
-    // The source cart is OWNED by a customer; the merge caller is the SAME customer in a different
-    // session — so callerOwnsMergeSource passes and the ONLY thing that prevents the merge from
-    // touching the source is the status:"open" filter in findOpenCartBySession. If a regression let
-    // that query return checkout_pending carts, this merge would proceed and abandon the source /
-    // orphan its reservation — and this test would catch it.
     const customerId = createTestMikaId("customer", 1);
     const sourceCtx = createTestRequestContext({
       sessionId: "session_source",
@@ -12597,8 +12418,6 @@ describe("backend API composition", () => {
       userId: false,
     });
 
-    // Drive the customer's cart to checkout_pending with an active stock reservation (the checkout is
-    // "created"/resumable, so it is not reopened on subsequent cart access).
     const added = await api.cart.add(sourceCtx, { sellableId: sellable.id, quantity: 2 });
     if (!added.ok) throw new Error("Expected cart.add to succeed.");
     const cartId = added.data.id;
@@ -12619,7 +12438,6 @@ describe("backend API composition", () => {
     const merged = await api.cart.merge(callerCtx, { sourceSessionId: "session_source" });
     expect(merged.ok).toBe(true);
 
-    // The checkout_pending cart is NOT abandoned and its reservation is NOT orphaned.
     await expect(repositories.session.findById(cartId)).resolves.toMatchObject({
       status: "checkout_pending",
     });
@@ -12750,8 +12568,6 @@ describe("backend API composition", () => {
     const checkout = await api.checkout.start(ctx, { cartId: added.data.id });
     if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
 
-    // The provider must receive the order-level discount so it charges the discounted total (2160),
-    // not the undiscounted subtotal (2400) the line items sum to.
     const call = fake.getCalls().createCheckoutSession[0];
     expect(call?.discount).toMatchObject({ amount: 240, currency: TEST_CURRENCY });
     const lineSubtotal = (call?.lines ?? []).reduce(
@@ -12788,8 +12604,6 @@ describe("backend API composition", () => {
     const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
     if (!added.ok) throw new Error("Expected cart.add to succeed.");
 
-    // No coupon is persisted on the cart; it arrives only on checkout.start (the same field
-    // cart.quote/checkout.preview accept). It must still discount the provider charge.
     const checkout = await api.checkout.start(ctx, {
       cartId: added.data.id,
       couponCode: "SAVE10",
@@ -12890,8 +12704,6 @@ describe("backend API composition", () => {
       ok: true,
     });
 
-    // The shopper quoted SAVE20 and authorizes it at checkout; the override must win over
-    // the stale persisted SAVE10 instead of being silently ignored.
     const checkout = await api.checkout.start(ctx, {
       cartId: added.data.id,
       couponCode: "SAVE20",
@@ -12901,10 +12713,6 @@ describe("backend API composition", () => {
     await expect(
       repositories.session.findCheckoutById(checkout.data.id),
     ).resolves.toMatchObject({ aggregate: { coupon: { label: "SAVE20" } } });
-    // The override also propagates to the backing cart (now checkout_pending), so the cart and
-    // any later quote/preview stay aligned with what checkout charged. (The open-cart persist in
-    // resolveCheckoutStart is independently exercised by the delegated-payment coupon test, whose
-    // authorization recompute reads the cart back.)
     await expect(
       repositories.session.findCheckoutPendingCartBySession("session_1", TEST_CURRENCY),
     ).resolves.toMatchObject({ aggregate: { coupon: { label: "SAVE20" } } });
@@ -12944,7 +12752,6 @@ describe("backend API composition", () => {
       error: { code: "VALIDATION_FAILED" },
     });
 
-    // The ambiguous request reserves no stock and never hands off to the provider.
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
       quantityReserved: 0,
     });
@@ -13132,7 +12939,6 @@ describe("backend API composition", () => {
     const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
     if (!added.ok) throw new Error("Expected cart.add to succeed.");
 
-    // Magic-link verification persists the customer id on the same session.
     const customerId = createMikaId("customer_checkout_login");
     await ctx.session?.set("mika.customerId", customerId);
 
@@ -13766,8 +13572,6 @@ describe("backend API composition", () => {
     const repositories = createTestBackendRepositories({
       stockBySellableId: new Map([[sellable.id, stock]]),
     });
-    // Default fake checkout session expires at 2026-01-01T01:00:00Z — an hour out,
-    // well beyond the 15m backend reservation TTL.
     const fake = createFakeMikaProvider();
     await repositories.catalog.put(
       createCatalogItemDocument({ contentRef, sellables: [sellable] }),
@@ -13785,15 +13589,12 @@ describe("backend API composition", () => {
     const checkout = await api.checkout.start(ctx, { cartId: added.data.id });
     if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
 
-    // The checkout document persists the longer provider window...
     const checkoutDocument = await repositories.session.findById(
       createTestMikaId("checkout", 1),
     );
     expect(checkoutDocument).toMatchObject({
       expiresAt: createISODateTime("2026-01-01T01:00:00.000Z"),
     });
-    // ...and the reservation created during checkout.start must be extended to match it,
-    // so a maintenance sweep cannot release stock while the session is still payable.
     const reservation = await repositories.stock.findEventById(
       createTestMikaId("stock_event", 1),
     );
@@ -14152,14 +13953,10 @@ describe("backend API composition", () => {
     await expect(
       api.checkout.start(ctx, {
         cartId: added.data.id,
-        // A client tries to spoof an internal correlation key alongside a genuine custom field.
         customFields: { checkoutOrderId: "spoofed", promo: "summer" },
       }),
     ).resolves.toMatchObject({ ok: true, status: 200 });
 
-    // The reserved internal key is stripped from the provider metadata (it cannot be spoofed into
-    // Stripe dashboards/webhooks), matching the persisted checkout metadata; the genuine custom field
-    // is forwarded unchanged.
     expect(fake.getCalls().createCheckoutSession[0]?.metadata).toEqual({ promo: "summer" });
   });
 
@@ -14362,7 +14159,6 @@ describe("backend API composition", () => {
     );
     const ctx = createTestRequestContext({ customerId: false, userId: false });
 
-    // Buy-now: no cart, so the reservation lives only on the checkout document's lines.
     const checkout = await api.checkout.start(ctx, { sellableId: sellable.id, quantity: 1 });
     if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
     const storedCheckout = await repositories.session.findCheckoutById(
@@ -14378,7 +14174,6 @@ describe("backend API composition", () => {
     });
     expect(cancelled).toMatchObject({ ok: true, data: { status: "cancelled" } });
 
-    // The reservation must be released immediately on cancel, not left until TTL expiry.
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
       quantityReserved: 0,
     });
@@ -14414,8 +14209,6 @@ describe("backend API composition", () => {
     const reservationId = createTestMikaId("stock_event", 1);
     await api.checkout.cancel(ctx, { checkoutId: createTestMikaId("checkout", 1) });
 
-    // Cancel returns the stock to availability but marks the reservation EXPIRED (not released),
-    // so it stays consumable for a payment that completed just before the cancel.
     await expect(repositories.stock.findEventById(reservationId)).resolves.toMatchObject({
       status: "expired",
     });
@@ -14423,7 +14216,6 @@ describe("backend API composition", () => {
       quantityReserved: 0,
     });
 
-    // A late provider payment fulfills by consuming the expired reservation from on-hand stock.
     await expect(
       createMikaStockLifecycleService(deps).consume({
         reservationEventId: reservationId,
@@ -14694,7 +14486,6 @@ describe("backend API composition", () => {
     const cart = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
     if (!cart.ok) throw new Error("Expected cart.add to succeed.");
 
-    // A leaked shared payment token alone must not trigger delegated payment.
     await expect(
       api.checkout.start(ctx, {
         cartId: cart.data.id,
@@ -14703,7 +14494,6 @@ describe("backend API composition", () => {
       }),
     ).resolves.toMatchObject({ ok: false, status: 403, error: { code: "FORBIDDEN" } });
 
-    // A forged or stale authorization hash that does not match a fresh preview is rejected too.
     await expect(
       api.checkout.start(ctx, {
         cartId: cart.data.id,
@@ -14715,7 +14505,6 @@ describe("backend API composition", () => {
       }),
     ).resolves.toMatchObject({ ok: false, status: 403, error: { code: "FORBIDDEN" } });
 
-    // The provider was never asked to create a (delegated) session, and no stock was reserved.
     expect(fake.getCalls().createCheckoutSession).toEqual([]);
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
       quantityReserved: 0,
@@ -14752,7 +14541,6 @@ describe("backend API composition", () => {
     const cart = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
     if (!cart.ok) throw new Error("Expected cart.add to succeed.");
 
-    // The ACP-authorized path: preview the cart to obtain the payment-authorization input hash...
     const previewInput = {
       cartId: cart.data.id,
       provider: TEST_PROVIDER,
@@ -14782,8 +14570,6 @@ describe("backend API composition", () => {
     ).resolves.toMatchObject({ ok: false, status: 403, error: { code: "FORBIDDEN" } });
     expect(fake.getCalls().createCheckoutSession).toHaveLength(0);
 
-    // ...then start with the token bound to that proof. Volatile delegated fields are stripped from
-    // the proof hash, so preview does not need the token but start can carry it to the provider.
     const started = await api.checkout.start(ctx, {
       ...previewInput,
       customFields: {
@@ -15745,14 +15531,11 @@ describe("backend API composition", () => {
       userId: false,
       sessionId: "session_wishlist_source",
     });
-    // The customer already has a wishlist from an earlier authenticated session.
     const priorCustomerCtx = createTestRequestContext({
       customerId: "customer_1",
       userId: "user_1",
       sessionId: "session_prior",
     });
-    // Legitimate handoff: the guest session signs in as customer_1, keeping its session id (so it
-    // owns the guest wishlist it created) and merging that source into the customer's wishlist.
     const callerCtx = createTestRequestContext({
       customerId: "customer_1",
       userId: "user_1",
@@ -15833,7 +15616,6 @@ describe("backend API composition", () => {
     await api.wishlist.add(victimCtx, { sellableId: victimSellable.id });
     await api.wishlist.add(attackerCtx, { sellableId: attackerSellable.id });
 
-    // Attacker tries to harvest the victim's saved items via a guessed/leaked session id.
     const merged = await api.wishlist.merge(attackerCtx, { sourceSessionId: "session_victim" });
     if (!merged.ok) {
       throw new Error("Expected wishlist.merge to succeed without merging the foreign source.");
@@ -15841,7 +15623,6 @@ describe("backend API composition", () => {
     expect(merged.data.items).toHaveLength(1);
     expect(merged.data.items[0]?.sellableId).toBe(attackerSellable.id);
 
-    // The victim wishlist must be untouched: still active and holding its own item.
     const victimWishlist = await repositories.session.findWishlistBySession("session_victim");
     expect(victimWishlist?.status).toBe("active");
     expect(victimWishlist?.aggregate.items).toHaveLength(1);
@@ -16731,9 +16512,6 @@ function createTestStockRepository(
       }
 
       const fromActive = event.status === "active";
-      // Mirror consumeOnHandStatement's oversell guard: an expired reservation's quantity was
-      // already returned to availability, so it can only be consumed when enough un-reserved
-      // on-hand units remain for finite, non-backorder items.
       if (
         !fromActive &&
         current &&

@@ -533,6 +533,7 @@ export type MikaBackendNow = () => Date;
 export type MikaBackendISODateTime = () => ISODateTime;
 /** Namespaced id generator for documents and events. */
 export type MikaBackendIdFactory = (namespace: string) => MikaId;
+/** Plain text or binary payload accepted by the injectable hash helper. */
 export type MikaBackendHashInput = string | Uint8Array;
 /** Hash helper for PII, tokens, and webhook payload deduplication. */
 export type MikaBackendHashHelper = (input: MikaBackendHashInput) => Promise<string> | string;
@@ -622,6 +623,7 @@ export interface ReserveStockInput {
   readonly metadata?: JsonObject;
 }
 
+/** Outcome of creating or replaying a stock reservation event. */
 export type ReserveStockResult = ReserveStockRepositoryResult;
 
 /** Input for releasing a prior stock reservation by event id. */
@@ -630,9 +632,10 @@ export interface ReleaseReservedStockInput {
   readonly now?: ISODateTime;
 }
 
+/** Outcome of releasing an active reservation back to available stock. */
 export type ReleaseReservedStockResult = ReleaseReservedStockRepositoryResult;
 
-/** Result of expiring a reservation (frees stock while leaving it consumable for late fulfillment). */
+/** Outcome of expiring a reservation while keeping it consumable for late fulfillment. */
 export type ExpireReservedStockResult = ExpireReservedStockRepositoryResult;
 
 /** Input for consuming a reservation at order fulfillment. */
@@ -643,6 +646,7 @@ export interface ConsumeReservedStockInput {
   readonly orderLineId?: MikaId;
 }
 
+/** Outcome of fulfilling a reservation into a sale consumption event. */
 export type ConsumeReservedStockResult = ConsumeReservedStockRepositoryResult;
 
 /** Input for maintenance sweep of expired stock reservations. */
@@ -650,6 +654,7 @@ export interface ReleaseExpiredReservationsInput {
   readonly now?: ISODateTime;
 }
 
+/** Counts from sweeping expired reservations during maintenance. */
 export type ReleaseExpiredReservationsResult = ReleaseExpiredReservationsRepositoryResult;
 
 /** Input for extending active reservation expiry to match a longer checkout window. */
@@ -664,6 +669,7 @@ export interface AdjustStockInput extends StockAdjustInput {
   readonly now?: ISODateTime;
 }
 
+/** Outcome of an admin stock quantity adjustment or idempotent replay. */
 export type AdjustStockResult = AdjustStockRepositoryResult;
 
 /** Stock reservation and adjustment API used by cart, checkout, and maintenance. */
@@ -763,10 +769,6 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
     stock: {
       availability: async ({ sellableId }) => {
         const id = createMikaId(sellableId);
-        // Mirror the catalog.sellables policy: a delisted (inactive) or unknown sellable must NOT
-        // expose its live inventory on this public endpoint. Resolve the real catalog sellable and
-        // 404 unless it is active, instead of projecting a hardcoded `active: true` from the stock
-        // row alone (which leaked inventory for products hidden from the public catalog).
         const catalog = await input.repositories.catalog.findItemBySellableId(id);
         const sellable = catalog?.aggregate.sellables.find((item) => item.id === id);
         if (!sellable?.active) {
@@ -935,9 +937,6 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
     },
     download: {
       resolve: async (downloadInput) => resolveDownload(input, downloadInput),
-      // Same single-use consume-and-redirect as `resolve`, exposed as a POST action so the bundled
-      // storefront's download interstitial only burns the token on a user-initiated submit (not on a
-      // GET prefetch/link-scan). `resolve` stays the GET surface for agents/programmatic callers.
       confirm: async (downloadInput) => resolveDownload(input, downloadInput),
       ...input.overrides?.download,
     },
@@ -1347,9 +1346,6 @@ async function getAccount(
     };
   }
 
-  // Guest orders carry no customerId, so a magic-link emailHash identity must
-  // find its paid orders by the emailHash snapshotted onto the order. (A
-  // userId-only identity has no emailHash and keeps an empty order list.)
   const orderItems = identity.emailHash
     ? (await input.repositories.ledger.listOrdersByEmailHash(identity.emailHash)).items
     : [];
@@ -1406,9 +1402,6 @@ async function resolveAccountIdentity(
 
   if (customerId) {
     const customer = await input.repositories.account.findCustomerById(customerId);
-    // Reject an anonymized (account-deleted) customer: findCustomerById still reads the
-    // retained record for admin/accounting, but a lingering mika.customerId session must
-    // no longer resolve a customer identity for it.
     if (
       !customer ||
       isAnonymizedCustomer(customer) ||
@@ -1427,10 +1420,6 @@ async function resolveAccountIdentity(
   if (userId) {
     const customer = await input.repositories.account.findCustomerByUserId(userId);
     if (customer) {
-      // Defense-in-depth: reject an anonymized (account-deleted) customer reached via the
-      // userId index. The delete neutralizes that index to the sentinel so the original
-      // userId no longer matches, but guard the resolution the same way as the customerId
-      // branch in case the index was not (yet) neutralized.
       if (isAnonymizedCustomer(customer)) return null;
       return {
         customer,
@@ -1449,9 +1438,6 @@ async function resolveAccountIdentity(
   if (sessionEmailHash) {
     const customer = await input.repositories.account.findCustomerByEmailHash(sessionEmailHash);
     if (customer) {
-      // Defense-in-depth: reject an anonymized customer reached via the email-hash index.
-      // The delete re-keys that index to the sentinel so the original hash is already dead
-      // here, but guard it the same way as the customerId and userId branches.
       if (isAnonymizedCustomer(customer)) return null;
       return {
         customer,
@@ -1751,9 +1737,6 @@ async function runSubscriptionAction(
   }
 
   if (subscription.status === "cancelled" || subscription.status === "expired") {
-    // A cancelled/expired subscription is TERMINAL: cancel/change/renew must not run, because
-    // subscriptionStatusAfterAction would otherwise REVIVE it (renew -> active, cancel ->
-    // cancel_at_period_end) or mutate a dead record's price.
     return {
       ok: false,
       status: 409,
@@ -1782,11 +1765,6 @@ async function runSubscriptionAction(
     return validationFailed("priceId", `Price '${actionInput.priceId}' was not found.`);
   }
   if (action === "change" && actionInput.priceId && priceMatch) {
-    // The change target must stay within the SAME plan family: a recurring (subscription)
-    // price on the subscription's current sellable, in the same currency. A sellable owns its
-    // whole price list, so this still allows legitimate interval/amount switches (e.g.
-    // monthly -> annual of the same plan) while blocking a self-serve repoint to an unrelated,
-    // cheaper, one-time (payment-mode), or foreign-currency price elsewhere in the catalog.
     const current = subscription.aggregate.sellable;
     if (
       priceMatch.sellable.id !== current.sellableId ||
@@ -1998,9 +1976,6 @@ async function refundOrder(
     ...(order.providerPaymentId ? { providerPaymentId: order.providerPaymentId } : {}),
     ...(refundInput.amount !== undefined ? { amount: refundInput.amount } : {}),
     ...(refundInput.reason ? { reason: refundInput.reason } : {}),
-    // Forward the admin idempotency key so the provider can dedupe a retried refund: if the provider
-    // refund succeeds but the subsequent ledger.put throws, the audit is marked failed and a same-key
-    // retry re-invokes the provider — which must not create a second refund.
     ...(refundInput.idempotencyKey ? { idempotencyKey: refundInput.idempotencyKey } : {}),
   };
 
@@ -2757,9 +2732,6 @@ async function adminActionIdempotencyInputHash(
   idempotencyInput: JsonValue | undefined,
   record: Pick<MikaAdminAuditStartRecord, "action" | "targetType" | "targetId" | "metadata">,
 ): Promise<string> {
-  // Prefer the explicit client-supplied input; it carries only the deterministic
-  // request fields. Fall back to the assembled record identity for actions that
-  // supply no explicit input (those have deterministic record fields only).
   const hashedInput =
     idempotencyInput !== undefined
       ? idempotencyInput
@@ -2871,12 +2843,6 @@ async function runAdminAction<TData>(
       record.idempotencyKey,
     );
     if (prior) {
-      // The declared idempotency scope is `same_key_same_input`: a prior audit may
-      // only be replayed (or block as in-progress) when this request carries the same
-      // input. A differing input under the same key — e.g. a refund retried with a new
-      // orderId — must not return the earlier snapshot, so surface a conflict instead.
-      // Audits written before this hash existed have no stored hash; fall back to the
-      // legacy replay-by-key behavior for them rather than rejecting.
       const priorInputHash = adminAuditStoredIdempotencyInputHash(prior);
       if (
         priorInputHash !== undefined &&
@@ -3164,30 +3130,12 @@ async function verifyMagicLink(
     );
   }
 
-  // The token is consumed first so a single-use verification is claimed atomically — only one
-  // concurrent request wins the consume, which keeps a shared link from authenticating two
-  // different sessions in the common case. But the session store is async and can fail; consuming
-  // before the session write would otherwise spend the token without authenticating anyone,
-  // bricking the link on retry (TOKEN_USED). So the identity resolve, the account-view assembly,
-  // and the session writes run under a guard that, on any failure, restores the token to pending
-  // (best effort) and rethrows, leaving the link usable. The account view is built BEFORE the
-  // session writes so a read failure while assembling it reverts cleanly (nothing authenticated
-  // yet); the session writes are the last awaited work. Two windows remain and are accepted: a lost
-  // HTTP response after a successful write (the write already landed), and a partial multi-key
-  // session write (one `set` succeeds, a later one throws) — both inherent to the per-key
-  // MikaSessionAccess.set port — which can re-open the token while a session is already authorized;
-  // the worst case there is two sessions for the SAME customer, never a cross-account escalation.
   try {
     const customer = record?.subjectHash
       ? await input.repositories.account.findCustomerByEmailHash(record.subjectHash)
       : null;
     if (customer) {
       const data = await accountDTOForCustomer(input, ctx, customer);
-      // Rotate the session id before binding identity, so a session id an attacker planted in the
-      // victim's browser BEFORE authentication cannot be reused to read the account afterwards
-      // (session fixation). regenerate() runs as the first of the final session writes — after the
-      // account view is assembled — so an assembly failure still reverts the token cleanly via the
-      // catch below, and a regenerate failure does too.
       await ctx.session?.regenerate?.();
       await ctx.session?.set("mika.customerId", customer.customerId);
       if (customer.userId) await ctx.session?.set("mika.userId", customer.userId);
@@ -3197,8 +3145,6 @@ async function verifyMagicLink(
 
     const email = record?.data ? stringChild(record.data, "email") : undefined;
     if (record?.subjectHash) {
-      // Same session-fixation defense for the emailHash-only identity: rotate before binding, and
-      // only when an identity is actually bound (a no-subjectHash token authenticates no one).
       await ctx.session?.regenerate?.();
       await ctx.session?.set("mika.emailHash", record.subjectHash);
     }
@@ -3220,18 +3166,12 @@ async function verifyMagicLink(
   }
 }
 
-// The account export must contain the COMPLETE history. The list ports accept a limit but no cursor,
-// so an effectively-unbounded limit is the available "fetch all" (the storage returns every matching
-// row); no realistic account is silently truncated. True cursor pagination would require a port change.
 const ACCOUNT_EXPORT_LIMIT = Number.MAX_SAFE_INTEGER;
 
 async function accountDTOForCustomer(
   input: CreateMikaBackendApiInput,
   ctx: MikaRequestContext,
   customer: CustomerDocument,
-  // Default (undefined) keeps the account VIEW paginated at the repository defaults; the account
-  // EXPORT passes ACCOUNT_EXPORT_LIMIT so the artifact is the COMPLETE history, not a silently
-  // truncated first page.
   limit?: number,
 ): Promise<AccountDTO> {
   const [orders, subscriptions, entitlements] = await Promise.all([
@@ -3312,13 +3252,6 @@ async function orderDownloadDTOs(
   const downloads: DownloadDTO[] = [];
   for (const line of order.aggregate.lines) {
     for (const downloadRef of line.downloadRefs ?? []) {
-      // Mint a short-lived, single-use capability token and expose a NAVIGABLE link instead of the
-      // bare internal ref, so the bundled account download link works without the host first calling
-      // `admin.downloadIssue`. The href targets the storefront's GET-validate / POST-consume download
-      // INTERSTITIAL (`/download/<token>`), NOT the consuming `download.resolve` GET plugin route, so a
-      // browser prefetch of the account link cannot burn the single-use token (the token is spent only
-      // on the user-initiated POST inside the interstitial). The token's redirectUrl is the ref — a
-      // host-mapped placeholder; actual asset delivery stays host-wired.
       const { token, expiresAt } = await createOrderLineDownloadToken(
         input,
         ctx,
@@ -3337,9 +3270,6 @@ async function orderDownloadDTOs(
   return downloads;
 }
 
-// Mint a single-use download capability token bound to an order line's download ref (the same token
-// shape `issueDownload` writes, minus the admin audit), so `download.resolve` validates and consumes
-// it identically. Called per account view, so each page render yields a fresh navigable link.
 async function createOrderLineDownloadToken(
   input: CreateMikaBackendApiInput,
   ctx: MikaRequestContext,
@@ -3530,10 +3460,6 @@ function accountExportBelongsToIdentity(
 ): boolean {
   if (identity.customer && document.customerId === identity.customer.customerId) return true;
   if (identity.userId && document.userId === identity.userId) return true;
-  // An emailHash-only magic-link identity (no customer/user row) can create an
-  // export but has no customerId/userId on the document to match, so also match
-  // the persisted emailHash. A later-created customer for the same email keeps
-  // access because identity.customer.emailHash equals the document's emailHash.
   const identityEmailHash = identity.customer?.emailHash ?? identity.emailHash;
   return Boolean(identityEmailHash && document.record.emailHash === identityEmailHash);
 }
@@ -4416,8 +4342,6 @@ async function processStoredWebhook(
         event.paymentStatus === "refunded" ||
         event.paymentStatus === "partially_refunded"
       ) {
-        // A provider-initiated reversal (refund / chargeback / uncollectible) downgrades the order
-        // away from `paid` and revokes access on a full reversal — it is NOT a checkout failure.
         try {
           return await processPaymentReversalWebhook(input, ctx, webhook, event);
         } catch (error) {
@@ -4501,22 +4425,15 @@ async function processPaymentReversalWebhook(
       );
     }
 
-    // A weak reversal Mika cannot correlate to a provider payment/order is treated as provider
-    // noise. There is no durable key to wait on, so acknowledge it instead of retrying forever.
     return markWebhookProcessed(input, webhook, ctx.now, {}, { strict: true });
   }
 
-  // Already fully refunded may mean a prior attempt updated the ledger but failed while revoking
-  // fulfillment access. Re-run the idempotent revocation before acknowledging the redelivery.
   if (order.paymentStatus === "refunded") {
     await revokeOrderFulfillmentAccess(input, order, ctx.now);
     return markWebhookProcessedForOrder(input, webhook, ctx.now, order);
   }
 
   const now = ctx.now;
-  // `partially_refunded` carries Stripe's CUMULATIVE refunded amount; convert it to this event's
-  // delta so applyOrderRefund's cumulative tracking stays correct across repeated partial webhooks.
-  // A full reversal passes no amount, so applyOrderRefund resolves the status to `refunded`.
   const cumulativeReversed = event.totals?.total?.amount;
   const refundAmount =
     event.paymentStatus === "partially_refunded" && cumulativeReversed !== undefined
@@ -5091,13 +5008,6 @@ async function updateSubscriptionFromEvent(
     return subscription;
   }
 
-  // A locally-applied period-end cancel must not be reactivated by an equal- or unknown-period
-  // "active" event. Admin cancel sets status "cancel_at_period_end" without advancing the billing
-  // period, so the period-based staleness check above cannot protect it. This covers both a
-  // replayed pre-cancel webhook ({ active, cancelAtPeriodEnd: false }) and the provider's own
-  // routine echo, which Stripe represents as { status: "active", cancel_at_period_end: true }.
-  // Only a period-ADVANCING event (a genuine renewal) or a non-active (terminal) status may move
-  // the subscription off cancel_at_period_end.
   const eventStart = event.currentPeriodStart;
   const appliedStart = subscription.aggregate.currentPeriodStart;
   const eventAdvancesPeriod = Boolean(
@@ -5383,10 +5293,6 @@ async function createPaymentOrderDocument(
       metadata: paymentOrderLineMetadata(line, event),
     }),
   );
-  // Snapshot the purchaser once so the order's top-level customerId/emailHash mirror
-  // aggregate.customer. A guest checkout whose payer email matches a registered account is promoted
-  // to that customerId here (via paymentCustomerSnapshot); a guest with no match keeps customerId
-  // undefined and is still found later by the top-level emailHash (e.g. a magic-link emailHash session).
   const customer = await paymentCustomerSnapshot(input, checkout, event);
 
   return {
@@ -5542,12 +5448,6 @@ async function paymentCustomerSnapshot(
     ? await input.hash(`email:${normalizedEmail}`)
     : undefined;
 
-  // Guest checkout (no checkout.customerId): promote to the registered customer when the payer email
-  // matches an existing account, so paid orders and entitlements attach to that customer at fulfillment
-  // time instead of being written with an undefined customerId. The customer's emailHash is computed
-  // identically (`hash("email:" + normalized)`), so the payer-email hash matches a magic-link account.
-  // Gated on `!checkout.customerId` so a logged-in checkout whose customer was deleted between checkout
-  // and the webhook keeps its (dangling) customerId rather than being re-bound to a different account.
   const customer =
     checkoutCustomer ??
     (!checkout.customerId && payerEmailHash
@@ -5623,16 +5523,8 @@ async function fulfillPaidOrder(
       }
     }
   } catch (error) {
-    // Forward-progress persistence. Each line's side effects (stock consume, entitlement/license
-    // writes) commit to their own stores as the loop runs. If a later line throws before the current
-    // progress write completes, persist the progress made so far (fulfilled lines carrying their
-    // stockMovementId/entitlementId, merged with lines not yet reached) WITHOUT a `fulfilledAt`
-    // marker, then rethrow so the workflow still records the failure and retries the remaining lines.
     if (changed) {
       const progressedLines = [...fulfilledLines, ...originalLines.slice(fulfilledLines.length)];
-      // Swallow a failure to persist forward progress so the ORIGINAL per-line error below — the root
-      // cause the workflow should record and retry on — is the one that propagates, never masked by a
-      // secondary ledger error. `ledger.put` is a deterministic-id upsert, so this never double-writes.
       await input.repositories.ledger
         .put(orderWithFulfilledLines(order, progressedLines, ctx.now))
         .catch(() => undefined);
@@ -5666,9 +5558,6 @@ async function fulfillPaidOrder(
   return fulfilledOrder;
 }
 
-// Build an order document with the given (possibly partially) fulfilled lines. `fulfilledAt` is set
-// only when the order is fully fulfilled; partial forward-progress writes pass it undefined so the
-// order stays paid-but-not-fulfilled while still durably recording the committed per-line goods.
 function orderWithFulfilledLines(
   order: OrderDocument,
   lines: readonly OrderLine[],
@@ -5723,9 +5612,6 @@ async function fulfillPaidOrderLine(
       const license = await createOrderLineLicenseDocument(input, order, line, ctx.now);
       const existing = await input.repositories.account.findLicenseById(license.id);
       if (!existing) await input.repositories.account.put(license);
-      // The license document dedups via its deterministic id, but the host-hook notification needs
-      // its own exactly-once guard: a re-leased worker can re-enter before the license is persisted.
-      // Marker-gate the emission so `license.issued` fires at most once per line.
       await emitFulfillmentNotificationOnce(
         input,
         ctx,
@@ -6136,9 +6022,6 @@ async function emitFulfillmentNotificationOnce<TKind extends MikaNotificationKin
   },
   context: MikaNotificationContextMap[TKind],
 ): Promise<void> {
-  // Gate the host-hook emission behind a notification marker so a re-leased fulfillment worker (or a
-  // duplicate webhook) cannot double-fire it — the same exactly-once protection the order-confirmation
-  // email uses. Mirrors queueOrderConfirmationEmail: acquire → emit → complete (fail + rethrow).
   const lease = await acquireNotificationMarker(input, ctx, {
     id: marker.id,
     kind: marker.kind,
@@ -6306,15 +6189,6 @@ function webhookReceiptResult(
   webhook: WebhookDocument,
   event: MikaProviderWebhookEvent,
 ): MikaApiResult<WebhookReceiveDTO> {
-  // A paid payment webhook still in `received` after processing means the
-  // fulfillment workflow could not run to a terminal state: the lease was lost
-  // mid-step or is held by another worker (`runPaymentWebhookWorkflow` and the
-  // `WorkflowRunnerLeaseLostError` catch both return the webhook unchanged).
-  // Acknowledging HTTP 200 here would tell the provider to stop redelivering
-  // while the paid order is unfulfilled. Surface a retryable conflict so the
-  // provider redelivers; a later delivery (after the lease frees or expires)
-  // reprocesses the still-`received` webhook and completes fulfillment
-  // idempotently.
   if (event.kind === "payment" && event.paymentStatus === "paid" && webhook.status === "received") {
     return webhookProcessingDeferred(webhook.id);
   }
@@ -6744,9 +6618,6 @@ async function startCheckout(
   const reserved = await reserveCheckoutLines(input, ctx, checkoutId, resolved, expiresAt);
   if (!reserved.ok) return reserved;
 
-  // Provider lines carry undiscounted catalog amounts, so an applied cart coupon must be passed to
-  // the provider as an order-level discount — otherwise the provider charges the full subtotal while
-  // Mika records the discounted total, overcharging the shopper.
   const checkoutSubtotal = reserved.lines.reduce(
     (sum, line) => sum + line.item.unitAmount * line.quantity,
     0,
@@ -6766,11 +6637,6 @@ async function startCheckout(
           : {}),
         successUrl: checkoutSuccessUrl(input, ctx, checkoutInput, checkoutId, statusToken),
         cancelUrl: checkoutCancelUrl(input, ctx, checkoutInput, checkoutId, statusToken),
-        // Strip the same internal Mika keys we exclude from the persisted checkout metadata, so a
-        // client cannot spoof correlation keys (checkoutOrderId, checkoutIdempotencyKey, …) into the
-        // provider's metadata (Stripe dashboard/webhooks). The ACP delegated-payment keys
-        // (acpPaymentToken, …) are not internal keys, so they pass through and the provider's
-        // delegated charge still works.
         metadata: checkoutCustomMetadata(checkoutInput.customFields),
       });
     } catch {
@@ -6797,9 +6663,6 @@ async function startCheckout(
 
   const providerCheckoutId = providerSession.providerCheckoutId ?? providerSession.id;
   const documentExpiresAt = providerSession.expiresAt ?? expiresAt;
-  // Reservations were created with the backend TTL before the provider session existed.
-  // When the provider grants a longer session window, extend the reservations so stock stays
-  // consumable for the entire period the checkout can still complete and fulfill.
   if (new Date(documentExpiresAt).getTime() > new Date(expiresAt).getTime()) {
     await createMikaStockLifecycleService(input).extendReservations({
       reservationEventIds: reserved.reservationIds,
@@ -6902,10 +6765,6 @@ async function resolveCheckoutStart(
   ctx: MikaRequestContext,
   checkoutInput: StartCheckoutInput,
 ): Promise<({ readonly ok: true } & CheckoutStartResolution) | MikaApiFailure> {
-  // cartId (checkout an existing cart) and sellableId (express buy-now) are
-  // mutually exclusive line sources. Supplying both would add every cart line
-  // and then a separate line for the sellable, double-counting (and
-  // double-reserving / double-charging) a sellable already in the cart.
   if (checkoutInput.cartId && checkoutInput.sellableId) {
     return validationFailed(
       "sellableId",
@@ -6956,10 +6815,6 @@ async function resolveCheckoutStart(
     return validationFailed("cartId", "Checkout requires lines with one purchase mode.");
   }
 
-  // A `couponCode` (the same field cart.quote/checkout.preview price against) is honored here
-  // so checkout charges the terms the shopper was quoted instead of silently using a stale
-  // persisted cart coupon. The resolver remains pure: it returns the in-memory cart update and
-  // `persistCheckoutStart` writes it only as part of the successful checkout/cart transition.
   let resolvedCart = cartResult.cart;
   let coupon = resolvedCart?.aggregate.coupon;
   if (checkoutInput.couponCode !== undefined) {
@@ -7404,11 +7259,6 @@ async function cancelCheckout(
     return checkoutDocumentSuccessResult(document);
   }
 
-  // Return every reservation created for this checkout (from the checkout document's own lines —
-  // authoritative for both cart-based and buy-now checkouts) to availability so other shoppers are
-  // not blocked. They are EXPIRED rather than RELEASED: a provider payment that completed just
-  // before this cancel (its webhook still in flight) must still be able to fulfill, and an expired
-  // reservation stays consumable via the guarded on-hand path while a released one does not.
   const reservationIds = document.aggregate.lines
     .map((line) => line.reservationId)
     .filter((id): id is MikaId => Boolean(id));

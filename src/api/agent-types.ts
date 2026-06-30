@@ -153,15 +153,18 @@ export interface MikaProofRefBase {
   readonly raw?: JsonObject;
 }
 
+/** Proof reference recording end-user consent for a gated operation. */
 export interface MikaConsentProofRef extends MikaProofRefBase {
   readonly kind: "consent";
 }
 
+/** Proof reference for a standing mandate authorizing recurring or delegated actions. */
 export interface MikaMandateRef extends MikaProofRefBase {
   readonly kind: "mandate";
   readonly mandateType?: string;
 }
 
+/** Proof reference capping spend for a payment-sensitive operation. */
 export interface MikaPaymentAuthorizationRef extends MikaProofRefBase {
   readonly kind: "payment_authorization";
   readonly handlerId?: string;
@@ -171,6 +174,7 @@ export interface MikaPaymentAuthorizationRef extends MikaProofRefBase {
   };
 }
 
+/** Proof reference tying an operation to a settled or pending commerce receipt. */
 export interface MikaReceiptRef extends MikaProofRefBase {
   readonly kind: "receipt";
   readonly status?: "pending" | "settled" | "failed" | "refunded";
@@ -245,6 +249,7 @@ export interface MikaActionRun {
 export type MikaAgentActionAccept = "form" | "json";
 /** Where operation input is read from on the wire. */
 export type MikaAgentOperationTransport = "body" | "search" | "none";
+/** HTTP verb used by an operation's wire route in the agent manifest. */
 export type MikaAgentOperationHttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
 
 /** Single operation entry in an agent manifest. */

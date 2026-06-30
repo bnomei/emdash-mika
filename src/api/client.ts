@@ -28,6 +28,7 @@ export interface CatalogSellablesOptions {
   readonly locale?: string;
 }
 
+/** Public plugin route keys accepted by the browser client. */
 export type MikaClientRouteName = MikaPublicPluginRouteName;
 
 /** Resolves a public plugin route name to an absolute or site-relative URL. */

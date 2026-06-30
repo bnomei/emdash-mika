@@ -58,6 +58,7 @@ import {
 
 export { mikaOperationRequestInit, parseMikaOperationInput } from "./operation-transport";
 
+/** HTTP verbs used by plugin route operations. */
 export type MikaOperationHttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
 /** Where validated input is read on the HTTP request. */
 export type MikaOperationTransport = "body" | "search" | "none";
@@ -885,9 +886,6 @@ export const mikaOperationDefinitions = defineMikaOperations({
     schema: downloadResolveInputSchema,
     searchKeys: ["token"],
   }),
-  // POST sibling of `downloadResolve` that consumes the single-use token via a user-initiated form
-  // submit (mirrors `magicLinkVerify`). The bundled download interstitial posts this so a GET
-  // prefetch/link-scan cannot burn the token; `downloadResolve` (GET) stays for agents.
   downloadConfirm: defineMikaOperation({
     namespace: "download",
     method: "confirm",
@@ -1075,7 +1073,9 @@ export const mikaOperationDefinitions = defineMikaOperations({
 /** One registered operation definition (schema, route, agent metadata, and call binding). */
 export type MikaApiOperation =
   (typeof mikaOperationDefinitions)[keyof typeof mikaOperationDefinitions];
+/** Operation definition that maps to an HTTP plugin route. */
 export type MikaRouteOperation = MikaApiOperation;
+/** Route-only entry without a backing API operation (manifest and action runner). */
 export type MikaRouteOnlyDefinition =
   (typeof mikaRouteOnlyDefinitions)[keyof typeof mikaRouteOnlyDefinitions];
 
@@ -1096,6 +1096,7 @@ type MikaOperationPluginRoutes = {
 /** Route key to path segment map consumed by {@link mikaPluginRoute}. */
 export const mikaOperationPluginRoutes = collectMikaPluginRoutes() as MikaOperationPluginRoutes;
 
+/** Route key union for operations marked `public: true`. */
 export type MikaOperationPublicRouteName = Extract<
   MikaRouteOperation,
   { readonly public: true }
@@ -1109,6 +1110,7 @@ export const mikaOperationPublicRouteNames = mikaRoutedOperationDefinitions
   )
   .map((operation) => operation.routeKey) as readonly MikaOperationPublicRouteName[];
 
+/** Type mapping namespaces to registered API method name lists. */
 export type MikaOperationApiMethodNames = {
   readonly [TNamespace in MikaApiOperation["namespace"]]: readonly Extract<
     MikaApiOperation,
@@ -1125,13 +1127,16 @@ type MikaActionOperation = Extract<
   { readonly action: MikaOperationActionDefinition }
 >;
 
+/** Map of HTML action keys to action metadata with linked operations. */
 export type MikaActionDefinitions = {
   readonly [TOperation in MikaActionOperation as TOperation["action"]["key"]]: TOperation["action"] & {
     readonly operation: TOperation;
   };
 };
 
+/** Display name union of all registered HTML actions. */
 export type MikaActionName = MikaActionDefinitions[keyof MikaActionDefinitions]["name"];
+/** Single HTML action entry with schema and linked operation. */
 export type MikaActionDefinition = MikaActionDefinitions[keyof MikaActionDefinitions];
 
 /** HTML form actions keyed by stable action id with linked operations. */

@@ -42,12 +42,6 @@ export function createISODateTime(value: string): ISODateTime {
     throw new TypeError(`Invalid ISODateTime '${value}'.`);
   }
 
-  // Canonicalize to UTC `Z` with milliseconds. Expiry is evaluated with string comparisons
-  // (`expiresAt <= now`, `expires_at > now`) against a canonical `now`; if a caller-supplied value
-  // were stored verbatim in a non-canonical form (offset like `+14:00`, or missing milliseconds),
-  // lexicographic order would diverge from chronological order and an expired token/entitlement
-  // could be accepted (or a valid one rejected). Idempotent for values already produced by
-  // `toISOString()`/`addMilliseconds`, so internally-generated timestamps are unchanged.
   return new Date(dateTime).toISOString() as ISODateTime;
 }
 

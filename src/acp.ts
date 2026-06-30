@@ -47,11 +47,13 @@ export const MIKA_ACP_API_VERSION = "2025-09-12";
 /** Default prefix for generated ACP checkout session ids. */
 export const MIKA_ACP_DEFAULT_SESSION_PREFIX = "acp_checkout";
 
+/** Seller identity and policy links attached to ACP catalog products. */
 export interface MikaAcpSeller {
   readonly name: string;
   readonly links: readonly MikaAcpLink[];
 }
 
+/** Typed policy or FAQ URL included in ACP seller metadata. */
 export interface MikaAcpLink {
   readonly type:
     | "terms_of_use"
@@ -65,6 +67,7 @@ export interface MikaAcpLink {
   readonly title?: string;
 }
 
+/** Mika sellable bundle used to build one ACP product feed entry. */
 export interface MikaAcpFeedProductInput {
   readonly id: string;
   readonly title?: string;
@@ -75,11 +78,13 @@ export interface MikaAcpFeedProductInput {
   readonly sellables: readonly SellableDTO[];
 }
 
+/** ACP product feed envelope with optional target country and product list. */
 export interface MikaAcpProductFeed {
   readonly target_country?: string;
   readonly products: readonly MikaAcpProduct[];
 }
 
+/** Flat merchant file-upload row derived from sellables for feed ingestion. */
 export interface MikaAcpFileUploadProductRow {
   readonly is_eligible_search: boolean;
   readonly is_eligible_checkout: boolean;
@@ -101,6 +106,7 @@ export interface MikaAcpFileUploadProductRow {
   readonly seller_tos?: string;
 }
 
+/** Batch input for generating newline-delimited merchant catalog rows. */
 export interface MikaAcpFileUploadRowsInput {
   readonly products: readonly MikaAcpFeedProductInput[];
   readonly brand: string;
@@ -114,6 +120,7 @@ export interface MikaAcpFileUploadRowsInput {
   readonly sellerTos?: string;
 }
 
+/** ACP catalog product with variants projected from Mika sellables. */
 export interface MikaAcpProduct {
   readonly id: string;
   readonly title?: string;
@@ -123,6 +130,7 @@ export interface MikaAcpProduct {
   readonly variants: readonly MikaAcpVariant[];
 }
 
+/** Purchasable variant with price, availability, and seller metadata. */
 export interface MikaAcpVariant {
   readonly id: string;
   readonly title: string;
@@ -135,27 +143,32 @@ export interface MikaAcpVariant {
   readonly seller?: MikaAcpSeller;
 }
 
+/** Multi-format product description (plain, HTML, or markdown). */
 export interface MikaAcpDescription {
   readonly plain?: string;
   readonly html?: string;
   readonly markdown?: string;
 }
 
+/** Minor-unit price amount and ISO currency for an ACP variant. */
 export interface MikaAcpPrice {
   readonly amount: number;
   readonly currency: string;
 }
 
+/** Stock and availability status for an ACP variant. */
 export interface MikaAcpAvailability {
   readonly available?: boolean;
   readonly status?: "in_stock" | "backorder" | "preorder" | "out_of_stock" | "discontinued";
 }
 
+/** Named option value pairing for a sellable variant. */
 export interface MikaAcpVariantOption {
   readonly name: string;
   readonly value: string;
 }
 
+/** Image or video asset URL with optional dimensions and alt text. */
 export interface MikaAcpMedia {
   readonly type: "image" | "video";
   readonly url: string;
@@ -164,6 +177,7 @@ export interface MikaAcpMedia {
   readonly height?: number;
 }
 
+/** Structural validation failure with JSON path and message. */
 export interface MikaAcpValidationIssue {
   readonly path: string;
   readonly message: string;
@@ -202,9 +216,6 @@ export interface MikaAcpSessionStore {
 export type MikaAcpIdempotencyClaim =
   | { readonly status: "claimed" }
   | { readonly status: "replayed"; readonly record: MikaAcpSessionRecord }
-  // For `conflict`/`in_progress`, `id` MUST be the bound (existing) session id — never the rejected
-  // candidate. `beginAcpIdempotency` resolves it via `store.get(id)` to replay the original session
-  // on an idempotent create retry, so a custom store returning the wrong id would mis-replay.
   | { readonly status: "conflict"; readonly id: string }
   | { readonly status: "in_progress"; readonly id: string };
 
@@ -234,12 +245,14 @@ export interface MikaAcpCheckoutHandlers {
   cancel(request: Request, checkoutSessionId: string): Promise<Response>;
 }
 
+/** Request body for creating an ACP checkout session with items. */
 export interface MikaAcpCheckoutCreateRequest {
   readonly buyer?: MikaAcpBuyer;
   readonly items: readonly MikaAcpItem[];
   readonly fulfillment_address?: MikaAcpAddress;
 }
 
+/** Partial update for buyer, items, address, or fulfillment option on a checkout session. */
 export interface MikaAcpCheckoutUpdateRequest {
   readonly buyer?: MikaAcpBuyer;
   readonly items?: readonly MikaAcpItem[];
@@ -247,22 +260,26 @@ export interface MikaAcpCheckoutUpdateRequest {
   readonly fulfillment_option_id?: string;
 }
 
+/** Payment token and buyer data submitted to complete an ACP checkout session. */
 export interface MikaAcpCheckoutCompleteRequest {
   readonly buyer?: MikaAcpBuyer;
   readonly payment_data: MikaAcpPaymentData;
 }
 
+/** Buyer contact fields carried through the ACP checkout session lifecycle. */
 export interface MikaAcpBuyer {
   readonly name?: string;
   readonly email?: string;
   readonly phone_number?: string;
 }
 
+/** Sellable id and quantity line referenced by ACP checkout requests. */
 export interface MikaAcpItem {
   readonly id: string;
   readonly quantity: number;
 }
 
+/** Structured fulfillment or billing address on ACP checkout sessions. */
 export interface MikaAcpAddress {
   readonly name: string;
   readonly line_one: string;
@@ -274,12 +291,14 @@ export interface MikaAcpAddress {
   readonly phone_number?: string;
 }
 
+/** Delegated payment token and provider submitted at checkout completion. */
 export interface MikaAcpPaymentData {
   readonly token: string;
   readonly provider: "stripe" | "adyen" | "braintree";
   readonly billing_address?: MikaAcpAddress;
 }
 
+/** ACP checkout session lifecycle state from cart reconciliation through payment. */
 export type MikaAcpCheckoutSessionStatus =
   | "not_ready_for_payment"
   | "ready_for_payment"
@@ -303,11 +322,13 @@ export interface MikaAcpCheckoutSession {
   readonly order?: MikaAcpOrder;
 }
 
+/** Supported delegated payment provider and payment methods for the checkout session. */
 export interface MikaAcpPaymentProvider {
   readonly provider: "stripe" | "adyen" | "braintree";
   readonly supported_payment_methods: readonly ["card"];
 }
 
+/** Quoted line with base amount, discounts, tax, and total for the checkout session. */
 export interface MikaAcpLineItem {
   readonly id: string;
   readonly item: MikaAcpItem;
@@ -318,6 +339,7 @@ export interface MikaAcpLineItem {
   readonly total: number;
 }
 
+/** Digital or shipping fulfillment choice with priced subtotals. */
 export type MikaAcpFulfillmentOption =
   | {
       readonly type: "digital";
@@ -341,6 +363,7 @@ export type MikaAcpFulfillmentOption =
       readonly total: number;
     };
 
+/** Labeled monetary total bucket (subtotal, tax, fulfillment, etc.) on a checkout session. */
 export interface MikaAcpTotal {
   readonly type:
     | "items_base_amount"
@@ -355,6 +378,7 @@ export interface MikaAcpTotal {
   readonly amount: number;
 }
 
+/** Info or error message surfaced to the agent during checkout. */
 export type MikaAcpMessage =
   | {
       readonly type: "info";
@@ -376,17 +400,20 @@ export type MikaAcpMessage =
       readonly content: string;
     };
 
+/** Policy link exposed on the ACP checkout session response. */
 export interface MikaAcpCheckoutLink {
   readonly type: "terms_of_use" | "privacy_policy" | "seller_shop_policies";
   readonly url: string;
 }
 
+/** Completed order reference with permalink returned on successful checkout. */
 export interface MikaAcpOrder {
   readonly id: string;
   readonly checkout_session_id: string;
   readonly permalink_url: string;
 }
 
+/** ACP HTTP error envelope for invalid, unauthorized, or non-idempotent requests. */
 export interface MikaAcpError {
   readonly type: "invalid_request";
   readonly code:
@@ -776,11 +803,6 @@ async function handleAcpComplete(
 
   const record = await options.store.get(checkoutSessionId);
   if (!record) return acpError(request, 404, "invalid_request", "Checkout session was not found.");
-  // Serialize completion on the SESSION, not the per-request Idempotency-Key. The `record.checkoutId`
-  // re-entry guard below is read before it is persisted (after the `checkout.start` payment-auth side
-  // effect), so two concurrent completes with distinct keys would otherwise both pass the guard and
-  // both authorize. A session-scoped atomic claim makes a second concurrent complete return 409
-  // (replay in progress) before reaching checkout.start.
   const idempotency = await beginAcpIdempotency(
     options,
     request,
@@ -976,8 +998,6 @@ async function beginAcpIdempotency(
   replayExistingBinding = false,
   storeKeyOverride?: string,
 ): Promise<MikaAcpIdempotencyBegin> {
-  // `storeKeyOverride` lets a verb serialize on something other than the per-request Idempotency-Key
-  // — complete keys on the session id so two concurrent completes can't both authorize payment.
   const key = storeKeyOverride ?? acpIdempotencyStoreKey(request);
   if (!key) return { ok: true };
 
@@ -997,10 +1017,6 @@ async function beginAcpIdempotency(
       };
     }
 
-    // Create mints a fresh server-side id before claiming, so a same-key retry surfaces as a
-    // "conflict" against the original binding rather than a "replayed" id match. The id is never
-    // client-chosen for create, so an existing binding can only be the original call: replay its
-    // response. If the bound session is not yet persisted, the original call is still in progress.
     if (replayExistingBinding && claim.status === "conflict") {
       const bound = await options.store.get(claim.id);
 
@@ -1032,8 +1048,6 @@ async function beginAcpIdempotency(
 
   const replayed = await options.store.getByIdempotencyKey?.(key);
   if (!replayed) return { ok: true, lease: { key, id: checkoutSessionId, claimed: false } };
-  // For create the candidate id is freshly minted, so do not require it to match the bound id — any
-  // existing binding for this key is the original session and must be replayed, not 409'd.
   if (!replayExistingBinding && replayed.id !== checkoutSessionId) {
     return {
       ok: false,

@@ -797,11 +797,6 @@ export class AccountRepository {
       (input.emailHash ? await this.findCustomerByEmailHash(input.emailHash) : null);
     if (!customer) return { anonymized: false };
 
-    // Neutralize BOTH the email-hash AND the userId index so neither re-auth lookup
-    // (findCustomerByEmailHash / findCustomerByUserId) can resolve the deleted account;
-    // the sentinel is opaque and non-resolvable. customerId is RETAINED as the admin
-    // key (accounting reads via findCustomerById). A single per-identity sentinel is
-    // returned so the retained orders/entitlements are re-keyed to the identical value.
     const sentinel = `account-deleted:${customer.customerId}`;
     const anonymized: CustomerDocument = {
       ...customer,
@@ -834,10 +829,6 @@ export class AccountRepository {
     readonly sentinel: string;
     readonly now: ISODateTime;
   }): Promise<{ readonly anonymized: number }> {
-    // An entitlement may be reachable by customerId AND/OR the email-hash index AND/OR the userId
-    // index (a host SSO / manual grant can be keyed by userId ALONE, with no customer doc or
-    // emailHash); union all three by id so none is double-counted or missed. A high limit fetches
-    // every match -- the list ports have no cursor.
     const byId = new Map<MikaId, EntitlementDocument>();
     if (input.customerId) {
       for (const item of (
@@ -863,9 +854,6 @@ export class AccountRepository {
 
     let anonymized = 0;
     for (const entitlement of byId.values()) {
-      // Re-key both the indexed projection and the backing record so neither the
-      // email-hash NOR the userId index resolves the grant after delete (listEntitlements
-      // ByEmailHash / listEntitlementsByUser); status/key/order/customer linkage is kept.
       const redacted: EntitlementDocument = {
         ...entitlement,
         emailHash: input.sentinel,
@@ -968,10 +956,6 @@ export class LedgerRepository {
     readonly sentinel: string;
     readonly now: ISODateTime;
   }): Promise<{ readonly anonymized: number }> {
-    // Collect by customerId (all of a deleted customer's orders) AND by emailHash
-    // (a guest order may carry only the email-hash index), union by order id so none
-    // is missed. A high limit fetches every match -- listOrdersByCustomer defaults to
-    // 50 and the list ports have no cursor.
     const byId = new Map<MikaId, OrderDocument>();
     if (input.customerId) {
       for (const item of (
@@ -990,9 +974,6 @@ export class LedgerRepository {
 
     let anonymized = 0;
     for (const order of byId.values()) {
-      // De-identify the order: neutralize the email-hash index and strip identity PII
-      // from the customer snapshot while retaining all financial fields (totals, lines,
-      // provider ids, status, paidAt, metadata) and the opaque customerId.
       const redacted: OrderDocument = {
         ...order,
         emailHash: input.sentinel,
@@ -1215,8 +1196,6 @@ export class OpsRepository {
     for (const candidate of stuck) {
       const updated = await this.documents.update(candidate.id, (current) => {
         const workflow = documentOfType(current, "workflow");
-        // Re-check under the write guard: only fail a workflow that is STILL stuck. If a concurrent
-        // force-lease revived it, leave it alone.
         if (!workflow || !workflowIsExhausted(workflow, now)) return null;
 
         return workflowDocumentWithRecord(workflow, now, {
@@ -2020,13 +1999,6 @@ export class StockRepository {
               now: input.now,
             }).execute(executor);
       if (!mutationAffected(stockMutation)) {
-        // For an expired reservation the on-hand consume is guarded so it cannot dip into units
-        // already promised to other active reservations. A no-op here means honoring this late
-        // fulfillment would oversell; roll back (so it can be retried once stock frees up) rather
-        // than commit an oversell. The guard is intentionally conservative: it counts every active
-        // reservation (including any that are expired-but-not-yet-swept), so it may briefly refuse a
-        // consume that the next maintenance sweep would make room for. That fails safe and the
-        // workflow retry self-heals once the sweep runs.
         if (current.status === "expired") {
           throw new Error(
             `Reservation event '${current.id}' cannot be consumed: insufficient available stock to fulfill the expired reservation without overselling.`,
@@ -2071,13 +2043,6 @@ export class StockRepository {
           .updateTable("mika_stock_events")
           .set({
             status: "expired",
-            // Free the idempotency key on bulk expiry, mirroring the single-event expire()/release()
-            // eventPatch. Otherwise a checkout.start that reserved stock then died before persisting
-            // its checkout document stays stuck: retries with the same Idempotency-Key keep replaying
-            // the (now expired) reservation and get 409, even though the held stock has already been
-            // returned to availability. The unique idempotency_key index also means a stale non-null
-            // key would block a fresh reserve with the same key, so clearing it is required, not just
-            // tidy.
             idempotency_key: null,
             updated_at: input.now,
           })
@@ -2149,8 +2114,6 @@ export class StockRepository {
           .updateTable("mika_stock_events")
           .set({
             status: "released",
-            // Free the idempotency key on bulk release too (same reasoning as expiry), so a released
-            // reservation never keeps an Idempotency-Key bound to a dead hold.
             idempotency_key: null,
             updated_at: input.now,
           })
@@ -2512,10 +2475,6 @@ export class EphemeralRepository {
   }
 
   async restoreToken(key: string, now: ISODateTime): Promise<boolean> {
-    // Reverse of consumeToken: flip a still-consumed token back to pending (gated on `consumed`
-    // so we only undo a consume, never resurrect a deleted/expired-purged row). No expires_at
-    // guard — if the token expired in the meantime, restoring it is harmless (the next verify
-    // returns TOKEN_EXPIRED rather than TOKEN_USED).
     const result = await this.db
       .updateTable("mika_ephemeral_records")
       .set((eb) => ({

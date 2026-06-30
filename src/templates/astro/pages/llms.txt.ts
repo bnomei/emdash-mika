@@ -8,6 +8,7 @@ import {
 } from "@bnomei/emdash-mika/agent";
 import type { APIRoute } from "astro";
 
+/** Serve dynamically so discovery text can track the live agent manifest schema. */
 export const prerender = false;
 
 const agentManifestSchemaId =
@@ -15,6 +16,7 @@ const agentManifestSchemaId =
     ? mikaAgentManifestJsonSchema["$id"]
     : "https://bnomei.com/schemas/emdash-mika/agent-manifest.v1.json";
 
+/** Plain-text storefront discovery document for LLM crawlers at `/llms.txt`. */
 export const GET: APIRoute = () =>
   new Response(
     [

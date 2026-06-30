@@ -51,6 +51,7 @@ export interface MikaActionsOptions {
   readonly operationPolicy?: MikaOperationPolicy;
 }
 
+/** Stable action id for HTML form posts wired through {@link mikaActionDefinitions}. */
 export type MikaActionName = MikaOperationActionName;
 export type { MikaOperationPolicy } from "./api/operation-policy";
 

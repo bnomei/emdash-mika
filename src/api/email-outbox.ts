@@ -35,6 +35,7 @@ export type MikaEmailSender = (
   message: MikaEmailDeliveryMessage,
 ) => Promise<MikaEmailDeliveryResult | void>;
 
+/** Context passed to custom retry-delay functions after a failed delivery attempt. */
 export interface MikaEmailOutboxRetryInput {
   readonly email: EmailDocument;
   readonly error: unknown;
@@ -60,11 +61,13 @@ export interface MikaEmailOutboxRunnerInput {
       }) => string | undefined);
 }
 
+/** Optional clock override and batch limit for one outbox sweep. */
 export interface MikaEmailOutboxRunOptions {
   readonly now?: ISODateTime;
   readonly limit?: number;
 }
 
+/** Per-email terminal status from a single outbox delivery attempt. */
 export type MikaEmailOutboxRunItem =
   | {
       readonly emailId: MikaId;
@@ -107,6 +110,7 @@ export interface MikaEmailOutboxRunner {
   runOnce(options?: MikaEmailOutboxRunOptions): Promise<MikaEmailOutboxRunResult>;
 }
 
+/** Payload shape expected by the EmDash host email pipeline. */
 export interface MikaEmDashEmailMessage {
   readonly to: string;
   readonly subject: string;
@@ -121,6 +125,7 @@ export interface MikaEmDashEmailPipeline {
   readonly isAvailable?: () => boolean;
 }
 
+/** Options when adapting an EmDash pipeline into a Mika sender. */
 export interface MikaEmDashEmailSenderOptions {
   readonly source?: string;
   readonly allowPluginScopedSender?: boolean;
@@ -189,8 +194,6 @@ export function createEmDashMikaEmailSender(
         subject: message.subject,
         text: message.text,
         html: message.html,
-        // Forward the email's idempotency key so the host pipeline / provider can dedup a re-send
-        // (e.g. an at-least-once retry after a crash), complementing the in-runner send/record split.
         ...(message.idempotencyKey ? { idempotencyKey: message.idempotencyKey } : {}),
       },
       source,
@@ -208,8 +211,6 @@ async function deliverLeasedEmail(
   try {
     prepared = await prepareEmailDelivery(input, email);
   } catch (error) {
-    // A render/prepare throw must fail only THIS email, not abort the whole outbox sweep. The runOnce
-    // loop has no per-iteration guard, so an unhandled throw here would strand every later due email.
     return failLeasedEmail(input, email, leaseKey, now, error);
   }
 
@@ -234,13 +235,9 @@ async function deliverLeasedEmail(
   try {
     result = await input.sender(prepared.message);
   } catch (error) {
-    // The send itself failed — nothing was delivered, so fail-and-retry is safe.
     return failLeasedEmail(input, email, leaseKey, now, error);
   }
 
-  // The provider ACCEPTED the email. From here a recording failure must NOT fail-and-retry (that would
-  // re-send a duplicate on the next sweep): record the delivery best-effort — complete under the lease,
-  // else mark delivered — and never fall back to failLeasedEmail.
   const providerMessageId = result?.providerMessageId;
   const completed = await input.repositories.ops
     .completeEmail({ emailId: email.id, leaseKey, now, providerMessageId })

@@ -35,16 +35,19 @@ type MikaMaintenanceTaskResult<TResult> =
       readonly reason: string;
     };
 
+/** Counts from releasing expired stock reservations during maintenance. */
 export interface MikaMaintenanceStockReservationsResult {
   readonly reservationsScanned: number;
   readonly reservationsReleased: number;
   readonly stockItems: number;
 }
 
+/** Count of expired ephemeral records purged in one maintenance sweep. */
 export interface MikaMaintenanceEphemeralRecordsResult {
   readonly purged: number;
 }
 
+/** Aggregated outcome of processing queued account-delete requests. */
 export interface MikaMaintenanceAccountDeleteRequestsResult {
   readonly scanned: number;
   readonly completed: number;
@@ -53,6 +56,7 @@ export interface MikaMaintenanceAccountDeleteRequestsResult {
   readonly items: readonly MikaMaintenanceAccountDeleteRequestItem[];
 }
 
+/** Per-request completion or failure details from account-delete processing. */
 export type MikaMaintenanceAccountDeleteRequestItem =
   | {
       readonly requestId: MikaId;
@@ -70,6 +74,7 @@ export type MikaMaintenanceAccountDeleteRequestItem =
       readonly error: string;
     };
 
+/** Counts from reclaiming exhausted workflow leases during maintenance. */
 export interface MikaMaintenanceStuckWorkflowsResult {
   readonly scanned: number;
   readonly reclaimed: number;
@@ -247,16 +252,6 @@ async function processQueuedAccountDeleteRequests(input: {
         ...(request.customerId ? { customerId: request.customerId } : {}),
         ...(request.emailHash ? { emailHash: request.emailHash } : {}),
       });
-      // Re-key the retained orders/entitlements to the SAME sentinel the customer
-      // document received so a fresh magic link can no longer reach them via the
-      // email-hash index. The customer-doc method derives the sentinel from the
-      // resolved customer.customerId and returns it; fall back to the request's
-      // customerId when the customer record is already gone (a prior partial run)
-      // so the value still matches `account-deleted:<customerId>`. A GUEST delete
-      // has NO customer document (the library never provisions them) and NO
-      // customerId, only the request emailHash -- derive a sentinel from that hash so
-      // the guest's email-hash-keyed orders/entitlements are re-keyed too; otherwise
-      // they keep the original hash and a fresh magic link re-exposes them.
       const sentinel =
         customerResult.sentinel ??
         (request.customerId

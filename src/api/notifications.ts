@@ -35,12 +35,14 @@ export interface MikaNotificationRecipientContext {
   readonly emailHash?: string;
 }
 
+/** Magic-link flow that triggered the notification (sign-in, checkout, account delete, or host extension). */
 export type MikaMagicLinkNotificationPurpose =
   | "sign_in"
   | "checkout"
   | "account_delete"
   | (string & {});
 
+/** Context for magic-link delivery after token issuance. */
 export interface MikaMagicLinkRequestedNotificationContext extends MikaNotificationRecipientContext {
   readonly toEmail: string;
   readonly link: string;
@@ -50,6 +52,7 @@ export interface MikaMagicLinkRequestedNotificationContext extends MikaNotificat
   readonly tokenId: MikaId;
 }
 
+/** Single fulfilled line item included in an order-confirmed notification. */
 export interface MikaOrderConfirmedNotificationLine {
   readonly lineId: MikaId;
   readonly sellableId: MikaId;
@@ -66,6 +69,7 @@ export interface MikaOrderConfirmedNotificationLine {
   readonly metadata?: JsonObject;
 }
 
+/** Context for post-checkout order confirmation email or host handler. */
 export interface MikaOrderConfirmedNotificationContext extends MikaNotificationRecipientContext {
   readonly toEmail: string;
   readonly orderId: MikaId;
@@ -79,6 +83,7 @@ export interface MikaOrderConfirmedNotificationContext extends MikaNotificationR
   readonly fulfillmentKinds: readonly FulfillmentKind[];
 }
 
+/** Context when checkout payment fails or a provider webhook reports failure. */
 export interface MikaCheckoutPaymentFailedNotificationContext extends MikaNotificationRecipientContext {
   readonly checkoutId?: MikaId;
   readonly orderId?: MikaId;
@@ -94,6 +99,7 @@ export interface MikaCheckoutPaymentFailedNotificationContext extends MikaNotifi
   readonly total?: Money;
 }
 
+/** Context when a download token or entitlement link is ready for delivery. */
 export interface MikaDownloadReadyNotificationContext extends MikaNotificationRecipientContext {
   readonly downloadRef: string;
   readonly orderId?: MikaId;
@@ -105,6 +111,7 @@ export interface MikaDownloadReadyNotificationContext extends MikaNotificationRe
   readonly licenseId?: MikaId;
 }
 
+/** Context when a license key is issued for a fulfilled order line. */
 export interface MikaLicenseIssuedNotificationContext extends MikaNotificationRecipientContext {
   readonly licenseId: MikaId;
   readonly orderId?: MikaId;
@@ -115,6 +122,7 @@ export interface MikaLicenseIssuedNotificationContext extends MikaNotificationRe
   readonly fulfillmentKind?: FulfillmentKind;
 }
 
+/** Context for subscription lifecycle events (start, update, renewal failure). */
 export interface MikaSubscriptionNotificationContext extends MikaNotificationRecipientContext {
   readonly subscriptionId: MikaId;
   readonly status: SubscriptionStatus;
@@ -131,6 +139,7 @@ export interface MikaSubscriptionNotificationContext extends MikaNotificationRec
   readonly eventType?: string;
 }
 
+/** Context when a customer data export is ready to download. */
 export interface MikaAccountExportReadyNotificationContext extends MikaNotificationRecipientContext {
   readonly exportId: MikaId;
   readonly expiresAt: ISODateTime;
@@ -138,10 +147,12 @@ export interface MikaAccountExportReadyNotificationContext extends MikaNotificat
   readonly tokenId?: MikaId;
 }
 
+/** Context when a customer requests account deletion. */
 export interface MikaAccountDeleteRequestedNotificationContext extends MikaNotificationRecipientContext {
   readonly requestId: MikaId;
 }
 
+/** Ops-facing context when inbound provider webhook processing fails persistently. */
 export interface MikaOpsWebhookFailedNotificationContext {
   readonly webhookId: MikaId;
   readonly provider: ProviderName;
@@ -154,6 +165,7 @@ export interface MikaOpsWebhookFailedNotificationContext {
   readonly relatedSubscriptionId?: MikaId;
 }
 
+/** Fallback notification context for kinds without a dedicated payload shape. */
 export interface MikaGenericNotificationContext extends MikaNotificationRecipientContext {
   readonly metadata?: JsonObject;
 }
@@ -182,6 +194,7 @@ export type MikaNotificationIntent<TKind extends MikaNotificationKind = MikaNoti
   };
 }[TKind];
 
+/** Outcome returned by a notification hook indicating whether default delivery was suppressed. */
 export interface MikaNotificationHookResult {
   readonly handled: boolean;
 }

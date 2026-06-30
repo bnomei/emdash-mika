@@ -615,8 +615,6 @@ describe("Mika Astro helpers", () => {
     expect(mikaSafeReturnTo("https://shop.test/account/orders", options)).toBe("/account/orders");
     expect(mikaSafeReturnTo("https://evil.test/account", options)).toBe("/fallback");
     expect(mikaSafeReturnTo("//evil.test/account", options)).toBe("/fallback");
-    // Same-origin absolute URL whose pathname begins with "//" must not survive sanitization:
-    // a downstream `new URL(path, origin)` would resolve it to an attacker origin.
     expect(mikaSafeReturnTo("https://shop.test//evil.test/done", options)).toBe("/fallback");
     expect(mikaSafeReturnTo("https://shop.test//evil.test", options)).toBe("/fallback");
     expect(mikaSafeReturnTo("javascript:alert(1)", options)).toBe("/fallback");
@@ -1660,8 +1658,6 @@ describe("Mika client", () => {
       }),
     });
 
-    // Without the header, no idempotency key is injected (so the per-request
-    // header is the only source on direct routes, matching the action runner).
     await routes[mikaPluginRoutes.adminStockAdjust].handler({
       input: adjustInput,
       request: new Request(adjustUrl, { method: "POST" }),
@@ -3942,8 +3938,6 @@ describe("public types", () => {
 
 describe("createISODateTime canonicalization", () => {
   it("normalizes a UTC-offset timestamp to canonical Z so string expiry comparisons stay correct", () => {
-    // 2026-06-29T23:00:00+14:00 is the instant 2026-06-29T09:00:00Z; stored verbatim it would sort
-    // lexicographically after a 10:00Z `now` and read as not-yet-expired.
     expect(createISODateTime("2026-06-29T23:00:00+14:00")).toBe("2026-06-29T09:00:00.000Z");
   });
 

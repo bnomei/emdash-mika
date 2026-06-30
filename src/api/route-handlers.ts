@@ -166,11 +166,6 @@ async function handleRouteOperation(
     operation,
     api,
     ctx: mikaContext,
-    // Forward the Idempotency-Key header into admin operation input on direct
-    // plugin routes, mirroring handleActionRunner. Admin operations declare
-    // requiresRequestContext: false, so the backend reads input.idempotencyKey
-    // rather than ctx; without this, header-only agent retries would re-execute
-    // mutations (refund, stock adjust, ...) instead of replaying.
     input: adminRunnerInputWithContext(operation, parsedInput.data, mikaContext.idempotencyKey),
     operationPolicy: options.operationPolicy,
   });

@@ -46,6 +46,7 @@ export const MIKA_ERROR_CODES = [
   "NOT_IMPLEMENTED",
 ] as const;
 
+/** Union of stable API failure codes enumerated in {@link MIKA_ERROR_CODES}. */
 export type MikaErrorCode = (typeof MIKA_ERROR_CODES)[number];
 
 /** Structured error payload on failed API responses. */
@@ -96,18 +97,21 @@ export interface MoneyDTO {
   readonly currency: CurrencyCode;
 }
 
+/** One selectable value within a variant dimension such as size or color. */
 export interface VariantOptionValueDTO {
   readonly option: string;
   readonly value: string;
   readonly label?: string;
 }
 
+/** Labeled variant axis and its values for purchase UI pickers. */
 export interface VariantOptionGroupDTO {
   readonly option: string;
   readonly label: string;
   readonly values: readonly VariantOptionValueDTO[];
 }
 
+/** Stock fulfillment state for a sellable at read time. */
 export type AvailabilityStatus =
   | "available"
   | "low_stock"
@@ -126,6 +130,7 @@ export interface AvailabilityDTO {
   readonly reservedByCurrentCheckout?: boolean;
 }
 
+/** Active sellable price with currency, billing mode, and fulfillment kind. */
 export interface PriceDTO {
   readonly id: MikaId;
   readonly sellableId: MikaId;
@@ -153,6 +158,7 @@ export interface SellableDTO {
   readonly availability?: AvailabilityDTO;
 }
 
+/** Priced cart row with sellable snapshot, quantity, and live availability. */
 export interface CartLineDTO {
   readonly id: MikaId;
   readonly sellableId: MikaId;
@@ -183,6 +189,7 @@ export interface CartDTO {
   readonly errors?: readonly MikaError[];
 }
 
+/** Coupon metadata and discount applied to the cart total. */
 export interface AppliedCouponDTO {
   readonly code?: string;
   readonly label?: string;
@@ -190,6 +197,7 @@ export interface AppliedCouponDTO {
   readonly providerCouponId?: string;
 }
 
+/** Saved sellable snapshot with add time and current availability. */
 export interface WishlistItemDTO {
   readonly id: MikaId;
   readonly sellableId: MikaId;
@@ -207,6 +215,7 @@ export interface WishlistDTO {
   readonly items: readonly WishlistItemDTO[];
 }
 
+/** Lifecycle state of a provider-hosted checkout session. */
 export type CheckoutStatusDTO =
   | "created"
   | "redirected"
@@ -231,6 +240,7 @@ export interface CheckoutSessionDTO {
   readonly errors?: readonly MikaError[];
 }
 
+/** Optional buyer identity and tax fields collected during checkout. */
 export interface CheckoutCustomerInput {
   readonly email?: string;
   readonly name?: string;
@@ -238,8 +248,10 @@ export interface CheckoutCustomerInput {
   readonly vatId?: string;
 }
 
+/** Whether a quoted cart snapshot is still valid for checkout handoff. */
 export type CartQuoteStatusDTO = "valid" | "changed" | "expired" | "unavailable";
 
+/** Quote row with pricing snapshot, quantity, and validation warnings. */
 export interface CartQuoteLineDTO {
   readonly lineId?: MikaId;
   readonly sellableId: MikaId;
@@ -255,6 +267,7 @@ export interface CartQuoteLineDTO {
   readonly warnings?: readonly string[];
 }
 
+/** Tax, discount, shipping, or fee line in a quote total breakdown. */
 export interface CartQuoteAdjustmentDTO {
   readonly type: "discount" | "tax" | "shipping" | "fee";
   readonly label?: string;
@@ -283,6 +296,7 @@ export interface CartQuoteDTO {
   readonly errors?: readonly MikaError[];
 }
 
+/** Agent or buyer readiness gate before payment authorization. */
 export type CheckoutPreviewStatusDTO =
   | "ready"
   | "requires_confirmation"
@@ -290,6 +304,7 @@ export type CheckoutPreviewStatusDTO =
   | "unavailable"
   | "expired";
 
+/** Required agent proof kind and binding constraints for checkout preview. */
 export interface CheckoutPreviewProofRequirementDTO {
   readonly kind: MikaAgentProofKind;
   readonly required: boolean;
@@ -316,6 +331,7 @@ export interface CheckoutPreviewDTO {
   readonly errors?: readonly MikaError[];
 }
 
+/** Logged-in or checkout-linked buyer profile identifiers. */
 export interface CustomerDTO {
   readonly id?: MikaId;
   readonly userId?: string;
@@ -323,6 +339,7 @@ export interface CustomerDTO {
   readonly name?: string;
 }
 
+/** Compact order row for account history and order lists. */
 export interface OrderSummaryDTO {
   readonly id: MikaId;
   readonly orderNumber: string;
@@ -333,6 +350,7 @@ export interface OrderSummaryDTO {
   readonly invoiceHref?: string;
 }
 
+/** Recurring purchase with billing period end and self-service actions. */
 export interface SubscriptionDTO {
   readonly id: MikaId;
   readonly title: string;
@@ -342,6 +360,7 @@ export interface SubscriptionDTO {
   readonly providerActions?: readonly ("portal" | "cancel" | "renew" | "change")[];
 }
 
+/** Access grant from orders, subscriptions, or manual admin issuance. */
 export interface EntitlementDTO {
   readonly key: string;
   readonly status: "active" | "inactive" | "revoked" | "expired";
@@ -349,6 +368,7 @@ export interface EntitlementDTO {
   readonly expiresAt?: ISODateTime;
 }
 
+/** Customer-facing downloadable asset with time-limited access href. */
 export interface DownloadDTO {
   readonly id: MikaId;
   readonly title: string;
@@ -356,12 +376,14 @@ export interface DownloadDTO {
   readonly expiresAt?: ISODateTime;
 }
 
+/** Token resolution outcome with redirect URL and expiry. */
 export interface DownloadResolutionDTO {
   readonly title?: string;
   readonly redirectUrl?: string;
   readonly expiresAt?: ISODateTime;
 }
 
+/** Async personal data export job status and download link when ready. */
 export interface AccountExportDTO {
   readonly id: MikaId;
   readonly status: "queued" | "running" | "ready" | "expired" | "failed";
@@ -370,6 +392,7 @@ export interface AccountExportDTO {
   readonly downloadHref?: string;
 }
 
+/** Secure export download link resolved from export job and access token. */
 export interface AccountExportDownloadDTO {
   readonly id: MikaId;
   readonly href?: string;
@@ -385,7 +408,7 @@ export interface AccountDTO {
   readonly downloads: readonly DownloadDTO[];
 }
 
-/** Input for `cart.add`. */
+/** Sellable, price, quantity, and variant selection for a new cart line. */
 export interface AddCartItemInput {
   readonly sellableId: MikaId;
   readonly priceId?: MikaId;
@@ -395,40 +418,40 @@ export interface AddCartItemInput {
   readonly returnTo?: string;
 }
 
-/** Input for `cart.merge`. */
+/** Source session or cart to fold into the shopper's active cart. */
 export interface MergeCartInput {
   readonly sourceSessionId?: string;
   readonly targetCartId?: MikaId;
   readonly returnTo?: string;
 }
 
-/** Input for `cart.update`. */
+/** Cart line identifier and target quantity for in-place line updates. */
 export interface UpdateCartItemInput {
   readonly lineId: MikaId;
   readonly quantity: number;
   readonly returnTo?: string;
 }
 
-/** Input for `cart.remove`. */
+/** Cart line identifier to remove from the open cart. */
 export interface RemoveCartItemInput {
   readonly lineId: MikaId;
   readonly returnTo?: string;
 }
 
-/** Input for `cart.applyCoupon`. */
+/** Discount code and optional cart scope for coupon application. */
 export interface ApplyCouponInput {
   readonly code: string;
   readonly cartId?: MikaId;
   readonly returnTo?: string;
 }
 
-/** Input for `cart.removeCoupon`. */
+/** Optional cart scope when clearing an applied coupon. */
 export interface RemoveCouponInput {
   readonly cartId?: MikaId;
   readonly returnTo?: string;
 }
 
-/** Input for `cart.quote`. */
+/** Cart or ad-hoc purchase details for a priced quote before checkout. */
 export interface CartQuoteInput {
   readonly cartId?: MikaId;
   readonly sellableId?: MikaId;
@@ -440,40 +463,40 @@ export interface CartQuoteInput {
   readonly returnTo?: string;
 }
 
-/** Input for `wishlist.add`. */
+/** Sellable and optional price to save for later purchase. */
 export interface WishlistItemInput {
   readonly sellableId: MikaId;
   readonly priceId?: MikaId;
   readonly returnTo?: string;
 }
 
-/** Input for `wishlist.remove`. */
+/** Wishlist entry identifier to drop from the saved list. */
 export interface RemoveWishlistItemInput {
   readonly itemId: MikaId;
   readonly returnTo?: string;
 }
 
-/** Input for `wishlist.moveToCart`. */
+/** Wishlist entry and quantity to transfer into the cart. */
 export interface MoveWishlistItemToCartInput {
   readonly itemId: MikaId;
   readonly quantity?: number;
   readonly returnTo?: string;
 }
 
-/** Input for `wishlist.saveForLater`. */
+/** Cart line to move off the cart into the wishlist. */
 export interface SaveCartLineForLaterInput {
   readonly lineId: MikaId;
   readonly returnTo?: string;
 }
 
-/** Input for `wishlist.merge`. */
+/** Source session or wishlist to merge into the active wishlist. */
 export interface MergeWishlistInput {
   readonly sourceSessionId?: string;
   readonly targetWishlistId?: MikaId;
   readonly returnTo?: string;
 }
 
-/** Input for `checkout.start` and base fields for preview. */
+/** Cart or direct purchase handoff fields plus provider and redirect paths. */
 export interface StartCheckoutInput {
   readonly cartId?: MikaId;
   readonly sellableId?: MikaId;
@@ -488,75 +511,76 @@ export interface StartCheckoutInput {
   readonly returnTo?: string;
 }
 
-/** Input for `checkout.preview`. */
+/** Checkout handoff fields plus quote binding and agent proof references. */
 export interface CheckoutPreviewInput extends StartCheckoutInput {
   readonly quoteId?: MikaId;
   readonly proofRefs?: readonly MikaAgentProofRef[];
 }
 
-/** Input for `magicLink.request`. */
+/** Email address and post-login return path for passwordless sign-in. */
 export interface MagicLinkRequestInput {
   readonly email: string;
   readonly returnTo?: string;
 }
 
-/** Input for `magicLink.verify`. */
+/** One-time token and return path to complete magic-link authentication. */
 export interface MagicLinkVerifyInput {
   readonly token: string;
   readonly returnTo?: string;
 }
 
-/** Input for `account.portal`. */
+/** Post-provider-portal return path for billing self-service. */
 export interface AccountPortalInput {
   readonly returnTo?: string;
 }
 
-/** Input for subscription cancel, change, and renew operations. */
+/** Subscription identifier and optional plan change for lifecycle actions. */
 export interface SubscriptionActionInput {
   readonly subscriptionId: MikaId;
   readonly priceId?: MikaId;
   readonly returnTo?: string;
 }
 
-/** Input for `account.export`. */
+/** Return path after requesting a personal data export. */
 export interface AccountExportInput {
   readonly returnTo?: string;
 }
 
-/** Input for `account.delete`. */
+/** Return path after initiating account deletion. */
 export interface AccountDeleteInput {
   readonly returnTo?: string;
 }
 
-/** Input for `account.exportStatus`. */
+/** Export job identifier to poll async export readiness. */
 export interface AccountExportStatusInput {
   readonly exportId: MikaId;
 }
 
-/** Input for `account.exportDownload`. */
+/** Export job and optional access token for secure download. */
 export interface AccountExportDownloadInput {
   readonly exportId: MikaId;
   readonly token?: string;
 }
 
-/** Input for `checkout.status`. */
+/** Checkout session and optional status token for payment polling. */
 export interface CheckoutStatusInput {
   readonly checkoutId: MikaId;
   readonly token?: string;
 }
 
-/** Input for `checkout.cancel`. */
+/** Checkout session to abandon before completion. */
 export interface CheckoutCancelInput {
   readonly checkoutId: MikaId;
 }
 
-/** Input for `order.invoice`. */
+/** Order, optional invoice token, and return path for hosted invoice access. */
 export interface OrderInvoiceInput {
   readonly orderId: MikaId;
   readonly token?: string;
   readonly returnTo?: string;
 }
 
+/** Hosted invoice URL and expiry for an order. */
 export interface OrderInvoiceDTO {
   readonly orderId: MikaId;
   readonly href?: string;
@@ -581,8 +605,10 @@ export const MIKA_PROVIDER_CAPABILITIES = [
   "webhook_signatures",
 ] as const;
 
+/** Union of payment-provider feature flags in {@link MIKA_PROVIDER_CAPABILITIES}. */
 export type MikaProviderCapability = (typeof MIKA_PROVIDER_CAPABILITIES)[number];
 
+/** Provider adapter liveness with declared capabilities and probe warnings. */
 export interface ProviderHealthDTO {
   readonly provider: ProviderName;
   readonly ok: boolean;
@@ -599,6 +625,7 @@ export interface WebhookReceiveInput {
   readonly providerEventId?: string;
 }
 
+/** Ingest outcome for an incoming provider webhook event. */
 export interface WebhookReceiveDTO {
   readonly id?: MikaId;
   readonly status: "received" | "duplicate" | "failed";
@@ -614,12 +641,12 @@ export interface AdminActionResultDTO {
   readonly affected?: Record<string, number>;
 }
 
-/** Input for `admin.providerHealth`. */
+/** Optional provider filter for adapter capability health probes. */
 export interface ProviderHealthInput {
   readonly provider?: ProviderName;
 }
 
-/** Input for `admin.providerSync`. */
+/** Provider, sync mode, scope, and optional catalog entry for reconciliation. */
 export interface ProviderSyncInput {
   readonly provider?: ProviderName;
   readonly mode?: "dry_run" | "apply";
@@ -627,7 +654,7 @@ export interface ProviderSyncInput {
   readonly contentRef?: ContentRefDTO;
 }
 
-/** Input for `admin.stockAdjust`. */
+/** Stock item delta, reason, and idempotency metadata for admin inventory changes. */
 export interface StockAdjustInput {
   readonly stockItemId: MikaId;
   readonly quantityDelta: number;
@@ -637,17 +664,17 @@ export interface StockAdjustInput {
   readonly metadata?: JsonObject;
 }
 
-/** Input for `admin.releaseExpiredReservations`. */
+/** Optional clock override for expired reservation maintenance sweeps. */
 export interface ReleaseExpiredReservationsInput {
   readonly now?: ISODateTime;
 }
 
-/** Input for `admin.webhookReplay`. */
+/** Stored webhook event identifier for admin replay. */
 export interface WebhookReplayInput {
   readonly webhookId: MikaId;
 }
 
-/** Input for `admin.orderRefund`. */
+/** Order, optional partial amount, reason, and idempotency key for refunds. */
 export interface OrderRefundInput {
   readonly orderId: MikaId;
   readonly amount?: number;
@@ -655,14 +682,14 @@ export interface OrderRefundInput {
   readonly idempotencyKey?: string;
 }
 
-/** Input for `admin.orderCancel`. */
+/** Order and optional reason with idempotency for cancellation. */
 export interface OrderCancelInput {
   readonly orderId: MikaId;
   readonly reason?: string;
   readonly idempotencyKey?: string;
 }
 
-/** Input for `admin.entitlementGrant`. */
+/** Entitlement key and customer identity for manual access grants. */
 export interface EntitlementGrantInput {
   readonly entitlementKey: string;
   readonly customerId?: MikaId;
@@ -672,7 +699,7 @@ export interface EntitlementGrantInput {
   readonly idempotencyKey?: string;
 }
 
-/** Input for `admin.entitlementRevoke`. */
+/** Entitlement or customer identifiers and reason for access revocation. */
 export interface EntitlementRevokeInput {
   readonly entitlementId?: MikaId;
   readonly entitlementKey?: string;
@@ -681,20 +708,20 @@ export interface EntitlementRevokeInput {
   readonly idempotencyKey?: string;
 }
 
-/** Input for `admin.emailResend`. */
+/** Queued email and idempotency key for delivery retry. */
 export interface EmailResendInput {
   readonly emailId: MikaId;
   readonly idempotencyKey?: string;
 }
 
-/** Input for `admin.licenseRevoke`. */
+/** License identifier and reason for key revocation. */
 export interface LicenseRevokeInput {
   readonly licenseId: MikaId;
   readonly reason?: string;
   readonly idempotencyKey?: string;
 }
 
-/** Input for `admin.downloadIssue`. */
+/** Order or entitlement anchors and expiry for issuing download tokens. */
 export interface DownloadIssueInput {
   readonly entitlementId?: MikaId;
   readonly orderId?: MikaId;
