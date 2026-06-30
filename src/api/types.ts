@@ -480,6 +480,7 @@ export interface StartCheckoutInput {
   readonly priceId?: MikaId;
   readonly quantity?: number;
   readonly provider?: ProviderName;
+  readonly couponCode?: string;
   readonly customer?: CheckoutCustomerInput;
   readonly customFields?: JsonObject;
   readonly successPath?: string;

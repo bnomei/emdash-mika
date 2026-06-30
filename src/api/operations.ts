@@ -446,6 +446,7 @@ function normalizeCheckoutStartActionInput(input: CheckoutStartFormInput) {
     priceId: input.priceId,
     quantity: input.quantity,
     provider: input.provider,
+    couponCode: input.couponCode,
     customer,
     customFields: input.customFields,
     successPath: input.successPath,

@@ -10022,6 +10022,101 @@ describe("backend API composition", () => {
     expect(lineSubtotal - (call?.discount?.amount ?? 0)).toBe(2160);
   });
 
+  it("applies a checkout.start couponCode to the provider discount and checkout coupon", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) throw new Error("Expected cart.add to succeed.");
+
+    // No coupon is persisted on the cart; it arrives only on checkout.start (the same field
+    // cart.quote/checkout.preview accept). It must still discount the provider charge.
+    const checkout = await api.checkout.start(ctx, {
+      cartId: added.data.id,
+      couponCode: "SAVE10",
+    });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+
+    const call = fake.getCalls().createCheckoutSession[0];
+    expect(call?.discount).toMatchObject({ amount: 240, currency: TEST_CURRENCY });
+    const lineSubtotal = (call?.lines ?? []).reduce(
+      (sum, line) => sum + line.unitAmount * line.quantity,
+      0,
+    );
+    expect(lineSubtotal - (call?.discount?.amount ?? 0)).toBe(2160);
+    await expect(
+      repositories.session.findCheckoutById(checkout.data.id),
+    ).resolves.toMatchObject({ aggregate: { coupon: { label: "SAVE10" } } });
+  });
+
+  it("lets a checkout.start couponCode override the persisted cart coupon", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) throw new Error("Expected cart.add to succeed.");
+    await expect(api.cart.applyCoupon(ctx, { code: "SAVE10" })).resolves.toMatchObject({
+      ok: true,
+    });
+
+    // The shopper quoted SAVE20 and authorizes it at checkout; the override must win over
+    // the stale persisted SAVE10 instead of being silently ignored.
+    const checkout = await api.checkout.start(ctx, {
+      cartId: added.data.id,
+      couponCode: "SAVE20",
+    });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+
+    await expect(
+      repositories.session.findCheckoutById(checkout.data.id),
+    ).resolves.toMatchObject({ aggregate: { coupon: { label: "SAVE20" } } });
+    // The override also propagates to the backing cart (now checkout_pending), so the cart and
+    // any later quote/preview stay aligned with what checkout charged. (The open-cart persist in
+    // resolveCheckoutStart is independently exercised by the delegated-payment coupon test, whose
+    // authorization recompute reads the cart back.)
+    await expect(
+      repositories.session.findCheckoutPendingCartBySession("session_1", TEST_CURRENCY),
+    ).resolves.toMatchObject({ aggregate: { coupon: { label: "SAVE20" } } });
+  });
+
   it("rejects checkout.start when both cartId and sellableId are supplied", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();

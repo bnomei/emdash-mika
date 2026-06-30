@@ -6453,12 +6453,44 @@ async function resolveCheckoutStart(
     return validationFailed("cartId", "Checkout requires lines with one purchase mode.");
   }
 
+  // A `couponCode` (the same field cart.quote/checkout.preview price against) is honored here
+  // so checkout charges the terms the shopper was quoted instead of silently using a stale
+  // persisted cart coupon. The discount basis is the resolved checkout lines (current prices),
+  // and when a cart backs the checkout the coupon is persisted to it — exactly like
+  // cart.applyCoupon — so cart state, totals, and provider lines stay aligned. An empty code
+  // removes the coupon. Applied after the resolver's own validation (empty cart / mixed modes)
+  // so those rejections never persist a coupon; a later provider-session failure still rolls
+  // back reservations but leaves this coupon on the cart — the same outcome as cart.applyCoupon
+  // followed by a failed checkout, which is acceptable since the shopper supplied the code.
+  let resolvedCart = cartResult.cart;
+  let coupon = resolvedCart?.aggregate.coupon;
+  if (checkoutInput.couponCode !== undefined) {
+    const code = checkoutInput.couponCode.trim();
+    coupon = code
+      ? await couponSnapshotForSubtotal(
+          input,
+          code,
+          lines.reduce((sum, line) => sum + line.line.item.unitAmount * line.line.quantity, 0),
+        )
+      : undefined;
+    if (resolvedCart) {
+      resolvedCart = {
+        ...resolvedCart,
+        updatedAt: ctx.now,
+        aggregate: coupon
+          ? cartWithCoupon({ cart: resolvedCart.aggregate, coupon })
+          : cartWithoutCoupon({ cart: resolvedCart.aggregate }),
+      };
+      await input.repositories.session.put(resolvedCart);
+    }
+  }
+
   return {
     ok: true,
-    cart: cartResult.cart,
+    cart: resolvedCart,
     currency,
     mode: modes[0],
-    coupon: cartResult.cart?.aggregate.coupon,
+    coupon,
     lines,
   };
 }
@@ -7672,16 +7704,12 @@ async function validateExistingLineQuantity(
 
 const COUPON_DISCOUNT_RATE = 0.1;
 
-async function createCouponSnapshot(
-  input: MikaCartWishlistBackendInput,
-  cart: CartDocument,
+async function couponSnapshotForSubtotal(
+  input: Pick<CreateMikaBackendApiInput, "hash">,
   code: string,
+  subtotalAmount: number,
 ): Promise<CouponSnapshot> {
   const normalizedCode = code.toUpperCase();
-  const subtotalAmount = cart.aggregate.items.reduce(
-    (sum, line) => sum + line.item.unitAmount * line.quantity,
-    0,
-  );
 
   return {
     codeHash: await input.hash(`coupon:${normalizedCode}`),
@@ -7689,6 +7717,19 @@ async function createCouponSnapshot(
     rate: COUPON_DISCOUNT_RATE,
     discountAmount: Math.floor(subtotalAmount * COUPON_DISCOUNT_RATE),
   };
+}
+
+async function createCouponSnapshot(
+  input: MikaCartWishlistBackendInput,
+  cart: CartDocument,
+  code: string,
+): Promise<CouponSnapshot> {
+  const subtotalAmount = cart.aggregate.items.reduce(
+    (sum, line) => sum + line.item.unitAmount * line.quantity,
+    0,
+  );
+
+  return couponSnapshotForSubtotal(input, code, subtotalAmount);
 }
 
 async function cartDocumentToDTO(
