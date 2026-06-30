@@ -4728,7 +4728,21 @@ describe("backend API composition", () => {
         quantityOnHand: 4,
         quantityReserved: 0,
       });
-      await expect(repositories.ledger.findOrderById(order.id)).resolves.toEqual(order);
+      // The order is retained as a financial record but de-identified: identity PII is
+      // cleared and the email-hash index is neutralized to the sentinel, while the
+      // financial fields (totals, lines, ids, customerId) stay intact.
+      const retainedOrder = await repositories.ledger.findOrderById(order.id);
+      expect(retainedOrder?.customerId).toBe(order.customerId);
+      expect(retainedOrder?.totalAmount).toBe(order.totalAmount);
+      expect(retainedOrder?.status).toBe(order.status);
+      expect(retainedOrder?.aggregate.lines).toEqual(order.aggregate.lines);
+      expect(retainedOrder?.aggregate.totals).toEqual(order.aggregate.totals);
+      expect(retainedOrder?.emailHash).toBe(`account-deleted:${customer.customerId}`);
+      expect(retainedOrder?.aggregate.customer.emailHash).toBe(
+        `account-deleted:${customer.customerId}`,
+      );
+      expect(retainedOrder?.aggregate.customer.email).toBeUndefined();
+      expect(retainedOrder?.aggregate.customer.name).toBeUndefined();
       await expect(repositories.ops.findEmail(email.id)).resolves.toMatchObject({
         status: "skipped",
         nextAttemptAt: undefined,
@@ -4742,6 +4756,539 @@ describe("backend API composition", () => {
           metadata: { redactedAt: clock.isoAt(60_000) },
         },
       });
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
+    }
+  });
+
+  it("re-keys a userId-only entitlement on account delete (no customer doc, no emailHash)", async () => {
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const accountCollection = createStorageCollection("account");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+      stock: new StockRepository(db),
+      ephemeral: new EphemeralRepository(db),
+    } satisfies MikaBackendRepositories;
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const clock = createTestClock();
+    const sentinel = "account-deleted-user:user_only";
+
+    try {
+      await mikaInitialMigration.up(db);
+      // A userId-only identity (host SSO / manual grant): an entitlement keyed by userId ALONE — no
+      // customer doc, no customerId, no emailHash. This class previously made account-delete a no-op
+      // (the sentinel was undefined AND the anonymizer never collected by userId), leaving the grant
+      // re-authable forever via listEntitlementsByUser.
+      const baseGrant = createEntitlementDocument();
+      await repositories.account.put({
+        ...baseGrant,
+        customerId: undefined,
+        emailHash: undefined,
+        userId: "user_only",
+        record: {
+          ...baseGrant.record,
+          customerId: undefined,
+          emailHash: undefined,
+          userId: "user_only",
+        },
+      });
+      const userCtx = createTestRequestContext({ customerId: false, userId: "user_only" });
+
+      expect((await repositories.account.listEntitlementsByUser("user_only")).items).toHaveLength(1);
+      await expect(api.account.delete(userCtx, {})).resolves.toMatchObject({ ok: true, status: 202 });
+
+      await expect(
+        createMikaMaintenanceRunner({ repositories }).runOnce({ now: clock.isoAt(60_000) }),
+      ).resolves.toMatchObject({
+        accountDeleteRequests: {
+          status: "completed",
+          result: { items: [{ status: "completed", entitlementsAnonymized: 1 }] },
+        },
+      });
+
+      // The userId index is neutralized: the original userId no longer resolves the grant, and
+      // re-authenticating with the same ctx.userId yields no identity.
+      expect((await repositories.account.listEntitlementsByUser("user_only")).items).toHaveLength(0);
+      expect((await repositories.account.listEntitlementsByUser(sentinel)).items).toHaveLength(1);
+      await expect(
+        api.account.get(createTestRequestContext({ customerId: false, userId: "user_only" })),
+      ).resolves.toMatchObject({ ok: false, status: 401, error: { code: "AUTH_REQUIRED" } });
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
+    }
+  });
+
+  it("anonymizes the customer identity record when completing an account delete request", async () => {
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const accountCollection = createStorageCollection("account");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+      stock: new StockRepository(db),
+      ephemeral: new EphemeralRepository(db),
+    } satisfies MikaBackendRepositories;
+    const dependencies = createIncrementingBackendDependencies({ repositories });
+    const api = createMikaBackendApi(dependencies);
+    const clock = createTestClock();
+    const customer = createCustomerDocument();
+    const originalEmailHash = createTestHash("email:subscriber@example.test");
+    const sentinel = `account-deleted:${customer.customerId}`;
+
+    try {
+      await mikaInitialMigration.up(db);
+      await repositories.account.put(customer);
+
+      // The pre-delete customer is fully resolvable by its email hash (re-auth path).
+      await expect(
+        repositories.account.findCustomerByEmailHash(originalEmailHash),
+      ).resolves.toMatchObject({ customerId: customer.customerId, aggregate: { name: "Subscriber One" } });
+
+      await expect(api.account.delete(createTestRequestContext(), {})).resolves.toMatchObject({
+        ok: true,
+        status: 202,
+      });
+
+      const runner = createMikaMaintenanceRunner({ repositories });
+      await expect(runner.runOnce({ now: clock.isoAt(60_000) })).resolves.toMatchObject({
+        accountDeleteRequests: {
+          status: "completed",
+          result: {
+            scanned: 1,
+            completed: 1,
+            failed: 0,
+            items: [
+              {
+                requestId: "account_delete_request_1",
+                status: "completed",
+                customerAnonymized: true,
+              },
+            ],
+          },
+        },
+      });
+
+      // Identity PII is cleared on the persisted customer document.
+      const anonymized = await repositories.account.findCustomerById(customer.customerId);
+      expect(anonymized?.aggregate.email).toBeUndefined();
+      expect(anonymized?.aggregate.name).toBeUndefined();
+      expect(anonymized?.aggregate.company).toBeUndefined();
+      expect(anonymized?.aggregate.vatId).toBeUndefined();
+      // Both email-hash indexes are neutralized to the opaque, non-resolvable sentinel.
+      expect(anonymized?.aggregate.emailHash).toBe(sentinel);
+      expect(anonymized?.emailHash).toBe(sentinel);
+      // The customerId (admin key) and an audit marker are retained; the userId index is
+      // neutralized to the SAME sentinel as the email hash so neither re-auth lookup can
+      // resolve the deleted account.
+      expect(anonymized?.customerId).toBe(customer.customerId);
+      expect(anonymized?.userId).toBe(sentinel);
+      expect(anonymized?.aggregate.metadata?.["anonymizedAt"]).toBe(clock.isoAt(60_000));
+      expect(anonymized?.updatedAt).toBe(clock.isoAt(60_000));
+
+      // Re-auth via the original email hash OR the original userId no longer resolves the
+      // deleted account (both indexes neutralized to the sentinel).
+      await expect(
+        repositories.account.findCustomerByEmailHash(originalEmailHash),
+      ).resolves.toBeNull();
+      await expect(
+        repositories.account.findCustomerByUserId(customer.userId as string),
+      ).resolves.toBeNull();
+
+      const request = await repositories.ops.findAccountDeleteRequest(
+        createTestMikaId("account_delete_request", 1),
+      );
+      expect(request).toMatchObject({
+        status: "completed",
+        record: {
+          status: "completed",
+          metadata: {
+            maintenance: {
+              customerAnonymized: true,
+            },
+          },
+        },
+      });
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
+    }
+  });
+
+  it("severs re-auth and pre-delete-session access to a deleted customer's retained records", async () => {
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const accountCollection = createStorageCollection("account");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+      stock: new StockRepository(db),
+      ephemeral: new EphemeralRepository(db),
+    } satisfies MikaBackendRepositories;
+    const dependencies = createIncrementingBackendDependencies({ repositories });
+    const api = createMikaBackendApi(dependencies);
+    const clock = createTestClock();
+    const customer = createCustomerDocument();
+    const originalEmailHash = createTestHash("email:subscriber@example.test");
+    const sentinel = `account-deleted:${customer.customerId}`;
+    // A paid order (with a download line) and an entitlement, both keyed by the
+    // customer's email hash, are the records a re-auth/guest path could otherwise reach.
+    const order = createOrderDocument({ emailHash: originalEmailHash });
+    const entitlement = createEntitlementDocument();
+
+    try {
+      await mikaInitialMigration.up(db);
+      await repositories.account.put(customer);
+      await repositories.account.put(entitlement);
+      await repositories.ledger.put(order);
+
+      // Pre-delete, both records are reachable by the customer's email hash.
+      expect((await repositories.ledger.listOrdersByEmailHash(originalEmailHash)).items).toHaveLength(
+        1,
+      );
+      expect(
+        (await repositories.account.listEntitlementsByEmailHash(originalEmailHash)).items,
+      ).toHaveLength(1);
+
+      await expect(api.account.delete(createTestRequestContext(), {})).resolves.toMatchObject({
+        ok: true,
+        status: 202,
+      });
+
+      const runner = createMikaMaintenanceRunner({ repositories });
+      await expect(runner.runOnce({ now: clock.isoAt(60_000) })).resolves.toMatchObject({
+        accountDeleteRequests: {
+          status: "completed",
+          result: {
+            completed: 1,
+            failed: 0,
+            items: [
+              {
+                requestId: "account_delete_request_1",
+                status: "completed",
+                customerAnonymized: true,
+                ordersAnonymized: 1,
+                entitlementsAnonymized: 1,
+              },
+            ],
+          },
+        },
+      });
+
+      // GAP 1: the email-hash index on the retained order/entitlement is neutralized, so
+      // the original hash resolves nothing -- yet the records survive (re-keyed to the
+      // sentinel) with their financial fields intact.
+      expect((await repositories.ledger.listOrdersByEmailHash(originalEmailHash)).items).toHaveLength(
+        0,
+      );
+      expect(
+        (await repositories.account.listEntitlementsByEmailHash(originalEmailHash)).items,
+      ).toHaveLength(0);
+      const retainedOrders = (await repositories.ledger.listOrdersByEmailHash(sentinel)).items;
+      expect(retainedOrders).toHaveLength(1);
+      expect(retainedOrders[0]?.data.totalAmount).toBe(order.totalAmount);
+      expect(retainedOrders[0]?.data.aggregate.lines).toEqual(order.aggregate.lines);
+      expect(retainedOrders[0]?.data.aggregate.customer.email).toBeUndefined();
+      expect(retainedOrders[0]?.data.aggregate.customer.emailHash).toBe(sentinel);
+      const retainedEntitlements = (
+        await repositories.account.listEntitlementsByEmailHash(sentinel)
+      ).items;
+      expect(retainedEntitlements).toHaveLength(1);
+      expect(retainedEntitlements[0]?.data.record.emailHash).toBe(sentinel);
+      expect(retainedEntitlements[0]?.data.entitlementKey).toBe(entitlement.entitlementKey);
+
+      // The userId index is neutralized too: the customer doc's userId and the
+      // entitlement's userId both re-keyed to the sentinel, so neither re-auth lookup by
+      // the ORIGINAL userId resolves anything (defense-in-depth for the userId branch).
+      const originalUserId = customer.userId as string;
+      await expect(repositories.account.findCustomerByUserId(originalUserId)).resolves.toBeNull();
+      expect((await repositories.account.listEntitlementsByUser(originalUserId)).items).toHaveLength(
+        0,
+      );
+
+      // GAP 1 end-to-end: a FRESH magic link to the deleted email re-authenticates only as
+      // a guest (the customer doc no longer matches the hash). verifyMagicLink's guest branch
+      // returns hardcoded empty arrays regardless of any retained record, so it proves
+      // nothing on its own -- the real check is the SUBSEQUENT account.get, which resolves
+      // identity from the bound mika.emailHash session and must be rejected outright.
+      const guestCtx = createTestRequestContext({ customerId: false, userId: false });
+      await expect(
+        api.magicLink.request(guestCtx, { email: "subscriber@example.test" }),
+      ).resolves.toMatchObject({ ok: true });
+      await expect(
+        api.magicLink.verify(guestCtx, { token: "magic_link_token_1" }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(await api.account.get(guestCtx)).toMatchObject({
+        ok: false,
+        status: 401,
+        error: { code: "AUTH_REQUIRED" },
+      });
+
+      // GAP 2: a session opened BEFORE deletion still holds mika.customerId; identity
+      // resolution must now reject the anonymized customer outright instead of granting
+      // access (the order/entitlement are still keyed by the retained customerId).
+      const staleSessionCtx = createTestRequestContext({ customerId: false, userId: false });
+      staleSessionCtx.session?.set("mika.customerId", customer.customerId);
+      expect(await api.account.get(staleSessionCtx)).toMatchObject({
+        ok: false,
+        status: 401,
+        error: { code: "AUTH_REQUIRED" },
+      });
+
+      // Admin/accounting can still read the retained (anonymized) record by id.
+      await expect(repositories.account.findCustomerById(customer.customerId)).resolves.toMatchObject(
+        { customerId: customer.customerId, emailHash: sentinel },
+      );
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
+    }
+  });
+
+  it("re-keys a guest's email-hash-keyed orders and entitlements on account delete (no customer doc)", async () => {
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const accountCollection = createStorageCollection("account");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+      stock: new StockRepository(db),
+      ephemeral: new EphemeralRepository(db),
+    } satisfies MikaBackendRepositories;
+    const dependencies = createIncrementingBackendDependencies({ repositories });
+    const api = createMikaBackendApi(dependencies);
+    const clock = createTestClock();
+
+    // A GUEST who bought a digital product: the library NEVER provisions a customer doc,
+    // so the only records are an order + entitlement keyed ONLY by the email hash -- no
+    // customerId, no userId. A guest delete must still re-key these or a fresh magic link
+    // re-exposes them (orders, entitlements, fresh download/invoice tokens, account export).
+    const guestEmail = "guest@example.test";
+    const guestHash = createTestHash("email:guest@example.test");
+    // No customer doc and no customerId => the sentinel is derived from the request emailHash.
+    const sentinel = `account-deleted-email:${guestHash}`;
+    const baseOrder = createOrderDocument();
+    const guestOrder = createOrderDocument({
+      orderNumber: "M-2001",
+      customerId: undefined,
+      emailHash: guestHash,
+      aggregate: {
+        ...baseOrder.aggregate,
+        customer: {
+          ...baseOrder.aggregate.customer,
+          customerId: undefined,
+          userId: undefined,
+          email: guestEmail,
+          emailHash: guestHash,
+        },
+      },
+    });
+    const baseEntitlement = createEntitlementDocument();
+    const guestEntitlement = {
+      ...baseEntitlement,
+      customerId: undefined,
+      userId: undefined,
+      emailHash: guestHash,
+      entitlementKey: "downloads.guest",
+      record: {
+        ...baseEntitlement.record,
+        customerId: undefined,
+        userId: undefined,
+        emailHash: guestHash,
+        entitlementKey: "downloads.guest",
+      },
+    } satisfies EntitlementDocument;
+
+    try {
+      await mikaInitialMigration.up(db);
+      await repositories.ledger.put(guestOrder);
+      await repositories.account.put(guestEntitlement);
+
+      // Pre-delete, both records are reachable by the guest's email hash.
+      expect((await repositories.ledger.listOrdersByEmailHash(guestHash)).items).toHaveLength(1);
+      expect(
+        (await repositories.account.listEntitlementsByEmailHash(guestHash)).items,
+      ).toHaveLength(1);
+
+      // A magic-link-verified guest session carries mika.emailHash but no customerId/userId;
+      // the guest drives account.delete from exactly that emailHash-only identity.
+      const guestCtx = createTestRequestContext({ customerId: false, userId: false });
+      await guestCtx.session?.set("mika.emailHash", guestHash);
+      await expect(api.account.delete(guestCtx, {})).resolves.toMatchObject({
+        ok: true,
+        status: 202,
+      });
+
+      // The queued request carries ONLY the emailHash (no customerId, no userId).
+      const queuedRequest = await repositories.ops.findAccountDeleteRequest(
+        createTestMikaId("account_delete_request", 1),
+      );
+      expect(queuedRequest?.customerId).toBeUndefined();
+      expect(queuedRequest?.userId).toBeUndefined();
+      expect(queuedRequest?.emailHash).toBe(guestHash);
+
+      const runner = createMikaMaintenanceRunner({ repositories });
+      await expect(runner.runOnce({ now: clock.isoAt(60_000) })).resolves.toMatchObject({
+        accountDeleteRequests: {
+          status: "completed",
+          result: {
+            completed: 1,
+            failed: 0,
+            items: [
+              {
+                requestId: "account_delete_request_1",
+                status: "completed",
+                // No customer doc for a guest, but the email-hash-keyed records are still re-keyed.
+                customerAnonymized: false,
+                ordersAnonymized: 1,
+                entitlementsAnonymized: 1,
+              },
+            ],
+          },
+        },
+      });
+
+      // The original hash now resolves nothing; the records survive (re-keyed to the
+      // email sentinel) so financial history is retained without the re-auth vector.
+      expect((await repositories.ledger.listOrdersByEmailHash(guestHash)).items).toHaveLength(0);
+      expect(
+        (await repositories.account.listEntitlementsByEmailHash(guestHash)).items,
+      ).toHaveLength(0);
+      expect((await repositories.ledger.listOrdersByEmailHash(sentinel)).items).toHaveLength(1);
+      expect(
+        (await repositories.account.listEntitlementsByEmailHash(sentinel)).items,
+      ).toHaveLength(1);
+
+      // End-to-end: a FRESH magic link to the deleted guest email re-authenticates as a
+      // guest, but the subsequent account.get resolves no orders/entitlements/downloads.
+      const freshCtx = createTestRequestContext({ customerId: false, userId: false });
+      await expect(
+        api.magicLink.request(freshCtx, { email: guestEmail }),
+      ).resolves.toMatchObject({ ok: true });
+      await expect(
+        api.magicLink.verify(freshCtx, { token: "magic_link_token_1" }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(await api.account.get(freshCtx)).toMatchObject({
+        ok: false,
+        status: 401,
+        error: { code: "AUTH_REQUIRED" },
+      });
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
+    }
+  });
+
+  it("severs the userId re-auth path and neutralizes the userId index on account delete", async () => {
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const accountCollection = createStorageCollection("account");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+      stock: new StockRepository(db),
+      ephemeral: new EphemeralRepository(db),
+    } satisfies MikaBackendRepositories;
+    const dependencies = createIncrementingBackendDependencies({ repositories });
+    const api = createMikaBackendApi(dependencies);
+    const clock = createTestClock();
+    const customer = createCustomerDocument();
+    const originalUserId = customer.userId as string;
+    const order = createOrderDocument();
+    const entitlement = createEntitlementDocument();
+    // userId is an INDEPENDENT host-supplied context field (context.ts), distinct from
+    // customerId. A userId-only identity context exercises the userId resolution branch.
+    const userIdCtx = () =>
+      createTestRequestContext({ customerId: false, userId: originalUserId });
+
+    try {
+      await mikaInitialMigration.up(db);
+      await repositories.account.put(customer);
+      await repositories.account.put(entitlement);
+      await repositories.ledger.put(order);
+
+      // Pre-delete, the userId-only identity resolves the FULL account (the leak surface:
+      // findCustomerByUserId -> accountDTOForCustomer with orders, entitlements, tokens).
+      await expect(api.account.get(userIdCtx())).resolves.toMatchObject({
+        ok: true,
+        status: 200,
+        data: {
+          customer: { id: customer.customerId, userId: originalUserId },
+          orders: [{ id: order.id }],
+          entitlements: [{ key: entitlement.entitlementKey }],
+        },
+      });
+      expect(
+        (await repositories.account.listEntitlementsByUser(originalUserId)).items,
+      ).toHaveLength(1);
+
+      // Delete the registered customer (resolved by its customerId).
+      await expect(api.account.delete(createTestRequestContext(), {})).resolves.toMatchObject({
+        ok: true,
+        status: 202,
+      });
+
+      const runner = createMikaMaintenanceRunner({ repositories });
+      await expect(runner.runOnce({ now: clock.isoAt(60_000) })).resolves.toMatchObject({
+        accountDeleteRequests: {
+          status: "completed",
+          result: {
+            completed: 1,
+            failed: 0,
+            items: [
+              {
+                requestId: "account_delete_request_1",
+                status: "completed",
+                customerAnonymized: true,
+                entitlementsAnonymized: 1,
+              },
+            ],
+          },
+        },
+      });
+
+      // The userId index is neutralized to the sentinel on BOTH the customer doc and the
+      // entitlement, so the original userId resolves neither a customer nor an entitlement.
+      await expect(repositories.account.findCustomerByUserId(originalUserId)).resolves.toBeNull();
+      expect(
+        (await repositories.account.listEntitlementsByUser(originalUserId)).items,
+      ).toHaveLength(0);
+
+      // The userId-only identity is now rejected outright -- closing the findCustomerByUserId
+      // DTO sink AND the listEntitlementsByUser fallthrough (no customer + no entitlements).
+      expect(await api.account.get(userIdCtx())).toMatchObject({
+        ok: false,
+        status: 401,
+        error: { code: "AUTH_REQUIRED" },
+      });
+
+      // Admin/accounting still reads the retained record by its customerId (the admin key).
+      await expect(
+        repositories.account.findCustomerById(customer.customerId),
+      ).resolves.toMatchObject({ customerId: customer.customerId });
     } finally {
       await rollbackMikaInitialMigration(db);
       await database.destroy();
@@ -9195,6 +9742,8 @@ describe("backend API composition", () => {
         baseLedger.listOrdersByCustomer(customerId, limit),
       listOrdersByEmailHash: (emailHash, limit) =>
         baseLedger.listOrdersByEmailHash(emailHash, limit),
+      anonymizeOrdersForAccountDelete: (anonymizeInput) =>
+        baseLedger.anonymizeOrdersForAccountDelete(anonymizeInput),
       put: async (document) => {
         if (
           document.type === "order" &&

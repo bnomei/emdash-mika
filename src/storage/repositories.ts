@@ -786,6 +786,103 @@ export class AccountRepository {
   async put(document: AccountDocument): Promise<void> {
     await this.documents.put(document);
   }
+
+  async anonymizeCustomerForAccountDelete(input: {
+    readonly customerId?: MikaId;
+    readonly emailHash?: string;
+    readonly now: ISODateTime;
+  }): Promise<{ readonly anonymized: boolean; readonly sentinel?: string }> {
+    const customer =
+      (input.customerId ? await this.findCustomerById(input.customerId) : null) ??
+      (input.emailHash ? await this.findCustomerByEmailHash(input.emailHash) : null);
+    if (!customer) return { anonymized: false };
+
+    // Neutralize BOTH the email-hash AND the userId index so neither re-auth lookup
+    // (findCustomerByEmailHash / findCustomerByUserId) can resolve the deleted account;
+    // the sentinel is opaque and non-resolvable. customerId is RETAINED as the admin
+    // key (accounting reads via findCustomerById). A single per-identity sentinel is
+    // returned so the retained orders/entitlements are re-keyed to the identical value.
+    const sentinel = `account-deleted:${customer.customerId}`;
+    const anonymized: CustomerDocument = {
+      ...customer,
+      emailHash: sentinel,
+      userId: sentinel,
+      aggregate: {
+        ...customer.aggregate,
+        email: undefined,
+        emailHash: sentinel,
+        name: undefined,
+        company: undefined,
+        vatId: undefined,
+        metadata: {
+          ...(customer.aggregate.metadata ?? {}),
+          anonymizedAt: input.now,
+        },
+      },
+      updatedAt: input.now,
+    };
+
+    await this.put(anonymized);
+
+    return { anonymized: true, sentinel };
+  }
+
+  async anonymizeEntitlementsForAccountDelete(input: {
+    readonly customerId?: MikaId;
+    readonly emailHash?: string;
+    readonly userId?: string;
+    readonly sentinel: string;
+    readonly now: ISODateTime;
+  }): Promise<{ readonly anonymized: number }> {
+    // An entitlement may be reachable by customerId AND/OR the email-hash index AND/OR the userId
+    // index (a host SSO / manual grant can be keyed by userId ALONE, with no customer doc or
+    // emailHash); union all three by id so none is double-counted or missed. A high limit fetches
+    // every match -- the list ports have no cursor.
+    const byId = new Map<MikaId, EntitlementDocument>();
+    if (input.customerId) {
+      for (const item of (
+        await this.listEntitlementsByCustomer(input.customerId, Number.MAX_SAFE_INTEGER)
+      ).items) {
+        byId.set(item.data.id, item.data);
+      }
+    }
+    if (input.emailHash) {
+      for (const item of (
+        await this.listEntitlementsByEmailHash(input.emailHash, Number.MAX_SAFE_INTEGER)
+      ).items) {
+        byId.set(item.data.id, item.data);
+      }
+    }
+    if (input.userId) {
+      for (const item of (
+        await this.listEntitlementsByUser(input.userId, Number.MAX_SAFE_INTEGER)
+      ).items) {
+        byId.set(item.data.id, item.data);
+      }
+    }
+
+    let anonymized = 0;
+    for (const entitlement of byId.values()) {
+      // Re-key both the indexed projection and the backing record so neither the
+      // email-hash NOR the userId index resolves the grant after delete (listEntitlements
+      // ByEmailHash / listEntitlementsByUser); status/key/order/customer linkage is kept.
+      const redacted: EntitlementDocument = {
+        ...entitlement,
+        emailHash: input.sentinel,
+        userId: input.sentinel,
+        record: {
+          ...entitlement.record,
+          emailHash: input.sentinel,
+          userId: input.sentinel,
+        },
+        updatedAt: input.now,
+      };
+      await this.put(redacted);
+      anonymized += 1;
+    }
+
+    return { anonymized };
+  }
 }
 
 /** Document repository for order ledger documents and provider payment lookup. */
@@ -863,6 +960,60 @@ export class LedgerRepository {
       orderBy: { createdAt: "desc" },
       limit,
     });
+  }
+
+  async anonymizeOrdersForAccountDelete(input: {
+    readonly customerId?: MikaId;
+    readonly emailHash?: string;
+    readonly sentinel: string;
+    readonly now: ISODateTime;
+  }): Promise<{ readonly anonymized: number }> {
+    // Collect by customerId (all of a deleted customer's orders) AND by emailHash
+    // (a guest order may carry only the email-hash index), union by order id so none
+    // is missed. A high limit fetches every match -- listOrdersByCustomer defaults to
+    // 50 and the list ports have no cursor.
+    const byId = new Map<MikaId, OrderDocument>();
+    if (input.customerId) {
+      for (const item of (
+        await this.listOrdersByCustomer(input.customerId, Number.MAX_SAFE_INTEGER)
+      ).items) {
+        byId.set(item.data.id, item.data);
+      }
+    }
+    if (input.emailHash) {
+      for (const item of (
+        await this.listOrdersByEmailHash(input.emailHash, Number.MAX_SAFE_INTEGER)
+      ).items) {
+        byId.set(item.data.id, item.data);
+      }
+    }
+
+    let anonymized = 0;
+    for (const order of byId.values()) {
+      // De-identify the order: neutralize the email-hash index and strip identity PII
+      // from the customer snapshot while retaining all financial fields (totals, lines,
+      // provider ids, status, paidAt, metadata) and the opaque customerId.
+      const redacted: OrderDocument = {
+        ...order,
+        emailHash: input.sentinel,
+        aggregate: {
+          ...order.aggregate,
+          customer: {
+            ...order.aggregate.customer,
+            email: undefined,
+            emailHash: input.sentinel,
+            name: undefined,
+            company: undefined,
+            vatId: undefined,
+          },
+        },
+        updatedAt: input.now,
+      };
+      await this.put(redacted);
+      anonymized += 1;
+    }
+
+    return { anonymized };
   }
 
   async put(document: LedgerDocument): Promise<void> {

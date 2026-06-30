@@ -59,6 +59,9 @@ export type MikaMaintenanceAccountDeleteRequestItem =
       readonly tokensDeleted: number;
       readonly reservationsReleased: number;
       readonly emailsRedacted: number;
+      readonly customerAnonymized: boolean;
+      readonly ordersAnonymized: number;
+      readonly entitlementsAnonymized: number;
     }
   | {
       readonly requestId: MikaId;
@@ -97,7 +100,10 @@ type MikaMaintenancePurgeExpiredEphemeralRecords = (input: {
 interface MikaMaintenanceRunnerInput {
   readonly api?: Pick<MikaApi, "admin">;
   readonly emailOutboxRunner?: MikaEmailOutboxRunner;
-  readonly repositories?: Pick<MikaBackendRepositories, "ephemeral" | "ops" | "stock">;
+  readonly repositories?: Pick<
+    MikaBackendRepositories,
+    "account" | "ephemeral" | "ledger" | "ops" | "stock"
+  >;
   readonly now?: MikaBackendNow;
   readonly releaseExpiredReservations?: MikaMaintenanceReleaseExpiredReservations;
   readonly purgeExpiredEphemeralRecords?: MikaMaintenancePurgeExpiredEphemeralRecords;
@@ -207,7 +213,10 @@ export function createMikaMaintenanceRunner(
 }
 
 async function processQueuedAccountDeleteRequests(input: {
-  readonly repositories: Pick<MikaBackendRepositories, "ephemeral" | "ops" | "stock">;
+  readonly repositories: Pick<
+    MikaBackendRepositories,
+    "account" | "ephemeral" | "ledger" | "ops" | "stock"
+  >;
   readonly now: ISODateTime;
   readonly limit: number;
 }): Promise<MikaMaintenanceAccountDeleteRequestsResult> {
@@ -233,6 +242,47 @@ async function processQueuedAccountDeleteRequests(input: {
         ...(request.userId ? { userId: request.userId } : {}),
         ...(request.emailHash ? { emailHash: request.emailHash } : {}),
       });
+      const customerResult = await input.repositories.account.anonymizeCustomerForAccountDelete({
+        now: input.now,
+        ...(request.customerId ? { customerId: request.customerId } : {}),
+        ...(request.emailHash ? { emailHash: request.emailHash } : {}),
+      });
+      // Re-key the retained orders/entitlements to the SAME sentinel the customer
+      // document received so a fresh magic link can no longer reach them via the
+      // email-hash index. The customer-doc method derives the sentinel from the
+      // resolved customer.customerId and returns it; fall back to the request's
+      // customerId when the customer record is already gone (a prior partial run)
+      // so the value still matches `account-deleted:<customerId>`. A GUEST delete
+      // has NO customer document (the library never provisions them) and NO
+      // customerId, only the request emailHash -- derive a sentinel from that hash so
+      // the guest's email-hash-keyed orders/entitlements are re-keyed too; otherwise
+      // they keep the original hash and a fresh magic link re-exposes them.
+      const sentinel =
+        customerResult.sentinel ??
+        (request.customerId
+          ? `account-deleted:${request.customerId}`
+          : request.emailHash
+            ? `account-deleted-email:${request.emailHash}`
+            : request.userId
+              ? `account-deleted-user:${request.userId}`
+              : undefined);
+      const ordersResult = sentinel
+        ? await input.repositories.ledger.anonymizeOrdersForAccountDelete({
+            now: input.now,
+            sentinel,
+            ...(request.customerId ? { customerId: request.customerId } : {}),
+            ...(request.emailHash ? { emailHash: request.emailHash } : {}),
+          })
+        : { anonymized: 0 };
+      const entitlementsResult = sentinel
+        ? await input.repositories.account.anonymizeEntitlementsForAccountDelete({
+            now: input.now,
+            sentinel,
+            ...(request.customerId ? { customerId: request.customerId } : {}),
+            ...(request.emailHash ? { emailHash: request.emailHash } : {}),
+            ...(request.userId ? { userId: request.userId } : {}),
+          })
+        : { anonymized: 0 };
 
       const completed = await input.repositories.ops.completeAccountDeleteRequest({
         requestId: request.id,
@@ -242,6 +292,9 @@ async function processQueuedAccountDeleteRequests(input: {
             tokensDeleted,
             reservationsReleased: stockResult.releasedCount,
             emailsRedacted,
+            customerAnonymized: customerResult.anonymized,
+            ordersAnonymized: ordersResult.anonymized,
+            entitlementsAnonymized: entitlementsResult.anonymized,
           },
         },
       });
@@ -255,6 +308,9 @@ async function processQueuedAccountDeleteRequests(input: {
         tokensDeleted,
         reservationsReleased: stockResult.releasedCount,
         emailsRedacted,
+        customerAnonymized: customerResult.anonymized,
+        ordersAnonymized: ordersResult.anonymized,
+        entitlementsAnonymized: entitlementsResult.anonymized,
       });
     } catch (error) {
       const message = errorMessage(error);

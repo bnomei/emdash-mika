@@ -320,6 +320,18 @@ export interface MikaAccountRepositoryPort {
     limit?: number,
   ): Promise<MikaDocumentList<LicenseDocument>>;
   put(document: AccountDocument): Promise<void>;
+  anonymizeCustomerForAccountDelete(input: {
+    readonly customerId?: MikaId;
+    readonly emailHash?: string;
+    readonly now: ISODateTime;
+  }): Promise<{ readonly anonymized: boolean; readonly sentinel?: string }>;
+  anonymizeEntitlementsForAccountDelete(input: {
+    readonly customerId?: MikaId;
+    readonly emailHash?: string;
+    readonly userId?: string;
+    readonly sentinel: string;
+    readonly now: ISODateTime;
+  }): Promise<{ readonly anonymized: number }>;
 }
 
 /** Order ledger and payment correlation lookups. */
@@ -348,6 +360,12 @@ export interface MikaLedgerRepositoryPort {
     emailHash: string,
     limit?: number,
   ): Promise<MikaDocumentList<OrderDocument>>;
+  anonymizeOrdersForAccountDelete(input: {
+    readonly customerId?: MikaId;
+    readonly emailHash?: string;
+    readonly sentinel: string;
+    readonly now: ISODateTime;
+  }): Promise<{ readonly anonymized: number }>;
   put(document: LedgerDocument): Promise<void>;
 }
 
@@ -1309,6 +1327,11 @@ async function getAccount(
   };
 }
 
+/** True once the customer record has been anonymized by an account-delete completion. */
+function isAnonymizedCustomer(customer: CustomerDocument): boolean {
+  return customer.aggregate.metadata?.["anonymizedAt"] != null;
+}
+
 async function resolveAccountIdentity(
   input: CreateMikaBackendApiInput,
   ctx: MikaRequestContext,
@@ -1339,7 +1362,15 @@ async function resolveAccountIdentity(
 
   if (customerId) {
     const customer = await input.repositories.account.findCustomerById(customerId);
-    if (!customer || (userId && customer.userId && customer.userId !== userId)) return null;
+    // Reject an anonymized (account-deleted) customer: findCustomerById still reads the
+    // retained record for admin/accounting, but a lingering mika.customerId session must
+    // no longer resolve a customer identity for it.
+    if (
+      !customer ||
+      isAnonymizedCustomer(customer) ||
+      (userId && customer.userId && customer.userId !== userId)
+    )
+      return null;
 
     return {
       customer,
@@ -1352,6 +1383,11 @@ async function resolveAccountIdentity(
   if (userId) {
     const customer = await input.repositories.account.findCustomerByUserId(userId);
     if (customer) {
+      // Defense-in-depth: reject an anonymized (account-deleted) customer reached via the
+      // userId index. The delete neutralizes that index to the sentinel so the original
+      // userId no longer matches, but guard the resolution the same way as the customerId
+      // branch in case the index was not (yet) neutralized.
+      if (isAnonymizedCustomer(customer)) return null;
       return {
         customer,
         entitlements: (
@@ -1369,6 +1405,10 @@ async function resolveAccountIdentity(
   if (sessionEmailHash) {
     const customer = await input.repositories.account.findCustomerByEmailHash(sessionEmailHash);
     if (customer) {
+      // Defense-in-depth: reject an anonymized customer reached via the email-hash index.
+      // The delete re-keys that index to the sentinel so the original hash is already dead
+      // here, but guard it the same way as the customerId and userId branches.
+      if (isAnonymizedCustomer(customer)) return null;
       return {
         customer,
         entitlements: (

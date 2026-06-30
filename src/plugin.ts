@@ -42,7 +42,10 @@ export interface MikaMaintenancePluginOptions {
 
 /** Runtime dependencies injected when the maintenance cron handler executes. */
 export interface MikaMaintenanceRuntimeOptions extends MikaMaintenancePluginOptions {
-  readonly repositories?: Pick<MikaBackendRepositories, "ephemeral" | "ops" | "stock">;
+  readonly repositories?: Pick<
+    MikaBackendRepositories,
+    "account" | "ephemeral" | "ledger" | "ops" | "stock"
+  >;
   readonly emailOutboxRunner?: MikaEmailOutboxRunner;
 }
 
