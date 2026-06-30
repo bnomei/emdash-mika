@@ -670,7 +670,12 @@ async function refundStripePayment(
 
   return {
     id: createMikaId(refund.id),
-    status: refund.status === "failed" ? "failed" : "completed",
+    // Only a confirmed `succeeded` maps to `completed`. Stripe refunds are frequently `pending` while
+    // processing (and can still `failed`/`canceled`), and `refundOrder` writes the refunded ledger
+    // state + revokes fulfillment access ONLY on `completed` — so a pending/in-flight refund must not
+    // report completed, or the order would be marked refunded before the money actually moves.
+    // Eventual settlement of a pending refund is reconciled by the refund webhook (separate concern).
+    status: stripeRefundActionStatus(refund.status),
   };
 }
 
@@ -899,6 +904,21 @@ function moneyTotalsFromStripeAmount(
       currency: currency as MoneyDTO["currency"],
     },
   };
+}
+
+function stripeRefundActionStatus(
+  status: string | null | undefined,
+): AdminActionResultDTO["status"] {
+  switch (status) {
+    case "succeeded":
+      return "completed";
+    case "failed":
+    case "canceled":
+      return "failed";
+    default:
+      // `pending`, `requires_action`, or anything unrecognized: the refund is in flight, not settled.
+      return "running";
+  }
 }
 
 function stripeSubscriptionStatus(status: string | undefined): SubscriptionStatus {

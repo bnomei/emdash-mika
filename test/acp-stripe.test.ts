@@ -954,6 +954,32 @@ describe("Mika ACP projection", () => {
 });
 
 describe("Mika Stripe provider", () => {
+  it("maps Stripe refund statuses to admin action statuses", async () => {
+    const refundActionStatus = async (status: string | null) => {
+      const stripe: MikaStripeClient = {
+        refunds: {
+          create: async () => ({ id: "re_test_1", status }),
+        },
+      };
+      const provider = createMikaStripeProvider({ stripe });
+      const result = await provider.refundPayment?.({
+        orderId: createMikaId("order_1"),
+        providerPaymentId: "pi_test_1",
+      });
+
+      return result?.status;
+    };
+
+    // Only a confirmed `succeeded` is a completed refund; a pending/in-flight refund must defer the
+    // refunded ledger write, and failed/canceled are terminal failures.
+    expect(await refundActionStatus("succeeded")).toBe("completed");
+    expect(await refundActionStatus("pending")).toBe("running");
+    expect(await refundActionStatus("requires_action")).toBe("running");
+    expect(await refundActionStatus("failed")).toBe("failed");
+    expect(await refundActionStatus("canceled")).toBe("failed");
+    expect(await refundActionStatus(null)).toBe("running");
+  });
+
   it("creates hosted checkout sessions from provider price ids", async () => {
     const createCalls: unknown[] = [];
     const stripe: MikaStripeClient = {
