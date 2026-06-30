@@ -3932,6 +3932,27 @@ describe("public types", () => {
   });
 });
 
+describe("createISODateTime canonicalization", () => {
+  it("normalizes a UTC-offset timestamp to canonical Z so string expiry comparisons stay correct", () => {
+    // 2026-06-29T23:00:00+14:00 is the instant 2026-06-29T09:00:00Z; stored verbatim it would sort
+    // lexicographically after a 10:00Z `now` and read as not-yet-expired.
+    expect(createISODateTime("2026-06-29T23:00:00+14:00")).toBe("2026-06-29T09:00:00.000Z");
+  });
+
+  it("adds milliseconds to a second-precision Z timestamp", () => {
+    expect(createISODateTime("2026-06-29T10:00:00Z")).toBe("2026-06-29T10:00:00.000Z");
+  });
+
+  it("is idempotent for an already-canonical timestamp", () => {
+    expect(createISODateTime("2026-06-29T10:00:00.000Z")).toBe("2026-06-29T10:00:00.000Z");
+  });
+
+  it("still rejects values that are not ISO date-times", () => {
+    expect(() => createISODateTime("not-a-date")).toThrow("Invalid ISODateTime");
+    expect(() => createISODateTime("2026-06-29")).toThrow("Invalid ISODateTime");
+  });
+});
+
 describe("Mika Astro template contracts", () => {
   it("keeps Astro Actions on the request-bound API instead of private JSON routes", () => {
     const source = readFileSync(new URL("../src/astro-actions.ts", import.meta.url), "utf8");

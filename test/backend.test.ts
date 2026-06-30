@@ -4208,6 +4208,33 @@ describe("backend API composition", () => {
     }
   });
 
+  it("treats a non-canonical (offset) download-token expiry as expired by canonicalizing it", async () => {
+    const harness = await createAccountServicesHarness();
+
+    try {
+      await harness.repositories.ledger.put(createOrderDocument());
+      // 2026-01-01T13:00:00+14:00 is the instant 2025-12-31T23:00:00Z — already past `now`
+      // (TEST_NOW, 2026-01-01T00:00:00.000Z). Stored verbatim it sorts lexicographically AFTER now
+      // ("...T13..." > "...T00...") and would be served as still-valid; createISODateTime must
+      // canonicalize it to `Z` so the string expiry comparison matches the real instant.
+      await issueDownloadToken(harness.repositories, {
+        token: "noncanonical_expired_download_token",
+        expiresAt: "2026-01-01T13:00:00+14:00",
+        data: { downloadRef: "download:order_1:order_line_1" },
+      });
+
+      await expect(
+        harness.api.download.resolve({ token: "noncanonical_expired_download_token" }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 410,
+        error: { code: "TOKEN_EXPIRED" },
+      });
+    } finally {
+      await harness.destroy();
+    }
+  });
+
   it("returns stable download token errors for invalid, expired, used, and revoked tokens", async () => {
     const harness = await createAccountServicesHarness();
 

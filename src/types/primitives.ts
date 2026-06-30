@@ -35,14 +35,20 @@ export function createMikaId(value: string): MikaId {
   return nonEmptyTrimmed(value, "MikaId") as MikaId;
 }
 
-/** Constructs a branded ISO datetime after parse validation. */
+/** Constructs a branded, canonical-UTC (`Z`) ISO datetime after parse validation. */
 export function createISODateTime(value: string): ISODateTime {
   const dateTime = nonEmptyTrimmed(value, "ISODateTime");
   if (!ISO_DATE_TIME_PATTERN.test(dateTime) || Number.isNaN(Date.parse(dateTime))) {
     throw new TypeError(`Invalid ISODateTime '${value}'.`);
   }
 
-  return dateTime as ISODateTime;
+  // Canonicalize to UTC `Z` with milliseconds. Expiry is evaluated with string comparisons
+  // (`expiresAt <= now`, `expires_at > now`) against a canonical `now`; if a caller-supplied value
+  // were stored verbatim in a non-canonical form (offset like `+14:00`, or missing milliseconds),
+  // lexicographic order would diverge from chronological order and an expired token/entitlement
+  // could be accepted (or a valid one rejected). Idempotent for values already produced by
+  // `toISOString()`/`addMilliseconds`, so internally-generated timestamps are unchanged.
+  return new Date(dateTime).toISOString() as ISODateTime;
 }
 
 /** Constructs a branded three-letter currency code. */
