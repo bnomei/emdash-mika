@@ -2303,6 +2303,26 @@ export class EphemeralRepository {
     return affected(result.numUpdatedRows);
   }
 
+  async restoreToken(key: string, now: ISODateTime): Promise<boolean> {
+    // Reverse of consumeToken: flip a still-consumed token back to pending (gated on `consumed`
+    // so we only undo a consume, never resurrect a deleted/expired-purged row). No expires_at
+    // guard — if the token expired in the meantime, restoring it is harmless (the next verify
+    // returns TOKEN_EXPIRED rather than TOKEN_USED).
+    const result = await this.db
+      .updateTable("mika_ephemeral_records")
+      .set((eb) => ({
+        status: "pending",
+        version: eb("version", "+", 1),
+        updated_at: now,
+      }))
+      .where("key", "=", key)
+      .where("kind", "=", "token")
+      .where("status", "=", "consumed")
+      .executeTakeFirst();
+
+    return affected(result.numUpdatedRows);
+  }
+
   async purgeExpired(now: ISODateTime): Promise<number> {
     const result = await this.db
       .deleteFrom("mika_ephemeral_records")

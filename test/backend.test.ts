@@ -3526,6 +3526,89 @@ describe("backend API composition", () => {
     }
   });
 
+  it("restores the magic-link token when the session write fails so the link stays usable", async () => {
+    const harness = await createMagicLinkHarness();
+
+    try {
+      await harness.accountCollection.put("customer_document_1", createCustomerDocument());
+      await harness.api.magicLink.request(createTestRequestContext(), {
+        email: "subscriber@example.test",
+      });
+      const tokenHash = createTestHash("magic-link-token:magic_link_token_1");
+
+      // A session store whose write fails must NOT permanently spend the one-time token.
+      const failingCtx = {
+        ...createTestRequestContext(),
+        session: {
+          get: async () => undefined,
+          set: async () => {
+            throw new Error("session store outage");
+          },
+        },
+      };
+      await expect(
+        harness.api.magicLink.verify(failingCtx, { token: "magic_link_token_1" }),
+      ).rejects.toThrow("session store outage");
+
+      // The consume was reverted, so the token is pending again rather than stuck "consumed".
+      await expect(harness.repositories.ephemeral.get(tokenHash)).resolves.toMatchObject({
+        status: "pending",
+      });
+
+      // The same link now verifies successfully against a working session.
+      await expect(
+        harness.api.magicLink.verify(createTestRequestContext(), {
+          token: "magic_link_token_1",
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        status: 200,
+        data: { customer: { id: "customer_1" } },
+      });
+    } finally {
+      await harness.destroy();
+    }
+  });
+
+  it("restores the magic-link token when the account view fails, leaving the session unwritten", async () => {
+    const harness = await createMagicLinkHarness();
+
+    try {
+      await harness.accountCollection.put("customer_document_1", createCustomerDocument());
+      await harness.api.magicLink.request(createTestRequestContext(), {
+        email: "subscriber@example.test",
+      });
+      const tokenHash = createTestHash("magic-link-token:magic_link_token_1");
+
+      // Fail the account-view assembly (a customer-data read throws) after the token is consumed.
+      // Because the DTO is built before the session writes, this must revert the token AND leave the
+      // session unauthenticated, not half-authenticate while re-opening the one-time token.
+      const originalListOrders = harness.repositories.ledger.listOrdersByCustomer;
+      harness.repositories.ledger.listOrdersByCustomer = async () => {
+        throw new Error("ledger read outage");
+      };
+      const ctx = createTestRequestContext();
+      await expect(
+        harness.api.magicLink.verify(ctx, { token: "magic_link_token_1" }),
+      ).rejects.toThrow("ledger read outage");
+
+      expect(await ctx.session?.get("mika.customerId")).toBeUndefined();
+      await expect(harness.repositories.ephemeral.get(tokenHash)).resolves.toMatchObject({
+        status: "pending",
+      });
+
+      // With the read restored, the same link verifies successfully and binds the session.
+      harness.repositories.ledger.listOrdersByCustomer = originalListOrders;
+      const ctx2 = createTestRequestContext();
+      await expect(
+        harness.api.magicLink.verify(ctx2, { token: "magic_link_token_1" }),
+      ).resolves.toMatchObject({ ok: true, data: { customer: { id: "customer_1" } } });
+      expect(await ctx2.session?.get("mika.customerId")).toBe("customer_1");
+    } finally {
+      await harness.destroy();
+    }
+  });
+
   it("returns account overview sections for an authenticated customer", async () => {
     const accountCollection = createStorageCollection("account");
     const ledgerCollection = createStorageCollection("ledger");
@@ -4479,6 +4562,9 @@ describe("backend API composition", () => {
           throw new Error("not used");
         },
         async consumeToken() {
+          return false;
+        },
+        async restoreToken() {
           return false;
         },
         async purgeExpired() {
@@ -13488,6 +13574,20 @@ function createTestEphemeralRepository(): MikaEphemeralRepositoryPort {
       records.set(key, {
         ...record,
         status: "consumed",
+        version: record.version + 1,
+        updatedAt: now,
+      });
+
+      return true;
+    },
+    async restoreToken(key, now) {
+      const record = records.get(key);
+      if (!record || record.kind !== "token" || record.status !== "consumed") {
+        return false;
+      }
+      records.set(key, {
+        ...record,
+        status: "pending",
         version: record.version + 1,
         updatedAt: now,
       });

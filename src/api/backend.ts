@@ -476,6 +476,12 @@ export interface MikaEphemeralRepositoryPort {
     readonly data?: JsonObject;
   }): Promise<EphemeralRecord>;
   consumeToken(key: string, now: ISODateTime): Promise<boolean>;
+  /**
+   * Reverts a token consumed by {@link consumeToken} back to `pending` (only if it is still
+   * `consumed`). Used to compensate a single-use consume whose follow-up side effect failed, so
+   * the token stays usable on retry. Returns true when a consumed token was restored.
+   */
+  restoreToken(key: string, now: ISODateTime): Promise<boolean>;
   purgeExpired(now: ISODateTime): Promise<number>;
   deleteTokensBySubjectHashes(subjectHashes: readonly string[]): Promise<number>;
 }
@@ -3024,30 +3030,49 @@ async function verifyMagicLink(
     );
   }
 
-  const customer = record?.subjectHash
-    ? await input.repositories.account.findCustomerByEmailHash(record.subjectHash)
-    : null;
-  if (customer) {
-    await ctx.session?.set("mika.customerId", customer.customerId);
-    if (customer.userId) await ctx.session?.set("mika.userId", customer.userId);
+  // The token is consumed first so a single-use verification is claimed atomically — only one
+  // concurrent request wins the consume, which keeps a shared link from authenticating two
+  // different sessions in the common case. But the session store is async and can fail; consuming
+  // before the session write would otherwise spend the token without authenticating anyone,
+  // bricking the link on retry (TOKEN_USED). So the identity resolve, the account-view assembly,
+  // and the session writes run under a guard that, on any failure, restores the token to pending
+  // (best effort) and rethrows, leaving the link usable. The account view is built BEFORE the
+  // session writes so a read failure while assembling it reverts cleanly (nothing authenticated
+  // yet); the session writes are the last awaited work. Two windows remain and are accepted: a lost
+  // HTTP response after a successful write (the write already landed), and a partial multi-key
+  // session write (one `set` succeeds, a later one throws) — both inherent to the per-key
+  // MikaSessionAccess.set port — which can re-open the token while a session is already authorized;
+  // the worst case there is two sessions for the SAME customer, never a cross-account escalation.
+  try {
+    const customer = record?.subjectHash
+      ? await input.repositories.account.findCustomerByEmailHash(record.subjectHash)
+      : null;
+    if (customer) {
+      const data = await accountDTOForCustomer(input, ctx, customer);
+      await ctx.session?.set("mika.customerId", customer.customerId);
+      if (customer.userId) await ctx.session?.set("mika.userId", customer.userId);
 
-    return { ok: true, status: 200, data: await accountDTOForCustomer(input, ctx, customer) };
+      return { ok: true, status: 200, data };
+    }
+
+    const email = record?.data ? stringChild(record.data, "email") : undefined;
+    if (record?.subjectHash) await ctx.session?.set("mika.emailHash", record.subjectHash);
+
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        customer: email ? { email } : undefined,
+        orders: [],
+        subscriptions: [],
+        entitlements: [],
+        downloads: [],
+      },
+    };
+  } catch (error) {
+    await input.repositories.ephemeral.restoreToken(tokenHash, ctx.now).catch(() => undefined);
+    throw error;
   }
-
-  const email = record?.data ? stringChild(record.data, "email") : undefined;
-  if (record?.subjectHash) await ctx.session?.set("mika.emailHash", record.subjectHash);
-
-  return {
-    ok: true,
-    status: 200,
-    data: {
-      customer: email ? { email } : undefined,
-      orders: [],
-      subscriptions: [],
-      entitlements: [],
-      downloads: [],
-    },
-  };
 }
 
 async function accountDTOForCustomer(
