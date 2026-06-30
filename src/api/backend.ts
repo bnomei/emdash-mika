@@ -70,11 +70,12 @@ import {
   applyOrderCancel,
   applyOrderRefund,
   applyPaymentEventToOrder,
-  orderIsPaymentTerminal,
+  orderBlocksFulfillment,
   orderRefundedAmount,
   subscriptionCancelAtPeriodEndAfterAction,
   subscriptionStatusAfterAction,
 } from "./lifecycle";
+import { formatSubjectRef } from "./subject-ref";
 import type {
   CartLine,
   CheckoutLine,
@@ -221,7 +222,7 @@ type MikaAdminAuditStartRecord = Omit<
    * wall-clock `metadata.expiresAt` — do not make identical retries hash
    * differently and force a false `same_key_same_input` conflict.
    */
-  readonly idempotencyInput?: unknown;
+  readonly idempotencyInput?: JsonValue;
 };
 
 const DEFAULT_BACKEND_CURRENCY = createCurrencyCode("EUR");
@@ -889,17 +890,23 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
     }),
     cart: createCartBackend(input),
     wishlist: createWishlistBackend(input),
-    checkout: withHydratedCustomerContext({
-      start: async (ctx, checkoutInput) => startCheckout(input, ctx, checkoutInput),
-      status: async (ctx, statusInput) => checkoutStatus(input, ctx, statusInput),
-      cancel: async (ctx, cancelInput) => cancelCheckout(input, ctx, cancelInput),
-      preview: async (ctx, previewInput) => {
+    checkout: {
+      start: withHydratedCustomerHandler((ctx, checkoutInput) =>
+        startCheckout(input, ctx, checkoutInput),
+      ),
+      status: withHydratedCustomerHandler((ctx, statusInput) =>
+        checkoutStatus(input, ctx, statusInput),
+      ),
+      cancel: withHydratedCustomerHandler((ctx, cancelInput) =>
+        cancelCheckout(input, ctx, cancelInput),
+      ),
+      preview: withHydratedCustomerHandler(async (ctx, previewInput) => {
         const preview = await createCheckoutPreview(input, ctx, previewInput);
 
         return { ok: true, status: 200, data: preview };
-      },
-      ...input.overrides?.checkout,
-    }),
+      }),
+      ...hydratedCheckoutOverrides(input.overrides?.checkout),
+    },
     magicLink: {
       request: async (ctx, requestInput) => requestMagicLink(input, ctx, requestInput),
       verify: async (ctx, verifyInput) => verifyMagicLink(input, ctx, verifyInput),
@@ -1137,7 +1144,17 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
     },
   } satisfies MikaApi["cart"];
 
-  return withHydratedCustomerContext({ ...cart, ...input.overrides?.cart });
+  return {
+    get: withHydratedCustomerHandler(cart.get),
+    quote: withHydratedCustomerHandler(cart.quote),
+    add: withHydratedCustomerHandler(cart.add),
+    update: withHydratedCustomerHandler(cart.update),
+    remove: withHydratedCustomerHandler(cart.remove),
+    merge: withHydratedCustomerHandler(cart.merge),
+    applyCoupon: withHydratedCustomerHandler(cart.applyCoupon),
+    removeCoupon: withHydratedCustomerHandler(cart.removeCoupon),
+    ...hydratedCartOverrides(input.overrides?.cart),
+  };
 }
 
 function createWishlistBackend(input: MikaCartWishlistBackendInput): MikaApi["wishlist"] {
@@ -1297,7 +1314,15 @@ function createWishlistBackend(input: MikaCartWishlistBackendInput): MikaApi["wi
     },
   } satisfies MikaApi["wishlist"];
 
-  return withHydratedCustomerContext({ ...wishlist, ...input.overrides?.wishlist });
+  return {
+    get: withHydratedCustomerHandler(wishlist.get),
+    add: withHydratedCustomerHandler(wishlist.add),
+    remove: withHydratedCustomerHandler(wishlist.remove),
+    moveToCart: withHydratedCustomerHandler(wishlist.moveToCart),
+    saveForLater: withHydratedCustomerHandler(wishlist.saveForLater),
+    merge: withHydratedCustomerHandler(wishlist.merge),
+    ...hydratedWishlistOverrides(input.overrides?.wishlist),
+  };
 }
 
 async function getAccount(
@@ -1981,7 +2006,7 @@ async function refundOrder(
       targetType: "order",
       targetId: order.id,
       idempotencyKey: refundInput.idempotencyKey,
-      idempotencyInput: refundInput,
+      idempotencyInput: refundInput as unknown as JsonValue,
       metadata: {
         provider: order.provider,
         orderId: order.id,
@@ -2106,7 +2131,7 @@ async function cancelOrder(
       targetType: "order",
       targetId: order.id,
       idempotencyKey: cancelInput.idempotencyKey,
-      idempotencyInput: cancelInput,
+      idempotencyInput: cancelInput as unknown as JsonValue,
       metadata: {
         provider: order.provider,
         orderId: order.id,
@@ -2225,7 +2250,7 @@ async function grantEntitlement(
       targetType: "entitlement",
       targetId: entitlementId,
       idempotencyKey: grantInput.idempotencyKey,
-      idempotencyInput: grantInput,
+      idempotencyInput: grantInput as unknown as JsonValue,
       metadata: {
         entitlementKey: grantInput.entitlementKey,
         ...(grantInput.customerId ? { customerId: grantInput.customerId } : {}),
@@ -2281,7 +2306,7 @@ async function revokeEntitlement(
       targetType: "entitlement",
       targetId: entitlement.id,
       idempotencyKey: revokeInput.idempotencyKey,
-      idempotencyInput: revokeInput,
+      idempotencyInput: revokeInput as unknown as JsonValue,
       metadata: {
         entitlementId: entitlement.id,
         entitlementKey: entitlement.entitlementKey,
@@ -2341,7 +2366,7 @@ async function resendEmail(
       targetType: "email",
       targetId: email.id,
       idempotencyKey: resendInput.idempotencyKey,
-      idempotencyInput: resendInput,
+      idempotencyInput: resendInput as unknown as JsonValue,
       metadata: {
         emailId: email.id,
         kind: email.kind,
@@ -2405,7 +2430,7 @@ async function revokeLicense(
       targetType: "license",
       targetId: license.id,
       idempotencyKey: revokeInput.idempotencyKey,
-      idempotencyInput: revokeInput,
+      idempotencyInput: revokeInput as unknown as JsonValue,
       metadata: {
         licenseId: license.id,
         ...(license.customerId ? { customerId: license.customerId } : {}),
@@ -2476,7 +2501,7 @@ async function issueDownload(
       targetId: createMikaId(target.downloadRef),
       createdAt: now,
       idempotencyKey: issueInput.idempotencyKey,
-      idempotencyInput: issueInput,
+      idempotencyInput: issueInput as unknown as JsonValue,
       metadata: {
         orderId: target.order.id,
         orderLineId: target.line.id,
@@ -2687,7 +2712,7 @@ function isJsonObject(value: unknown): value is JsonObject {
 async function completeAdminAudit(
   input: CreateMikaBackendApiInput,
   audit: AdminAuditDocument,
-  result?: unknown,
+  result?: JsonValue,
 ): Promise<void> {
   const resultSnapshot = audit.record.idempotencyKey && isJsonObject(result) ? result : undefined;
 
@@ -2710,7 +2735,7 @@ async function completeAdminAudit(
   });
 }
 
-function adminAuditReplayResult<TData>(audit: AdminAuditDocument): TData | null {
+function adminAuditReplayResult<TData extends JsonObject>(audit: AdminAuditDocument): TData | null {
   const snapshot = audit.record.metadata?.[ADMIN_AUDIT_RESULT_METADATA_KEY];
 
   return isJsonObject(snapshot) ? (snapshot as TData) : null;
@@ -2724,7 +2749,7 @@ function adminAuditStoredIdempotencyInputHash(audit: AdminAuditDocument): string
 
 async function adminActionIdempotencyInputHash(
   input: CreateMikaBackendApiInput,
-  idempotencyInput: unknown,
+  idempotencyInput: JsonValue | undefined,
   record: Pick<MikaAdminAuditStartRecord, "action" | "targetType" | "targetId" | "metadata">,
 ): Promise<string> {
   // Prefer the explicit client-supplied input; it carries only the deterministic
@@ -2857,9 +2882,9 @@ async function runAdminAction<TData>(
       }
 
       if (prior.record.status === "completed") {
-        const replay = adminAuditReplayResult<TData>(prior);
+        const replay = adminAuditReplayResult<JsonObject>(prior);
         if (replay !== null) {
-          return { ok: true, status: 200, data: replay };
+          return { ok: true, status: 200, data: replay as TData };
         }
       } else if (prior.record.status === "started") {
         return {
@@ -2891,7 +2916,7 @@ async function runAdminAction<TData>(
 
   try {
     const data = await action(audit);
-    await completeAdminAudit(input, audit, data);
+    await completeAdminAudit(input, audit, data as unknown as JsonValue);
 
     return {
       ok: true,
@@ -3346,11 +3371,11 @@ async function createOrderLineDownloadToken(
 
 function orderDownloadSubjectHash(order: OrderDocument): string | undefined {
   const customerId = order.customerId ?? order.aggregate.customer.customerId;
-  if (customerId) return `customer:${customerId}`;
+  if (customerId) return formatSubjectRef({ kind: "customer", id: customerId });
   const userId = order.aggregate.customer.userId;
-  if (userId) return `user:${userId}`;
+  if (userId) return formatSubjectRef({ kind: "user", id: userId });
   const emailHash = order.emailHash ?? order.aggregate.customer.emailHash;
-  return emailHash ? `email:${emailHash}` : undefined;
+  return emailHash ? formatSubjectRef({ kind: "email", id: emailHash }) : undefined;
 }
 
 function accountExportDTO(
@@ -3511,9 +3536,13 @@ function accountExportBelongsToIdentity(
 function accountExportSubjectHash(
   identity: NonNullable<Awaited<ReturnType<typeof resolveAccountIdentity>>>,
 ): string | undefined {
-  if (identity.customer?.customerId) return `customer:${identity.customer.customerId}`;
-  if (identity.userId) return `user:${identity.userId}`;
-  return identity.emailHash ? `email:${identity.emailHash}` : undefined;
+  if (identity.customer?.customerId) {
+    return formatSubjectRef({ kind: "customer", id: identity.customer.customerId });
+  }
+  if (identity.userId) return formatSubjectRef({ kind: "user", id: identity.userId });
+  return identity.emailHash
+    ? formatSubjectRef({ kind: "email", id: identity.emailHash })
+    : undefined;
 }
 
 async function hashAccountExportDownloadToken(
@@ -4445,8 +4474,9 @@ async function processStoredWebhook(
  * Applies a provider-initiated payment reversal (refund / chargeback / uncollectible invoice) to
  * the matching order: downgrades it to `refunded`/`partially_refunded` and, on a FULL reversal,
  * revokes the order's entitlements/licenses (a partial refund intentionally retains access). Idem-
- * potent: a re-delivered reversal for an already fully-refunded order is a no-op, and a reversal
- * with no matching Mika order is acknowledged rather than failed.
+ * potent: a re-delivered reversal for an already fully-refunded order is a no-op. A reversal with
+ * a strong provider payment/order id is retryable until the matching Mika order exists; weak,
+ * uncorrelated reversals are acknowledged so non-Mika provider noise is not retried forever.
  */
 async function processPaymentReversalWebhook(
   input: CreateMikaBackendApiInput,
@@ -4456,8 +4486,18 @@ async function processPaymentReversalWebhook(
 ): Promise<WebhookDocument> {
   const order = await findExistingPaymentOrder(input, event);
   if (!order) {
-    // A reversal for a charge Mika has no order for (e.g. a non-Mika charge, or one never
-    // persisted). There is nothing to downgrade — acknowledge so it is not retried forever.
+    if (reversalHasStrongOrderIdentity(event)) {
+      return markWebhookFailed(
+        input,
+        webhook,
+        ctx.now,
+        "Refund webhook could not be linked to an order.",
+        { strict: true },
+      );
+    }
+
+    // A weak reversal Mika cannot correlate to a provider payment/order is treated as provider
+    // noise. There is no durable key to wait on, so acknowledge it instead of retrying forever.
     return markWebhookProcessed(input, webhook, ctx.now, {}, { strict: true });
   }
 
@@ -4493,6 +4533,10 @@ async function processPaymentReversalWebhook(
   }
 
   return markWebhookProcessedForOrder(input, webhook, now, updated);
+}
+
+function reversalHasStrongOrderIdentity(event: MikaProviderPaymentEvent): boolean {
+  return Boolean(event.providerPaymentId || event.providerOrderId);
 }
 
 type PaymentFailureWebhookEvent = Omit<MikaProviderPaymentEvent, "paymentStatus"> & {
@@ -4538,7 +4582,7 @@ async function processPaymentWebhook(
       const order = await runWorkflowStep("persist_order", () =>
         updatePaymentOrderFromEvent(input, ctx, orderSource, event),
       );
-      const fulfilledOrder = orderIsPaymentTerminal(order)
+      const fulfilledOrder = orderBlocksFulfillment(order)
         ? order
         : await fulfillCheckoutPaymentOrder(input, ctx, runWorkflowStep, order, event);
 
@@ -4570,7 +4614,7 @@ async function processPaymentWebhook(
       const order = await runWorkflowStep("persist_order", () =>
         updatePaymentOrderFromEvent(input, ctx, orderSource, event),
       );
-      const fulfilledOrder = orderIsPaymentTerminal(order)
+      const fulfilledOrder = orderBlocksFulfillment(order)
         ? order
         : await fulfillCheckoutPaymentOrder(input, ctx, runWorkflowStep, order, event, checkout);
 
@@ -5595,6 +5639,9 @@ async function fulfillPaidOrder(
 
   if (!changed && orderAlreadyMarkedFulfilled) {
     await queueOrderConfirmationEmail(input, ctx, order, fulfilledLines);
+    await emitOrderDownloadReadyNotifications(input, ctx, order, originalLines, {
+      includeExistingRefs: true,
+    });
     return order;
   }
 
@@ -6589,6 +6636,10 @@ type CheckoutStartResolution = {
 // switches Stripe to a delegated charge) and the ACP authorization handoff in src/acp.ts.
 const DELEGATED_PAYMENT_TOKEN_METADATA_KEY = "acpPaymentToken";
 const DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY = "acpPaymentAuthorizationInputHash";
+const DELEGATED_PAYMENT_PROOF_VOLATILE_METADATA_KEYS = new Set<string>([
+  DELEGATED_PAYMENT_TOKEN_METADATA_KEY,
+  DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY,
+]);
 
 /**
  * Gates delegated-payment handoff at checkout start.
@@ -6622,16 +6673,10 @@ async function requireDelegatedPaymentAuthorization(
     return forbidden("Delegated payment requires a checkout.preview payment authorization.");
   }
 
-  const previewInput: CheckoutPreviewInput = {
-    cartId: checkoutInput.cartId,
-    provider: providerName,
-    ...(checkoutInput.couponCode !== undefined ? { couponCode: checkoutInput.couponCode } : {}),
-  };
-  const quote = await createCartQuote(input, ctx, previewInput);
-  const mode = await resolveCheckoutPreviewMode(input, ctx, previewInput);
-  const expectedHash = await input.hash(
-    JSON.stringify(checkoutPreviewProofProjection(previewInput, quote, mode, providerName)),
-  );
+  const proofInput: StartCheckoutInput = { ...checkoutInput, provider: providerName };
+  const quote = await createCartQuote(input, ctx, proofInput);
+  const mode = await resolveCheckoutPreviewMode(input, ctx, proofInput);
+  const expectedHash = await delegatedPaymentProofHash(input, proofInput, quote, mode, providerName);
   if (expectedHash !== providedHash) {
     return forbidden("Delegated payment authorization does not match the current checkout.");
   }
@@ -6909,13 +6954,8 @@ async function resolveCheckoutStart(
 
   // A `couponCode` (the same field cart.quote/checkout.preview price against) is honored here
   // so checkout charges the terms the shopper was quoted instead of silently using a stale
-  // persisted cart coupon. The discount basis is the resolved checkout lines (current prices),
-  // and when a cart backs the checkout the coupon is persisted to it — exactly like
-  // cart.applyCoupon — so cart state, totals, and provider lines stay aligned. An empty code
-  // removes the coupon. Applied after the resolver's own validation (empty cart / mixed modes)
-  // so those rejections never persist a coupon; a later provider-session failure still rolls
-  // back reservations but leaves this coupon on the cart — the same outcome as cart.applyCoupon
-  // followed by a failed checkout, which is acceptable since the shopper supplied the code.
+  // persisted cart coupon. The resolver remains pure: it returns the in-memory cart update and
+  // `persistCheckoutStart` writes it only as part of the successful checkout/cart transition.
   let resolvedCart = cartResult.cart;
   let coupon = resolvedCart?.aggregate.coupon;
   if (checkoutInput.couponCode !== undefined) {
@@ -6935,7 +6975,6 @@ async function resolveCheckoutStart(
           ? cartWithCoupon({ cart: resolvedCart.aggregate, coupon })
           : cartWithoutCoupon({ cart: resolvedCart.aggregate }),
       };
-      await input.repositories.session.put(resolvedCart);
     }
   }
 
@@ -7170,8 +7209,10 @@ function requiredCheckoutExpiry(document: CheckoutDocument): ISODateTime {
 }
 
 function checkoutAccessSubjectHash(document: CheckoutDocument): string | undefined {
-  if (document.customerId) return `customer:${document.customerId}`;
-  return document.sessionId ? `session:${document.sessionId}` : undefined;
+  if (document.customerId) return formatSubjectRef({ kind: "customer", id: document.customerId });
+  return document.sessionId
+    ? formatSubjectRef({ kind: "session", id: document.sessionId })
+    : undefined;
 }
 
 async function markCheckoutPersistenceFailed(
@@ -7414,20 +7455,63 @@ async function withEffectiveCustomer(ctx: MikaRequestContext): Promise<MikaReque
   return sessionCustomerId ? { ...ctx, customerId: sessionCustomerId } : ctx;
 }
 
-function withHydratedCustomerContext<TApi extends Record<string, unknown>>(api: TApi): TApi {
-  const wrapped: Record<string, unknown> = {};
-  for (const [key, method] of Object.entries(api)) {
-    if (typeof method !== "function") {
-      wrapped[key] = method;
-      continue;
-    }
+function withHydratedCustomerHandler<TArgs extends readonly unknown[], TResult>(
+  handler: (ctx: MikaRequestContext, ...args: TArgs) => Promise<TResult>,
+): (ctx: MikaRequestContext, ...args: TArgs) => Promise<TResult> {
+  return async (ctx, ...args) => handler(await withEffectiveCustomer(ctx), ...args);
+}
 
-    const handler = method as (ctx: MikaRequestContext, ...rest: unknown[]) => unknown;
-    wrapped[key] = (ctx: MikaRequestContext, ...rest: unknown[]) =>
-      Promise.resolve(withEffectiveCustomer(ctx)).then((hydrated) => handler(hydrated, ...rest));
-  }
+function hydratedCheckoutOverrides(
+  overrides: MikaApiOverrides["checkout"] | undefined,
+): MikaApiOverrides["checkout"] | undefined {
+  if (!overrides) return undefined;
 
-  return wrapped as TApi;
+  return {
+    ...(overrides.start ? { start: withHydratedCustomerHandler(overrides.start) } : {}),
+    ...(overrides.preview ? { preview: withHydratedCustomerHandler(overrides.preview) } : {}),
+    ...(overrides.status ? { status: withHydratedCustomerHandler(overrides.status) } : {}),
+    ...(overrides.cancel ? { cancel: withHydratedCustomerHandler(overrides.cancel) } : {}),
+  };
+}
+
+function hydratedCartOverrides(
+  overrides: MikaApiOverrides["cart"] | undefined,
+): MikaApiOverrides["cart"] | undefined {
+  if (!overrides) return undefined;
+
+  return {
+    ...(overrides.get ? { get: withHydratedCustomerHandler(overrides.get) } : {}),
+    ...(overrides.quote ? { quote: withHydratedCustomerHandler(overrides.quote) } : {}),
+    ...(overrides.add ? { add: withHydratedCustomerHandler(overrides.add) } : {}),
+    ...(overrides.update ? { update: withHydratedCustomerHandler(overrides.update) } : {}),
+    ...(overrides.remove ? { remove: withHydratedCustomerHandler(overrides.remove) } : {}),
+    ...(overrides.merge ? { merge: withHydratedCustomerHandler(overrides.merge) } : {}),
+    ...(overrides.applyCoupon
+      ? { applyCoupon: withHydratedCustomerHandler(overrides.applyCoupon) }
+      : {}),
+    ...(overrides.removeCoupon
+      ? { removeCoupon: withHydratedCustomerHandler(overrides.removeCoupon) }
+      : {}),
+  };
+}
+
+function hydratedWishlistOverrides(
+  overrides: MikaApiOverrides["wishlist"] | undefined,
+): MikaApiOverrides["wishlist"] | undefined {
+  if (!overrides) return undefined;
+
+  return {
+    ...(overrides.get ? { get: withHydratedCustomerHandler(overrides.get) } : {}),
+    ...(overrides.add ? { add: withHydratedCustomerHandler(overrides.add) } : {}),
+    ...(overrides.remove ? { remove: withHydratedCustomerHandler(overrides.remove) } : {}),
+    ...(overrides.moveToCart
+      ? { moveToCart: withHydratedCustomerHandler(overrides.moveToCart) }
+      : {}),
+    ...(overrides.saveForLater
+      ? { saveForLater: withHydratedCustomerHandler(overrides.saveForLater) }
+      : {}),
+    ...(overrides.merge ? { merge: withHydratedCustomerHandler(overrides.merge) } : {}),
+  };
 }
 
 function checkoutDocumentSuccessResult(
@@ -7715,9 +7799,7 @@ async function createCheckoutPreview(
   const quote = await createCartQuote(input, ctx, previewInput);
   const mode = await resolveCheckoutPreviewMode(input, ctx, previewInput);
   const provider = previewInput.provider ?? input.defaults?.provider;
-  const inputHash = await input.hash(
-    JSON.stringify(checkoutPreviewProofProjection(previewInput, quote, mode, provider)),
-  );
+  const inputHash = await delegatedPaymentProofHash(input, previewInput, quote, mode, provider);
   const hasPaymentAuthorization =
     previewInput.proofRefs?.some(
       (proof) =>
@@ -7760,21 +7842,37 @@ async function createCheckoutPreview(
   };
 }
 
-function checkoutPreviewProofProjection(
-  previewInput: CheckoutPreviewInput,
+async function delegatedPaymentProofHash(
+  input: CreateMikaBackendApiInput,
+  checkoutInput: StartCheckoutInput,
   quote: CartQuoteDTO,
   mode: PurchaseMode | undefined,
   provider: ProviderName | undefined,
-) {
+): Promise<string> {
+  return input.hash(
+    stableJsonStringify(delegatedPaymentProofProjection(checkoutInput, quote, mode, provider)),
+  );
+}
+
+function delegatedPaymentProofProjection(
+  checkoutInput: StartCheckoutInput,
+  quote: CartQuoteDTO,
+  mode: PurchaseMode | undefined,
+  provider: ProviderName | undefined,
+): JsonObject {
   return {
-    quoteId: previewInput.quoteId,
+    cartId: checkoutInput.cartId ?? quote.cartId,
+    sellableId: checkoutInput.sellableId,
+    priceId: checkoutInput.priceId,
+    quantity: checkoutInput.quantity,
     provider,
+    couponCode: checkoutInput.couponCode,
     mode,
-    customer: previewInput.customer,
-    customFields: previewInput.customFields,
-    successPath: previewInput.successPath,
-    cancelPath: previewInput.cancelPath,
-    returnTo: previewInput.returnTo,
+    customer: checkoutInput.customer,
+    customFields: delegatedPaymentProofCustomFields(checkoutInput.customFields),
+    successPath: checkoutInput.successPath,
+    cancelPath: checkoutInput.cancelPath,
+    returnTo: checkoutInput.returnTo,
     quote: {
       cartId: quote.cartId,
       status: quote.status,
@@ -7791,7 +7889,19 @@ function checkoutPreviewProofProjection(
       warnings: quote.warnings,
       errors: quote.errors,
     },
-  };
+  } as unknown as JsonObject;
+}
+
+function delegatedPaymentProofCustomFields(
+  customFields: JsonObject | undefined,
+): JsonObject | undefined {
+  const filtered = Object.fromEntries(
+    Object.entries(checkoutCustomMetadata(customFields)).filter(
+      ([key]) => !DELEGATED_PAYMENT_PROOF_VOLATILE_METADATA_KEYS.has(key),
+    ),
+  ) as JsonObject;
+
+  return Object.keys(filtered).length > 0 ? filtered : undefined;
 }
 
 async function resolveCheckoutPreviewMode(

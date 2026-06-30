@@ -1940,18 +1940,11 @@ export class StockRepository {
   async release(
     input: ReleaseReservedStockRepositoryInput,
   ): Promise<ReleaseReservedStockRepositoryResult> {
-    return mutateActiveReservationEvent({
+    return transitionActiveReservation({
       executor: this.db,
       reservationEventId: input.reservationEventId,
       now: input.now,
       targetStatus: "released",
-      eventPatch: { idempotency_key: null },
-      applyStockMutation: (executor, event) =>
-        releaseStockStatement({
-          stockItemId: event.stockItemId,
-          quantity: event.quantityDelta,
-          now: input.now,
-        }).execute(executor),
     });
   }
 
@@ -1964,18 +1957,11 @@ export class StockRepository {
   async expire(
     input: ReleaseReservedStockRepositoryInput,
   ): Promise<ExpireReservedStockRepositoryResult> {
-    return mutateActiveReservationEvent({
+    return transitionActiveReservation({
       executor: this.db,
       reservationEventId: input.reservationEventId,
       now: input.now,
       targetStatus: "expired",
-      eventPatch: { idempotency_key: null },
-      applyStockMutation: (executor, event) =>
-        releaseStockStatement({
-          stockItemId: event.stockItemId,
-          quantity: event.quantityDelta,
-          now: input.now,
-        }).execute(executor),
     });
   }
 
@@ -2296,6 +2282,27 @@ async function mutateStockWithEvent<
   }
 
   return { status: input.successStatus, event, stock };
+}
+
+async function transitionActiveReservation<TStatus extends "released" | "expired">(input: {
+  readonly executor: MikaDbExecutor;
+  readonly reservationEventId: MikaId;
+  readonly now: ISODateTime;
+  readonly targetStatus: TStatus;
+}): Promise<ReservationEventMutationRepositoryResult<TStatus>> {
+  return mutateActiveReservationEvent({
+    executor: input.executor,
+    reservationEventId: input.reservationEventId,
+    now: input.now,
+    targetStatus: input.targetStatus,
+    eventPatch: { idempotency_key: null },
+    applyStockMutation: (executor, event) =>
+      releaseStockStatement({
+        stockItemId: event.stockItemId,
+        quantity: event.quantityDelta,
+        now: input.now,
+      }).execute(executor),
+  });
 }
 
 async function mutateActiveReservationEvent<TStatus extends "released" | "consumed" | "expired">(input: {

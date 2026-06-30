@@ -10,6 +10,7 @@ import type {
   MikaEmailOutboxRunOptions,
   MikaEmailOutboxRunResult,
 } from "./email-outbox";
+import { formatSubjectRef } from "./subject-ref";
 import { createISODateTime, type ISODateTime, type MikaId } from "../types/primitives";
 
 /** Per-run limits and clock override for maintenance sweeps. */
@@ -342,9 +343,13 @@ function accountDeleteSubjectHashes(input: {
   readonly emailHash?: string;
 }): readonly string[] {
   return [
-    ...(input.customerId ? [input.customerId, `customer:${input.customerId}`] : []),
-    ...(input.userId ? [`user:${input.userId}`] : []),
-    ...(input.emailHash ? [input.emailHash, `email:${input.emailHash}`] : []),
+    ...(input.customerId
+      ? [input.customerId, formatSubjectRef({ kind: "customer", id: input.customerId })]
+      : []),
+    ...(input.userId ? [formatSubjectRef({ kind: "user", id: input.userId })] : []),
+    ...(input.emailHash
+      ? [input.emailHash, formatSubjectRef({ kind: "email", id: input.emailHash })]
+      : []),
   ];
 }
 

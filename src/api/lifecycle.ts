@@ -18,9 +18,16 @@ const PAYMENT_TERMINAL_ORDER_STATUSES = new Set<OrderStatus>([
   "cancelled",
 ]);
 
+const FULFILLMENT_BLOCKING_ORDER_STATUSES = new Set<OrderStatus>(["refunded", "cancelled"]);
+
 /** Whether the order has reached a non-reversible payment terminal status. */
 export function orderIsPaymentTerminal(order: OrderDocument): boolean {
   return PAYMENT_TERMINAL_ORDER_STATUSES.has(order.status);
+}
+
+/** Whether fulfillment must not run for the order's current lifecycle state. */
+export function orderBlocksFulfillment(order: OrderDocument): boolean {
+  return FULFILLMENT_BLOCKING_ORDER_STATUSES.has(order.status);
 }
 
 /** Derives post-payment status without downgrading terminal orders. */

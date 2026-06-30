@@ -28,6 +28,7 @@ import { MIKA_AGENT_IDEMPOTENCY_KEY_HEADER } from "../src/api/agent-types";
 import { callMikaOperation, mikaActionDefinitions } from "../src/api/operations";
 import { createMikaPluginRoutes } from "../src/api/route-handlers";
 import { mikaPluginRoutes } from "../src/api/routes";
+import { formatSubjectRef, parseSubjectRef } from "../src/api/subject-ref";
 import { createMikaStorageConfig, type StorageCollection } from "../src/storage/collections";
 import {
   MIKA_ERROR_CODES,
@@ -4889,7 +4890,43 @@ describe("backend API composition", () => {
       await repositories.ephemeral.put({
         key: "customer_export_token",
         kind: "token",
-        subjectHash: `customer:${customer.customerId}`,
+        subjectHash: formatSubjectRef({ kind: "customer", id: customer.customerId }),
+        status: "pending",
+        count: 0,
+        expiresAt: clock.isoAt(15 * 60_000),
+        version: 1,
+        createdAt: TEST_NOW,
+        updatedAt: TEST_NOW,
+      });
+      await repositories.ephemeral.put({
+        key: "user_download_token",
+        kind: "token",
+        subjectHash: formatSubjectRef({ kind: "user", id: "user_1" }),
+        status: "pending",
+        count: 0,
+        expiresAt: clock.isoAt(15 * 60_000),
+        version: 1,
+        createdAt: TEST_NOW,
+        updatedAt: TEST_NOW,
+      });
+      await repositories.ephemeral.put({
+        key: "email_download_token",
+        kind: "token",
+        subjectHash: formatSubjectRef({
+          kind: "email",
+          id: createTestHash("email:subscriber@example.test"),
+        }),
+        status: "pending",
+        count: 0,
+        expiresAt: clock.isoAt(15 * 60_000),
+        version: 1,
+        createdAt: TEST_NOW,
+        updatedAt: TEST_NOW,
+      });
+      await repositories.ephemeral.put({
+        key: "legacy_email_token",
+        kind: "token",
+        subjectHash: createTestHash("email:subscriber@example.test"),
         status: "pending",
         count: 0,
         expiresAt: clock.isoAt(15 * 60_000),
@@ -4927,7 +4964,7 @@ describe("backend API composition", () => {
               {
                 requestId: "account_delete_request_1",
                 status: "completed",
-                tokensDeleted: 2,
+                tokensDeleted: 5,
                 reservationsReleased: 1,
                 emailsRedacted: 1,
               },
@@ -4947,7 +4984,7 @@ describe("backend API composition", () => {
           completedAt: clock.isoAt(60_000),
           metadata: {
             maintenance: {
-              tokensDeleted: 2,
+              tokensDeleted: 5,
               reservationsReleased: 1,
               emailsRedacted: 1,
             },
@@ -4959,6 +4996,9 @@ describe("backend API composition", () => {
       expect(request?.record.confirmTokenHash).toBeUndefined();
       await expect(repositories.ephemeral.get("customer_download_token")).resolves.toBeNull();
       await expect(repositories.ephemeral.get("customer_export_token")).resolves.toBeNull();
+      await expect(repositories.ephemeral.get("user_download_token")).resolves.toBeNull();
+      await expect(repositories.ephemeral.get("email_download_token")).resolves.toBeNull();
+      await expect(repositories.ephemeral.get("legacy_email_token")).resolves.toBeNull();
       await expect(repositories.ephemeral.get("customer_rate_limit")).resolves.toMatchObject({
         kind: "rate_limit",
       });
@@ -5000,6 +5040,23 @@ describe("backend API composition", () => {
       await rollbackMikaInitialMigration(db);
       await database.destroy();
     }
+  });
+
+  it("formats and parses typed token subject references", () => {
+    const subjects = [
+      { kind: "customer" as const, id: createTestMikaId("customer", 1) },
+      { kind: "user" as const, id: "user_1" },
+      { kind: "email" as const, id: createTestHash("email:subscriber@example.test") },
+      { kind: "session" as const, id: "session_1" },
+    ];
+
+    for (const subject of subjects) {
+      expect(parseSubjectRef(formatSubjectRef(subject))).toEqual(subject);
+    }
+
+    expect(parseSubjectRef(createTestHash("email:subscriber@example.test"))).toBeNull();
+    expect(parseSubjectRef("customer:")).toBeNull();
+    expect(parseSubjectRef("unknown:value")).toBeNull();
   });
 
   it("re-keys a userId-only entitlement on account delete (no customer doc, no emailHash)", async () => {
@@ -7618,6 +7675,114 @@ describe("backend API composition", () => {
     ).resolves.toMatchObject({ status: "active", record: { status: "active" } });
   });
 
+  it("retries an out-of-order provider reversal until the paid order exists", async () => {
+    const repositories = createTestBackendRepositories();
+    const sellable = createSellableDefinition();
+    const deliveries = [
+      {
+        payloadHash: "refund_before_order_hash",
+        providerEventId: "event_refund_before_order",
+        paymentStatus: "refunded" as const,
+        type: "charge.refunded",
+      },
+      {
+        payloadHash: "paid_after_refund_hash",
+        providerEventId: "event_paid_after_refund",
+        paymentStatus: "paid" as const,
+        type: "payment.completed",
+      },
+      {
+        payloadHash: "refund_before_order_hash",
+        providerEventId: "event_refund_before_order",
+        paymentStatus: "refunded" as const,
+        type: "charge.refunded",
+      },
+    ];
+    const fake = createFakeMikaProvider({
+      id: TEST_PROVIDER,
+      overrides: {
+        verifyWebhook: async (webhookInput) => {
+          const delivery = deliveries[0];
+          if (!delivery) throw new Error("Unexpected webhook verification call.");
+
+          return createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: delivery.payloadHash,
+            parsed: { delivery: delivery.providerEventId },
+          });
+        },
+        parseWebhookEvent: async (verified) => {
+          const delivery = deliveries.shift();
+          if (!delivery) throw new Error("Unexpected webhook parse call.");
+
+          return createPaymentWebhookEvent(verified, {
+            providerEventId: delivery.providerEventId,
+            type: delivery.type,
+            providerCheckoutId: "provider_checkout_fake",
+            providerPaymentId: "payment_out_of_order",
+            providerOrderId: "provider_order_out_of_order",
+            paymentStatus: delivery.paymentStatus,
+            customer: { email: "OutOfOrder@Example.test" },
+          });
+        },
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef: createTestContentRef(), sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({
+      sessionId: "session_out_of_order",
+      customerId: false,
+      userId: false,
+      idempotencyKey: "checkout_out_of_order",
+    });
+    const cart = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    if (!cart.ok) throw new Error("Expected cart.add to succeed.");
+    const checkout = await api.checkout.start(ctx, {
+      cartId: cart.data.id,
+      provider: TEST_PROVIDER,
+    });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+
+    await expect(receiveWebhook(api, "refund-before-order")).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "failed", replayable: true },
+    });
+    await expect(
+      repositories.ledger.findOrderByProviderPayment(TEST_PROVIDER, "payment_out_of_order"),
+    ).resolves.toBeNull();
+
+    await expect(receiveWebhook(api, "paid-after-refund")).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_2", status: "received" },
+    });
+    await expect(
+      repositories.ledger.findOrderByProviderPayment(TEST_PROVIDER, "payment_out_of_order"),
+    ).resolves.toMatchObject({ status: "paid", paymentStatus: "paid" });
+
+    await expect(receiveWebhook(api, "refund-redelivery")).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "received", replayable: true },
+    });
+    await expect(
+      repositories.ledger.findOrderByProviderPayment(TEST_PROVIDER, "payment_out_of_order"),
+    ).resolves.toMatchObject({ status: "refunded", paymentStatus: "refunded" });
+    await expect(
+      repositories.ops.findWebhookById(createTestMikaId("webhook", 1)),
+    ).resolves.toMatchObject({
+      status: "processed",
+      record: { relatedOrderId: "order_1" },
+    });
+  });
+
   it("deduplicates a retried order refund by idempotency key without refunding twice", async () => {
     const repositories = createTestBackendRepositories();
     const fake = createFakeMikaProvider({
@@ -9691,6 +9856,113 @@ describe("backend API composition", () => {
     }
   });
 
+  it("preserves partially refunded payment state while fulfilling missing line access", async () => {
+    const stripe = createProviderName("stripe");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+    };
+    const baseOrder = createOrderDocument({
+      status: "partially_refunded",
+      paymentStatus: "partially_refunded",
+      provider: stripe,
+      providerPaymentId: "payment_partial_replay",
+      providerOrderId: "provider_order_partial_replay",
+    });
+    const partiallyRefundedOrder: OrderDocument = {
+      ...baseOrder,
+      aggregate: {
+        ...baseOrder.aggregate,
+        lines: baseOrder.aggregate.lines.map((line) => {
+          const { downloadRefs: _downloadRefs, ...lineWithoutRefs } = line;
+          return lineWithoutRefs;
+        }),
+        metadata: {
+          ...baseOrder.aggregate.metadata,
+          refundAmount: 300,
+        },
+        providerRefs: [
+          {
+            provider: stripe,
+            paymentId: "payment_partial_replay",
+            orderId: "provider_order_partial_replay",
+          },
+        ],
+      },
+    };
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "partial_replay_paid_hash",
+            parsed: { delivery: "event_partial_replay_paid" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createPaymentWebhookEvent(verified, {
+            providerEventId: "event_partial_replay_paid",
+            providerPaymentId: "payment_partial_replay",
+            providerOrderId: "provider_order_partial_replay",
+            invoiceUrl: "https://invoice.example.test/partial-replay",
+          }),
+      },
+    });
+    const notificationIntents: MikaNotificationIntent[] = [];
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+        notifications: {
+          handle: (intent) => {
+            notificationIntents.push(intent);
+          },
+        },
+      }),
+    );
+    await repositories.ledger.put(partiallyRefundedOrder);
+
+    await expect(receiveWebhook(api, "partial-replay-paid", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "received" },
+    });
+
+    await expect(
+      repositories.ledger.findOrderById(partiallyRefundedOrder.id),
+    ).resolves.toMatchObject({
+      status: "partially_refunded",
+      paymentStatus: "partially_refunded",
+      aggregate: {
+        invoiceUrl: "https://invoice.example.test/partial-replay",
+        lines: [
+          {
+            id: "order_line_1",
+            downloadRefs: ["download:order_1:order_line_1"],
+          },
+        ],
+        metadata: {
+          refundAmount: 300,
+          fulfilledAt: TEST_NOW,
+        },
+      },
+    });
+    expect(notificationIntents.filter((intent) => intent.kind === "download.ready")).toHaveLength(
+      1,
+    );
+    await expect(opsCollection.get("workflow_webhook_1_payment")).resolves.toMatchObject({
+      status: "completed",
+      record: {
+        resumeState: {
+          relatedOrderId: "order_1",
+          webhookStatus: "processed",
+        },
+      },
+    });
+  });
+
   it("persists forward progress when a later line fails mid-fulfillment", async () => {
     const stripe = createProviderName("stripe");
     const accountCollection = createStorageCollection("account");
@@ -9929,6 +10201,135 @@ describe("backend API composition", () => {
     await expect(
       accountCollection.get("entitlement_order_1_order_line_1"),
     ).resolves.toMatchObject({ type: "entitlement", status: "active" });
+  });
+
+  it("retries download-ready notifications after an order was already marked fulfilled", async () => {
+    const stripe = createProviderName("stripe");
+    const sessionCollection = createStorageCollection("session");
+    const ledgerCollection = createStorageCollection("ledger");
+    const opsCollection = createStorageCollection("ops");
+    const sellable = createSellableDefinition({
+      id: createTestMikaId("sellable", 1),
+      prices: [
+        createPriceDefinition({
+          id: createTestMikaId("price", 1),
+          fulfillmentKind: "download",
+          providerRefs: [
+            { provider: stripe, productId: "prod_download", priceId: "price_download" },
+          ],
+        }),
+      ],
+    });
+    const repositories = {
+      ...createTestBackendRepositories(),
+      session: new SessionRepository(sessionCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+      ops: new OpsRepository(opsCollection),
+      stock: createTestStockRepository(
+        new Map([
+          [
+            sellable.id,
+            createStockRecord({
+              id: createTestMikaId("stock", 1),
+              sellableId: sellable.id,
+              quantityOnHand: 5,
+              quantityReserved: 0,
+            }),
+          ],
+        ]),
+      ),
+    };
+    const fake = createFakeMikaProvider({
+      id: stripe,
+      overrides: {
+        verifyWebhook: async (webhookInput) =>
+          createVerifiedWebhookPayload(webhookInput, {
+            payloadHash: "download_ready_retry_hash",
+            parsed: { delivery: "event_download_ready_retry" },
+          }),
+        parseWebhookEvent: async (verified) =>
+          createPaymentWebhookEvent(verified, {
+            providerEventId: "event_download_ready_retry",
+            providerCheckoutId: "provider_checkout_fake",
+            providerPaymentId: "payment_download_ready_retry",
+            providerOrderId: "provider_order_download_ready_retry",
+            customer: { email: "DownloadReady@Example.test", name: "Download Ready" },
+          }),
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef: createTestContentRef(), sellables: [sellable] }),
+    );
+    const notificationIntents: MikaNotificationIntent[] = [];
+    let failFirstDownloadReady = true;
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+        notifications: {
+          handle: (intent) => {
+            notificationIntents.push(intent);
+            if (intent.kind === "download.ready" && failFirstDownloadReady) {
+              failFirstDownloadReady = false;
+              throw new Error("download notification unavailable");
+            }
+          },
+        },
+      }),
+    );
+    const shopperCtx = createTestRequestContext({
+      sessionId: "session_download_ready_retry",
+      customerId: createTestMikaId("customer", 1),
+      userId: "user_download_ready_retry",
+      idempotencyKey: "checkout_download_ready_retry",
+    });
+    const cart = await api.cart.add(shopperCtx, { sellableId: sellable.id, quantity: 1 });
+    if (!cart.ok) throw new Error("Expected cart.add to succeed.");
+    const checkout = await api.checkout.start(shopperCtx, {
+      cartId: cart.data.id,
+      provider: stripe,
+    });
+    if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
+
+    await receiveWebhook(api, "download-ready-fails", stripe).catch(() => undefined);
+    await expect(
+      repositories.ledger.findOrderById(createTestMikaId("order", 1)),
+    ).resolves.toMatchObject({
+      aggregate: {
+        lines: [{ downloadRefs: ["download:order_1:order_line_1"] }],
+        metadata: { fulfilledAt: TEST_NOW },
+      },
+    });
+    await expect(
+      opsCollection.get("workflow_download_order_1_order_line_1_notification_download_ready"),
+    ).resolves.toMatchObject({
+      status: "failed",
+      record: { lastError: "download notification unavailable" },
+    });
+
+    await expect(receiveWebhook(api, "download-ready-redelivery", stripe)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "received" },
+    });
+
+    expect(notificationIntents.filter((intent) => intent.kind === "download.ready")).toHaveLength(2);
+    await expect(
+      opsCollection.get("workflow_download_order_1_order_line_1_notification_download_ready"),
+    ).resolves.toMatchObject({
+      status: "completed",
+      idempotencyKey: "download.ready:download:order_1:order_line_1",
+    });
+    await expect(opsCollection.count({ type: "email" })).resolves.toBe(1);
+
+    await expect(
+      receiveWebhook(api, "download-ready-third-delivery", stripe),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "webhook_1", status: "duplicate" },
+    });
+    expect(notificationIntents.filter((intent) => intent.kind === "download.ready")).toHaveLength(2);
   });
 
   it("creates fulfillment side effects once from replayed payment webhook events", async () => {
@@ -12394,6 +12795,59 @@ describe("backend API composition", () => {
     ).resolves.toMatchObject({ aggregate: { coupon: { label: "SAVE10" } } });
   });
 
+  it("does not persist checkout.start couponCode when checkout creation fails", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider({
+      overrides: {
+        createCheckoutSession: async () => {
+          throw new Error("provider unavailable");
+        },
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) throw new Error("Expected cart.add to succeed.");
+
+    await expect(
+      api.checkout.start(ctx, {
+        cartId: added.data.id,
+        couponCode: "SAVE10",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 502,
+      error: { code: "PROVIDER_FAILED" },
+    });
+
+    await expect(repositories.session.findById(added.data.id)).resolves.toMatchObject({
+      type: "cart",
+      status: "open",
+      aggregate: { coupon: undefined },
+    });
+    await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
+      quantityReserved: 0,
+    });
+  });
+
   it("lets a checkout.start couponCode override the persisted cart coupon", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();
@@ -14286,25 +14740,57 @@ describe("backend API composition", () => {
     if (!cart.ok) throw new Error("Expected cart.add to succeed.");
 
     // The ACP-authorized path: preview the cart to obtain the payment-authorization input hash...
-    const preview = await api.checkout.preview(ctx, {
+    const previewInput = {
       cartId: cart.data.id,
       provider: TEST_PROVIDER,
-    });
+      customer: { email: "Delegated@Example.test", name: "Delegated Buyer" },
+      customFields: { publicNote: "deliver after 5pm" },
+      successPath: "/checkout/success/delegated",
+      cancelPath: "/checkout/cancel/delegated",
+      returnTo: "/products/delegated",
+    };
+    const preview = await api.checkout.preview(ctx, previewInput);
     if (!preview.ok) throw new Error("Expected checkout.preview to succeed.");
     const inputHash = preview.data.inputHash;
     if (!inputHash) throw new Error("Expected checkout.preview to return an input hash.");
 
-    // ...then start with the token bound to that proof. The delegated payment is authorized.
+    await expect(
+      api.checkout.start(ctx, {
+        ...previewInput,
+        customFields: {
+          publicNote: "changed after preview",
+          acpPaymentToken: "spt_authorized_123",
+          acpPaymentAuthorizationInputHash: inputHash,
+        },
+      }),
+    ).resolves.toMatchObject({ ok: false, status: 403, error: { code: "FORBIDDEN" } });
+    expect(fake.getCalls().createCheckoutSession).toHaveLength(0);
+
+    // ...then start with the token bound to that proof. Volatile delegated fields are stripped from
+    // the proof hash, so preview does not need the token but start can carry it to the provider.
     const started = await api.checkout.start(ctx, {
-      cartId: cart.data.id,
-      provider: TEST_PROVIDER,
+      ...previewInput,
       customFields: {
+        ...previewInput.customFields,
         acpPaymentToken: "spt_authorized_123",
         acpPaymentAuthorizationInputHash: inputHash,
       },
     });
     expect(started).toMatchObject({ ok: true });
     expect(fake.getCalls().createCheckoutSession).toHaveLength(1);
+    expect(fake.getCalls().createCheckoutSession[0]).toMatchObject({
+      provider: TEST_PROVIDER,
+      customer: { email: "Delegated@Example.test", name: "Delegated Buyer" },
+      metadata: {
+        publicNote: "deliver after 5pm",
+        acpPaymentToken: "spt_authorized_123",
+        acpPaymentAuthorizationInputHash: inputHash,
+      },
+      successUrl:
+        "https://shop.example.test/checkout/success/delegated?checkoutId=checkout_1&token=checkout_status_token_1",
+      cancelUrl:
+        "https://shop.example.test/checkout/cancel/delegated?checkoutId=checkout_1&token=checkout_status_token_1",
+    });
   });
 
   it("allows delegated checkout with a couponCode authorized by checkout preview", async () => {
@@ -16071,6 +16557,45 @@ function createTestStockRepository(
     stockBySellableId instanceof Map ? stockBySellableId : new Map(stockBySellableId);
   const eventsById = new Map<string, StockEventRecord>();
   const eventsByIdempotencyKey = new Map<string, StockEventRecord>();
+  async function transitionActiveReservation<TStatus extends "released" | "expired">(input: {
+    readonly reservationEventId: MikaId;
+    readonly now: ISODateTime;
+    readonly targetStatus: TStatus;
+  }) {
+    const event = eventsById.get(input.reservationEventId);
+    if (!event) return { status: "not_found" as const };
+
+    const current =
+      Array.from(stockItems.values()).find((stock) => stock.id === event.stockItemId) ?? null;
+    if (event.status !== "active") {
+      return { status: "not_active" as const, event, stock: current };
+    }
+
+    const transitionedEvent: StockEventRecord = {
+      ...event,
+      status: input.targetStatus,
+      idempotencyKey: undefined,
+      updatedAt: input.now,
+    };
+    const stock = current
+      ? {
+          ...current,
+          quantityReserved: Math.max(0, current.quantityReserved - event.quantityDelta),
+          updatedAt: input.now,
+        }
+      : null;
+    eventsById.set(transitionedEvent.id, transitionedEvent);
+    if (event.idempotencyKey) {
+      eventsByIdempotencyKey.delete(event.idempotencyKey);
+    }
+    if (stock) {
+      stockItems.set(stock.sellableId, stock);
+    }
+
+    return stock
+      ? { status: input.targetStatus, event: transitionedEvent, stock }
+      : { status: "not_active" as const, event: transitionedEvent, stock };
+  }
 
   return {
     async findItemById(stockItemId) {
@@ -16160,74 +16685,18 @@ function createTestStockRepository(
       return { status: "reserved", event, stock };
     },
     async release(release) {
-      const event = eventsById.get(release.reservationEventId);
-      if (!event) return { status: "not_found" };
-
-      const current =
-        Array.from(stockItems.values()).find((stock) => stock.id === event.stockItemId) ?? null;
-      if (event.status !== "active") {
-        return { status: "not_active", event, stock: current };
-      }
-
-      const releasedEvent: StockEventRecord = {
-        ...event,
-        status: "released",
-        idempotencyKey: undefined,
-        updatedAt: release.now,
-      };
-      const stock = current
-        ? {
-            ...current,
-            quantityReserved: Math.max(0, current.quantityReserved - event.quantityDelta),
-            updatedAt: release.now,
-          }
-        : null;
-      eventsById.set(releasedEvent.id, releasedEvent);
-      if (event.idempotencyKey) {
-        eventsByIdempotencyKey.delete(event.idempotencyKey);
-      }
-      if (stock) {
-        stockItems.set(stock.sellableId, stock);
-      }
-
-      return stock
-        ? { status: "released", event: releasedEvent, stock }
-        : { status: "not_active", event: releasedEvent, stock };
+      return transitionActiveReservation({
+        reservationEventId: release.reservationEventId,
+        now: release.now,
+        targetStatus: "released",
+      });
     },
     async expire(expire) {
-      const event = eventsById.get(expire.reservationEventId);
-      if (!event) return { status: "not_found" };
-
-      const current =
-        Array.from(stockItems.values()).find((stock) => stock.id === event.stockItemId) ?? null;
-      if (event.status !== "active") {
-        return { status: "not_active", event, stock: current };
-      }
-
-      const expiredEvent: StockEventRecord = {
-        ...event,
-        status: "expired",
-        idempotencyKey: undefined,
-        updatedAt: expire.now,
-      };
-      const stock = current
-        ? {
-            ...current,
-            quantityReserved: Math.max(0, current.quantityReserved - event.quantityDelta),
-            updatedAt: expire.now,
-          }
-        : null;
-      eventsById.set(expiredEvent.id, expiredEvent);
-      if (event.idempotencyKey) {
-        eventsByIdempotencyKey.delete(event.idempotencyKey);
-      }
-      if (stock) {
-        stockItems.set(stock.sellableId, stock);
-      }
-
-      return stock
-        ? { status: "expired", event: expiredEvent, stock }
-        : { status: "not_active", event: expiredEvent, stock };
+      return transitionActiveReservation({
+        reservationEventId: expire.reservationEventId,
+        now: expire.now,
+        targetStatus: "expired",
+      });
     },
     async consume(consume) {
       const event = eventsById.get(consume.reservationEventId);
