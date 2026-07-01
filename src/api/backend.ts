@@ -78,6 +78,7 @@ import {
   applyOrderRefund,
   applyPaymentEventToOrder,
   orderBlocksFulfillment,
+  orderIsPaymentTerminal,
   orderRefundedAmount,
   subscriptionCancelAtPeriodEndAfterAction,
   subscriptionStatusAfterAction,
@@ -2172,6 +2173,9 @@ async function refundOrder(
   if (!order) {
     return orderNotFound(refundInput.orderId);
   }
+  if (order.status === "cancelled") {
+    return validationFailed("orderId", `Order '${order.id}' is cancelled and cannot be refunded.`);
+  }
 
   const providerFeature = await requireProviderFeature(input, {
     providerName: order.provider,
@@ -2181,6 +2185,12 @@ async function refundOrder(
   });
   if (!providerFeature.ok) return providerFeature;
   const refundableAmount = Math.max(0, order.totalAmount - orderRefundedAmount(order));
+  if (refundableAmount <= 0) {
+    return validationFailed(
+      "amount",
+      `Order '${order.id}' has no remaining refundable amount.`,
+    );
+  }
   if (refundInput.amount !== undefined && refundInput.amount > refundableAmount) {
     return validationFailed(
       "amount",
@@ -2304,6 +2314,12 @@ async function cancelOrder(
   const order = await input.repositories.ledger.findOrderById(cancelInput.orderId);
   if (!order) {
     return orderNotFound(cancelInput.orderId);
+  }
+  if (orderIsPaymentTerminal(order)) {
+    return validationFailed(
+      "orderId",
+      `Order '${order.id}' is in a terminal payment state and cannot be cancelled.`,
+    );
   }
 
   const providerFeature = await requireProviderFeature(input, {
