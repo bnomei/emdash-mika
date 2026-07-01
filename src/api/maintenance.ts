@@ -9,6 +9,7 @@
 import type { MikaBackendNow, MikaBackendRepositories } from "./backend";
 import type { AdminActionResultDTO, MikaApiResult, ReleaseExpiredReservationsInput } from "./types";
 import type { MikaApi } from "./server";
+import type { AccountDeleteRequestDocument } from "../types/documents";
 import type {
   MikaEmailOutboxRunner,
   MikaEmailOutboxRunOptions,
@@ -20,7 +21,13 @@ import type {
   MikaAcpSessionStore,
 } from "../acp";
 import { subjectHashCandidates } from "./subject-ref";
-import { createISODateTime, type ISODateTime, type MikaId } from "../types/primitives";
+import {
+  createISODateTime,
+  isJsonObject,
+  type ISODateTime,
+  type JsonObject,
+  type MikaId,
+} from "../types/primitives";
 
 /** Per-run limits and clock override for maintenance sweeps. */
 export interface MikaMaintenanceRunOptions {
@@ -320,54 +327,99 @@ async function processQueuedAccountDeleteRequests(input: {
   const items: MikaMaintenanceAccountDeleteRequestItem[] = [];
 
   for (const item of queued.items) {
-    const request = item.data;
+    let request = item.data;
+    let cleanupApplied = hasCompletedAccountDeleteMaintenanceSteps(request);
 
     try {
       await assertAccountDeleteMaintenanceAllowed(input.repositories, request);
       const sentinel = accountDeleteSentinel(request);
-      const tokensDeleted = await input.repositories.ephemeral.deleteTokensBySubjectHashes(
-        subjectHashCandidates(request),
+      const runStep = async <TValue extends number | boolean>(
+        stepName: AccountDeleteMaintenanceStepName,
+        valueType: "number" | "boolean",
+        run: () => Promise<TValue>,
+      ): Promise<TValue> => {
+        const recorded = accountDeleteMaintenanceStepValue(request, stepName);
+        if (typeof recorded === valueType) return recorded as TValue;
+
+        const value = await run();
+        cleanupApplied = true;
+        const updated = await input.repositories.ops.recordAccountDeleteMaintenanceStep({
+          requestId: request.id,
+          now: input.now,
+          stepName,
+          result: { value },
+        });
+        if (!updated) {
+          throw new Error(
+            `Account delete request '${request.id}' step '${stepName}' could not be recorded.`,
+          );
+        }
+        request = updated;
+
+        return value;
+      };
+
+      const tokensDeleted = await runStep("tokensDeleted", "number", () =>
+        input.repositories.ephemeral.deleteTokensBySubjectHashes(subjectHashCandidates(request)),
       );
-      const stockResult = request.customerId
-        ? await input.repositories.stock.releaseActiveReservationsByCustomer({
-            customerId: request.customerId,
-            now: input.now,
-          })
-        : { releasedCount: 0 };
-      const emailsRedacted = await input.repositories.ops.redactQueuedFailedEmailsForAccountDelete({
-        now: input.now,
-        ...(request.customerId ? { customerId: request.customerId } : {}),
-        ...(request.userId ? { userId: request.userId } : {}),
-        ...(request.emailHash ? { emailHash: request.emailHash } : {}),
+      const reservationsReleased = await runStep("reservationsReleased", "number", async () => {
+        if (!request.customerId) return 0;
+        const stockResult = await input.repositories.stock.releaseActiveReservationsByCustomer({
+          customerId: request.customerId,
+          now: input.now,
+        });
+
+        return stockResult.releasedCount;
       });
-      const ordersResult = sentinel
-        ? await input.repositories.ledger.anonymizeOrdersForAccountDelete({
-            now: input.now,
-            sentinel,
-            ...(request.customerId ? { customerId: request.customerId } : {}),
-            ...(request.emailHash ? { emailHash: request.emailHash } : {}),
-          })
-        : { anonymized: 0 };
-      const entitlementsResult = sentinel
-        ? await input.repositories.account.anonymizeEntitlementsForAccountDelete({
-            now: input.now,
-            sentinel,
-            ...(request.customerId ? { customerId: request.customerId } : {}),
-            ...(request.emailHash ? { emailHash: request.emailHash } : {}),
-            ...(request.userId ? { userId: request.userId } : {}),
-          })
-        : { anonymized: 0 };
-      const licensesResult = sentinel
-        ? await input.repositories.account.anonymizeLicensesForAccountDelete({
-            now: input.now,
-            sentinel,
-            ...(request.customerId ? { customerId: request.customerId } : {}),
-          })
-        : { anonymized: 0 };
-      const customerResult = await input.repositories.account.anonymizeCustomerForAccountDelete({
-        now: input.now,
-        ...(request.customerId ? { customerId: request.customerId } : {}),
-        ...(request.emailHash ? { emailHash: request.emailHash } : {}),
+      const emailsRedacted = await runStep("emailsRedacted", "number", () =>
+        input.repositories.ops.redactQueuedFailedEmailsForAccountDelete({
+          now: input.now,
+          ...(request.customerId ? { customerId: request.customerId } : {}),
+          ...(request.userId ? { userId: request.userId } : {}),
+          ...(request.emailHash ? { emailHash: request.emailHash } : {}),
+        }),
+      );
+      const ordersAnonymized = await runStep("ordersAnonymized", "number", async () => {
+        if (!sentinel) return 0;
+        const result = await input.repositories.ledger.anonymizeOrdersForAccountDelete({
+          now: input.now,
+          sentinel,
+          ...(request.customerId ? { customerId: request.customerId } : {}),
+          ...(request.emailHash ? { emailHash: request.emailHash } : {}),
+        });
+
+        return result.anonymized;
+      });
+      const entitlementsAnonymized = await runStep("entitlementsAnonymized", "number", async () => {
+        if (!sentinel) return 0;
+        const result = await input.repositories.account.anonymizeEntitlementsForAccountDelete({
+          now: input.now,
+          sentinel,
+          ...(request.customerId ? { customerId: request.customerId } : {}),
+          ...(request.emailHash ? { emailHash: request.emailHash } : {}),
+          ...(request.userId ? { userId: request.userId } : {}),
+        });
+
+        return result.anonymized;
+      });
+      const licensesAnonymized = await runStep("licensesAnonymized", "number", async () => {
+        if (!sentinel) return 0;
+        const result = await input.repositories.account.anonymizeLicensesForAccountDelete({
+          now: input.now,
+          sentinel,
+          ...(request.customerId ? { customerId: request.customerId } : {}),
+        });
+
+        return result.anonymized;
+      });
+      const customerAnonymized = await runStep("customerAnonymized", "boolean", async () => {
+        const result = await input.repositories.account.anonymizeCustomerForAccountDelete({
+          now: input.now,
+          ...(request.customerId ? { customerId: request.customerId } : {}),
+          ...(request.emailHash ? { emailHash: request.emailHash } : {}),
+        });
+
+        return result.anonymized;
       });
 
       const completed = await input.repositories.ops.completeAccountDeleteRequest({
@@ -375,13 +427,14 @@ async function processQueuedAccountDeleteRequests(input: {
         now: input.now,
         metadata: {
           maintenance: {
+            ...accountDeleteMaintenanceMetadata(request),
             tokensDeleted,
-            reservationsReleased: stockResult.releasedCount,
+            reservationsReleased,
             emailsRedacted,
-            customerAnonymized: customerResult.anonymized,
-            ordersAnonymized: ordersResult.anonymized,
-            entitlementsAnonymized: entitlementsResult.anonymized,
-            licensesAnonymized: licensesResult.anonymized,
+            customerAnonymized,
+            ordersAnonymized,
+            entitlementsAnonymized,
+            licensesAnonymized,
           },
         },
       });
@@ -393,19 +446,17 @@ async function processQueuedAccountDeleteRequests(input: {
         requestId: request.id,
         status: "completed",
         tokensDeleted,
-        reservationsReleased: stockResult.releasedCount,
+        reservationsReleased,
         emailsRedacted,
-        customerAnonymized: customerResult.anonymized,
-        ordersAnonymized: ordersResult.anonymized,
-        entitlementsAnonymized: entitlementsResult.anonymized,
-        licensesAnonymized: licensesResult.anonymized,
+        customerAnonymized,
+        ordersAnonymized,
+        entitlementsAnonymized,
+        licensesAnonymized,
       });
     } catch (error) {
       const message = errorMessage(error);
-      await input.repositories.ops.failAccountDeleteRequest({
-        requestId: request.id,
-        now: input.now,
-        lastError: message,
+      await recordAccountDeleteRequestFailure(input.repositories, request, input.now, message, {
+        retryable: cleanupApplied || hasCompletedAccountDeleteMaintenanceSteps(request),
       });
       items.push({
         requestId: request.id,
@@ -422,6 +473,75 @@ async function processQueuedAccountDeleteRequests(input: {
     hasMore: queued.hasMore,
     items,
   };
+}
+
+type AccountDeleteMaintenanceStepName =
+  | "tokensDeleted"
+  | "reservationsReleased"
+  | "emailsRedacted"
+  | "ordersAnonymized"
+  | "entitlementsAnonymized"
+  | "licensesAnonymized"
+  | "customerAnonymized";
+
+async function recordAccountDeleteRequestFailure(
+  repositories: MikaMaintenanceRepositories,
+  request: AccountDeleteRequestDocument,
+  now: ISODateTime,
+  lastError: string,
+  options: { readonly retryable: boolean },
+): Promise<void> {
+  if (options.retryable) {
+    try {
+      await repositories.ops.recordAccountDeleteRequestError({
+        requestId: request.id,
+        now,
+        lastError,
+      });
+    } catch {
+      // Keep the in-memory result failed while leaving the queued request retryable.
+    }
+
+    return;
+  }
+
+  await repositories.ops.failAccountDeleteRequest({
+    requestId: request.id,
+    now,
+    lastError,
+  });
+}
+
+function hasCompletedAccountDeleteMaintenanceSteps(
+  request: AccountDeleteRequestDocument,
+): boolean {
+  const steps = jsonObjectChild(accountDeleteMaintenanceMetadata(request), "steps");
+
+  return steps ? Object.keys(steps).length > 0 : false;
+}
+
+function accountDeleteMaintenanceStepValue(
+  request: AccountDeleteRequestDocument,
+  stepName: AccountDeleteMaintenanceStepName,
+): number | boolean | undefined {
+  const steps = jsonObjectChild(accountDeleteMaintenanceMetadata(request), "steps");
+  const step = jsonObjectChild(steps, stepName);
+  if (step?.["status"] !== "completed") return undefined;
+
+  const result = jsonObjectChild(step, "result");
+  const value = result?.["value"];
+
+  return typeof value === "number" || typeof value === "boolean" ? value : undefined;
+}
+
+function accountDeleteMaintenanceMetadata(request: AccountDeleteRequestDocument): JsonObject {
+  return jsonObjectChild(request.record.metadata, "maintenance") ?? {};
+}
+
+function jsonObjectChild(input: JsonObject | undefined, key: string): JsonObject | undefined {
+  const value = input?.[key];
+
+  return isJsonObject(value) ? value : undefined;
 }
 
 // Blocks account-delete completion while an active subscription or checkout-pending cart exists.

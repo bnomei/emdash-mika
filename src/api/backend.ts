@@ -25,6 +25,7 @@ import type {
   AdjustStockRepositoryResult,
   AdjustStockRepositoryInput,
   AccountDeleteEmailRedactionRepositoryInput,
+  AccountDeleteMaintenanceStepRepositoryInput,
   AccountDeleteRequestCompletionRepositoryInput,
   AccountDeleteRequestFailureRepositoryInput,
   CatalogProviderPriceMatch,
@@ -453,6 +454,12 @@ export interface MikaOpsRepositoryPort {
   ): Promise<MikaDocumentList<AccountDeleteRequestDocument>>;
   completeAccountDeleteRequest(
     input: AccountDeleteRequestCompletionRepositoryInput,
+  ): Promise<AccountDeleteRequestDocument | null>;
+  recordAccountDeleteMaintenanceStep(
+    input: AccountDeleteMaintenanceStepRepositoryInput,
+  ): Promise<AccountDeleteRequestDocument | null>;
+  recordAccountDeleteRequestError(
+    input: AccountDeleteRequestFailureRepositoryInput,
   ): Promise<AccountDeleteRequestDocument | null>;
   failAccountDeleteRequest(
     input: AccountDeleteRequestFailureRepositoryInput,

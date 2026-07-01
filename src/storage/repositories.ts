@@ -33,6 +33,7 @@ import type { EphemeralRecord, StockEventRecord, StockItemRecord } from "../type
 import {
   createISODateTime,
   createMikaId,
+  isJsonObject,
   type ContentRef,
   type ISODateTime,
   type JsonObject,
@@ -270,6 +271,14 @@ export interface AccountDeleteRequestFailureRepositoryInput {
   readonly requestId: MikaId;
   readonly now: ISODateTime;
   readonly lastError: string;
+}
+
+/** Input for recording one completed account-delete maintenance step. */
+export interface AccountDeleteMaintenanceStepRepositoryInput {
+  readonly requestId: MikaId;
+  readonly now: ISODateTime;
+  readonly stepName: string;
+  readonly result: JsonObject;
 }
 
 /** Identity selectors for redacting queued email records after account deletion. */
@@ -1279,6 +1288,37 @@ export class OpsRepository {
     return documentOfType(updated, "accountDeleteRequest");
   }
 
+  async recordAccountDeleteMaintenanceStep(
+    input: AccountDeleteMaintenanceStepRepositoryInput,
+  ): Promise<AccountDeleteRequestDocument | null> {
+    const updated = await this.documents.update(input.requestId, (current) => {
+      const request = documentOfType(current, "accountDeleteRequest");
+      if (!request || request.status !== "queued") return null;
+
+      return accountDeleteRequestDocumentWithRecord(request, input.now, {
+        lastError: undefined,
+        metadata: accountDeleteMaintenanceStepMetadata(request.record.metadata, input),
+      });
+    });
+
+    return documentOfType(updated, "accountDeleteRequest");
+  }
+
+  async recordAccountDeleteRequestError(
+    input: AccountDeleteRequestFailureRepositoryInput,
+  ): Promise<AccountDeleteRequestDocument | null> {
+    const updated = await this.documents.update(input.requestId, (current) => {
+      const request = documentOfType(current, "accountDeleteRequest");
+      if (!request || request.status !== "queued") return null;
+
+      return accountDeleteRequestDocumentWithRecord(request, input.now, {
+        lastError: input.lastError,
+      });
+    });
+
+    return documentOfType(updated, "accountDeleteRequest");
+  }
+
   async failAccountDeleteRequest(
     input: AccountDeleteRequestFailureRepositoryInput,
   ): Promise<AccountDeleteRequestDocument | null> {
@@ -2133,6 +2173,35 @@ function emailMatchesAccountDeleteIdentity(
     (identity.userId && record.metadata?.["userId"] === identity.userId) ||
     (identity.emailHash && record.metadata?.["emailHash"] === identity.emailHash),
   );
+}
+
+function accountDeleteMaintenanceStepMetadata(
+  metadata: JsonObject | undefined,
+  input: AccountDeleteMaintenanceStepRepositoryInput,
+): JsonObject {
+  const maintenance = jsonObjectChild(metadata, "maintenance");
+  const steps = jsonObjectChild(maintenance, "steps");
+
+  return {
+    ...metadata,
+    maintenance: {
+      ...maintenance,
+      steps: {
+        ...steps,
+        [input.stepName]: {
+          status: "completed",
+          completedAt: input.now,
+          result: input.result,
+        },
+      },
+    },
+  };
+}
+
+function jsonObjectChild(input: JsonObject | undefined, key: string): JsonObject | undefined {
+  const value = input?.[key];
+
+  return isJsonObject(value) ? value : undefined;
 }
 
 function accountDeleteRequestDocumentWithRecord(
