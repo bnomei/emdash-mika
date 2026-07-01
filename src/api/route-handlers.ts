@@ -105,7 +105,7 @@ async function handleActionRunner(
     operation: resolved.data.operation,
     api,
     ctx: mikaContext,
-    input: adminRunnerInputWithContext(
+    input: mikaOperationInputWithIdempotencyContext(
       resolved.data.operation,
       resolved.data.input,
       mikaContext.idempotencyKey,
@@ -123,28 +123,18 @@ async function handleActionRunner(
   return toMikaAdminActionRunResult(result, resolved.data.resultAdapter);
 }
 
-// Admin mutations that accept idempotency via header when the body omits idempotencyKey.
-const ADMIN_IDEMPOTENT_OPERATIONS: ReadonlySet<string> = new Set([
-  "admin.stockAdjust",
-  "admin.orderRefund",
-  "admin.orderCancel",
-  "admin.entitlementGrant",
-  "admin.entitlementRevoke",
-  "admin.emailResend",
-  "admin.licenseRevoke",
-  "admin.downloadIssue",
-]);
-
-function adminRunnerInputWithContext(
+export function mikaOperationInputWithIdempotencyContext(
   operation: MikaRouteOperation,
   input: unknown,
   idempotencyKey: string | undefined,
 ): unknown {
   if (
     !idempotencyKey ||
-    !ADMIN_IDEMPOTENT_OPERATIONS.has(operation.name) ||
+    operation.agent.idempotency !== "required" ||
+    !operation.agent.idempotencyKey ||
+    !operationSchemaHasIdempotencyKey(operation) ||
     !isRecord(input) ||
-    "idempotencyKey" in input
+    hasNonEmptyIdempotencyKey(input)
   ) {
     return input;
   }
@@ -153,6 +143,30 @@ function adminRunnerInputWithContext(
     ...input,
     idempotencyKey,
   };
+}
+
+function hasNonEmptyIdempotencyKey(input: Record<string, unknown>): boolean {
+  const value = input["idempotencyKey"];
+
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function operationSchemaHasIdempotencyKey(operation: MikaRouteOperation): boolean {
+  const schema = "schema" in operation ? operation.schema : undefined;
+  const shape = schema ? zodObjectShape(schema) : undefined;
+
+  return shape ? Object.prototype.hasOwnProperty.call(shape, "idempotencyKey") : false;
+}
+
+function zodObjectShape(schema: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(schema)) return undefined;
+  const directShape = schema["shape"];
+  const definition = schema["_def"];
+  const defShape = isRecord(definition) ? definition["shape"] : undefined;
+  const shape = typeof directShape === "function" ? directShape() : directShape ?? defShape;
+  const resolved = typeof shape === "function" ? shape() : shape;
+
+  return isRecord(resolved) ? resolved : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -191,7 +205,11 @@ async function handleRouteOperation(
     operation,
     api,
     ctx: mikaContext,
-    input: adminRunnerInputWithContext(operation, parsedInput.data, mikaContext.idempotencyKey),
+    input: mikaOperationInputWithIdempotencyContext(
+      operation,
+      parsedInput.data,
+      mikaContext.idempotencyKey,
+    ),
     operationPolicy: options.operationPolicy,
   });
 }

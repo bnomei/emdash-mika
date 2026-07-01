@@ -1706,6 +1706,13 @@ describe("Mika client", () => {
         headers: { [MIKA_AGENT_IDEMPOTENCY_KEY_HEADER]: "adjust_header_key" },
       }),
     });
+    await routes[mikaPluginRoutes.adminStockAdjust].handler({
+      input: { ...adjustInput, idempotencyKey: "" },
+      request: new Request(adjustUrl, {
+        method: "POST",
+        headers: { [MIKA_AGENT_IDEMPOTENCY_KEY_HEADER]: "adjust_header_empty_body_key" },
+      }),
+    });
 
     const rejected = await routes[mikaPluginRoutes.adminStockAdjust].handler({
       input: adjustInput,
@@ -1714,6 +1721,7 @@ describe("Mika client", () => {
 
     expect(received).toEqual([
       expect.objectContaining({ idempotencyKey: "adjust_header_key" }),
+      expect.objectContaining({ idempotencyKey: "adjust_header_empty_body_key" }),
     ]);
     expect(rejected).toMatchObject({
       ok: false,
@@ -1731,6 +1739,7 @@ describe("Mika client", () => {
     expect(source).toContain("MIKA_AGENT_IDEMPOTENCY_KEY_HEADER");
     expect(source).toContain("idempotencyKey: actionIdempotencyKey(ctx.request)");
     expect(source).toContain("request.headers.get(MIKA_AGENT_IDEMPOTENCY_KEY_HEADER)");
+    expect(source).toContain("mikaOperationInputWithIdempotencyContext");
   });
 
   it("pins action descriptors to their operation metadata", () => {

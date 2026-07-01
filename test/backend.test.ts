@@ -62,6 +62,7 @@ import { createMikaProviderRegistry } from "../src/provider";
 import type { PriceDefinition, SellableDefinition } from "../src/types/aggregates";
 import type {
   CatalogItemDocument,
+  AdminAuditDocument,
   CartDocument,
   CheckoutDocument,
   CustomerDocument,
@@ -201,12 +202,14 @@ describe("backend test storage helpers", () => {
         ["type", "kind", "status", "nextAttemptAt"],
         ["type", "kind", "subjectType", "subjectId"],
         ["type", "kind", "idempotencyKey"],
+        ["type", "action", "idempotencyKey"],
       ]),
     );
     expect(config.ops.uniqueIndexes).toEqual(
       expect.arrayContaining([
         ["type", "kind", "idempotencyKey"],
         ["type", "kind", "subjectType", "subjectId"],
+        ["type", "action", "idempotencyKey"],
       ]),
     );
     expect(config.account.indexes).toEqual(
@@ -239,6 +242,42 @@ describe("backend test storage helpers", () => {
     await expect(
       collection.put("record_2", createRecord({ type: "order", name: "Alpha" })),
     ).rejects.toThrow("Unique storage index violation");
+  });
+
+  it("does not claim a failed admin idempotency retry when another retry already started", async () => {
+    const baseCollection = createStorageCollection("ops");
+    const failed = createAdminAuditTestDocument({
+      id: createTestMikaId("admin_audit", 1),
+      status: "failed",
+    });
+    const started = createAdminAuditTestDocument({
+      id: failed.id,
+      status: "started",
+    });
+    const retry = createAdminAuditTestDocument({
+      id: createTestMikaId("admin_audit", 2),
+      status: "started",
+    });
+    await baseCollection.put(failed.id, started);
+    let returnStaleFailure = true;
+    const staleLookupCollection: StorageCollection<MikaStorageDocuments["ops"]> = {
+      ...baseCollection,
+      query: async (options) => {
+        if (returnStaleFailure) {
+          returnStaleFailure = false;
+
+          return { items: [{ id: failed.id, data: failed }], hasMore: false };
+        }
+
+        return baseCollection.query(options);
+      },
+    };
+    const ops = new OpsRepository(staleLookupCollection);
+
+    await expect(ops.claimAdminAuditIdempotency(retry)).resolves.toMatchObject({
+      status: "existing",
+      audit: { id: failed.id, status: "started" },
+    });
   });
 
   it("lists due workflows and leases one worker at a time", async () => {
@@ -7041,10 +7080,11 @@ describe("backend API composition", () => {
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toEqual(stock);
     await expect(
       repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       id: createTestMikaId("admin_audit", 1),
       type: "adminAudit",
       schemaVersion: 1,
+      action: "provider.syncCatalog",
       status: "completed",
       createdAt: TEST_NOW,
       updatedAt: TEST_NOW,
@@ -7244,10 +7284,11 @@ describe("backend API composition", () => {
     expect(fake.getCalls().syncCatalog).toEqual([{ mode: "apply" }]);
     await expect(
       repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       id: createTestMikaId("admin_audit", 1),
       type: "adminAudit",
       schemaVersion: 1,
+      action: "provider.syncCatalog",
       status: "failed",
       createdAt: TEST_NOW,
       updatedAt: TEST_NOW,
@@ -8745,6 +8786,57 @@ describe("backend API composition", () => {
     await expect(
       repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
     ).resolves.toMatchObject({ status: "completed", record: { action: "order.refund" } });
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 2)),
+    ).resolves.toBeNull();
+  });
+
+  it("replays a completed legacy admin audit without a top-level action", async () => {
+    const repositories = createTestBackendRepositories();
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["refundPayment"],
+    });
+    const order = createOrderDocument();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const refundArgs = {
+      orderId: order.id,
+      amount: 500,
+      reason: "legacy",
+      idempotencyKey: "refund_legacy_key",
+    };
+
+    await repositories.ledger.put(order);
+    await expect(api.admin.orderRefund(refundArgs)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { status: "completed" },
+    });
+    const audit = await repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1));
+    if (!audit) throw new Error("Expected completed admin audit.");
+    const legacyAudit = { ...audit } as AdminAuditDocument & { action?: string };
+    delete legacyAudit.action;
+    await repositories.ops.writeAudit(legacyAudit as AdminAuditDocument);
+
+    await expect(api.admin.orderRefund(refundArgs)).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { status: "completed" },
+    });
+
+    expect(fake.getCalls().refundPayment).toEqual([
+      {
+        orderId: order.id,
+        providerPaymentId: "payment_1",
+        amount: 500,
+        reason: "legacy",
+        idempotencyKey: "refund_legacy_key",
+      },
+    ]);
     await expect(
       repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 2)),
     ).resolves.toBeNull();
@@ -19587,6 +19679,44 @@ function createStorageCollection<TName extends keyof MikaStorageDocuments>(
   return createMemoryStorageCollectionWithConfig<MikaStorageDocuments[TName]>(
     createMikaStorageConfig()[name],
   );
+}
+
+function createAdminAuditTestDocument(
+  overrides: Partial<Omit<AdminAuditDocument, "record">> & {
+    readonly record?: Partial<AdminAuditDocument["record"]>;
+  } = {},
+): AdminAuditDocument {
+  const { record: recordOverrides, ...documentOverrides } = overrides;
+  const id = documentOverrides.id ?? createTestMikaId("admin_audit", 1);
+  const action = documentOverrides.action ?? recordOverrides?.action ?? "order.refund";
+  const status = documentOverrides.status ?? recordOverrides?.status ?? "started";
+  const idempotencyKey =
+    documentOverrides.idempotencyKey ?? recordOverrides?.idempotencyKey ?? "admin_retry_race";
+  const metadata = {
+    idempotencyInputHash: "same_input_hash",
+    ...recordOverrides?.metadata,
+  };
+
+  return {
+    id,
+    type: "adminAudit",
+    schemaVersion: 1,
+    action,
+    status,
+    idempotencyKey,
+    record: {
+      id,
+      action,
+      status,
+      idempotencyKey,
+      createdAt: TEST_NOW,
+      metadata,
+      ...recordOverrides,
+    },
+    createdAt: TEST_NOW,
+    updatedAt: TEST_NOW,
+    ...documentOverrides,
+  };
 }
 
 function isCartRouteResult(

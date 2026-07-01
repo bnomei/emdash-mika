@@ -280,6 +280,13 @@ export interface AccountDeleteEmailRedactionRepositoryInput {
   readonly emailHash?: string;
 }
 
+/** Result of atomically claiming an admin action idempotency key. */
+export type AdminAuditIdempotencyClaimResult =
+  | { readonly status: "claimed"; readonly audit: AdminAuditDocument }
+  | { readonly status: "existing"; readonly audit: AdminAuditDocument };
+
+const ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY = "idempotencyInputHash";
+
 type ReservationEventMutationRepositoryResult<
   TStatus extends "released" | "consumed" | "expired",
 > =
@@ -478,6 +485,32 @@ function documentOfType<TDocument extends TypedDocument, TType extends DocumentT
   type: TType,
 ): DocumentOfType<TDocument, TType> | null {
   return document?.type === type ? (document as DocumentOfType<TDocument, TType>) : null;
+}
+
+function adminAuditInputHashMatches(
+  current: AdminAuditDocument,
+  next: AdminAuditDocument,
+): boolean {
+  const currentHash =
+    current.record.metadata?.[ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY];
+  const nextHash = next.record.metadata?.[ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY];
+
+  return typeof currentHash === "string" && currentHash === nextHash;
+}
+
+function adminAuditHasTopLevelAction(document: AdminAuditDocument): boolean {
+  return typeof (document as { readonly action?: unknown }).action === "string";
+}
+
+function adminAuditWithId(document: AdminAuditDocument, id: MikaId): AdminAuditDocument {
+  return {
+    ...document,
+    id,
+    record: {
+      ...document.record,
+      id,
+    },
+  };
 }
 
 function cartWithCheckoutClaim(
@@ -1590,6 +1623,76 @@ export class OpsRepository {
       (item) => (item.data.record.action === action ? item.data : null),
       { where: { idempotencyKey } },
     );
+  }
+
+  async claimAdminAuditIdempotency(
+    document: AdminAuditDocument,
+  ): Promise<AdminAuditIdempotencyClaimResult> {
+    if (!document.record.idempotencyKey) {
+      await this.writeAudit(document);
+
+      return { status: "claimed", audit: document };
+    }
+
+    const legacy = await this.findAdminAuditByIdempotencyKey(
+      document.record.action,
+      document.record.idempotencyKey,
+    );
+    if (legacy && !adminAuditHasTopLevelAction(legacy)) {
+      const reclaimed = await this.reclaimFailedAdminAuditIdempotency(legacy, document);
+
+      return reclaimed ?? { status: "existing", audit: legacy };
+    }
+
+    try {
+      await this.writeAudit(document);
+
+      return { status: "claimed", audit: document };
+    } catch (error) {
+      const existing = await this.findAdminAuditByIdempotencyKey(
+        document.record.action,
+        document.record.idempotencyKey,
+      );
+      if (existing) {
+        const reclaimed = await this.reclaimFailedAdminAuditIdempotency(existing, document);
+        if (reclaimed) return reclaimed;
+        return { status: "existing", audit: existing };
+      }
+
+      throw error;
+    }
+  }
+
+  private async reclaimFailedAdminAuditIdempotency(
+    existing: AdminAuditDocument,
+    document: AdminAuditDocument,
+  ): Promise<AdminAuditIdempotencyClaimResult | undefined> {
+    if (existing.record.status !== "failed" || !adminAuditInputHashMatches(existing, document)) {
+      return undefined;
+    }
+
+    let reclaimedByThisCall = false;
+    const reclaimed = await this.documents.update(existing.id, (current) => {
+      const currentAudit = documentOfType(current, "adminAudit");
+      if (
+        !currentAudit ||
+        currentAudit.record.status !== "failed" ||
+        !adminAuditInputHashMatches(currentAudit, document)
+      ) {
+        return current;
+      }
+
+      reclaimedByThisCall = true;
+
+      return adminAuditWithId(document, currentAudit.id);
+    });
+    const audit = documentOfType(reclaimed, "adminAudit");
+    if (reclaimedByThisCall && audit?.record.status === "started") {
+      return { status: "claimed", audit };
+    }
+    if (audit) return { status: "existing", audit };
+
+    return undefined;
   }
 
   async findEmail(emailId: MikaId): Promise<EmailDocument | null> {

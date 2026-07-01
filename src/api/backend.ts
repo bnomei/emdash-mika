@@ -21,6 +21,7 @@ import {
   type MikaVerifiedWebhookPayload,
 } from "../provider";
 import type {
+  AdminAuditIdempotencyClaimResult,
   AdjustStockRepositoryResult,
   AdjustStockRepositoryInput,
   AccountDeleteEmailRedactionRepositoryInput,
@@ -492,6 +493,9 @@ export interface MikaOpsRepositoryPort {
     action: string,
     idempotencyKey: string,
   ): Promise<AdminAuditDocument | null>;
+  claimAdminAuditIdempotency(
+    document: AdminAuditDocument,
+  ): Promise<AdminAuditIdempotencyClaimResult>;
   findEmail(emailId: MikaId): Promise<EmailDocument | null>;
   listDueEmails(now: ISODateTime, limit?: number): Promise<MikaDocumentList<EmailDocument>>;
   reclaimExhaustedEmails(
@@ -3052,40 +3056,7 @@ async function runAdminAction<TData>(
   const idempotencyInputHash = record.idempotencyKey
     ? await adminActionIdempotencyInputHash(input, idempotencyInput, auditRecord)
     : undefined;
-  if (record.idempotencyKey) {
-    const prior = await input.repositories.ops.findAdminAuditByIdempotencyKey(
-      record.action,
-      record.idempotencyKey,
-    );
-    if (prior) {
-      const priorInputHash = adminAuditStoredIdempotencyInputHash(prior);
-      if (
-        priorInputHash !== undefined &&
-        idempotencyInputHash !== undefined &&
-        priorInputHash !== idempotencyInputHash
-      ) {
-        return adminIdempotencyInputMismatch(record.action);
-      }
-
-      if (prior.record.status === "completed") {
-        const replay = adminAuditReplayResult<JsonObject>(prior);
-        if (replay !== null) {
-          return { ok: true, status: 200, data: replay as TData };
-        }
-      } else if (prior.record.status === "started") {
-        return {
-          ok: false,
-          status: 409,
-          error: {
-            code: "CONFLICT",
-            message: `Admin action '${record.action}' is already in progress for this idempotency key.`,
-          },
-        };
-      }
-    }
-  }
-
-  const audit = createAdminAuditDocument(input, {
+  let audit = createAdminAuditDocument(input, {
     ...auditRecord,
     status: "started",
     createdAt: record.createdAt ?? currentBackendISODateTime(input),
@@ -3098,7 +3069,15 @@ async function runAdminAction<TData>(
         }
       : {}),
   });
-  await input.repositories.ops.writeAudit(audit);
+  if (record.idempotencyKey) {
+    const claim = await input.repositories.ops.claimAdminAuditIdempotency(audit);
+    if (claim.status === "existing") {
+      return adminIdempotencyClaimResult<TData>(record.action, idempotencyInputHash, claim.audit);
+    }
+    audit = claim.audit;
+  } else {
+    await input.repositories.ops.writeAudit(audit);
+  }
 
   try {
     const data = await action(audit);
@@ -3115,6 +3094,37 @@ async function runAdminAction<TData>(
 
     return failure(message);
   }
+}
+
+function adminIdempotencyClaimResult<TData>(
+  action: string,
+  idempotencyInputHash: string | undefined,
+  prior: AdminAuditDocument,
+): MikaApiResult<TData> {
+  const priorInputHash = adminAuditStoredIdempotencyInputHash(prior);
+  if (
+    priorInputHash !== undefined &&
+    idempotencyInputHash !== undefined &&
+    priorInputHash !== idempotencyInputHash
+  ) {
+    return adminIdempotencyInputMismatch(action);
+  }
+
+  if (prior.record.status === "completed") {
+    const replay = adminAuditReplayResult<JsonObject>(prior);
+    if (replay !== null) {
+      return { ok: true, status: 200, data: replay as TData };
+    }
+  }
+
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "CONFLICT",
+      message: `Admin action '${action}' is already in progress for this idempotency key.`,
+    },
+  };
 }
 
 function missingTarget(targetType: string, field: string, value: string): MikaApiFailure {
@@ -9366,6 +9376,7 @@ function createAdminAuditDocument(
     type: "adminAudit",
     schemaVersion: 1,
     actorId: record.actorId,
+    action: record.action,
     targetType: record.targetType,
     targetId: record.targetId,
     status: record.status,

@@ -23,6 +23,7 @@ import {
 import { mikaActionTreeSpec, type MikaActionTreeSpec } from "./api/action-tree";
 import { runMikaOperation } from "./api/operation-runner";
 import type { MikaOperationPolicy } from "./api/operation-policy";
+import { mikaOperationInputWithIdempotencyContext } from "./api/route-handlers";
 import { resolveMikaApiOverrides, resolveMikaOperationPolicy } from "./api/runtime-api";
 import { createMikaApi, type MikaApi, type MikaApiOverrides } from "./api/server";
 import { z } from "./api/validation";
@@ -187,7 +188,11 @@ export function createMikaActions(options: MikaActionsOptions = {}): MikaActions
           operation: definition.operation,
           api,
           ctx: requestContext,
-          input: requestInput,
+          input: mikaOperationInputWithIdempotencyContext(
+            definition.operation,
+            requestInput,
+            requestContext.idempotencyKey,
+          ),
           operationPolicy,
         }),
       );

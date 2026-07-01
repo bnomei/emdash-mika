@@ -270,7 +270,7 @@ export type WorkflowDocument = RecordBackedDocument<
 export type AdminAuditDocument = RecordBackedDocument<
   "adminAudit",
   AdminAuditEventRecord,
-  "actorId" | "targetType" | "targetId" | "status" | "idempotencyKey"
+  "actorId" | "action" | "targetType" | "targetId" | "status" | "idempotencyKey"
 >;
 
 /** Partition of document unions by storage collection name. */
