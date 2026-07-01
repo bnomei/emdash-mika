@@ -243,6 +243,7 @@ export interface WebhookEventRecord {
   readonly processedAt?: ISODateTime;
   readonly lastError?: string;
   readonly rawPayloadJson?: JsonObject;
+  readonly normalizedPayloadJson?: JsonObject;
   readonly rawPayloadPurgedAt?: ISODateTime;
   readonly relatedCustomerId?: MikaId;
   readonly relatedOrderId?: MikaId;

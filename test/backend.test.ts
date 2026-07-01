@@ -473,13 +473,50 @@ describe("backend test storage helpers", () => {
   it("purges stale raw webhook provider payloads without dropping normalized event rows", async () => {
     const clock = createTestClock();
     const ops = new OpsRepository(createStorageCollection("ops"));
-    const stale = createWebhookDocument({
+    const staleProcessed = createWebhookDocument({
       id: createTestMikaId("webhook", 1),
+      status: "processed",
       receivedAt: clock.isoAt(-15 * 24 * 60 * 60 * 1000),
       record: {
         id: createTestMikaId("webhook", 1),
+        status: "processed",
         receivedAt: clock.isoAt(-15 * 24 * 60 * 60 * 1000),
         rawPayloadJson: { providerPayload: { marker: "stale" } },
+      },
+    });
+    const staleReplayable = createWebhookDocument({
+      id: createTestMikaId("webhook", 4),
+      providerEventId: "event_4",
+      payloadHash: "hash_4",
+      status: "failed",
+      receivedAt: clock.isoAt(-16 * 24 * 60 * 60 * 1000),
+      record: {
+        id: createTestMikaId("webhook", 4),
+        providerEventId: "event_4",
+        payloadHash: "hash_4",
+        status: "failed",
+        receivedAt: clock.isoAt(-16 * 24 * 60 * 60 * 1000),
+        rawPayloadJson: { providerPayload: { marker: "replayable" } },
+      },
+    });
+    const normalizedReplayable = createWebhookDocument({
+      id: createTestMikaId("webhook", 5),
+      providerEventId: "event_5",
+      payloadHash: "hash_5",
+      status: "failed",
+      receivedAt: clock.isoAt(-17 * 24 * 60 * 60 * 1000),
+      record: {
+        id: createTestMikaId("webhook", 5),
+        providerEventId: "event_5",
+        payloadHash: "hash_5",
+        status: "failed",
+        receivedAt: clock.isoAt(-17 * 24 * 60 * 60 * 1000),
+        rawPayloadJson: { providerPayload: { marker: "normalized" } },
+        normalizedPayloadJson: {
+          kind: "payment",
+          provider: TEST_PROVIDER,
+          type: "payment.completed",
+        },
       },
     });
     const fresh = createWebhookDocument({
@@ -509,20 +546,39 @@ describe("backend test storage helpers", () => {
         rawPayloadPurgedAt: clock.isoAt(-1_000),
       },
     });
-    await ops.put(stale);
+    await ops.put(staleProcessed);
+    await ops.put(staleReplayable);
+    await ops.put(normalizedReplayable);
     await ops.put(fresh);
     await ops.put(alreadyPurged);
 
     await expect(ops.purgeWebhookRawPayloads(clock.isoAt(-14 * 24 * 60 * 60 * 1000), TEST_NOW))
       .resolves.toEqual({
-        scanned: 1,
-        purged: 1,
+        scanned: 2,
+        purged: 2,
       });
-    await expect(ops.findWebhookById(stale.id)).resolves.toMatchObject({
-      id: stale.id,
-      status: "received",
+    await expect(ops.findWebhookById(staleProcessed.id)).resolves.toMatchObject({
+      id: staleProcessed.id,
+      status: "processed",
       record: {
         rawPayloadJson: undefined,
+        rawPayloadPurgedAt: TEST_NOW,
+      },
+    });
+    await expect(ops.findWebhookById(staleReplayable.id)).resolves.toMatchObject({
+      record: {
+        rawPayloadJson: { providerPayload: { marker: "replayable" } },
+        rawPayloadPurgedAt: undefined,
+      },
+    });
+    await expect(ops.findWebhookById(normalizedReplayable.id)).resolves.toMatchObject({
+      record: {
+        rawPayloadJson: undefined,
+        normalizedPayloadJson: {
+          kind: "payment",
+          provider: TEST_PROVIDER,
+          type: "payment.completed",
+        },
         rawPayloadPurgedAt: TEST_NOW,
       },
     });
@@ -13422,13 +13478,16 @@ describe("backend API composition", () => {
             parsed: { delivery: "event_subscription_replay" },
           }),
         parseWebhookEvent: async (verified) =>
-          createSubscriptionWebhookEvent(verified, {
-            providerEventId: "event_subscription_replay",
-            providerSubscriptionId: "provider_subscription_replay",
-            providerCustomerId: "provider_customer_replay",
-            providerPriceId: "price_replay",
-            status: "active",
-          }),
+          ({
+            ...createSubscriptionWebhookEvent(verified, {
+              providerEventId: "event_subscription_replay",
+              providerSubscriptionId: "provider_subscription_replay",
+              providerCustomerId: "provider_customer_replay",
+              providerPriceId: "price_replay",
+              status: "active",
+            }),
+            raw: { providerPayload: { secret: "raw-provider-replay-data" } },
+          }) satisfies MikaProviderWebhookEvent,
       },
     });
     const api = createMikaBackendApi(
@@ -13447,6 +13506,14 @@ describe("backend API composition", () => {
       status: "failed",
       record: {
         attemptCount: 1,
+        normalizedPayloadJson: {
+          kind: "subscription",
+          provider: "stripe",
+          providerEventId: "event_subscription_replay",
+          providerSubscriptionId: "provider_subscription_replay",
+          providerCustomerId: "provider_customer_replay",
+          providerPriceId: "price_replay",
+        },
         rawPayloadJson: {
           normalizedEvent: {
             kind: "subscription",
@@ -13455,10 +13522,41 @@ describe("backend API composition", () => {
             providerSubscriptionId: "provider_subscription_replay",
             providerCustomerId: "provider_customer_replay",
             providerPriceId: "price_replay",
+            raw: { providerPayload: { secret: "raw-provider-replay-data" } },
           },
         },
       },
     });
+    const failedWebhook = await opsCollection.get("webhook_1");
+    if (!failedWebhook || failedWebhook.type !== "webhook") {
+      throw new Error("Expected failed replay webhook fixture.");
+    }
+    expect(failedWebhook.record.normalizedPayloadJson).not.toHaveProperty("raw");
+
+    await expect(repositories.ops.purgeWebhookRawPayloads(TEST_NOW, TEST_NOW)).resolves.toEqual({
+      scanned: 1,
+      purged: 1,
+    });
+    await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({
+      status: "failed",
+      record: {
+        rawPayloadJson: undefined,
+        normalizedPayloadJson: {
+          kind: "subscription",
+          provider: "stripe",
+          providerEventId: "event_subscription_replay",
+          providerSubscriptionId: "provider_subscription_replay",
+          providerCustomerId: "provider_customer_replay",
+          providerPriceId: "price_replay",
+        },
+        rawPayloadPurgedAt: TEST_NOW,
+      },
+    });
+    const purgedWebhook = await opsCollection.get("webhook_1");
+    if (!purgedWebhook || purgedWebhook.type !== "webhook") {
+      throw new Error("Expected purged replay webhook fixture.");
+    }
+    expect(purgedWebhook.record.normalizedPayloadJson).not.toHaveProperty("raw");
 
     await repositories.catalog.put(
       createCatalogItemDocument({
@@ -13651,6 +13749,7 @@ describe("backend API composition", () => {
         ...webhook.record,
         status: "failed",
         rawPayloadJson: { providerPayload: { delivery: "malformed-replay" } },
+        normalizedPayloadJson: undefined,
       },
     });
 
@@ -18956,6 +19055,7 @@ function createWebhookDocument(
     processedAt: recordOverrides.processedAt,
     lastError: recordOverrides.lastError,
     rawPayloadJson,
+    normalizedPayloadJson: recordOverrides.normalizedPayloadJson,
     rawPayloadPurgedAt: recordOverrides.rawPayloadPurgedAt,
     relatedCustomerId: recordOverrides.relatedCustomerId,
     relatedOrderId: recordOverrides.relatedOrderId,

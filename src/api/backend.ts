@@ -4270,6 +4270,7 @@ function createWebhookDocument(
     attemptCount: 0,
     receivedAt: ctx.now,
     rawPayloadJson: storedWebhookPayload(verified, event),
+    normalizedPayloadJson: webhookEventToJson(event, { includeRaw: false }),
   };
 
   return {
@@ -4295,11 +4296,14 @@ function storedWebhookPayload(
   return jsonObject({
     ...(verified.parsed ? { providerPayload: verified.parsed } : {}),
     ...(event.raw ? { providerPayload: verified.parsed ?? event.raw } : {}),
-    normalizedEvent: webhookEventToJson(event),
+    normalizedEvent: webhookEventToJson(event, { includeRaw: true }),
   });
 }
 
-function webhookEventToJson(event: MikaProviderWebhookEvent): JsonObject {
+function webhookEventToJson(
+  event: MikaProviderWebhookEvent,
+  options: { readonly includeRaw: boolean },
+): JsonObject {
   switch (event.kind) {
     case "payment":
       return jsonObject({
@@ -4326,10 +4330,10 @@ function webhookEventToJson(event: MikaProviderWebhookEvent): JsonObject {
               discount: event.totals.discount ? moneyToJson(event.totals.discount) : undefined,
               tax: event.totals.tax ? moneyToJson(event.totals.tax) : undefined,
               total: event.totals.total ? moneyToJson(event.totals.total) : undefined,
-            })
+          })
           : undefined,
         invoiceUrl: event.invoiceUrl,
-        raw: event.raw,
+        raw: options.includeRaw ? event.raw : undefined,
       });
     case "subscription":
       return jsonObject({
@@ -4344,7 +4348,7 @@ function webhookEventToJson(event: MikaProviderWebhookEvent): JsonObject {
         currentPeriodStart: event.currentPeriodStart,
         currentPeriodEnd: event.currentPeriodEnd,
         cancelAtPeriodEnd: event.cancelAtPeriodEnd,
-        raw: event.raw,
+        raw: options.includeRaw ? event.raw : undefined,
       });
     case "unknown":
       return jsonObject({
@@ -4352,7 +4356,7 @@ function webhookEventToJson(event: MikaProviderWebhookEvent): JsonObject {
         provider: event.provider,
         providerEventId: event.providerEventId,
         type: event.type,
-        raw: event.raw,
+        raw: options.includeRaw ? event.raw : undefined,
       });
   }
 }
@@ -4415,7 +4419,10 @@ function isLegacyQueuedWebhookStatus(status: unknown): status is "queued" {
 }
 
 function storedWebhookEvent(webhook: WebhookDocument): MikaProviderWebhookEvent | null {
-  const payload = webhook.record.rawPayloadJson;
+  const rawPayload = webhook.record.rawPayloadJson;
+  const payload =
+    webhook.record.normalizedPayloadJson ??
+    (rawPayload ? (jsonChild(rawPayload, "normalizedEvent") ?? rawPayload) : undefined);
   if (!payload) return null;
 
   const eventPayload =

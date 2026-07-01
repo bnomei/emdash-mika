@@ -1998,7 +1998,8 @@ function webhookRawPayloadIsPurgeable(webhook: WebhookDocument, cutoff: ISODateT
   return (
     webhook.record.receivedAt <= cutoff &&
     webhook.record.rawPayloadJson !== undefined &&
-    webhook.record.rawPayloadPurgedAt === undefined
+    webhook.record.rawPayloadPurgedAt === undefined &&
+    (webhook.status === "processed" || webhook.record.normalizedPayloadJson !== undefined)
   );
 }
 
