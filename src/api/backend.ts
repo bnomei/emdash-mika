@@ -3341,6 +3341,8 @@ async function queueDefaultMagicLinkRequestedEmail(
       purpose: context.purpose,
       expiresAt: context.expiresAt,
       link: context.link,
+      ...(context.emailHash ? { emailHash: context.emailHash } : {}),
+      ...(context.userId ? { userId: context.userId } : {}),
       ...(context.returnTo ? { returnTo: context.returnTo } : {}),
     },
   };
@@ -6421,6 +6423,8 @@ async function queueDefaultOrderConfirmedEmail(
     metadata: {
       orderLineIds: context.fulfilledLines.map((line) => line.lineId),
       fulfillmentKinds: [...context.fulfillmentKinds],
+      ...(context.emailHash ? { emailHash: context.emailHash } : {}),
+      ...(context.userId ? { userId: context.userId } : {}),
     },
   };
   const document: EmailDocument = {
