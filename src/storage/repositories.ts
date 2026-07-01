@@ -1950,6 +1950,52 @@ export class OpsRepository {
     return redacted;
   }
 
+  async redactAccountExportsForAccountDelete(
+    input: AccountDeleteEmailRedactionRepositoryInput,
+  ): Promise<number> {
+    const candidates = await listByTypeCandidates(
+      this.documents,
+      "accountExport",
+      1000,
+      {
+        orderBy: { createdAt: "asc" },
+      },
+      (document) => accountExportMatchesAccountDeleteIdentity(document, input),
+    );
+    let redacted = 0;
+
+    for (const item of candidates.items) {
+      const updated = await this.documents.update(item.id, (current) => {
+        const document = documentOfType(current, "accountExport");
+        if (!document || !accountExportMatchesAccountDeleteIdentity(document, input)) return null;
+        if (document.record.artifactRef === undefined && document.status === "expired") return null;
+
+        return {
+          ...document,
+          status: "expired",
+          expiresAt: input.now,
+          updatedAt: input.now,
+          record: {
+            ...document.record,
+            status: "expired",
+            expiresAt: input.now,
+            artifactRef: undefined,
+            downloadTokenHash: undefined,
+            lastError: "Redacted after account deletion.",
+            metadata: {
+              ...document.record.metadata,
+              redactedAt: input.now,
+            },
+          },
+        };
+      });
+
+      if (updated) redacted += 1;
+    }
+
+    return redacted;
+  }
+
   /** @deprecated Use workflow-specific leasing APIs for webhook fulfillment work. */
   async listWebhookFailures(now: string, limit = 50): Promise<DocumentList<WebhookDocument>> {
     return this.documents.listByType("webhook", {
@@ -2172,6 +2218,19 @@ function emailMatchesAccountDeleteIdentity(
     (identity.customerId && record.customerId === identity.customerId) ||
     (identity.userId && record.metadata?.["userId"] === identity.userId) ||
     (identity.emailHash && record.metadata?.["emailHash"] === identity.emailHash),
+  );
+}
+
+function accountExportMatchesAccountDeleteIdentity(
+  document: AccountExportDocument,
+  identity: AccountDeleteEmailRedactionRepositoryInput,
+): boolean {
+  const record = document.record;
+
+  return Boolean(
+    (identity.customerId && record.customerId === identity.customerId) ||
+    (identity.userId && record.userId === identity.userId) ||
+    (identity.emailHash && record.emailHash === identity.emailHash),
   );
 }
 

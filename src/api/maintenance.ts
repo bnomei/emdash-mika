@@ -84,6 +84,7 @@ export type MikaMaintenanceAccountDeleteRequestItem =
       readonly tokensDeleted: number;
       readonly reservationsReleased: number;
       readonly emailsRedacted: number;
+      readonly accountExportsRedacted: number;
       readonly customerAnonymized: boolean;
       readonly ordersAnonymized: number;
       readonly entitlementsAnonymized: number;
@@ -379,6 +380,14 @@ async function processQueuedAccountDeleteRequests(input: {
           ...(request.emailHash ? { emailHash: request.emailHash } : {}),
         }),
       );
+      const accountExportsRedacted = await runStep("accountExportsRedacted", "number", () =>
+        input.repositories.ops.redactAccountExportsForAccountDelete({
+          now: input.now,
+          ...(request.customerId ? { customerId: request.customerId } : {}),
+          ...(request.userId ? { userId: request.userId } : {}),
+          ...(request.emailHash ? { emailHash: request.emailHash } : {}),
+        }),
+      );
       const ordersAnonymized = await runStep("ordersAnonymized", "number", async () => {
         if (!sentinel) return 0;
         const result = await input.repositories.ledger.anonymizeOrdersForAccountDelete({
@@ -431,6 +440,7 @@ async function processQueuedAccountDeleteRequests(input: {
             tokensDeleted,
             reservationsReleased,
             emailsRedacted,
+            accountExportsRedacted,
             customerAnonymized,
             ordersAnonymized,
             entitlementsAnonymized,
@@ -448,6 +458,7 @@ async function processQueuedAccountDeleteRequests(input: {
         tokensDeleted,
         reservationsReleased,
         emailsRedacted,
+        accountExportsRedacted,
         customerAnonymized,
         ordersAnonymized,
         entitlementsAnonymized,
@@ -479,6 +490,7 @@ type AccountDeleteMaintenanceStepName =
   | "tokensDeleted"
   | "reservationsReleased"
   | "emailsRedacted"
+  | "accountExportsRedacted"
   | "ordersAnonymized"
   | "entitlementsAnonymized"
   | "licensesAnonymized"

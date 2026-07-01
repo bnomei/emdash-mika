@@ -518,6 +518,9 @@ export interface MikaOpsRepositoryPort {
   redactQueuedFailedEmailsForAccountDelete(
     input: AccountDeleteEmailRedactionRepositoryInput,
   ): Promise<number>;
+  redactAccountExportsForAccountDelete(
+    input: AccountDeleteEmailRedactionRepositoryInput,
+  ): Promise<number>;
   /** @deprecated Use workflow-specific leasing APIs for webhook fulfillment work. */
   listWebhookFailures(now: string, limit?: number): Promise<MikaDocumentList<WebhookDocument>>;
   writeAudit(document: AdminAuditDocument): Promise<void>;
