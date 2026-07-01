@@ -13,6 +13,7 @@ import { mikaTemplateRoutes } from "./routes";
 
 export { mikaHiddenInput, mikaReturnToInput } from "@bnomei/emdash-mika/astro";
 
+/** Redirect hidden inputs with template checkout success/cancel fallbacks for copied Astro forms. */
 export function mikaRedirectInputs(
   input: MikaRedirectInputsInput,
   options: MikaRedirectInputsOptions = {},

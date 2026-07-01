@@ -367,6 +367,7 @@ export const agentProofRefSchema = z.discriminatedUnion("kind", [
   }),
 ]) satisfies z.ZodType<MikaAgentProofRef>;
 
+/** Checkout handoff fields plus quote binding and agent proof refs for {@link CheckoutPreviewInput}. */
 export const checkoutPreviewInputSchema = startCheckoutInputSchema.extend({
   quoteId: optionalMikaIdSchema,
   proofRefs: z.array(agentProofRefSchema).optional(),
@@ -396,6 +397,7 @@ export const magicLinkRequestInputSchema = z.object({
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<MagicLinkRequestInput>;
 
+/** One-time token and return path to complete magic-link authentication. */
 export const magicLinkVerifyInputSchema = z.object({
   token: requiredStringSchema,
   returnTo: optionalStringSchema,
@@ -433,6 +435,7 @@ export const providerHealthInputSchema = z.object({
   provider: optionalProviderNameSchema,
 }) satisfies z.ZodType<ProviderHealthInput>;
 
+/** Provider, sync mode, scope, and optional catalog entry for reconciliation. */
 export const providerSyncInputSchema = z
   .object({
     provider: optionalProviderNameSchema,
@@ -450,6 +453,7 @@ export const providerSyncInputSchema = z
     }
   }) satisfies z.ZodType<ProviderSyncInput>;
 
+/** Stock item delta, reason, and idempotency metadata for admin inventory changes. */
 export const stockAdjustInputSchema = z.object({
   stockItemId: mikaIdSchema,
   quantityDelta: integerSchema,
@@ -459,14 +463,17 @@ export const stockAdjustInputSchema = z.object({
   metadata: optionalJsonObjectSchema,
 }) satisfies z.ZodType<StockAdjustInput>;
 
+/** Optional clock override for expired reservation maintenance sweeps. */
 export const releaseExpiredReservationsInputSchema = z.object({
   now: optionalISODateTimeSchema,
 }) satisfies z.ZodType<ReleaseExpiredReservationsInput>;
 
+/** Stored webhook event identifier for admin replay. */
 export const webhookReplayInputSchema = z.object({
   webhookId: mikaIdSchema,
 }) satisfies z.ZodType<WebhookReplayInput>;
 
+/** Order, optional partial amount, reason, and idempotency key for refunds. */
 export const orderRefundInputSchema = z.object({
   orderId: mikaIdSchema,
   amount: optionalAmountSchema,
@@ -474,12 +481,14 @@ export const orderRefundInputSchema = z.object({
   idempotencyKey: optionalStringSchema,
 }) satisfies z.ZodType<OrderRefundInput>;
 
+/** Order and optional reason with idempotency for cancellation. */
 export const orderCancelInputSchema = z.object({
   orderId: mikaIdSchema,
   reason: optionalStringSchema,
   idempotencyKey: optionalStringSchema,
 }) satisfies z.ZodType<OrderCancelInput>;
 
+/** Entitlement key and customer identity for manual access grants. */
 export const entitlementGrantInputSchema = z.object({
   entitlementKey: requiredStringSchema,
   customerId: optionalMikaIdSchema,
@@ -489,6 +498,7 @@ export const entitlementGrantInputSchema = z.object({
   idempotencyKey: optionalStringSchema,
 }) satisfies z.ZodType<EntitlementGrantInput>;
 
+/** Entitlement or customer identifiers and reason for access revocation. */
 export const entitlementRevokeInputSchema = z.object({
   entitlementId: optionalMikaIdSchema,
   entitlementKey: optionalStringSchema,
@@ -497,17 +507,20 @@ export const entitlementRevokeInputSchema = z.object({
   idempotencyKey: optionalStringSchema,
 }) satisfies z.ZodType<EntitlementRevokeInput>;
 
+/** Queued email and idempotency key for delivery retry. */
 export const emailResendInputSchema = z.object({
   emailId: mikaIdSchema,
   idempotencyKey: optionalStringSchema,
 }) satisfies z.ZodType<EmailResendInput>;
 
+/** License identifier and reason for key revocation. */
 export const licenseRevokeInputSchema = z.object({
   licenseId: mikaIdSchema,
   reason: optionalStringSchema,
   idempotencyKey: optionalStringSchema,
 }) satisfies z.ZodType<LicenseRevokeInput>;
 
+/** Order or entitlement anchors and expiry for issuing download tokens. */
 export const downloadIssueInputSchema = z.object({
   entitlementId: optionalMikaIdSchema,
   orderId: optionalMikaIdSchema,
@@ -515,8 +528,6 @@ export const downloadIssueInputSchema = z.object({
   expiresAt: optionalISODateTimeSchema,
   idempotencyKey: optionalStringSchema,
 }) satisfies z.ZodType<DownloadIssueInput>;
-
-/** Shared parsers for operation handlers, URL search params, and HTML form posts. */
 
 /** Parses unknown input; returns a 422 {@link MikaApiResult} envelope on schema failure. */
 export function parseMikaInput<T>(schema: z.ZodType<T>, input: unknown): MikaValidationResult<T> {

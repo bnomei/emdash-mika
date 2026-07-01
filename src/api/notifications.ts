@@ -204,7 +204,7 @@ export type MikaNotificationHook = (
   intent: MikaNotificationIntent,
 ) => MikaNotificationHookResult | void | Promise<MikaNotificationHookResult | void>;
 
-/** Invokes the host hook; runs the default handler when the hook does not mark `handled`. */
+/** Invokes the host hook; runs the default handler unless the hook returns `handled: true`. */
 export async function emitMikaNotification(
   hook: MikaNotificationHook | undefined,
   intent: MikaNotificationIntent,
@@ -214,6 +214,7 @@ export async function emitMikaNotification(
   try {
     result = await hook?.(intent);
   } catch {
+    // Hook throws do not suppress default delivery; only an explicit handled result does.
     result = undefined;
   }
   if (result?.handled === true) return;

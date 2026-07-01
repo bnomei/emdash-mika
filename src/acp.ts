@@ -946,6 +946,7 @@ async function handleAcpComplete(
   return acpJson(request, await recordToAcpSession(options, request, completed), 200);
 }
 
+// checkout.start can return terminal failure states that must block ACP complete with 409.
 function acpCheckoutStartTerminalStatus(status: CheckoutSessionDTO["status"]): boolean {
   return (
     status === "failed" ||
