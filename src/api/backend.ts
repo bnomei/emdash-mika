@@ -6165,7 +6165,8 @@ async function fulfillPaidOrderLine(
         {
           id: fulfillmentDocumentId("workflow", order.id, line.id, "notification_license_issued"),
           kind: "license.issued",
-          subjectId: order.id,
+          subjectType: "orderLine",
+          subjectId: line.id,
           idempotencyKey: `license.issued:${order.id}:${line.id}`,
         },
         {
@@ -6460,7 +6461,8 @@ async function emitOrderDownloadReadyNotifications(
         {
           id: fulfillmentDocumentId("workflow", downloadRef, "notification_download_ready"),
           kind: "download.ready",
-          subjectId: order.id,
+          subjectType: "orderDownload",
+          subjectId: createMikaId(downloadRef),
           idempotencyKey: `download.ready:${downloadRef}`,
         },
         {
@@ -6568,6 +6570,7 @@ async function emitFulfillmentNotificationOnce<TKind extends MikaNotificationKin
   marker: {
     readonly id: MikaId;
     readonly kind: TKind;
+    readonly subjectType: string;
     readonly subjectId: MikaId;
     readonly idempotencyKey: string;
   },
@@ -6576,7 +6579,7 @@ async function emitFulfillmentNotificationOnce<TKind extends MikaNotificationKin
   const lease = await acquireNotificationMarker(input, ctx, {
     id: marker.id,
     kind: marker.kind,
-    subjectType: "order",
+    subjectType: marker.subjectType,
     subjectId: marker.subjectId,
     idempotencyKey: marker.idempotencyKey,
   });
