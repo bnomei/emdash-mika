@@ -4343,6 +4343,7 @@ function webhookEventToJson(
         providerCheckoutId: event.providerCheckoutId,
         providerPaymentId: event.providerPaymentId,
         providerOrderId: event.providerOrderId,
+        providerSubscriptionId: event.providerSubscriptionId,
         customer: event.customer
           ? jsonObject({
               email: event.customer.email,
@@ -4473,6 +4474,7 @@ function storedWebhookEvent(webhook: WebhookDocument): MikaProviderWebhookEvent 
         providerCheckoutId: stringChild(eventPayload, "providerCheckoutId"),
         providerPaymentId: stringChild(eventPayload, "providerPaymentId"),
         providerOrderId: stringChild(eventPayload, "providerOrderId"),
+        providerSubscriptionId: stringChild(eventPayload, "providerSubscriptionId"),
         customer: customerChild(eventPayload, "customer"),
         lines: providerLineChildren(eventPayload, "lines"),
         totals: totalsChild(eventPayload, "totals"),
@@ -4997,6 +4999,14 @@ async function processPaymentWebhook(
       findPaymentEventCheckout(input, event),
     );
     if (!checkout) {
+      if (event.providerSubscriptionId) {
+        // A paid subscription-renewal invoice has no Mika checkout; the
+        // subscription lifecycle is reconciled from customer.subscription.*
+        // events, so acknowledge it instead of flagging a processing failure.
+        return runWorkflowStep("mark_webhook", () =>
+          markWebhookProcessed(input, webhook, ctx.now, {}, { strict: true }),
+        );
+      }
       return runWorkflowStep("mark_webhook", () =>
         markWebhookFailed(
           input,

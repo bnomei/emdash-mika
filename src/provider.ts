@@ -210,6 +210,7 @@ export interface MikaProviderPaymentEvent {
   readonly providerCheckoutId?: string;
   readonly providerPaymentId?: string;
   readonly providerOrderId?: string;
+  readonly providerSubscriptionId?: string;
   readonly customer?: CheckoutCustomerInput;
   readonly lines: readonly MikaProviderLineItem[];
   readonly totals?: {

@@ -800,6 +800,9 @@ function parseStripeWebhookEvent(
       type,
       providerPaymentId: stringChild(object, "payment_intent") ?? stringChild(object, "id"),
       providerOrderId: stringChild(object, "id"),
+      ...(stringChild(object, "subscription")
+        ? { providerSubscriptionId: stringChild(object, "subscription") }
+        : {}),
       customer: {
         email: stringChild(object, "customer_email"),
       },
