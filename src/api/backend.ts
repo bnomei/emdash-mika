@@ -115,7 +115,12 @@ import type {
   WorkflowDocument,
   WishlistDocument,
 } from "../types/documents";
-import { createCurrencyCode, createISODateTime, createMikaId } from "../types/primitives";
+import {
+  createCurrencyCode,
+  createISODateTime,
+  createMikaId,
+  isJsonObject,
+} from "../types/primitives";
 import type {
   CheckoutStatus,
   ContentRef,
@@ -296,6 +301,26 @@ export interface MikaSessionRepositoryPort {
     customerId: MikaId,
     currency: string,
   ): Promise<CartDocument | null>;
+  listCheckoutPendingCartsBySession(
+    sessionId: string,
+    limit?: number,
+  ): Promise<MikaDocumentList<CartDocument>>;
+  listCheckoutPendingCartsByCustomer(
+    customerId: MikaId,
+    limit?: number,
+  ): Promise<MikaDocumentList<CartDocument>>;
+  claimCartForCheckout(input: {
+    readonly cartId: MikaId;
+    readonly checkoutId: MikaId;
+    readonly expectedUpdatedAt: ISODateTime;
+    readonly claimExpiresAt: ISODateTime;
+    readonly now: ISODateTime;
+  }): Promise<CartDocument | null>;
+  releaseCartCheckoutClaim(input: {
+    readonly cartId: MikaId;
+    readonly checkoutId: MikaId;
+    readonly now: ISODateTime;
+  }): Promise<CartDocument | null>;
   findWishlistBySession(sessionId: string): Promise<WishlistDocument | null>;
   findWishlistByCustomer(customerId: MikaId): Promise<WishlistDocument | null>;
   findCheckoutByProvider(
@@ -356,6 +381,11 @@ export interface MikaAccountRepositoryPort {
     readonly customerId?: MikaId;
     readonly emailHash?: string;
     readonly userId?: string;
+    readonly sentinel: string;
+    readonly now: ISODateTime;
+  }): Promise<{ readonly anonymized: number }>;
+  anonymizeLicensesForAccountDelete(input: {
+    readonly customerId?: MikaId;
     readonly sentinel: string;
     readonly now: ISODateTime;
   }): Promise<{ readonly anonymized: number }>;
@@ -437,6 +467,11 @@ export interface MikaOpsRepositoryPort {
     limit?: number,
     kind?: WorkflowDocument["kind"],
   ): Promise<{ readonly scanned: number; readonly reclaimed: number }>;
+  purgeWebhookRawPayloads(
+    cutoff: ISODateTime,
+    now: ISODateTime,
+    limit?: number,
+  ): Promise<{ readonly scanned: number; readonly purged: number }>;
   tryLeaseWorkflow(input: WorkflowLeaseRepositoryInput): Promise<WorkflowDocument | null>;
   startWorkflowStep(input: WorkflowStepRepositoryInput): Promise<WorkflowDocument | null>;
   completeWorkflowStep(input: WorkflowStepRepositoryInput): Promise<WorkflowDocument | null>;
@@ -457,6 +492,10 @@ export interface MikaOpsRepositoryPort {
   ): Promise<AdminAuditDocument | null>;
   findEmail(emailId: MikaId): Promise<EmailDocument | null>;
   listDueEmails(now: ISODateTime, limit?: number): Promise<MikaDocumentList<EmailDocument>>;
+  reclaimExhaustedEmails(
+    now: ISODateTime,
+    limit?: number,
+  ): Promise<{ readonly scanned: number; readonly reclaimed: number }>;
   tryLeaseEmail(input: EmailLeaseRepositoryInput): Promise<EmailDocument | null>;
   completeEmail(input: EmailCompleteRepositoryInput): Promise<EmailDocument | null>;
   markEmailDelivered(input: EmailDeliveredRepositoryInput): Promise<EmailDocument | null>;
@@ -525,6 +564,18 @@ export interface MikaEphemeralRepositoryPort {
     readonly now: ISODateTime;
     readonly data?: JsonObject;
   }): Promise<EphemeralRecord>;
+  tryAcquireLock(input: {
+    readonly key: string;
+    readonly owner: string;
+    readonly subjectHash?: string;
+    readonly expiresAt: ISODateTime;
+    readonly now: ISODateTime;
+  }): Promise<EphemeralRecord | null>;
+  releaseLock(input: {
+    readonly key: string;
+    readonly owner: string;
+    readonly now: ISODateTime;
+  }): Promise<boolean>;
   consumeToken(key: string, now: ISODateTime): Promise<boolean>;
   /**
    * Reverts a token consumed by {@link consumeToken} back to `pending` (only if it is still
@@ -883,6 +934,17 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
             };
           }
 
+          if (result.status === "would_undercut_reserved") {
+            return {
+              ok: false,
+              status: 409,
+              error: {
+                code: "CONFLICT",
+                message: `Stock adjustment for '${adjustment.stockItemId}' would undercut active reservations.`,
+              },
+            };
+          }
+
           if (result.status === "idempotency_conflict") {
             return {
               ok: false,
@@ -1007,6 +1069,10 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
       if (!resolved.ok) return resolved;
 
       const existing = await findOpenCart(input, ctx, currency);
+      if (existing) {
+        const writeBlocked = cartWriteBlocked(existing);
+        if (writeBlocked) return writeBlocked;
+      }
       const currentItems = existing?.aggregate.items ?? [];
       const existingLine = currentItems.find((line) => isEquivalentCartLine(line, resolved.line));
       const nextQuantity = (existingLine?.quantity ?? 0) + resolved.line.quantity;
@@ -1036,6 +1102,8 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
       }
 
       const document = await findOrCreateOpenCart(input, ctx);
+      const writeBlocked = cartWriteBlocked(document);
+      if (writeBlocked) return writeBlocked;
       const line = document.aggregate.items.find((item) => item.id === itemInput.lineId);
       if (!line) {
         return cartLineNotFound(itemInput.lineId);
@@ -1069,6 +1137,8 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
     },
     remove: async (ctx, itemInput) => {
       const document = await findOrCreateOpenCart(input, ctx);
+      const writeBlocked = cartWriteBlocked(document);
+      if (writeBlocked) return writeBlocked;
       if (!document.aggregate.items.some((item) => item.id === itemInput.lineId)) {
         return cartLineNotFound(itemInput.lineId);
       }
@@ -1089,6 +1159,8 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
         ? await findOwnedOpenCartById(input, ctx, mergeInput.targetCartId, "targetCartId")
         : { ok: true as const, cart: await findOrCreateOpenCart(input, ctx) };
       if (!targetResult.ok) return targetResult;
+      const writeBlocked = cartWriteBlocked(targetResult.cart);
+      if (writeBlocked) return writeBlocked;
       if (targetResult.cart.aggregate.currency !== currency) {
         return validationFailed(
           "targetCartId",
@@ -1147,6 +1219,8 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
         ? await findOwnedOpenCartById(input, ctx, couponInput.cartId, "cartId")
         : { ok: true as const, cart: await findOrCreateOpenCart(input, ctx) };
       if (!cartResult.ok) return cartResult;
+      const writeBlocked = cartWriteBlocked(cartResult.cart);
+      if (writeBlocked) return writeBlocked;
 
       const code = couponInput.code.trim();
       if (!code) {
@@ -1171,6 +1245,8 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
         ? await findOwnedOpenCartById(input, ctx, couponInput.cartId, "cartId")
         : { ok: true as const, cart: await findOrCreateOpenCart(input, ctx) };
       if (!cartResult.ok) return cartResult;
+      const writeBlocked = cartWriteBlocked(cartResult.cart);
+      if (writeBlocked) return writeBlocked;
 
       const updated: CartDocument = {
         ...cartResult.cart,
@@ -1251,6 +1327,10 @@ function createWishlistBackend(input: MikaCartWishlistBackendInput): MikaApi["wi
 
       const currency = defaultBackendCurrency(input);
       const existingCart = await findOpenCart(input, ctx, currency);
+      if (existingCart) {
+        const writeBlocked = cartWriteBlocked(existingCart);
+        if (writeBlocked) return writeBlocked;
+      }
       const cart = existingCart ?? createCartDocument(input, ctx, currency);
       if (item.item.currency !== cart.aggregate.currency) {
         return validationFailed(
@@ -1283,6 +1363,8 @@ function createWishlistBackend(input: MikaCartWishlistBackendInput): MikaApi["wi
     },
     saveForLater: async (ctx, itemInput) => {
       const cart = await findOrCreateOpenCart(input, ctx);
+      const writeBlocked = cartWriteBlocked(cart);
+      if (writeBlocked) return writeBlocked;
       const line = cart.aggregate.items.find((candidate) => candidate.id === itemInput.lineId);
       if (!line) {
         return cartLineNotFound(itemInput.lineId);
@@ -1611,7 +1693,7 @@ async function accountExportStatus(
 async function downloadAccountExport(
   input: CreateMikaBackendApiInput,
   ctx: MikaRequestContext,
-  downloadInput: { readonly exportId: MikaId; readonly token?: string },
+  downloadInput: { readonly exportId: MikaId; readonly token?: string; readonly consumeToken?: boolean },
 ): Promise<MikaApiResult<AccountExportDownloadDTO>> {
   const document = await input.repositories.ops.findAccountExport(downloadInput.exportId);
   if (!document) {
@@ -1627,6 +1709,10 @@ async function downloadAccountExport(
     const record = await input.repositories.ephemeral.get(tokenHash);
     const tokenError = accountExportDownloadTokenError(record, document.id, ctx.now);
     if (tokenError) return tokenError;
+
+    if (!downloadInput.consumeToken) {
+      return accountExportDownloadConfirmationResult(document, ctx.now);
+    }
 
     const consumed = await input.repositories.ephemeral.consumeToken(tokenHash, ctx.now);
     if (!consumed) {
@@ -1659,6 +1745,11 @@ async function requestAccountDelete(
   if (!identity) {
     return authRequired("Account deletion requires an authenticated customer identity.");
   }
+  const block = await accountDeleteBlocked(input, {
+    customerId: identity.customer?.customerId,
+    sessionId: ctx.sessionId,
+  });
+  if (block) return block;
 
   const now = ctx.now;
   const requestId = input.createId("account_delete_request");
@@ -1693,6 +1784,63 @@ async function requestAccountDelete(
   });
 
   return { ok: true, status: 202, data: { requested: true } };
+}
+
+async function accountDeleteBlocked(
+  input: CreateMikaBackendApiInput,
+  identity: { readonly customerId?: MikaId; readonly sessionId?: string },
+): Promise<MikaApiFailure | null> {
+  if (identity.customerId) {
+    const subscriptions = await input.repositories.account.listSubscriptionsByCustomer(
+      identity.customerId,
+      Number.MAX_SAFE_INTEGER,
+    );
+    const activeSubscription = subscriptions.items.find((item) =>
+      subscriptionBlocksAccountDelete(item.data),
+    );
+    if (activeSubscription) {
+      return apiFailure(
+        409,
+        "CONFLICT",
+        "Account deletion is blocked while an active subscription exists. Cancel the subscription in the host application first.",
+        { subscriptionId: "Active subscriptions must be cancelled before account deletion." },
+      );
+    }
+
+    const pendingCarts = await input.repositories.session.listCheckoutPendingCartsByCustomer(
+      identity.customerId,
+      1,
+    );
+    if (pendingCarts.items.length > 0) {
+      return apiFailure(
+        409,
+        "CONFLICT",
+        "Account deletion is blocked while a checkout is in progress.",
+        { cartId: "Complete or cancel the active checkout before account deletion." },
+      );
+    }
+  }
+
+  if (identity.sessionId) {
+    const pendingCarts = await input.repositories.session.listCheckoutPendingCartsBySession(
+      identity.sessionId,
+      1,
+    );
+    if (pendingCarts.items.length > 0) {
+      return apiFailure(
+        409,
+        "CONFLICT",
+        "Account deletion is blocked while a checkout is in progress.",
+        { cartId: "Complete or cancel the active checkout before account deletion." },
+      );
+    }
+  }
+
+  return null;
+}
+
+function subscriptionBlocksAccountDelete(subscription: SubscriptionDocument): boolean {
+  return subscription.status !== "cancelled" && subscription.status !== "expired";
 }
 
 async function createAccountPortalSession(
@@ -1838,6 +1986,10 @@ async function runSubscriptionAction(
     ...(actionInput.priceId ? { priceId: actionInput.priceId } : {}),
     ...(providerPriceId ? { providerPriceId } : {}),
   };
+  const idempotencyInput: JsonObject = {
+    subscriptionId: actionInput.subscriptionId,
+    ...(actionInput.priceId ? { priceId: actionInput.priceId } : {}),
+  };
 
   return runAdminProviderAction(
     input,
@@ -1845,6 +1997,8 @@ async function runSubscriptionAction(
       action: `subscription.${action}`,
       targetType: "subscription",
       targetId: subscription.id,
+      idempotencyKey: ctx.idempotencyKey,
+      idempotencyInput,
       metadata: {
         provider: subscription.provider,
         subscriptionId: subscription.id,
@@ -2742,10 +2896,6 @@ function addDownloadRefToOrder(
 const ADMIN_AUDIT_RESULT_METADATA_KEY = "result";
 const ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY = "idempotencyInputHash";
 
-function isJsonObject(value: unknown): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 async function completeAdminAudit(
   input: CreateMikaBackendApiInput,
   audit: AdminAuditDocument,
@@ -3486,6 +3636,25 @@ function accountExportDownloadResult(
   };
 }
 
+function accountExportDownloadConfirmationResult(
+  document: AccountExportDocument,
+  now: ISODateTime,
+): MikaApiResult<AccountExportDownloadDTO> {
+  const ready = accountExportDownloadResult(document, now);
+  if (!ready.ok) return ready;
+
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      id: document.id,
+      expiresAt: document.expiresAt,
+      requiresConfirmation: true,
+      confirmMethod: "POST",
+    },
+  };
+}
+
 function orderAccessRevokedForAccountDelete(order: OrderDocument): boolean {
   const orderEmailHash = order.emailHash ?? order.aggregate.customer.emailHash;
   return orderEmailHash?.startsWith("account-deleted") ?? false;
@@ -3918,12 +4087,7 @@ async function receiveWebhook(
     payloadHash: verified.payloadHash,
   });
   if (duplicate) {
-    if (
-      !(
-        event.kind === "payment" &&
-        (duplicate.status === "failed" || duplicate.status === "received")
-      )
-    ) {
+    if (!webhookDuplicateCanReprocess(event, duplicate)) {
       return webhookDuplicateResult(duplicate);
     }
 
@@ -3953,6 +4117,16 @@ async function receiveWebhook(
   const processedWebhook = await processStoredWebhook(input, ctx, webhook, event);
 
   return webhookReceiptResult(processedWebhook, event);
+}
+
+function webhookDuplicateCanReprocess(
+  event: MikaProviderWebhookEvent,
+  duplicate: WebhookDocument,
+): boolean {
+  if (event.kind === "payment") return duplicate.status === "failed" || duplicate.status === "received";
+  if (event.kind === "subscription") return duplicate.status === "received";
+
+  return false;
 }
 
 async function replayWebhook(
@@ -4481,7 +4655,11 @@ async function processStoredWebhook(
         event.paymentStatus === "partially_refunded"
       ) {
         try {
-          return await processPaymentReversalWebhook(input, ctx, webhook, event);
+          return (
+            (await withWebhookSubjectLock(input, ctx, webhook, paymentWebhookLockTarget(event), () =>
+              processPaymentReversalWebhook(input, ctx, webhook, event),
+            )) ?? webhook
+          );
         } catch (error) {
           if (error instanceof WorkflowRunnerLeaseLostError) return webhook;
 
@@ -4497,7 +4675,11 @@ async function processStoredWebhook(
 
       if (event.paymentStatus !== "paid") {
         if (event.type === "checkout.session.expired") {
-          return processCheckoutExpiredWebhook(input, ctx, webhook, event);
+          return (
+            (await withWebhookSubjectLock(input, ctx, webhook, paymentWebhookLockTarget(event), () =>
+              processCheckoutExpiredWebhook(input, ctx, webhook, event),
+            )) ?? webhook
+          );
         }
 
         const failed = await markWebhookFailed(
@@ -4513,7 +4695,11 @@ async function processStoredWebhook(
       }
 
       try {
-        return await processPaymentWebhook(input, ctx, webhook, event);
+        return (
+          (await withWebhookSubjectLock(input, ctx, webhook, paymentWebhookLockTarget(event), () =>
+            processPaymentWebhook(input, ctx, webhook, event),
+          )) ?? webhook
+        );
       } catch (error) {
         if (error instanceof WorkflowRunnerLeaseLostError) return webhook;
 
@@ -4527,7 +4713,11 @@ async function processStoredWebhook(
       }
     case "subscription":
       try {
-        return await processSubscriptionWebhook(input, ctx, webhook, event);
+        return (
+          (await withWebhookSubjectLock(input, ctx, webhook, subscriptionWebhookLockTarget(event), () =>
+            processSubscriptionWebhook(input, ctx, webhook, event),
+          )) ?? webhook
+        );
       } catch {
         return markWebhookFailed(
           input,
@@ -4539,6 +4729,70 @@ async function processStoredWebhook(
     case "unknown":
       return webhook;
   }
+}
+
+interface WebhookSubjectLockTarget {
+  readonly kind: "payment" | "order" | "checkout" | "subscription" | "subscription_customer";
+  readonly identity: string;
+}
+
+async function withWebhookSubjectLock<TResult>(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  webhook: WebhookDocument,
+  target: WebhookSubjectLockTarget | null,
+  run: () => Promise<TResult>,
+): Promise<TResult | null> {
+  if (!target) return run();
+
+  const subject = `${target.kind}:${target.identity}`;
+  const subjectHash = await input.hash(`webhook-subject-lock:${subject}`);
+  const owner = `${webhook.id}:${ctx.now}`;
+  const key = `webhook-subject-lock:${subjectHash}`;
+  const lock = await input.repositories.ephemeral.tryAcquireLock({
+    key,
+    owner,
+    subjectHash,
+    expiresAt: addMilliseconds(ctx.now, 300_000),
+    now: ctx.now,
+  });
+  if (!lock) return null;
+
+  try {
+    return await run();
+  } finally {
+    await input.repositories.ephemeral.releaseLock({ key, owner, now: ctx.now }).catch(() => undefined);
+  }
+}
+
+function paymentWebhookLockTarget(event: MikaProviderPaymentEvent): WebhookSubjectLockTarget | null {
+  if (event.providerPaymentId) {
+    return { kind: "payment", identity: `${event.provider}:${event.providerPaymentId}` };
+  }
+  if (event.providerOrderId) {
+    return { kind: "order", identity: `${event.provider}:${event.providerOrderId}` };
+  }
+  if (event.providerCheckoutId) {
+    return { kind: "checkout", identity: `${event.provider}:${event.providerCheckoutId}` };
+  }
+
+  return null;
+}
+
+function subscriptionWebhookLockTarget(
+  event: MikaProviderSubscriptionEvent,
+): WebhookSubjectLockTarget | null {
+  if (event.providerSubscriptionId) {
+    return { kind: "subscription", identity: `${event.provider}:${event.providerSubscriptionId}` };
+  }
+  if (event.providerCustomerId && event.providerPriceId) {
+    return {
+      kind: "subscription_customer",
+      identity: `${event.provider}:${event.providerCustomerId}:${event.providerPriceId}`,
+    };
+  }
+
+  return null;
 }
 
 /**
@@ -6033,6 +6287,8 @@ async function queueOrderConfirmationEmail(
       ...(order.providerPaymentId ? { providerPaymentId: order.providerPaymentId } : {}),
       ...(order.providerOrderId ? { providerOrderId: order.providerOrderId } : {}),
       ...(order.checkoutSessionId ? { checkoutSessionId: order.checkoutSessionId } : {}),
+      subtotal: order.aggregate.totals.subtotal,
+      ...(order.aggregate.totals.discount ? { discount: order.aggregate.totals.discount } : {}),
       total: order.aggregate.totals.total,
       fulfilledLines: lines.map((line) => ({
         lineId: line.id,
@@ -6085,6 +6341,8 @@ async function queueDefaultOrderConfirmedEmail(
   const rendered = renderMikaEmail("order_confirmation", {
     toEmail: context.toEmail,
     orderNumber: context.orderNumber,
+    subtotal: context.subtotal,
+    ...(context.discount ? { discount: context.discount } : {}),
     total: context.total,
     lines: context.fulfilledLines.map((line) => ({
       title: line.title,
@@ -6430,7 +6688,10 @@ function webhookReceiptResult(
   webhook: WebhookDocument,
   event: MikaProviderWebhookEvent,
 ): MikaApiResult<WebhookReceiveDTO> {
-  if (event.kind === "payment" && event.paymentStatus === "paid" && webhook.status === "received") {
+  if (
+    (event.kind === "payment" || event.kind === "subscription") &&
+    webhook.status === "received"
+  ) {
     return webhookProcessingDeferred(webhook.id);
   }
   if (
@@ -6577,14 +6838,16 @@ async function reopenAbandonedCheckoutCart(
       ? await input.repositories.session.findCheckoutPendingCartBySession(ctx.sessionId, currency)
       : null;
   if (!pending) return null;
+  if (cartHasActiveCheckoutStartClaim(pending, ctx.now)) return pending;
 
   const checkoutId = metadataMikaId(pending.aggregate.metadata, "checkoutSessionId");
   const checkout = checkoutId
     ? await input.repositories.session.findCheckoutById(checkoutId)
     : null;
-  if (checkout && (checkout.status === "completed" || checkoutIsResumable(checkout, ctx.now))) {
+  if (checkout && checkout.status === "completed") {
     return null;
   }
+  if (checkout && checkoutIsResumable(checkout, ctx.now)) return pending;
 
   const reservationIds = pending.aggregate.items
     .map((item) => item.reservationId)
@@ -6599,11 +6862,32 @@ async function reopenAbandonedCheckoutCart(
   return reopened;
 }
 
+function cartWriteBlocked(cart: CartDocument): MikaApiFailure | null {
+  if (cart.status === "open") return null;
+
+  return apiFailure(
+    409,
+    "CONFLICT",
+    `Cart '${cart.id}' is locked by an active checkout.`,
+    {
+      cartId: "Cart is locked by an active checkout.",
+    },
+  );
+}
+
 function checkoutIsResumable(checkout: CheckoutDocument, now: ISODateTime): boolean {
   if (checkout.status !== "created" && checkout.status !== "redirected") return false;
   if (!checkout.expiresAt) return true;
 
   return new Date(checkout.expiresAt).getTime() > new Date(now).getTime();
+}
+
+function cartHasActiveCheckoutStartClaim(cart: CartDocument, now: ISODateTime): boolean {
+  const claimId = metadataString(cart.aggregate.metadata, "checkoutStartClaimId");
+  if (!claimId) return false;
+  const claimExpiresAt = metadataString(cart.aggregate.metadata, "checkoutStartClaimExpiresAt");
+
+  return !claimExpiresAt || new Date(claimExpiresAt).getTime() > new Date(now).getTime();
 }
 
 function reopenCartDocument(cart: CartDocument, now: ISODateTime): CartDocument {
@@ -6762,6 +7046,7 @@ type CheckoutStartLineResolution = {
 
 type CheckoutStartResolution = {
   readonly cart: CartDocument | null;
+  readonly cartUpdatedAt?: ISODateTime;
   readonly currency: CurrencyCode;
   readonly mode: PurchaseMode;
   readonly coupon?: CouponSnapshot;
@@ -6869,8 +7154,26 @@ async function startCheckout(
   const checkoutId = input.createId("checkout");
   const expiresAt = checkoutExpiresAt(input, ctx);
   const statusToken = input.createId("checkout_status_token");
+  const claimedCart =
+    resolved.cart && resolved.cartUpdatedAt
+      ? await input.repositories.session.claimCartForCheckout({
+          cartId: resolved.cart.id,
+          checkoutId,
+          expectedUpdatedAt: resolved.cartUpdatedAt,
+          claimExpiresAt: expiresAt,
+          now: ctx.now,
+        })
+      : null;
+  if (resolved.cart && !claimedCart) {
+    return apiFailure(409, "CONFLICT", "Cart is already being checked out.", {
+      cartId: "Cart is already being checked out.",
+    });
+  }
   const reserved = await reserveCheckoutLines(input, ctx, checkoutId, resolved, expiresAt);
-  if (!reserved.ok) return reserved;
+  if (!reserved.ok) {
+    if (claimedCart) await releaseCartCheckoutClaimQuietly(input, claimedCart.id, checkoutId, ctx.now);
+    return reserved;
+  }
 
   const checkoutSubtotal = reserved.lines.reduce(
     (sum, line) => sum + line.item.unitAmount * line.quantity,
@@ -6895,6 +7198,9 @@ async function startCheckout(
       });
     } catch {
       await releaseCheckoutReservations(input, reserved.reservationIds, ctx.now);
+      if (claimedCart) {
+        await releaseCartCheckoutClaimQuietly(input, claimedCart.id, checkoutId, ctx.now);
+      }
       return null;
     }
   })();
@@ -6916,6 +7222,9 @@ async function startCheckout(
   }
   if (providerSession.status === "failed") {
     await releaseCheckoutReservations(input, reserved.reservationIds, ctx.now);
+    if (claimedCart) {
+      await releaseCartCheckoutClaimQuietly(input, claimedCart.id, checkoutId, ctx.now);
+    }
     await emitBackendNotification(input, "checkout.payment_failed", ctx.now, {
       ...(checkoutInput.customer?.email ? { toEmail: checkoutInput.customer.email } : {}),
       ...(ctx.customerId ? { customerId: ctx.customerId } : {}),
@@ -6934,12 +7243,21 @@ async function startCheckout(
 
   const providerCheckoutId = providerSession.providerCheckoutId ?? providerSession.id;
   const documentExpiresAt = providerSession.expiresAt ?? expiresAt;
-  if (new Date(documentExpiresAt).getTime() > new Date(expiresAt).getTime()) {
-    await createMikaStockLifecycleService(input).extendReservations({
-      reservationEventIds: reserved.reservationIds,
-      expiresAt: documentExpiresAt,
-      now: ctx.now,
-    });
+  try {
+    if (new Date(documentExpiresAt).getTime() > new Date(expiresAt).getTime()) {
+      await createMikaStockLifecycleService(input).extendReservations({
+        reservationEventIds: reserved.reservationIds,
+        expiresAt: documentExpiresAt,
+        now: ctx.now,
+      });
+    }
+  } catch {
+    await releaseCheckoutReservations(input, reserved.reservationIds, ctx.now);
+    if (claimedCart) {
+      await releaseCartCheckoutClaimQuietly(input, claimedCart.id, checkoutId, ctx.now);
+    }
+
+    return checkoutPersistenceFailed();
   }
   const checkoutDocument: CheckoutDocument = {
     id: checkoutId,
@@ -7001,7 +7319,7 @@ async function startCheckout(
     ctx,
     checkoutDocument,
     statusToken,
-    resolved.cart,
+    checkoutStartCartForPersistence(resolved.cart, claimedCart),
     checkoutId,
     reserved.lines,
     reserved.reservationIds,
@@ -7114,6 +7432,7 @@ async function resolveCheckoutStart(
   return {
     ok: true,
     cart: resolvedCart,
+    cartUpdatedAt: cartResult.cart?.updatedAt,
     currency,
     mode: modes[0],
     coupon,
@@ -7181,14 +7500,7 @@ async function resolveCheckoutStartLine(
 
   const price = selectCartPrice(sellable, lineInput.priceId, lineInput.currency);
   if (!price) {
-    return {
-      ok: false,
-      status: 409,
-      error: {
-        code: "PRICE_INACTIVE",
-        message: `No active price is available for sellable '${sellable.id}'.`,
-      },
-    };
+    return cartPriceUnavailable(sellable, lineInput.priceId, lineInput.currency);
   }
   if (price.currency !== lineInput.currency) {
     return validationFailed("priceId", `Price '${price.id}' uses currency '${price.currency}'.`);
@@ -7309,6 +7621,9 @@ async function persistCheckoutStart(
     }
   } catch {
     await releaseCheckoutReservations(input, reservationIds, ctx.now);
+    if (cart) {
+      await releaseCartCheckoutClaimQuietly(input, cart.id, checkoutId, ctx.now);
+    }
     if (checkoutPersisted) {
       await markCheckoutPersistenceFailed(input, checkoutDocument, ctx.now);
     }
@@ -7317,6 +7632,26 @@ async function persistCheckoutStart(
   }
 
   return { ok: true };
+}
+
+function checkoutStartCartForPersistence(
+  resolvedCart: CartDocument | null,
+  claimedCart: CartDocument | null,
+): CartDocument | null {
+  if (!resolvedCart || !claimedCart) return claimedCart ?? resolvedCart;
+
+  return {
+    ...resolvedCart,
+    status: claimedCart.status,
+    aggregate: {
+      ...resolvedCart.aggregate,
+      metadata: {
+        ...resolvedCart.aggregate.metadata,
+        ...claimedCart.aggregate.metadata,
+      },
+    },
+    updatedAt: claimedCart.updatedAt,
+  };
 }
 
 async function putCheckoutStatusToken(
@@ -7394,6 +7729,19 @@ async function releaseCheckoutReservations(
 
   for (const reservationEventId of reservationIds) {
     await stock.release({ reservationEventId, now });
+  }
+}
+
+async function releaseCartCheckoutClaimQuietly(
+  input: CreateMikaBackendApiInput,
+  cartId: MikaId,
+  checkoutId: MikaId,
+  now: ISODateTime,
+): Promise<void> {
+  try {
+    await input.repositories.session.releaseCartCheckoutClaim({ cartId, checkoutId, now });
+  } catch {
+    // Best effort: reservation release already compensated inventory.
   }
 }
 
@@ -7943,6 +8291,11 @@ function cartWithCheckoutReservations(
     })),
     updatedAt,
   );
+  const {
+    checkoutStartClaimId: _checkoutStartClaimId,
+    checkoutStartClaimExpiresAt: _checkoutStartClaimExpiresAt,
+    ...metadata
+  } = updated.aggregate.metadata ?? {};
 
   return {
     ...updated,
@@ -7950,7 +8303,7 @@ function cartWithCheckoutReservations(
     aggregate: {
       ...updated.aggregate,
       metadata: {
-        ...updated.aggregate.metadata,
+        ...metadata,
         checkoutSessionId: checkoutId,
       },
     },
@@ -8708,14 +9061,7 @@ async function resolveCartLine(
 
   const price = selectCartPrice(sellable, itemInput.priceId, cartCurrency);
   if (!price) {
-    return {
-      ok: false,
-      status: 409,
-      error: {
-        code: "PRICE_INACTIVE",
-        message: `No active price is available for sellable '${sellable.id}'.`,
-      },
-    };
+    return cartPriceUnavailable(sellable, itemInput.priceId, cartCurrency);
   }
   if (price.currency !== cartCurrency) {
     return validationFailed("priceId", `Price '${price.id}' uses currency '${price.currency}'.`);
@@ -8780,14 +9126,7 @@ async function resolveWishlistItem(
 
   const price = selectCartPrice(sellable, itemInput.priceId, currency);
   if (!price) {
-    return {
-      ok: false,
-      status: 409,
-      error: {
-        code: "PRICE_INACTIVE",
-        message: `No active price is available for sellable '${sellable.id}'.`,
-      },
-    };
+    return cartPriceUnavailable(sellable, itemInput.priceId, currency);
   }
   if (price.currency !== currency) {
     return validationFailed("priceId", `Price '${price.id}' uses currency '${price.currency}'.`);
@@ -8813,11 +9152,43 @@ function selectCartPrice(
   priceId: MikaId | undefined,
   currency: CurrencyCode,
 ): PriceDefinition | null {
-  const price = priceId
-    ? sellable.prices.find((item) => item.id === priceId)
-    : sellable.prices.find((item) => item.active && item.currency === currency);
+  if (!priceId) {
+    const prices = activeCartPrices(sellable, currency);
 
+    return prices.length === 1 ? prices[0]! : null;
+  }
+
+  const price = sellable.prices.find((item) => item.id === priceId);
   return price?.active ? price : null;
+}
+
+function activeCartPrices(
+  sellable: SellableDefinition,
+  currency: CurrencyCode,
+): readonly PriceDefinition[] {
+  return sellable.prices.filter((item) => item.active && item.currency === currency);
+}
+
+function cartPriceUnavailable(
+  sellable: SellableDefinition,
+  priceId: MikaId | undefined,
+  currency: CurrencyCode,
+): MikaApiFailure {
+  if (!priceId && activeCartPrices(sellable, currency).length > 1) {
+    return validationFailed(
+      "priceId",
+      `Sellable '${sellable.id}' has multiple active prices for currency '${currency}'; provide priceId.`,
+    );
+  }
+
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "PRICE_INACTIVE",
+      message: `No active price is available for sellable '${sellable.id}'.`,
+    },
+  };
 }
 
 function validateQuantityLimit(

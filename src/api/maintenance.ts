@@ -10,6 +10,11 @@ import type {
   MikaEmailOutboxRunOptions,
   MikaEmailOutboxRunResult,
 } from "./email-outbox";
+import type {
+  MikaAcpSessionCleanupInput,
+  MikaAcpSessionCleanupResult,
+  MikaAcpSessionStore,
+} from "../acp";
 import { subjectHashCandidates } from "./subject-ref";
 import { createISODateTime, type ISODateTime, type MikaId } from "../types/primitives";
 
@@ -17,6 +22,10 @@ import { createISODateTime, type ISODateTime, type MikaId } from "../types/primi
 export interface MikaMaintenanceRunOptions {
   readonly now?: ISODateTime;
   readonly emailLimit?: number;
+  readonly stuckEmailLimit?: number;
+  readonly rawProviderPayloadLimit?: number;
+  readonly rawProviderPayloadRetentionDays?: number;
+  readonly acpSessionLimit?: number;
   readonly accountDeleteLimit?: number;
   readonly stuckWorkflowLimit?: number;
 }
@@ -67,6 +76,7 @@ export type MikaMaintenanceAccountDeleteRequestItem =
       readonly customerAnonymized: boolean;
       readonly ordersAnonymized: number;
       readonly entitlementsAnonymized: number;
+      readonly licensesAnonymized: number;
     }
   | {
       readonly requestId: MikaId;
@@ -80,10 +90,25 @@ export interface MikaMaintenanceStuckWorkflowsResult {
   readonly reclaimed: number;
 }
 
+/** Counts from reclaiming exhausted email outbox leases during maintenance. */
+export interface MikaMaintenanceStuckEmailsResult {
+  readonly scanned: number;
+  readonly reclaimed: number;
+}
+
+/** Counts from purging age-expired raw webhook provider payloads. */
+export interface MikaMaintenanceRawProviderPayloadsResult {
+  readonly scanned: number;
+  readonly purged: number;
+}
+
 /** Outcome of a single maintenance sweep across all configured tasks. */
 export interface MikaMaintenanceRunResult {
   readonly now: ISODateTime;
   readonly emailOutbox: MikaMaintenanceTaskResult<MikaEmailOutboxRunResult>;
+  readonly stuckEmails: MikaMaintenanceTaskResult<MikaMaintenanceStuckEmailsResult>;
+  readonly rawProviderPayloads: MikaMaintenanceTaskResult<MikaMaintenanceRawProviderPayloadsResult>;
+  readonly acpSessions: MikaMaintenanceTaskResult<MikaAcpSessionCleanupResult>;
   readonly stockReservations: MikaMaintenanceTaskResult<MikaMaintenanceStockReservationsResult>;
   readonly ephemeralRecords: MikaMaintenanceTaskResult<MikaMaintenanceEphemeralRecordsResult>;
   readonly accountDeleteRequests: MikaMaintenanceTaskResult<MikaMaintenanceAccountDeleteRequestsResult>;
@@ -105,11 +130,15 @@ type MikaMaintenancePurgeExpiredEphemeralRecords = (input: {
 
 type MikaMaintenanceRepositories = Pick<
   MikaBackendRepositories,
-  "account" | "ephemeral" | "ledger" | "ops" | "stock"
+  "account" | "ephemeral" | "ledger" | "ops" | "session" | "stock"
 >;
 
 interface MikaMaintenanceRunnerInput {
   readonly api?: Pick<MikaApi, "admin">;
+  readonly acpSessionStore?: MikaAcpSessionStore;
+  readonly cleanupExpiredAcpSessions?: (
+    input: MikaAcpSessionCleanupInput,
+  ) => Promise<MikaAcpSessionCleanupResult>;
   readonly emailOutboxRunner?: MikaEmailOutboxRunner;
   readonly repositories?: MikaMaintenanceRepositories;
   readonly now?: MikaBackendNow;
@@ -118,6 +147,10 @@ interface MikaMaintenanceRunnerInput {
 }
 
 const DEFAULT_ACCOUNT_DELETE_BATCH_SIZE = 25;
+const DEFAULT_STUCK_EMAIL_BATCH_SIZE = 50;
+const DEFAULT_RAW_PROVIDER_PAYLOAD_BATCH_SIZE = 50;
+const DEFAULT_RAW_PROVIDER_PAYLOAD_RETENTION_DAYS = 14;
+const DEFAULT_ACP_SESSION_BATCH_SIZE = 50;
 const DEFAULT_STUCK_WORKFLOW_BATCH_SIZE = 50;
 
 /** Composes optional outbox, stock, ephemeral, and account-delete processors. */
@@ -140,6 +173,57 @@ export function createMikaMaintenanceRunner(
         return {
           status: "completed" as const,
           result: await input.emailOutboxRunner.runOnce(emailOptions),
+        };
+      });
+      const stuckEmails = await runMaintenanceTask(async () => {
+        if (!input.repositories) {
+          return { status: "skipped" as const, reason: "Email repositories are not configured." };
+        }
+
+        return {
+          status: "completed" as const,
+          result: await input.repositories.ops.reclaimExhaustedEmails(
+            now,
+            options.stuckEmailLimit ?? DEFAULT_STUCK_EMAIL_BATCH_SIZE,
+          ),
+        };
+      });
+      const rawProviderPayloads = await runMaintenanceTask(async () => {
+        if (!input.repositories) {
+          return {
+            status: "skipped" as const,
+            reason: "Raw provider payload repositories are not configured.",
+          };
+        }
+
+        return {
+          status: "completed" as const,
+          result: await input.repositories.ops.purgeWebhookRawPayloads(
+            rawProviderPayloadCutoff(
+              now,
+              options.rawProviderPayloadRetentionDays ??
+                DEFAULT_RAW_PROVIDER_PAYLOAD_RETENTION_DAYS,
+            ),
+            now,
+            options.rawProviderPayloadLimit ?? DEFAULT_RAW_PROVIDER_PAYLOAD_BATCH_SIZE,
+          ),
+        };
+      });
+      const acpSessions = await runMaintenanceTask(async () => {
+        const cleanup = input.cleanupExpiredAcpSessions ?? input.acpSessionStore?.cleanupExpired;
+        if (!cleanup) {
+          return {
+            status: "skipped" as const,
+            reason: "ACP session cleanup service is not configured.",
+          };
+        }
+
+        return {
+          status: "completed" as const,
+          result: await cleanup({
+            now,
+            limit: options.acpSessionLimit ?? DEFAULT_ACP_SESSION_BATCH_SIZE,
+          }),
         };
       });
       const stockReservations = await runMaintenanceTask(async () => {
@@ -211,6 +295,9 @@ export function createMikaMaintenanceRunner(
       return {
         now,
         emailOutbox,
+        stuckEmails,
+        rawProviderPayloads,
+        acpSessions,
         stockReservations,
         ephemeralRecords,
         accountDeleteRequests,
@@ -232,6 +319,8 @@ async function processQueuedAccountDeleteRequests(input: {
     const request = item.data;
 
     try {
+      await assertAccountDeleteMaintenanceAllowed(input.repositories, request);
+      const sentinel = accountDeleteSentinel(request);
       const tokensDeleted = await input.repositories.ephemeral.deleteTokensBySubjectHashes(
         subjectHashCandidates(request),
       );
@@ -247,20 +336,6 @@ async function processQueuedAccountDeleteRequests(input: {
         ...(request.userId ? { userId: request.userId } : {}),
         ...(request.emailHash ? { emailHash: request.emailHash } : {}),
       });
-      const customerResult = await input.repositories.account.anonymizeCustomerForAccountDelete({
-        now: input.now,
-        ...(request.customerId ? { customerId: request.customerId } : {}),
-        ...(request.emailHash ? { emailHash: request.emailHash } : {}),
-      });
-      const sentinel =
-        customerResult.sentinel ??
-        (request.customerId
-          ? `account-deleted:${request.customerId}`
-          : request.emailHash
-            ? `account-deleted-email:${request.emailHash}`
-            : request.userId
-              ? `account-deleted-user:${request.userId}`
-              : undefined);
       const ordersResult = sentinel
         ? await input.repositories.ledger.anonymizeOrdersForAccountDelete({
             now: input.now,
@@ -278,6 +353,18 @@ async function processQueuedAccountDeleteRequests(input: {
             ...(request.userId ? { userId: request.userId } : {}),
           })
         : { anonymized: 0 };
+      const licensesResult = sentinel
+        ? await input.repositories.account.anonymizeLicensesForAccountDelete({
+            now: input.now,
+            sentinel,
+            ...(request.customerId ? { customerId: request.customerId } : {}),
+          })
+        : { anonymized: 0 };
+      const customerResult = await input.repositories.account.anonymizeCustomerForAccountDelete({
+        now: input.now,
+        ...(request.customerId ? { customerId: request.customerId } : {}),
+        ...(request.emailHash ? { emailHash: request.emailHash } : {}),
+      });
 
       const completed = await input.repositories.ops.completeAccountDeleteRequest({
         requestId: request.id,
@@ -290,6 +377,7 @@ async function processQueuedAccountDeleteRequests(input: {
             customerAnonymized: customerResult.anonymized,
             ordersAnonymized: ordersResult.anonymized,
             entitlementsAnonymized: entitlementsResult.anonymized,
+            licensesAnonymized: licensesResult.anonymized,
           },
         },
       });
@@ -306,6 +394,7 @@ async function processQueuedAccountDeleteRequests(input: {
         customerAnonymized: customerResult.anonymized,
         ordersAnonymized: ordersResult.anonymized,
         entitlementsAnonymized: entitlementsResult.anonymized,
+        licensesAnonymized: licensesResult.anonymized,
       });
     } catch (error) {
       const message = errorMessage(error);
@@ -329,6 +418,52 @@ async function processQueuedAccountDeleteRequests(input: {
     hasMore: queued.hasMore,
     items,
   };
+}
+
+async function assertAccountDeleteMaintenanceAllowed(
+  repositories: MikaMaintenanceRepositories,
+  request: {
+    readonly customerId?: MikaId;
+    readonly userId?: string;
+    readonly emailHash?: string;
+  },
+): Promise<void> {
+  if (!request.customerId) return;
+
+  const subscriptions = await repositories.account.listSubscriptionsByCustomer(
+    request.customerId,
+    Number.MAX_SAFE_INTEGER,
+  );
+  const activeSubscription = subscriptions.items.find(
+    (item) => item.data.status !== "cancelled" && item.data.status !== "expired",
+  );
+  if (activeSubscription) {
+    throw new Error(
+      `Account delete request is blocked by active subscription '${activeSubscription.id}'.`,
+    );
+  }
+
+  const pendingCarts = await repositories.session.listCheckoutPendingCartsByCustomer(
+    request.customerId,
+    1,
+  );
+  if (pendingCarts.items.length > 0) {
+    throw new Error(
+      `Account delete request is blocked by active checkout '${pendingCarts.items[0]!.id}'.`,
+    );
+  }
+}
+
+function accountDeleteSentinel(request: {
+  readonly customerId?: MikaId;
+  readonly userId?: string;
+  readonly emailHash?: string;
+}): string | undefined {
+  if (request.customerId) return `account-deleted:${request.customerId}`;
+  if (request.emailHash) return `account-deleted-email:${request.emailHash}`;
+  if (request.userId) return `account-deleted-user:${request.userId}`;
+
+  return undefined;
 }
 
 async function runMaintenanceTask<TResult>(
@@ -377,6 +512,13 @@ function numberField(input: Record<string, number> | undefined, key: string): nu
 
 function currentISODateTime(now?: MikaBackendNow): ISODateTime {
   return createISODateTime((now?.() ?? new Date()).toISOString());
+}
+
+function rawProviderPayloadCutoff(now: ISODateTime, retentionDays: number): ISODateTime {
+  const days = Number.isFinite(retentionDays) ? Math.max(0, retentionDays) : 0;
+  const retentionMs = days * 24 * 60 * 60 * 1000;
+
+  return createISODateTime(new Date(Date.parse(now) - retentionMs).toISOString());
 }
 
 function apiErrorMessage(result: MikaApiResult<unknown>): string {

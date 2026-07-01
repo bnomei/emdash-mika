@@ -39,6 +39,8 @@ export interface MikaOrderConfirmationLine {
 export interface MikaOrderConfirmationEmailInput {
   readonly toEmail: string;
   readonly orderNumber: string;
+  readonly subtotal?: Money;
+  readonly discount?: Money;
   readonly total?: Money;
   readonly lines?: readonly MikaOrderConfirmationLine[];
   readonly accountUrl?: string;
@@ -121,10 +123,13 @@ export function renderMikaOrderConfirmationEmail(
           )
           .join("\n")}`
       : "";
+  const subtotal =
+    input.subtotal && input.discount ? `\n\nSubtotal: ${formatMoney(input.subtotal)}` : "";
+  const discount = input.discount ? `\nDiscount: -${formatMoney(input.discount)}` : "";
   const total = input.total ? `\n\nTotal: ${formatMoney(input.total)}` : "";
   const account = input.accountUrl ? `\n\nView your account: ${input.accountUrl}` : "";
   const support = supportLine(input.brand);
-  const text = `Thanks for your order from ${siteName}.\n\nOrder: ${input.orderNumber}${lineText}${total}${account}${support ? `\n\n${support}` : ""}`;
+  const text = `Thanks for your order from ${siteName}.\n\nOrder: ${input.orderNumber}${lineText}${subtotal}${discount}${total}${account}${support ? `\n\n${support}` : ""}`;
   const htmlLines =
     lines.length > 0
       ? `<ul>${lines
@@ -136,7 +141,7 @@ export function renderMikaOrderConfirmationEmail(
       : "";
   const html = htmlDocument(
     subject,
-    `<p>Thanks for your order from ${escapeHtml(siteName)}.</p><p><strong>Order:</strong> ${escapeHtml(input.orderNumber)}</p>${htmlLines}${input.total ? `<p><strong>Total:</strong> ${escapeHtml(formatMoney(input.total))}</p>` : ""}${input.accountUrl ? button(input.accountUrl, "View account") : ""}${support ? `<p>${escapeHtml(support)}</p>` : ""}`,
+    `<p>Thanks for your order from ${escapeHtml(siteName)}.</p><p><strong>Order:</strong> ${escapeHtml(input.orderNumber)}</p>${htmlLines}${input.subtotal && input.discount ? `<p><strong>Subtotal:</strong> ${escapeHtml(formatMoney(input.subtotal))}</p>` : ""}${input.discount ? `<p><strong>Discount:</strong> -${escapeHtml(formatMoney(input.discount))}</p>` : ""}${input.total ? `<p><strong>Total:</strong> ${escapeHtml(formatMoney(input.total))}</p>` : ""}${input.accountUrl ? button(input.accountUrl, "View account") : ""}${support ? `<p>${escapeHtml(support)}</p>` : ""}`,
   );
 
   return {

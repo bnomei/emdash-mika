@@ -96,7 +96,10 @@ export function consumeOnHandStatement(input: ReleaseStockStatementInput): RawBu
   `;
 }
 
-/** SQL update that applies a signed on-hand adjustment when result stays non-negative. */
+/**
+ * SQL update that applies a signed on-hand adjustment when the result stays available for any
+ * active finite-stock reservations.
+ */
 export function adjustStockStatement(input: AdjustStockStatementInput): RawBuilder<unknown> {
   return sql`
     UPDATE mika_stock_items
@@ -105,5 +108,11 @@ export function adjustStockStatement(input: AdjustStockStatementInput): RawBuild
       updated_at = ${input.now}
     WHERE id = ${input.stockItemId}
       AND quantity_on_hand + ${input.quantityDelta} >= 0
+      AND (
+        policy != 'finite'
+        OR allow_backorder = 1
+        OR ${input.quantityDelta} >= 0
+        OR quantity_on_hand + ${input.quantityDelta} >= quantity_reserved
+      )
   `;
 }

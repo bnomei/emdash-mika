@@ -78,6 +78,8 @@ export interface MikaOrderConfirmedNotificationContext extends MikaNotificationR
   readonly providerPaymentId?: string;
   readonly providerOrderId?: string;
   readonly checkoutSessionId?: MikaId;
+  readonly subtotal: Money;
+  readonly discount?: Money;
   readonly total: Money;
   readonly fulfilledLines: readonly MikaOrderConfirmedNotificationLine[];
   readonly fulfillmentKinds: readonly FulfillmentKind[];

@@ -227,6 +227,7 @@ const expectedOperationContracts = [
   ["accountExport", "account", "export", "accountExport"],
   ["accountExportStatus", "account", "exportStatus", "accountExportStatus"],
   ["accountExportDownload", "account", "exportDownload", ""],
+  ["accountExportDownloadConsume", "account", "exportDownload", ""],
   ["accountDelete", "account", "delete", "accountDelete"],
   ["accountPortal", "account", "portal", "accountPortal"],
   ["subscriptionCancel", "subscription", "cancel", "subscriptionCancel"],
@@ -526,7 +527,12 @@ describe("Mika native plugin package", () => {
           },
           ops: {
             listQueuedAccountDeleteRequests: async () => ({ items: [], hasMore: false }),
+            reclaimExhaustedEmails: async () => ({ scanned: 0, reclaimed: 0 }),
+            purgeWebhookRawPayloads: async () => ({ scanned: 0, purged: 0 }),
             reclaimExhaustedWorkflows: async () => ({ scanned: 0, reclaimed: 0 }),
+          },
+          session: {
+            listCheckoutPendingCartsByCustomer: async () => ({ items: [], hasMore: false }),
           },
           stock: {},
         } as never,
@@ -1477,6 +1483,7 @@ describe("Mika client", () => {
       "accountExport|account.export|account.export|accountExport|POST|body|trusted|ctx||form",
       "accountExportStatus|account.exportStatus|account.exportStatus|accountExportStatus|GET|search|trusted|ctx|exportId|json",
       "accountExportDownload|account.exportDownload|account.exportDownload|accountExportDownload|GET|search|trusted|ctx|exportId,token|",
+      "accountExportDownloadConsume|account.exportDownload.consume|account.exportDownload|accountExportDownload|POST|body|trusted|ctx||",
       "accountDelete|account.delete|account.delete|accountDelete|POST|body|trusted|ctx||form",
       "accountPortal|account.portal|account.portal|accountPortal|POST|body|trusted|ctx||form",
       "subscriptionCancel|subscription.cancel|subscription.cancel|subscriptionCancel|POST|body|trusted|ctx||form",
@@ -1511,9 +1518,11 @@ describe("Mika client", () => {
 
       expect(operation.namespace).toBe(namespace);
       expect(operation.method).toBe(method);
-      expect(
-        (mikaOperationFacadeSpec as Record<string, Record<string, string>>)[namespace]?.[method],
-      ).toBe(operationKey);
+      if (operationKey !== "accountExportDownloadConsume") {
+        expect(
+          (mikaOperationFacadeSpec as Record<string, Record<string, string>>)[namespace]?.[method],
+        ).toBe(operationKey);
+      }
 
       if (actionKey) {
         expect(mikaActionDefinitions[actionKey].operation).toBe(operation);
@@ -1900,9 +1909,13 @@ describe("Mika client", () => {
       routePublicFlags.set(operation.routePath, operation.public);
     }
 
-    const methodsFromOperations = Object.values(mikaOperationDefinitions)
-      .map((operation) => `${operation.namespace}.${operation.method}`)
-      .sort();
+    const methodsFromOperations = [
+      ...new Set(
+        Object.values(mikaOperationDefinitions).map(
+          (operation) => `${operation.namespace}.${operation.method}`,
+        ),
+      ),
+    ].sort();
     const methodsFromPublicApi = Object.entries(mikaApiMethodNames)
       .flatMap(([namespace, methods]) => methods.map((method) => `${namespace}.${String(method)}`))
       .sort();

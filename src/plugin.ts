@@ -19,6 +19,7 @@ import { createMikaApi, type MikaApiOverrides } from "./api/server";
 import type { MikaOperationPolicy } from "./api/operation-policy";
 import { mikaStorageConfig } from "./storage/collections";
 import { createISODateTime } from "./types/primitives";
+import type { MikaAcpSessionStore } from "./acp";
 
 /** Stable EmDash plugin id registered for Mika routes and storage. */
 export { MIKA_PLUGIN_ID } from "./api/routes";
@@ -45,8 +46,9 @@ export interface MikaMaintenancePluginOptions {
 export interface MikaMaintenanceRuntimeOptions extends MikaMaintenancePluginOptions {
   readonly repositories?: Pick<
     MikaBackendRepositories,
-    "account" | "ephemeral" | "ledger" | "ops" | "stock"
+    "account" | "ephemeral" | "ledger" | "ops" | "session" | "stock"
   >;
+  readonly acpSessionStore?: MikaAcpSessionStore;
   readonly emailOutboxRunner?: MikaEmailOutboxRunner;
 }
 
@@ -131,6 +133,7 @@ export function createPlugin(options: MikaCreatePluginOptions = {}) {
 
         const result = await createMikaMaintenanceRunner({
           api,
+          ...(maintenance.acpSessionStore ? { acpSessionStore: maintenance.acpSessionStore } : {}),
           ...(maintenance.repositories ? { repositories: maintenance.repositories } : {}),
           ...(maintenance.emailOutboxRunner
             ? { emailOutboxRunner: maintenance.emailOutboxRunner }
@@ -177,6 +180,20 @@ function summarizeMikaMaintenanceResult(result: MikaMaintenanceRunResult) {
         skipped: taskResult.skipped,
         leaseMissed: taskResult.leaseMissed,
         leaseLost: taskResult.leaseLost,
+        hasMore: taskResult.hasMore,
+      })),
+      stuckEmails: summarizeTask(result.stuckEmails, (taskResult) => ({
+        scanned: taskResult.scanned,
+        reclaimed: taskResult.reclaimed,
+      })),
+      rawProviderPayloads: summarizeTask(result.rawProviderPayloads, (taskResult) => ({
+        scanned: taskResult.scanned,
+        purged: taskResult.purged,
+      })),
+      acpSessions: summarizeTask(result.acpSessions, (taskResult) => ({
+        scanned: taskResult.scanned,
+        expired: taskResult.expired,
+        purged: taskResult.purged,
         hasMore: taskResult.hasMore,
       })),
       stockReservations: summarizeTask(result.stockReservations, (taskResult) => ({

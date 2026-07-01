@@ -182,6 +182,10 @@ export type AdjustStockRepositoryResult =
       readonly stock: StockItemRecord;
     }
   | {
+      readonly status: "would_undercut_reserved";
+      readonly stock: StockItemRecord;
+    }
+  | {
       readonly status: "not_found";
     };
 
@@ -476,6 +480,45 @@ function documentOfType<TDocument extends TypedDocument, TType extends DocumentT
   return document?.type === type ? (document as DocumentOfType<TDocument, TType>) : null;
 }
 
+function cartWithCheckoutClaim(
+  cart: CartDocument,
+  checkoutId: MikaId,
+  claimExpiresAt: ISODateTime,
+  now: ISODateTime,
+): CartDocument {
+  return {
+    ...cart,
+    status: "checkout_pending",
+    aggregate: {
+      ...cart.aggregate,
+      metadata: {
+        ...cart.aggregate.metadata,
+        checkoutStartClaimId: checkoutId,
+        checkoutStartClaimExpiresAt: claimExpiresAt,
+      },
+    },
+    updatedAt: now,
+  };
+}
+
+function cartWithoutCheckoutClaim(cart: CartDocument, now: ISODateTime): CartDocument {
+  const metadata = Object.fromEntries(
+    Object.entries(cart.aggregate.metadata ?? {}).filter(
+      ([key]) => key !== "checkoutStartClaimId" && key !== "checkoutStartClaimExpiresAt",
+    ),
+  );
+
+  return {
+    ...cart,
+    status: "open",
+    aggregate: {
+      ...cart.aggregate,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+    },
+    updatedAt: now,
+  };
+}
+
 function typedCollection<TDocument extends TypedDocument & { readonly id: string }>(
   collection: StorageCollection<TDocument>,
 ) {
@@ -629,6 +672,63 @@ export class SessionRepository {
       status: "checkout_pending",
       currency,
     });
+  }
+
+  async listCheckoutPendingCartsBySession(
+    sessionId: string,
+    limit = 20,
+  ): Promise<DocumentList<CartDocument>> {
+    return this.documents.listByType("cart", {
+      where: { sessionId, status: "checkout_pending" },
+      orderBy: { updatedAt: "desc" },
+      limit,
+    });
+  }
+
+  async listCheckoutPendingCartsByCustomer(
+    customerId: MikaId,
+    limit = 20,
+  ): Promise<DocumentList<CartDocument>> {
+    return this.documents.listByType("cart", {
+      where: { customerId, status: "checkout_pending" },
+      orderBy: { updatedAt: "desc" },
+      limit,
+    });
+  }
+
+  async claimCartForCheckout(input: {
+    readonly cartId: MikaId;
+    readonly checkoutId: MikaId;
+    readonly expectedUpdatedAt: ISODateTime;
+    readonly claimExpiresAt: ISODateTime;
+    readonly now: ISODateTime;
+  }): Promise<CartDocument | null> {
+    const updated = await this.documents.update(input.cartId, (current) => {
+      const cart = documentOfType(current, "cart");
+      if (!cart || cart.status !== "open" || cart.updatedAt !== input.expectedUpdatedAt) {
+        return null;
+      }
+
+      return cartWithCheckoutClaim(cart, input.checkoutId, input.claimExpiresAt, input.now);
+    });
+
+    return documentOfType(updated, "cart");
+  }
+
+  async releaseCartCheckoutClaim(input: {
+    readonly cartId: MikaId;
+    readonly checkoutId: MikaId;
+    readonly now: ISODateTime;
+  }): Promise<CartDocument | null> {
+    const updated = await this.documents.update(input.cartId, (current) => {
+      const cart = documentOfType(current, "cart");
+      if (!cart || cart.status !== "checkout_pending") return null;
+      if (cart.aggregate.metadata?.["checkoutStartClaimId"] !== input.checkoutId) return null;
+
+      return cartWithoutCheckoutClaim(cart, input.now);
+    });
+
+    return documentOfType(updated, "cart");
   }
 
   async findWishlistBySession(sessionId: string): Promise<WishlistDocument | null> {
@@ -872,6 +972,42 @@ export class AccountRepository {
           ...entitlement.record,
           emailHash: input.sentinel,
           userId: input.sentinel,
+        },
+        updatedAt: input.now,
+      };
+      await this.put(redacted);
+      anonymized += 1;
+    }
+
+    return { anonymized };
+  }
+
+  async anonymizeLicensesForAccountDelete(input: {
+    readonly customerId?: MikaId;
+    readonly sentinel: string;
+    readonly now: ISODateTime;
+  }): Promise<{ readonly anonymized: number }> {
+    const licenses = input.customerId
+      ? await this.listLicensesByCustomer(input.customerId, Number.MAX_SAFE_INTEGER)
+      : { items: [] };
+
+    let anonymized = 0;
+    for (const item of licenses.items) {
+      const license = item.data;
+      const redacted: LicenseDocument = {
+        ...license,
+        customerId: undefined,
+        status: "revoked",
+        record: {
+          ...license.record,
+          licenseKeyHash: `${input.sentinel}:license-redacted`,
+          displayKeySuffix: "redacted",
+          status: "revoked",
+          revokedAt: license.record.revokedAt ?? input.now,
+          metadata: {
+            ...(license.record.metadata ?? {}),
+            anonymizedAt: input.now,
+          },
         },
         updatedAt: input.now,
       };
@@ -1224,6 +1360,40 @@ export class OpsRepository {
     return { scanned: stuck.length, reclaimed };
   }
 
+  async purgeWebhookRawPayloads(
+    cutoff: ISODateTime,
+    now: ISODateTime,
+    limit = 50,
+  ): Promise<{ readonly scanned: number; readonly purged: number }> {
+    const candidates = await listByTypeCandidates(
+      this.documents,
+      "webhook",
+      limit + 1,
+      {
+        where: { receivedAt: { lte: cutoff } },
+        orderBy: { receivedAt: "asc" },
+      },
+      (webhook) => webhookRawPayloadIsPurgeable(webhook, cutoff),
+    );
+
+    const stale = candidates.items.slice(0, limit);
+    let purged = 0;
+    for (const candidate of stale) {
+      const updated = await this.documents.update(candidate.id, (current) => {
+        const webhook = documentOfType(current, "webhook");
+        if (!webhook || !webhookRawPayloadIsPurgeable(webhook, cutoff)) return null;
+
+        return webhookDocumentWithRecord(webhook, now, {
+          rawPayloadJson: undefined,
+          rawPayloadPurgedAt: now,
+        });
+      });
+      if (documentOfType(updated, "webhook")) purged += 1;
+    }
+
+    return { scanned: stale.length, purged };
+  }
+
   async tryLeaseWorkflow(input: WorkflowLeaseRepositoryInput): Promise<WorkflowDocument | null> {
     const updated = await this.documents.update(input.workflowId, (current) => {
       const workflow = documentOfType(current, "workflow");
@@ -1414,10 +1584,12 @@ export class OpsRepository {
     action: string,
     idempotencyKey: string,
   ): Promise<AdminAuditDocument | null> {
-    const candidate = await this.documents.findOneByType("adminAudit", { idempotencyKey });
-    if (!candidate || candidate.record.action !== action) return null;
-
-    return candidate;
+    return findFirstByTypeCandidate(
+      this.documents,
+      "adminAudit",
+      (item) => (item.data.record.action === action ? item.data : null),
+      { where: { idempotencyKey } },
+    );
   }
 
   async findEmail(emailId: MikaId): Promise<EmailDocument | null> {
@@ -1446,6 +1618,47 @@ export class OpsRepository {
       cursor: hasMore ? String(items.length) : undefined,
       hasMore,
     };
+  }
+
+  async reclaimExhaustedEmails(
+    now: ISODateTime,
+    limit = 50,
+  ): Promise<{ readonly scanned: number; readonly reclaimed: number }> {
+    const candidates = await listByTypeCandidates(
+      this.documents,
+      "email",
+      limit + 1,
+      {
+        where: {
+          status: "queued",
+        },
+        orderBy: { nextAttemptAt: "asc" },
+      },
+      (email) => emailIsExhaustedLeaseLoss(email, now),
+    );
+
+    const exhausted = candidates.items.slice(0, limit);
+    let reclaimed = 0;
+    for (const candidate of exhausted) {
+      const updated = await this.documents.update(candidate.id, (current) => {
+        const email = documentOfType(current, "email");
+        if (!email || !emailIsExhaustedLeaseLoss(email, now)) return null;
+
+        return emailDocumentWithRecord(email, now, {
+          status: "failed",
+          nextAttemptAt: undefined,
+          leaseKey: undefined,
+          leasedAt: undefined,
+          leaseExpiresAt: undefined,
+          lastError:
+            email.record.lastError ??
+            "Email exhausted its lease attempts without delivery; marked failed for review.",
+        });
+      });
+      if (documentOfType(updated, "email")) reclaimed += 1;
+    }
+
+    return { scanned: exhausted.length, reclaimed };
   }
 
   async tryLeaseEmail(input: EmailLeaseRepositoryInput): Promise<EmailDocument | null> {
@@ -1678,6 +1891,34 @@ function workflowDueSortKey(workflow: WorkflowDocument): ISODateTime {
   );
 }
 
+function webhookRawPayloadIsPurgeable(webhook: WebhookDocument, cutoff: ISODateTime): boolean {
+  return (
+    webhook.record.receivedAt <= cutoff &&
+    webhook.record.rawPayloadJson !== undefined &&
+    webhook.record.rawPayloadPurgedAt === undefined
+  );
+}
+
+function webhookDocumentWithRecord(
+  webhook: WebhookDocument,
+  now: ISODateTime,
+  patch: Partial<WebhookDocument["record"]>,
+): WebhookDocument {
+  const record = {
+    ...webhook.record,
+    ...patch,
+  };
+
+  return {
+    ...webhook,
+    status: record.status,
+    nextAttemptAt: record.nextAttemptAt,
+    receivedAt: record.receivedAt,
+    record,
+    updatedAt: now,
+  };
+}
+
 function workflowHasActiveLease(
   workflow: WorkflowDocument,
   input: { readonly leaseKey: string; readonly now: ISODateTime },
@@ -1722,6 +1963,15 @@ function emailIsDueForLease(email: EmailDocument, now: ISODateTime, force = fals
   if (email.record.attemptCount >= email.record.maxAttempts) return false;
 
   return !email.nextAttemptAt || email.nextAttemptAt <= now;
+}
+
+function emailIsExhaustedLeaseLoss(email: EmailDocument, now: ISODateTime): boolean {
+  if (email.status !== "queued") return false;
+  const leaseExpiresAt = email.record.leaseExpiresAt;
+  if (!leaseExpiresAt || leaseExpiresAt > now) return false;
+  if (email.record.attemptCount < email.record.maxAttempts) return false;
+
+  return !email.record.lastError;
 }
 
 function emailHasActiveLease(
@@ -2181,7 +2431,7 @@ export class StockRepository {
         stockItemId: input.stockItemId,
         idempotencyKey: input.idempotencyKey,
         successStatus: "adjusted",
-        failureStatus: "would_go_negative",
+        failureStatus: (stock) => stockAdjustmentFailureStatus(stock, input.quantityDelta),
         reloadError: `Adjusted stock item '${input.stockItemId}' could not be reloaded.`,
         applyStockMutation: (executor) =>
           adjustStockStatement({
@@ -2207,6 +2457,24 @@ export class StockRepository {
   }
 }
 
+function stockAdjustmentFailureStatus(
+  stock: StockItemRecord,
+  quantityDelta: number,
+): "would_go_negative" | "would_undercut_reserved" {
+  const nextQuantityOnHand = stock.quantityOnHand + quantityDelta;
+  if (nextQuantityOnHand < 0) return "would_go_negative";
+  if (
+    quantityDelta < 0 &&
+    stock.policy === "finite" &&
+    !stock.allowBackorder &&
+    nextQuantityOnHand < stock.quantityReserved
+  ) {
+    return "would_undercut_reserved";
+  }
+
+  return "would_go_negative";
+}
+
 async function mutateStockWithEvent<
   TSuccessStatus extends string,
   TFailureStatus extends string,
@@ -2215,7 +2483,7 @@ async function mutateStockWithEvent<
   readonly stockItemId: MikaId;
   readonly idempotencyKey?: string;
   readonly successStatus: TSuccessStatus;
-  readonly failureStatus: TFailureStatus;
+  readonly failureStatus: TFailureStatus | ((stock: StockItemRecord) => TFailureStatus);
   readonly reloadError: string;
   readonly applyStockMutation: (executor: MikaDbExecutor) => Promise<StockMutationResult>;
   readonly createEvent: () => StockEventRecord;
@@ -2271,7 +2539,12 @@ async function mutateStockWithEvent<
 
   const mutation = await input.applyStockMutation(input.executor);
   if (!mutationAffected(mutation)) {
-    return { status: input.failureStatus, stock: current };
+    const failureStatus =
+      typeof input.failureStatus === "function"
+        ? input.failureStatus(current)
+        : input.failureStatus;
+
+    return { status: failureStatus, stock: current };
   }
 
   const event = input.createEvent();
@@ -2495,6 +2768,79 @@ export class EphemeralRepository {
     return record;
   }
 
+  async tryAcquireLock(input: {
+    readonly key: string;
+    readonly owner: string;
+    readonly subjectHash?: string;
+    readonly expiresAt: ISODateTime;
+    readonly now: ISODateTime;
+  }): Promise<EphemeralRecord | null> {
+    const ownerData = ephemeralLockOwnerData(input.owner);
+    const updated = await this.db
+      .updateTable("mika_ephemeral_records")
+      .set((eb) => ({
+        subject_hash: input.subjectHash ?? null,
+        status: "held",
+        count: eb("count", "+", 1),
+        expires_at: input.expiresAt,
+        version: eb("version", "+", 1),
+        data_json: ownerData,
+        updated_at: input.now,
+      }))
+      .where("key", "=", input.key)
+      .where("kind", "=", "lock")
+      .where((eb) =>
+        eb.or([
+          eb("status", "!=", "held"),
+          eb("expires_at", "<=", input.now),
+          eb("data_json", "=", ownerData),
+        ]),
+      )
+      .executeTakeFirst();
+    if (affected(updated.numUpdatedRows)) return this.get(input.key);
+
+    const inserted = await this.db
+      .insertInto("mika_ephemeral_records")
+      .values({
+        key: input.key,
+        kind: "lock",
+        subject_hash: input.subjectHash ?? null,
+        status: "held",
+        count: 1,
+        expires_at: input.expiresAt,
+        version: 1,
+        data_json: ownerData,
+        created_at: input.now,
+        updated_at: input.now,
+      })
+      .onConflict((oc) => oc.column("key").doNothing())
+      .executeTakeFirst();
+
+    return affected(inserted.numInsertedOrUpdatedRows) ? this.get(input.key) : null;
+  }
+
+  async releaseLock(input: {
+    readonly key: string;
+    readonly owner: string;
+    readonly now: ISODateTime;
+  }): Promise<boolean> {
+    const result = await this.db
+      .updateTable("mika_ephemeral_records")
+      .set((eb) => ({
+        status: "released",
+        expires_at: input.now,
+        version: eb("version", "+", 1),
+        updated_at: input.now,
+      }))
+      .where("key", "=", input.key)
+      .where("kind", "=", "lock")
+      .where("status", "=", "held")
+      .where("data_json", "=", ephemeralLockOwnerData(input.owner))
+      .executeTakeFirst();
+
+    return affected(result.numUpdatedRows);
+  }
+
   async consumeToken(key: string, now: ISODateTime): Promise<boolean> {
     const result = await this.db
       .updateTable("mika_ephemeral_records")
@@ -2671,6 +3017,10 @@ function mapEphemeral(row: MikaSelectable<"mika_ephemeral_records">): EphemeralR
     updatedAt: createISODateTime(row.updated_at),
     data: parseMetadata(row.data_json),
   };
+}
+
+function ephemeralLockOwnerData(owner: string): string {
+  return encodeJson({ owner });
 }
 
 function parseMetadata(text: string | null): JsonObject | undefined {

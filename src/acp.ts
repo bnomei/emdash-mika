@@ -49,6 +49,9 @@ export const MIKA_ACP_API_VERSION = "2025-09-12";
 /** Default prefix for generated ACP checkout session ids. */
 export const MIKA_ACP_DEFAULT_SESSION_PREFIX = "acp_checkout";
 
+const MIKA_ACP_DEFAULT_SESSION_TTL_MS = 15 * 60_000;
+const MIKA_ACP_DEFAULT_TERMINAL_RETENTION_MS = 24 * 60 * 60_000;
+
 /** Seller identity and policy links attached to ACP catalog products. */
 export interface MikaAcpSeller {
   readonly name: string;
@@ -200,8 +203,39 @@ export interface MikaAcpSessionRecord {
   readonly provider?: ProviderName;
   readonly paymentAuthorizationId?: string;
   readonly quoteInputHash?: string;
+  readonly quoteSnapshot?: MikaAcpSessionSnapshot;
+  readonly expiresAt?: ISODateTime;
+  readonly expiredAt?: ISODateTime;
+  readonly purgeAt?: ISODateTime;
   readonly createdAt: ISODateTime;
   readonly updatedAt: ISODateTime;
+}
+
+/** Frozen ACP quote projection captured before delegated payment handoff. */
+export interface MikaAcpSessionSnapshot {
+  readonly capturedAt: ISODateTime;
+  readonly quoteInputHash?: string;
+  readonly currency: string;
+  readonly lineItems: readonly MikaAcpLineItem[];
+  readonly fulfillmentOptions: readonly MikaAcpFulfillmentOption[];
+  readonly fulfillmentOptionId?: string;
+  readonly totals: readonly MikaAcpTotal[];
+  readonly messages: readonly MikaAcpMessage[];
+}
+
+/** Input for optional ACP session store cleanup. */
+export interface MikaAcpSessionCleanupInput {
+  readonly now: ISODateTime;
+  readonly limit?: number;
+  readonly terminalRetentionMs?: number;
+}
+
+/** Counts from expiring and purging ACP sessions. */
+export interface MikaAcpSessionCleanupResult {
+  readonly scanned: number;
+  readonly expired: number;
+  readonly purged: number;
+  readonly hasMore: boolean;
 }
 
 /** Pluggable store for ACP session records with optional idempotency-key coordination. */
@@ -212,6 +246,7 @@ export interface MikaAcpSessionStore {
   getByIdempotencyKey?(key: string): Promise<MikaAcpSessionRecord | undefined>;
   bindIdempotencyKey?(key: string, id: string): Promise<void>;
   releaseIdempotencyKey?(key: string, id: string): Promise<void>;
+  cleanupExpired?(input: MikaAcpSessionCleanupInput): Promise<MikaAcpSessionCleanupResult>;
 }
 
 /** Result of claiming an ACP idempotency key before creating or replaying a checkout session. */
@@ -231,6 +266,8 @@ export interface CreateMikaAcpCheckoutHandlersOptions {
   readonly signatureSecret?: string;
   readonly baseUrl?: string | URL;
   readonly now?: () => Date;
+  readonly sessionTtlMs?: number;
+  readonly terminalRetentionMs?: number;
   readonly createSessionId?: () => string;
   readonly orderUrl?: (input: {
     readonly checkoutId?: MikaId;
@@ -646,6 +683,52 @@ export function createMemoryMikaAcpSessionStore(): MikaAcpSessionStore {
       const binding = idempotencyKeys.get(key);
       if (binding?.id === id && binding.pending) idempotencyKeys.delete(key);
     },
+    async cleanupExpired(input) {
+      const limit = input.limit ?? 50;
+      const terminalRetentionMs =
+        input.terminalRetentionMs ?? MIKA_ACP_DEFAULT_TERMINAL_RETENTION_MS;
+      const records = [...sessions.values()].sort((left, right) =>
+        left.updatedAt.localeCompare(right.updatedAt),
+      );
+      let scanned = 0;
+      let expired = 0;
+      let purged = 0;
+      const purgedIds = new Set<string>();
+
+      for (const record of records) {
+        if (scanned >= limit) break;
+        scanned += 1;
+
+        if (record.purgeAt && new Date(record.purgeAt).getTime() <= new Date(input.now).getTime()) {
+          sessions.delete(record.id);
+          purgedIds.add(record.id);
+          purged += 1;
+          continue;
+        }
+
+        if (acpRecordIsExpired(record, input.now) && !record.expiredAt) {
+          sessions.set(record.id, {
+            ...record,
+            status: "not_ready_for_payment",
+            expiredAt: input.now,
+            purgeAt: addMilliseconds(input.now, terminalRetentionMs),
+            updatedAt: input.now,
+          });
+          expired += 1;
+        }
+      }
+
+      for (const [key, binding] of idempotencyKeys) {
+        if (purgedIds.has(binding.id)) idempotencyKeys.delete(key);
+      }
+
+      return {
+        scanned,
+        expired,
+        purged,
+        hasMore: records.length > scanned,
+      };
+    },
   };
 }
 
@@ -660,15 +743,30 @@ export function createMikaAcpCheckoutHandlers(
   }
 
   return {
-    create: async (request) => handleAcpCreate(options, request),
+    create: async (request) =>
+      safelyHandleAcpRequest(request, () => handleAcpCreate(options, request)),
     update: async (request, checkoutSessionId) =>
-      handleAcpUpdate(options, request, checkoutSessionId),
+      safelyHandleAcpRequest(request, () => handleAcpUpdate(options, request, checkoutSessionId)),
     complete: async (request, checkoutSessionId) =>
-      handleAcpComplete(options, request, checkoutSessionId),
-    get: async (request, checkoutSessionId) => handleAcpGet(options, request, checkoutSessionId),
+      safelyHandleAcpRequest(request, () =>
+        handleAcpComplete(options, request, checkoutSessionId),
+      ),
+    get: async (request, checkoutSessionId) =>
+      safelyHandleAcpRequest(request, () => handleAcpGet(options, request, checkoutSessionId)),
     cancel: async (request, checkoutSessionId) =>
-      handleAcpCancel(options, request, checkoutSessionId),
+      safelyHandleAcpRequest(request, () => handleAcpCancel(options, request, checkoutSessionId)),
   };
+}
+
+async function safelyHandleAcpRequest(
+  request: Request,
+  handler: () => Promise<Response>,
+): Promise<Response> {
+  try {
+    return await handler();
+  } catch {
+    return acpUnhandledFailure(request);
+  }
 }
 
 /** Factory for ACP `order_created` / `order_updated` webhook event payloads. */
@@ -727,22 +825,29 @@ async function handleAcpCreate(
     items: body.data.items,
     fulfillmentAddress: body.data.fulfillment_address,
     provider: options.provider ?? createProviderName("stripe"),
+    expiresAt: addMilliseconds(now, acpSessionTtlMs(options)),
     createdAt: now,
     updatedAt: now,
   };
   const idempotency = await beginAcpIdempotency(options, request, session.id, 201, true);
   if (!idempotency.ok) return idempotency.response;
 
-  const reconciled = await reconcileAcpCart(options, request, session, body.data.items);
-  if (!reconciled.ok) {
-    await releaseAcpIdempotency(options, idempotency.lease);
+  try {
+    const reconciled = await reconcileAcpCart(options, request, session, body.data.items);
+    if (!reconciled.ok) {
+      await releaseAcpIdempotency(options, idempotency.lease);
 
-    return reconciled.response;
+      return reconciled.response;
+    }
+    await options.store.put(reconciled.record);
+    await commitAcpIdempotency(options, idempotency.lease);
+
+    return acpJson(request, await recordToAcpSession(options, request, reconciled.record), 201);
+  } catch {
+    await releaseAcpIdempotencyQuietly(options, idempotency.lease);
+
+    return acpUnhandledFailure(request);
   }
-  await options.store.put(reconciled.record);
-  await commitAcpIdempotency(options, idempotency.lease);
-
-  return acpJson(request, await recordToAcpSession(options, request, reconciled.record), 201);
 }
 
 async function handleAcpUpdate(
@@ -753,55 +858,64 @@ async function handleAcpUpdate(
   const preflight = await verifyAcpRequest(options, request, true);
   if (preflight) return preflight;
 
-  const record = await options.store.get(checkoutSessionId);
+  let record = await options.store.get(checkoutSessionId);
   if (!record) return acpError(request, 404, "invalid_request", "Checkout session was not found.");
+  record = await expireAcpRecordIfNeeded(options, record);
+  if (acpRecordIsExpired(record, nowIso(options))) return acpExpiredError(request);
   const idempotency = await beginAcpIdempotency(options, request, checkoutSessionId, 200);
   if (!idempotency.ok) return idempotency.response;
-  const terminalStatus = await acpTerminalStatus(options, record);
-  if (terminalStatus) {
-    await releaseAcpIdempotency(options, idempotency.lease);
+  try {
+    const terminalStatus = await acpTerminalStatus(options, record);
+    if (terminalStatus) {
+      await releaseAcpIdempotency(options, idempotency.lease);
 
-    return acpTerminalError(request, terminalStatus, "updated");
+      return acpTerminalError(request, terminalStatus, "updated");
+    }
+
+    const body = await readJson<MikaAcpCheckoutUpdateRequest>(request);
+    if (!body.ok) {
+      await releaseAcpIdempotency(options, idempotency.lease);
+
+      return acpError(request, 400, "invalid_request", body.message);
+    }
+
+    if (record.checkoutId && body.data.items) {
+      await releaseAcpIdempotency(options, idempotency.lease);
+
+      return acpError(
+        request,
+        409,
+        "invalid_request",
+        "Cart items cannot be changed after checkout has started.",
+      );
+    }
+
+    const next: MikaAcpSessionRecord = {
+      ...record,
+      buyer: body.data.buyer ?? record.buyer,
+      items: body.data.items ?? record.items,
+      fulfillmentAddress: body.data.fulfillment_address ?? record.fulfillmentAddress,
+      fulfillmentOptionId: body.data.fulfillment_option_id ?? record.fulfillmentOptionId,
+      expiresAt: addMilliseconds(nowIso(options), acpSessionTtlMs(options)),
+      updatedAt: nowIso(options),
+    };
+    const reconciled = body.data.items
+      ? await reconcileAcpCart(options, request, next, body.data.items)
+      : { ok: true as const, record: next };
+    if (!reconciled.ok) {
+      await releaseAcpIdempotency(options, idempotency.lease);
+
+      return reconciled.response;
+    }
+    await options.store.put(reconciled.record);
+    await commitAcpIdempotency(options, idempotency.lease);
+
+    return acpJson(request, await recordToAcpSession(options, request, reconciled.record), 200);
+  } catch {
+    await releaseAcpIdempotencyQuietly(options, idempotency.lease);
+
+    return acpUnhandledFailure(request);
   }
-
-  const body = await readJson<MikaAcpCheckoutUpdateRequest>(request);
-  if (!body.ok) {
-    await releaseAcpIdempotency(options, idempotency.lease);
-
-    return acpError(request, 400, "invalid_request", body.message);
-  }
-
-  if (record.checkoutId && body.data.items) {
-    await releaseAcpIdempotency(options, idempotency.lease);
-
-    return acpError(
-      request,
-      409,
-      "invalid_request",
-      "Cart items cannot be changed after checkout has started.",
-    );
-  }
-
-  const next: MikaAcpSessionRecord = {
-    ...record,
-    buyer: body.data.buyer ?? record.buyer,
-    items: body.data.items ?? record.items,
-    fulfillmentAddress: body.data.fulfillment_address ?? record.fulfillmentAddress,
-    fulfillmentOptionId: body.data.fulfillment_option_id ?? record.fulfillmentOptionId,
-    updatedAt: nowIso(options),
-  };
-  const reconciled = body.data.items
-    ? await reconcileAcpCart(options, request, next, body.data.items)
-    : { ok: true as const, record: next };
-  if (!reconciled.ok) {
-    await releaseAcpIdempotency(options, idempotency.lease);
-
-    return reconciled.response;
-  }
-  await options.store.put(reconciled.record);
-  await commitAcpIdempotency(options, idempotency.lease);
-
-  return acpJson(request, await recordToAcpSession(options, request, reconciled.record), 200);
 }
 
 async function handleAcpComplete(
@@ -812,138 +926,198 @@ async function handleAcpComplete(
   const preflight = await verifyAcpRequest(options, request, true);
   if (preflight) return preflight;
 
-  const record = await options.store.get(checkoutSessionId);
+  let record = await options.store.get(checkoutSessionId);
   if (!record) return acpError(request, 404, "invalid_request", "Checkout session was not found.");
+  record = await expireAcpRecordIfNeeded(options, record);
+  if (acpRecordIsExpired(record, nowIso(options))) return acpExpiredError(request);
   const idempotency = await beginAcpIdempotency(
     options,
     request,
     checkoutSessionId,
     200,
-    false,
-    `acp_complete:${checkoutSessionId}`,
   );
   if (!idempotency.ok) return idempotency.response;
-  const terminalStatus = await acpTerminalStatus(options, record);
-  if (terminalStatus === "completed") {
-    await commitAcpIdempotency(options, idempotency.lease);
-
-    return acpJson(request, await recordToAcpSession(options, request, record), 200);
-  }
-  if (terminalStatus === "canceled") {
+  const completion = await beginAcpIdempotency(
+    options,
+    request,
+    checkoutSessionId,
+    409,
+    false,
+    `acp_complete_lock:${checkoutSessionId}`,
+  );
+  if (!completion.ok) {
     await releaseAcpIdempotency(options, idempotency.lease);
 
-    return acpTerminalError(request, terminalStatus, "completed");
+    return completion.response;
   }
-
-  if (record.checkoutId) {
-    await commitAcpIdempotency(options, idempotency.lease);
-
-    return acpJson(request, await recordToAcpSession(options, request, record), 200);
-  }
-
-  const body = await readJson<MikaAcpCheckoutCompleteRequest>(request);
-  if (!body.ok) {
+  const releaseLeases = async () => {
     await releaseAcpIdempotency(options, idempotency.lease);
+    await releaseAcpIdempotency(options, completion.lease);
+  };
+  const releaseLeasesQuietly = async () => {
+    await releaseAcpIdempotencyQuietly(options, idempotency.lease);
+    await releaseAcpIdempotencyQuietly(options, completion.lease);
+  };
+  try {
+    const terminalStatus = await acpTerminalStatus(options, record);
+    if (terminalStatus === "completed") {
+      await commitAcpIdempotency(options, idempotency.lease);
+      await releaseAcpIdempotency(options, completion.lease);
 
-    return acpError(request, 400, "invalid_request", body.message);
-  }
-  if (!body.data.payment_data?.token || !body.data.payment_data.provider) {
-    await releaseAcpIdempotency(options, idempotency.lease);
+      return acpJson(request, await recordToAcpSession(options, request, record), 200);
+    }
+    if (terminalStatus === "canceled") {
+      await releaseLeases();
 
-    return acpError(
-      request,
-      400,
-      "invalid_request",
-      "payment_data.token and provider are required.",
-      "$.payment_data",
-    );
-  }
-  const expectedProvider = providerToAcp(record.provider);
-  if (body.data.payment_data.provider !== expectedProvider) {
-    await releaseAcpIdempotency(options, idempotency.lease);
+      return acpTerminalError(request, terminalStatus, "completed");
+    }
 
-    return acpError(
-      request,
-      400,
-      "invalid_request",
-      `payment_data.provider must be '${expectedProvider}' for this checkout session.`,
-      "$.payment_data.provider",
-    );
-  }
-  if (body.data.payment_data.provider !== "stripe") {
-    await releaseAcpIdempotency(options, idempotency.lease);
+    if (record.checkoutId) {
+      await releaseLeases();
 
-    return acpError(
-      request,
-      400,
-      "invalid_request",
-      "ACP delegated checkout currently supports Stripe shared payment tokens only.",
-      "$.payment_data.provider",
-    );
-  }
+      return acpError(
+        request,
+        409,
+        "invalid_request",
+        "Checkout session already has a payment attempt in progress. Create a new ACP checkout session to retry payment.",
+      );
+    }
 
-  const customer = buyerToCustomer(body.data.buyer ?? record.buyer);
-  const preview = await previewAcpCheckout(options, request, record, customer);
-  if (!preview.ok) {
-    await releaseAcpIdempotency(options, idempotency.lease);
+    const body = await readJson<MikaAcpCheckoutCompleteRequest>(request);
+    if (!body.ok) {
+      await releaseLeases();
 
-    return acpErrorFromResult(request, preview);
-  }
-  if (!preview.data.inputHash || preview.data.status !== "requires_payment_authorization") {
-    await releaseAcpIdempotency(options, idempotency.lease);
+      return acpError(request, 400, "invalid_request", body.message);
+    }
+    if (!body.data.payment_data?.token || !body.data.payment_data.provider) {
+      await releaseLeases();
 
-    return acpError(request, 409, "invalid_request", "Checkout session is not ready for payment.");
-  }
+      return acpError(
+        request,
+        400,
+        "invalid_request",
+        "payment_data.token and provider are required.",
+        "$.payment_data",
+      );
+    }
+    const expectedProvider = providerToAcp(record.provider);
+    if (body.data.payment_data.provider !== expectedProvider) {
+      await releaseLeases();
 
-  const proofId = `acp_payment_authorization_${cryptoSafeId()}`;
-  const ctx = acpContext(options, request, record.sessionId);
-  const checkout = await options.api.checkout.start(ctx, {
-    cartId: record.cartId,
-    provider: record.provider,
-    customer,
-    customFields: {
-      [MIKA_DELEGATED_PAYMENT_TOKEN_METADATA_KEY]: body.data.payment_data.token,
-      [MIKA_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY]: body.data.payment_data.provider,
-      [MIKA_DELEGATED_PAYMENT_AUTHORIZATION_METADATA_KEY]: proofId,
-      [MIKA_DELEGATED_PAYMENT_CHECKOUT_SESSION_ID_METADATA_KEY]: record.id,
-      [MIKA_DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY]: preview.data.inputHash,
-    },
-  });
-  if (!checkout.ok) {
-    await releaseAcpIdempotency(options, idempotency.lease);
+      return acpError(
+        request,
+        400,
+        "invalid_request",
+        `payment_data.provider must be '${expectedProvider}' for this checkout session.`,
+        "$.payment_data.provider",
+      );
+    }
+    if (body.data.payment_data.provider !== "stripe") {
+      await releaseLeases();
 
-    return acpErrorFromResult(request, checkout);
-  }
-  if (acpCheckoutStartTerminalStatus(checkout.data.status)) {
-    await options.store.put({
+      return acpError(
+        request,
+        400,
+        "invalid_request",
+        "ACP delegated checkout currently supports Stripe shared payment tokens only.",
+        "$.payment_data.provider",
+      );
+    }
+
+    const customer = buyerToCustomer(body.data.buyer ?? record.buyer);
+    const preview = await previewAcpCheckout(options, request, record, customer);
+    if (!preview.ok) {
+      await releaseLeases();
+
+      return acpErrorFromResult(request, preview);
+    }
+    if (!preview.data.inputHash || preview.data.status !== "requires_payment_authorization") {
+      await releaseLeases();
+
+      return acpError(
+        request,
+        409,
+        "invalid_request",
+        "Checkout session is not ready for payment.",
+      );
+    }
+
+    const proofId = `acp_payment_authorization_${cryptoSafeId()}`;
+    const ctx = acpContext(options, request, record.sessionId);
+    const checkout = await options.api.checkout.start(ctx, {
+      cartId: record.cartId,
+      provider: record.provider,
+      customer,
+      customFields: {
+        [MIKA_DELEGATED_PAYMENT_TOKEN_METADATA_KEY]: body.data.payment_data.token,
+        [MIKA_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY]: body.data.payment_data.provider,
+        [MIKA_DELEGATED_PAYMENT_AUTHORIZATION_METADATA_KEY]: proofId,
+        [MIKA_DELEGATED_PAYMENT_CHECKOUT_SESSION_ID_METADATA_KEY]: record.id,
+        [MIKA_DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY]: preview.data.inputHash,
+      },
+    });
+    if (!checkout.ok) {
+      await releaseLeases();
+
+      return acpErrorFromResult(request, checkout);
+    }
+    if (acpCheckoutStartTerminalStatus(checkout.data.status)) {
+      await options.store.put({
+        ...record,
+        buyer: body.data.buyer ?? record.buyer,
+        status: "not_ready_for_payment",
+        updatedAt: nowIso(options),
+      });
+      await releaseLeases();
+
+      return acpError(
+        request,
+        409,
+        "invalid_request",
+        `Checkout session is ${checkout.data.status} and cannot be completed.`,
+      );
+    }
+    if (!preview.data.quote) {
+      await releaseLeases();
+
+      return acpError(
+        request,
+        409,
+        "invalid_request",
+        "Checkout session is not ready for payment.",
+      );
+    }
+
+    const now = nowIso(options);
+
+    const completed: MikaAcpSessionRecord = {
       ...record,
       buyer: body.data.buyer ?? record.buyer,
-      status: "not_ready_for_payment",
-      updatedAt: nowIso(options),
-    });
-    await releaseAcpIdempotency(options, idempotency.lease);
+      checkoutId: checkout.data.id,
+      status: checkout.data.status === "completed" ? "completed" : "ready_for_payment",
+      paymentAuthorizationId: proofId,
+      quoteInputHash: preview.data.inputHash,
+      quoteSnapshot: acpSessionSnapshotFromQuote(
+        { ...record, fulfillmentOptionId: record.fulfillmentOptionId },
+        preview.data.quote,
+        now,
+        preview.data.inputHash,
+      ),
+      ...(checkout.data.status === "completed"
+        ? { purgeAt: addMilliseconds(now, acpTerminalRetentionMs(options)) }
+        : {}),
+      updatedAt: now,
+    };
+    await options.store.put(completed);
+    await commitAcpIdempotency(options, idempotency.lease);
+    await releaseAcpIdempotency(options, completion.lease);
 
-    return acpError(
-      request,
-      409,
-      "invalid_request",
-      `Checkout session is ${checkout.data.status} and cannot be completed.`,
-    );
+    return acpJson(request, await recordToAcpSession(options, request, completed), 200);
+  } catch {
+    await releaseLeasesQuietly();
+
+    return acpUnhandledFailure(request);
   }
-
-  const completed: MikaAcpSessionRecord = {
-    ...record,
-    buyer: body.data.buyer ?? record.buyer,
-    checkoutId: checkout.data.id,
-    status: checkout.data.status === "completed" ? "completed" : "ready_for_payment",
-    paymentAuthorizationId: proofId,
-    quoteInputHash: preview.data.inputHash,
-    updatedAt: nowIso(options),
-  };
-  await options.store.put(completed);
-  await commitAcpIdempotency(options, idempotency.lease);
-
-  return acpJson(request, await recordToAcpSession(options, request, completed), 200);
 }
 
 // checkout.start can return terminal failure states that must block ACP complete with 409.
@@ -964,8 +1138,9 @@ async function handleAcpGet(
   const preflight = await verifyAcpRequest(options, request, false);
   if (preflight) return preflight;
 
-  const record = await options.store.get(checkoutSessionId);
+  let record = await options.store.get(checkoutSessionId);
   if (!record) return acpError(request, 404, "invalid_request", "Checkout session was not found.");
+  record = await expireAcpRecordIfNeeded(options, record);
 
   return acpJson(request, await recordToAcpSession(options, request, record), 200);
 }
@@ -978,43 +1153,52 @@ async function handleAcpCancel(
   const preflight = await verifyAcpRequest(options, request, true);
   if (preflight) return preflight;
 
-  const record = await options.store.get(checkoutSessionId);
+  let record = await options.store.get(checkoutSessionId);
   if (!record) return acpError(request, 404, "invalid_request", "Checkout session was not found.");
+  record = await expireAcpRecordIfNeeded(options, record);
+  if (acpRecordIsExpired(record, nowIso(options))) return acpExpiredError(request);
   const idempotency = await beginAcpIdempotency(options, request, checkoutSessionId, 200);
   if (!idempotency.ok) return idempotency.response;
-  const terminalStatus = await acpTerminalStatus(options, record);
-  if (terminalStatus === "completed") {
-    await releaseAcpIdempotency(options, idempotency.lease);
-
-    return acpTerminalError(request, terminalStatus, "canceled");
-  }
-  if (terminalStatus === "canceled") {
-    await commitAcpIdempotency(options, idempotency.lease);
-
-    return acpJson(request, await recordToAcpSession(options, request, record), 200);
-  }
-
-  if (record.checkoutId) {
-    const cancellation = await options.api.checkout.cancel(
-      acpContext(options, request, record.sessionId),
-      { checkoutId: record.checkoutId },
-    );
-    if (!cancellation.ok && cancellation.status !== 404) {
+  try {
+    const terminalStatus = await acpTerminalStatus(options, record);
+    if (terminalStatus === "completed") {
       await releaseAcpIdempotency(options, idempotency.lease);
 
-      return acpErrorFromResult(request, cancellation);
+      return acpTerminalError(request, terminalStatus, "canceled");
     }
+    if (terminalStatus === "canceled") {
+      await commitAcpIdempotency(options, idempotency.lease);
+
+      return acpJson(request, await recordToAcpSession(options, request, record), 200);
+    }
+
+    if (record.checkoutId) {
+      const cancellation = await options.api.checkout.cancel(
+        acpContext(options, request, record.sessionId),
+        { checkoutId: record.checkoutId },
+      );
+      if (!cancellation.ok && cancellation.status !== 404) {
+        await releaseAcpIdempotency(options, idempotency.lease);
+
+        return acpErrorFromResult(request, cancellation);
+      }
+    }
+
+    const canceled: MikaAcpSessionRecord = {
+      ...record,
+      status: "canceled",
+      purgeAt: addMilliseconds(nowIso(options), acpTerminalRetentionMs(options)),
+      updatedAt: nowIso(options),
+    };
+    await options.store.put(canceled);
+    await commitAcpIdempotency(options, idempotency.lease);
+
+    return acpJson(request, await recordToAcpSession(options, request, canceled), 200);
+  } catch {
+    await releaseAcpIdempotencyQuietly(options, idempotency.lease);
+
+    return acpUnhandledFailure(request);
   }
-
-  const canceled: MikaAcpSessionRecord = {
-    ...record,
-    status: "canceled",
-    updatedAt: nowIso(options),
-  };
-  await options.store.put(canceled);
-  await commitAcpIdempotency(options, idempotency.lease);
-
-  return acpJson(request, await recordToAcpSession(options, request, canceled), 200);
 }
 
 interface MikaAcpIdempotencyLease {
@@ -1117,6 +1301,17 @@ async function releaseAcpIdempotency(
   if (lease?.claimed) await options.store.releaseIdempotencyKey?.(lease.key, lease.id);
 }
 
+async function releaseAcpIdempotencyQuietly(
+  options: CreateMikaAcpCheckoutHandlersOptions,
+  lease: MikaAcpIdempotencyLease | undefined,
+): Promise<void> {
+  try {
+    await releaseAcpIdempotency(options, lease);
+  } catch {
+    // Best-effort cleanup after an ACP storage/API failure; callers still receive a protocol error.
+  }
+}
+
 function acpIdempotencyStoreKey(request: Request): string | undefined {
   const key = request.headers.get("Idempotency-Key");
   if (!key) return undefined;
@@ -1143,6 +1338,54 @@ async function acpTerminalStatus(
   if (checkout.data.status === "cancelled") return "canceled";
 
   return undefined;
+}
+
+function acpSessionTtlMs(options: CreateMikaAcpCheckoutHandlersOptions): number {
+  return options.sessionTtlMs ?? MIKA_ACP_DEFAULT_SESSION_TTL_MS;
+}
+
+function acpTerminalRetentionMs(options: CreateMikaAcpCheckoutHandlersOptions): number {
+  return options.terminalRetentionMs ?? MIKA_ACP_DEFAULT_TERMINAL_RETENTION_MS;
+}
+
+function acpRecordIsTerminal(record: MikaAcpSessionRecord): boolean {
+  return record.status === "completed" || record.status === "canceled";
+}
+
+function acpRecordIsExpired(record: MikaAcpSessionRecord, now: ISODateTime): boolean {
+  if (acpRecordIsTerminal(record)) return false;
+  if (record.expiredAt) return true;
+  if (!record.expiresAt) return false;
+
+  return new Date(record.expiresAt).getTime() <= new Date(now).getTime();
+}
+
+async function expireAcpRecordIfNeeded(
+  options: CreateMikaAcpCheckoutHandlersOptions,
+  record: MikaAcpSessionRecord,
+): Promise<MikaAcpSessionRecord> {
+  const now = nowIso(options);
+  if (!acpRecordIsExpired(record, now) || record.expiredAt) return record;
+
+  const expired: MikaAcpSessionRecord = {
+    ...record,
+    status: "not_ready_for_payment",
+    expiredAt: now,
+    purgeAt: addMilliseconds(now, acpTerminalRetentionMs(options)),
+    updatedAt: now,
+  };
+  await options.store.put(expired);
+
+  return expired;
+}
+
+function acpExpiredError(request: Request): Response {
+  return acpError(
+    request,
+    409,
+    "checkout_expired",
+    "Checkout session has expired. Create a new ACP checkout session to continue.",
+  );
 }
 
 function acpTerminalError(
@@ -1285,14 +1528,89 @@ async function recordToAcpSession(
   const checkoutStatus = record.checkoutId
     ? await options.api.checkout.status(ctx, { checkoutId: record.checkoutId })
     : undefined;
+  const checkout = checkoutStatus?.ok ? checkoutStatus.data : undefined;
+  const status =
+    checkout?.status === "completed" || record.status === "completed"
+      ? "completed"
+      : checkout?.status === "cancelled" || record.status === "canceled"
+        ? "canceled"
+        : undefined;
+  if (status === "completed" && record.quoteSnapshot) {
+    return acpCheckoutSessionFromSnapshot({
+      record,
+      snapshot: record.quoteSnapshot,
+      status,
+      seller: options.seller,
+      orderUrl: options.orderUrl?.({ checkoutId: record.checkoutId, sessionId: record.id }),
+      checkout,
+    });
+  }
 
   return acpCheckoutSessionFromState({
     record,
     quote: quote.ok ? quote.data : emptyQuote(record),
-    checkout: checkoutStatus?.ok ? checkoutStatus.data : undefined,
+    checkout,
     seller: options.seller,
     orderUrl: options.orderUrl?.({ checkoutId: record.checkoutId, sessionId: record.id }),
   });
+}
+
+function acpSessionSnapshotFromQuote(
+  record: MikaAcpSessionRecord,
+  quote: CartQuoteDTO,
+  capturedAt: ISODateTime,
+  quoteInputHash?: string,
+): MikaAcpSessionSnapshot {
+  return {
+    capturedAt,
+    ...(quoteInputHash ? { quoteInputHash } : {}),
+    currency: quote.currency.toLowerCase(),
+    lineItems: quote.items.map((line, index) => acpLineItem(line, index)),
+    fulfillmentOptions: fulfillmentOptions(quote),
+    ...(record.fulfillmentOptionId ? { fulfillmentOptionId: record.fulfillmentOptionId } : {}),
+    totals: acpTotals(quote),
+    messages: acpMessages(quote),
+  };
+}
+
+function acpCheckoutSessionFromSnapshot(input: {
+  readonly record: MikaAcpSessionRecord;
+  readonly snapshot: MikaAcpSessionSnapshot;
+  readonly status: MikaAcpCheckoutSessionStatus;
+  readonly seller: MikaAcpSeller;
+  readonly orderUrl?: string;
+  readonly checkout?: CheckoutSessionDTO;
+}): MikaAcpCheckoutSession {
+  return {
+    id: input.record.id,
+    ...(input.record.buyer ? { buyer: input.record.buyer } : {}),
+    payment_provider: {
+      provider: providerToAcp(input.record.provider),
+      supported_payment_methods: ["card"],
+    },
+    status: input.status,
+    currency: input.snapshot.currency,
+    line_items: input.snapshot.lineItems,
+    ...(input.record.fulfillmentAddress
+      ? { fulfillment_address: input.record.fulfillmentAddress }
+      : {}),
+    fulfillment_options: input.snapshot.fulfillmentOptions,
+    ...(input.snapshot.fulfillmentOptionId
+      ? { fulfillment_option_id: input.snapshot.fulfillmentOptionId }
+      : {}),
+    totals: input.snapshot.totals,
+    messages: input.snapshot.messages,
+    links: input.seller.links.flatMap((link) => acpCheckoutLink(link)),
+    ...(input.status === "completed" && input.checkout && input.orderUrl
+      ? {
+          order: {
+            id: input.checkout.orderId ?? input.checkout.id,
+            checkout_session_id: input.record.id,
+            permalink_url: input.orderUrl,
+          },
+        }
+      : {}),
+  };
 }
 
 /** Projects persisted session state plus Mika quote/checkout DTOs into an ACP checkout session. */
@@ -1308,9 +1626,11 @@ export function acpCheckoutSessionFromState(input: {
       ? "completed"
       : input.checkout?.status === "cancelled" || input.record.status === "canceled"
         ? "canceled"
-        : input.quote.status === "valid" || input.quote.status === "changed"
-          ? "ready_for_payment"
-          : "not_ready_for_payment";
+        : input.record.expiredAt
+          ? "not_ready_for_payment"
+          : input.quote.status === "valid" || input.quote.status === "changed"
+            ? "ready_for_payment"
+            : "not_ready_for_payment";
 
   return {
     id: input.record.id,
@@ -1698,8 +2018,16 @@ function acpErrorFromResult(
   );
 }
 
+function acpUnhandledFailure(request: Request): Response {
+  return acpError(request, 500, "provider_failed", "ACP checkout operation failed.");
+}
+
 function nowIso(options: CreateMikaAcpCheckoutHandlersOptions): ISODateTime {
   return createISODateTime((options.now?.() ?? new Date()).toISOString());
+}
+
+function addMilliseconds(value: ISODateTime, milliseconds: number): ISODateTime {
+  return createISODateTime(new Date(Date.parse(value) + milliseconds).toISOString());
 }
 
 function acpJson(request: Request, body: MikaAcpCheckoutSession, status: number): Response {

@@ -397,6 +397,8 @@ export interface AccountExportDownloadDTO {
   readonly id: MikaId;
   readonly href?: string;
   readonly expiresAt?: ISODateTime;
+  readonly requiresConfirmation?: boolean;
+  readonly confirmMethod?: "POST";
 }
 
 /** Customer account summary with orders, subscriptions, and entitlements. */
@@ -560,6 +562,7 @@ export interface AccountExportStatusInput {
 export interface AccountExportDownloadInput {
   readonly exportId: MikaId;
   readonly token?: string;
+  readonly consumeToken?: boolean;
 }
 
 /** Checkout session and optional status token for payment polling. */

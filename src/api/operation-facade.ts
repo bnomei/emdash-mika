@@ -87,7 +87,7 @@ function collectMikaOperationFacadeSpec(): MikaOperationFacadeSpec {
     [MikaOperationKey, MikaOperationDefinition]
   >) {
     const namespaceSpec = (spec[operation.namespace] ??= {});
-    namespaceSpec[operation.method] = key;
+    namespaceSpec[operation.method] ??= key;
   }
 
   return spec as MikaOperationFacadeSpec;

@@ -349,6 +349,10 @@ async function prepareEmailDelivery(
           renderMikaEmail("order_confirmation", {
             toEmail: email.record.toEmail,
             orderNumber: order.orderNumber,
+            subtotal: order.aggregate.totals.subtotal,
+            ...(order.aggregate.totals.discount
+              ? { discount: order.aggregate.totals.discount }
+              : {}),
             total: order.aggregate.totals.total,
             lines: lines.map((line) => ({
               title: line.item.titleSnapshot,

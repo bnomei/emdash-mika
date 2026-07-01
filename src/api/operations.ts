@@ -809,6 +809,21 @@ export const mikaOperationDefinitions = defineMikaOperations({
     schema: accountExportDownloadInputSchema,
     searchKeys: ["exportId", "token"],
   }),
+  accountExportDownloadConsume: defineMikaOperation({
+    name: "account.exportDownload.consume",
+    namespace: "account",
+    method: "exportDownload",
+    routeKey: "accountExportDownload",
+    routePath: "account/export/download",
+    httpMethod: "POST",
+    transport: "body",
+    public: false,
+    requiresRequestContext: true,
+    agent: agentOperationMetadata.accountRead,
+    schema: accountExportDownloadInputSchema,
+    call: (api, ctx, operationInput) =>
+      api.account.exportDownload(ctx, { ...operationInput, consumeToken: true }),
+  }),
   accountDelete: defineMikaOperation({
     namespace: "account",
     method: "delete",
@@ -1270,12 +1285,9 @@ function collectMikaApiMethodNames(): Record<string, readonly string[]> {
 
   for (const operation of Object.values(mikaOperationDefinitions)) {
     methodNames[operation.namespace] ??= [];
-    if (methodNames[operation.namespace]?.includes(operation.method)) {
-      throw new Error(
-        `Mika API method '${operation.namespace}.${operation.method}' is defined more than once.`,
-      );
+    if (!methodNames[operation.namespace]?.includes(operation.method)) {
+      methodNames[operation.namespace]?.push(operation.method);
     }
-    methodNames[operation.namespace]?.push(operation.method);
   }
 
   return methodNames;
