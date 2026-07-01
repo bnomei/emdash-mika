@@ -218,7 +218,9 @@ type Writable<TValue> = {
 /** Options controlling locale defaults and optional namespace inclusion. */
 export interface MikaOperationFacadeOptions {
   readonly locale?: string;
+  /** Exposes the admin namespace; intended for server-side clients only. */
   readonly includeAdmin?: boolean;
+  /** Exposes webhook.receive; intended for server-side ingest routes. */
   readonly includeWebhook?: boolean;
 }
 

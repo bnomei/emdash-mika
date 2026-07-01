@@ -1,9 +1,13 @@
 /**
- * Process-wide defaults for API overrides and operation policy resolved at route construction.
+ * Process-wide defaults for API overrides and operation policy merged at route construction.
+ *
+ * Host bootstrap registers defaults once via `setDefault*`; individual route factories may
+ * override per call. Tests reset by passing `undefined`.
  */
 import type { MikaApiOverrides } from "./server";
 import type { MikaOperationPolicy } from "./operation-policy";
 
+// Module-level singletons merged by resolve* when call sites omit explicit values.
 let defaultMikaApiOverrides: MikaApiOverrides | undefined;
 let defaultMikaOperationPolicy: MikaOperationPolicy | undefined;
 

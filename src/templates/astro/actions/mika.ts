@@ -1,6 +1,6 @@
 /**
  * Re-exports Mika Astro Actions from the package subpath.
- * Keeps the template action module aligned with published `astro-actions` contracts.
+ * Hosts should customize via `actions/index.ts` (`createMikaActions(options)`), not this shim.
  */
 export {
   createMikaActions,

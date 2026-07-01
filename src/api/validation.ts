@@ -202,7 +202,7 @@ export const orderInvoiceInputSchema = z.object({
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<OrderInvoiceInput>;
 
-/** Optional post-action redirect path shared by account portal flows. */
+/** Optional post-action redirect path shared by account export, delete, and portal inputs. */
 export const returnToInputSchema = z.object({
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<AccountExportInput & AccountDeleteInput & AccountPortalInput>;

@@ -2083,6 +2083,7 @@ export class StockRepository {
     return findStockEventById(this.db, eventId);
   }
 
+  /** Upserts stock item including on-hand and reserved quantities on sellable_id conflict. */
   async putItem(record: StockItemRecord): Promise<void> {
     const row: MikaInsertable<"mika_stock_items"> = {
       id: record.id,
@@ -2117,6 +2118,7 @@ export class StockRepository {
       .execute();
   }
 
+  /** Upserts stock definition only; does not overwrite quantity_on_hand or quantity_reserved. */
   async putItemDefinition(record: StockItemRecord): Promise<void> {
     const row: MikaInsertable<"mika_stock_items"> = {
       id: record.id,

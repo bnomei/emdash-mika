@@ -90,16 +90,21 @@ export interface MikaAdminActionDefinition {
   readonly confirm?: string;
   readonly placement?: MikaAdminActionPlacement;
   readonly payload?: Record<string, unknown>;
+  /** Entry field name whose value is injected into the runner payload. */
   readonly contextKey?: string;
+  /** Payload property that receives the context field value. */
   readonly contextValueKey?: string;
   readonly target?: MikaAdminActionTargetRequirement;
   readonly form?: MikaAdminActionFormMetadata;
   /** @deprecated Use form. */
   readonly input?: MikaAdminActionInputMetadata;
   readonly disabled?: boolean;
+  /** Minimum milliseconds between repeated runs of the same action. */
   readonly cooldownMs?: number;
   readonly feedback?: MikaAdminActionFeedback;
+  /** Poll interval while waiting for async admin runner completion. */
   readonly pollIntervalMs?: number;
+  /** Maximum poll duration before the UI treats the run as timed out. */
   readonly pollTimeoutMs?: number;
 }
 
@@ -126,6 +131,7 @@ export interface MikaActionsProviderConfig {
   readonly label?: string;
   readonly manifestRoute?: string;
   readonly runnerRoute?: string;
+  /** EmDash plugin ids permitted as action targets in the actions provider. */
   readonly allowedTargetPluginIds?: readonly string[];
 }
 
@@ -507,7 +513,9 @@ const MIKA_FIELD_ACTION_IDS = [
 
 /** Options for filtering which dashboard and field admin actions appear in a manifest. */
 export interface MikaAdminManifestOptions {
+  /** When false, dashboard-surface actions are omitted from the manifest. */
   readonly includeDashboardActions?: boolean;
+  /** When false, entry/field-surface actions are omitted from the manifest. */
   readonly includeFieldActions?: boolean;
   readonly disabled?: readonly MikaAdminActionId[];
 }

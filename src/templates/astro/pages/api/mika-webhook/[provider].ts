@@ -10,7 +10,7 @@ import type { APIRoute } from "astro";
 /** Webhook ingest must read the live request body and provider route param. */
 export const prerender = false;
 
-/** Verifies provider webhook metadata and forwards the payload to `webhook.receive`. */
+/** Hashes the raw body, records signature-header presence, and forwards to `webhook.receive` for verification. */
 export const POST: APIRoute = async ({ params, request, url }) => {
   const provider = params["provider"];
   if (!provider) return new Response("Missing provider.", { status: 400 });
@@ -18,6 +18,7 @@ export const POST: APIRoute = async ({ params, request, url }) => {
   const Mika = createMika({ request, url }, { includeWebhook: true });
   const rawBody = await request.clone().arrayBuffer();
   const payloadHash = "sha256:" + createHash("sha256").update(Buffer.from(rawBody)).digest("hex");
+  // Presence-only metadata; cryptographic verification happens inside webhook.receive.
   const signatureHeaderPresent =
     request.headers.has("stripe-signature") ||
     request.headers.has("paddle-signature") ||

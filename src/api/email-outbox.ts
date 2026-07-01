@@ -89,6 +89,7 @@ export type MikaEmailOutboxRunItem =
     }
   | {
       readonly emailId: MikaId;
+      /** Lease contention before send (missed) or lost after successful provider delivery. */
       readonly status: "lease_missed" | "lease_lost";
     };
 
@@ -247,6 +248,7 @@ async function deliverLeasedEmail(
     return { emailId: email.id, status: "sent", providerMessageId };
   }
 
+  // Provider delivery succeeded but lease was lost; mark delivered without holding the lease.
   const recovered = await input.repositories.ops
     .markEmailDelivered({ emailId: email.id, now, providerMessageId })
     .catch(() => false);

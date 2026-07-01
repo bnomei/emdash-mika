@@ -43,12 +43,15 @@ import type {
 
 /** Configuration for the Astro Actions tree: API overrides, guards, and operation policy. */
 export interface MikaActionsOptions {
+  /** API handler overrides wired into the actions runtime. */
   readonly api?: MikaApiOverrides;
+  /** Host guard invoked before each action; throw to reject the request. */
   readonly guard?: (
     ctx: ActionAPIContext,
     action: MikaActionName,
     input: unknown,
   ) => Promise<void> | void;
+  /** Operation policy applied before dispatching to the API. */
   readonly operationPolicy?: MikaOperationPolicy;
 }
 
@@ -216,6 +219,7 @@ function actionRequestContext(ctx: ActionAPIContext): MikaRequestContext {
   });
 }
 
+// Reads MIKA_AGENT_IDEMPOTENCY_KEY_HEADER for Astro Action idempotency replay.
 function actionIdempotencyKey(request: Request): string | undefined {
   const value = request.headers.get(MIKA_AGENT_IDEMPOTENCY_KEY_HEADER)?.trim();
   return value && value.length > 0 ? value : undefined;

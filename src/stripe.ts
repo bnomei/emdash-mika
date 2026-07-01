@@ -138,10 +138,14 @@ export interface MikaStripeClient {
 
 /** Configuration for the Stripe provider adapter including client, webhook secret, and optional catalog sync. */
 export interface CreateMikaStripeProviderOptions {
+  /** Stripe SDK client with the namespaces the adapter will call. */
   readonly stripe: MikaStripeClient;
   readonly id?: ProviderName;
+  /** Webhook signing secret for constructEvent verification. */
   readonly webhookSecret?: string;
+  /** Capability override; defaults are inferred from available Stripe client namespaces. */
   readonly capabilities?: readonly MikaProviderCapability[];
+  /** Optional catalog sync handler for admin provider.sync operations. */
   readonly catalogSync?: (input: MikaProviderSyncInput) => Promise<AdminActionResultDTO>;
   readonly now?: () => Date;
 }
@@ -387,6 +391,7 @@ async function createStripeCheckoutSession(
     input.metadata,
     MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY,
   );
+  // Delegated ACP token routes to PaymentIntent creation instead of Checkout Session.
   if (delegatedToken) {
     return createStripeDelegatedPayment(provider, options, input, delegatedToken);
   }
@@ -495,6 +500,7 @@ async function retrieveStripeCheckoutSession(
   options: CreateMikaStripeProviderOptions,
   id: string,
 ): Promise<MikaProviderCheckoutSession> {
+  // pi_* ids resolve via PaymentIntents API (delegated ACP checkout path).
   if (id.startsWith("pi_") && options.stripe.paymentIntents?.retrieve) {
     const intent = await options.stripe.paymentIntents.retrieve(id);
 
@@ -846,6 +852,7 @@ function parseStripeWebhookEvent(
   return unknownStripeWebhookEvent(provider, providerEventId, type, input.parsed);
 }
 
+// Stripe event types normalized to paymentStatus: "failed" in Mika webhook handling.
 const STRIPE_PAYMENT_FAILURE_TYPES = new Set([
   "payment_intent.payment_failed",
   "checkout.session.async_payment_failed",

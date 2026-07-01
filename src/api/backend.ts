@@ -242,6 +242,7 @@ const CHECKOUT_CUSTOMER_EMAIL_METADATA_KEY = "checkoutCustomerEmail";
 const CHECKOUT_CUSTOMER_NAME_METADATA_KEY = "checkoutCustomerName";
 const CHECKOUT_CUSTOMER_COMPANY_METADATA_KEY = "checkoutCustomerCompany";
 const CHECKOUT_CUSTOMER_VAT_ID_METADATA_KEY = "checkoutCustomerVatId";
+// Internal checkout keys: stripped from provider metadata and omitted from persisted custom fields.
 const CHECKOUT_INTERNAL_METADATA_KEYS = new Set<string>([
   "checkoutIdempotencyKey",
   CHECKOUT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY,
@@ -254,6 +255,7 @@ const CHECKOUT_INTERNAL_METADATA_KEYS = new Set<string>([
   CHECKOUT_CUSTOMER_COMPANY_METADATA_KEY,
   CHECKOUT_CUSTOMER_VAT_ID_METADATA_KEY,
 ]);
+// Delegated-payment proof keys: never persisted on checkout documents (token, authorization hash).
 const DELEGATED_PAYMENT_PROOF_VOLATILE_METADATA_KEYS = new Set<string>([
   MIKA_DELEGATED_PAYMENT_TOKEN_METADATA_KEY,
   MIKA_DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY,
@@ -7154,6 +7156,7 @@ async function startCheckout(
   const checkoutId = input.createId("checkout");
   const expiresAt = checkoutExpiresAt(input, ctx);
   const statusToken = input.createId("checkout_status_token");
+  // Optimistic cart claim serializes concurrent checkout starts; release on any downstream failure.
   const claimedCart =
     resolved.cart && resolved.cartUpdatedAt
       ? await input.repositories.session.claimCartForCheckout({
@@ -7741,7 +7744,7 @@ async function releaseCartCheckoutClaimQuietly(
   try {
     await input.repositories.session.releaseCartCheckoutClaim({ cartId, checkoutId, now });
   } catch {
-    // Best effort: reservation release already compensated inventory.
+    // Best effort: unlock the cart so another checkout attempt can proceed.
   }
 }
 

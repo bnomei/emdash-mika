@@ -194,6 +194,7 @@ export type MikaStorageCollections = {
 export interface StorageCollection<TDocument> {
   get(id: string): Promise<TDocument | null>;
   put(id: string, data: TDocument): Promise<void>;
+  /** Returning null from the updater deletes the document. */
   update(
     id: string,
     updater: (current: TDocument | null) => TDocument | null,

@@ -223,6 +223,7 @@ const DEFAULT_AGENT_VISIBILITIES = [
 
 /** Filters which agent-visible operations are included in the generated manifest. */
 export interface CreateMikaAgentManifestOptions {
+  /** Visibility tiers to include; defaults to public and trusted operations. */
   readonly include?: readonly MikaAgentVisibility[];
 }
 

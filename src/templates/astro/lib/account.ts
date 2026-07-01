@@ -9,8 +9,11 @@ export interface MikaTemplateAccountLicense {
   readonly id: string;
   readonly title: string;
   readonly status: string;
+  /** Truncated license key suffix shown in the account UI. */
   readonly displayKeySuffix?: string;
+  /** Originating order id for entitlement traceability. */
   readonly orderId?: string;
+  /** Resolved download link when the license grants file access. */
   readonly downloadHref?: string;
 }
 

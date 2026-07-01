@@ -1,6 +1,10 @@
 /**
- * Scheduled maintenance orchestrator: email outbox, expired stock reservations,
- * ephemeral purge, and queued account-delete completion.
+ * Scheduled maintenance orchestrator for background commerce hygiene.
+ *
+ * `runOnce` sweeps eight optional tasks — each skips when its dependency is unconfigured:
+ * email outbox delivery, stuck email lease reclaim, raw webhook payload purge, ACP session
+ * cleanup, expired stock reservation release, ephemeral record purge, queued account-delete
+ * completion, and stuck workflow lease reclaim.
  */
 import type { MikaBackendNow, MikaBackendRepositories } from "./backend";
 import type { AdminActionResultDTO, MikaApiResult, ReleaseExpiredReservationsInput } from "./types";
@@ -420,6 +424,7 @@ async function processQueuedAccountDeleteRequests(input: {
   };
 }
 
+// Blocks account-delete completion while an active subscription or checkout-pending cart exists.
 async function assertAccountDeleteMaintenanceAllowed(
   repositories: MikaMaintenanceRepositories,
   request: {
@@ -454,6 +459,7 @@ async function assertAccountDeleteMaintenanceAllowed(
   }
 }
 
+// Anonymization sentinel precedence: customerId, then emailHash, then userId.
 function accountDeleteSentinel(request: {
   readonly customerId?: MikaId;
   readonly userId?: string;

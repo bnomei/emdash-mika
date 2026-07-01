@@ -100,6 +100,7 @@ async function handleActionRunner(
       },
     });
   }
+  // Unhandled runner exceptions return a generic 500 envelope instead of leaking internals.
   const result = await runMikaOperation({
     operation: resolved.data.operation,
     api,
@@ -122,6 +123,7 @@ async function handleActionRunner(
   return toMikaAdminActionRunResult(result, resolved.data.resultAdapter);
 }
 
+// Admin mutations that accept idempotency via header when the body omits idempotencyKey.
 const ADMIN_IDEMPOTENT_OPERATIONS: ReadonlySet<string> = new Set([
   "admin.stockAdjust",
   "admin.orderRefund",

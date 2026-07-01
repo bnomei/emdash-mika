@@ -97,6 +97,7 @@ export interface EphemeralRecord {
   readonly key: string;
   readonly kind: "token" | "rate_limit" | "lock" | "nonce" | "cache_marker";
   readonly subjectHash?: string;
+  /** Kind-specific lifecycle status (held, pending, consumed, etc.). */
   readonly status: string;
   readonly count: number;
   readonly expiresAt: ISODateTime;
@@ -296,6 +297,7 @@ export interface WorkflowStepRecord {
 /** Lease-backed multi-step workflow record for async fulfillment pipelines. */
 export interface WorkflowRecord {
   readonly id: MikaId;
+  /** Open extension for new workflow kinds without widening the core union. */
   readonly kind: "payment_webhook_fulfillment" | (string & {});
   readonly status: WorkflowStatus;
   readonly subjectType?: string;

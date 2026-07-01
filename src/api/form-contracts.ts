@@ -2,6 +2,7 @@
  * Serialized form-field contracts for purchase buttons and checkout customer fields.
  * Keeps HTML form values aligned with operation input schemas.
  */
+/** Hidden-field or query-string contract for sellable selection with optional price variant. */
 export interface MikaPurchaseFieldInput {
   readonly sellableId: string;
   readonly priceId?: string | null;

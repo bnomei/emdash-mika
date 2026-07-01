@@ -99,6 +99,7 @@ export interface MikaAcpFileUploadProductRow {
   readonly url: string;
   readonly brand: string;
   readonly image_url: string;
+  /** Decimal major-unit amount with ISO currency suffix (e.g. "19.99 USD"), not minor units. */
   readonly price: string;
   readonly availability: "in_stock" | "out_of_stock" | "pre_order" | "backorder";
   readonly seller_name: string;
@@ -190,7 +191,9 @@ export interface MikaAcpValidationIssue {
 
 /** Persisted ACP checkout session state linking cart, checkout, buyer, and payment authorization. */
 export interface MikaAcpSessionRecord {
+  /** ACP checkout session id (URL path param); distinct from the Mika cart/request session. */
   readonly id: string;
+  /** Isolated Mika session id used for cart and checkout API calls. */
   readonly sessionId: string;
   readonly cartId?: MikaId;
   readonly checkoutId?: MikaId;
@@ -202,10 +205,13 @@ export interface MikaAcpSessionRecord {
   readonly currency?: CurrencyCode;
   readonly provider?: ProviderName;
   readonly paymentAuthorizationId?: string;
+  /** Hash of checkout.preview input captured at delegated-payment handoff. */
   readonly quoteInputHash?: string;
+  /** Frozen quote projection paired with quoteInputHash for completion replay checks. */
   readonly quoteSnapshot?: MikaAcpSessionSnapshot;
   readonly expiresAt?: ISODateTime;
   readonly expiredAt?: ISODateTime;
+  /** Scheduled purge time for terminal sessions retained after completion or cancel. */
   readonly purgeAt?: ISODateTime;
   readonly createdAt: ISODateTime;
   readonly updatedAt: ISODateTime;
@@ -242,9 +248,12 @@ export interface MikaAcpSessionCleanupResult {
 export interface MikaAcpSessionStore {
   get(id: string): Promise<MikaAcpSessionRecord | undefined>;
   put(record: MikaAcpSessionRecord): Promise<void>;
+  /** Claim before mutating; replay returns the stored record, conflict returns the other session id. */
   claimIdempotencyKey?(key: string, id: string): Promise<MikaAcpIdempotencyClaim>;
   getByIdempotencyKey?(key: string): Promise<MikaAcpSessionRecord | undefined>;
+  /** Bind after successful handler completion so replays return the committed record. */
   bindIdempotencyKey?(key: string, id: string): Promise<void>;
+  /** Release after handler failure so the key can be retried. */
   releaseIdempotencyKey?(key: string, id: string): Promise<void>;
   cleanupExpired?(input: MikaAcpSessionCleanupInput): Promise<MikaAcpSessionCleanupResult>;
 }
@@ -262,12 +271,18 @@ export interface CreateMikaAcpCheckoutHandlersOptions {
   readonly store: MikaAcpSessionStore;
   readonly seller: MikaAcpSeller;
   readonly provider?: ProviderName;
+  /** Bearer token checked against the Authorization header; at least one auth secret is required. */
   readonly apiKey?: string;
+  /** HMAC secret for Signature header verification; at least one auth secret is required. */
   readonly signatureSecret?: string;
+  /** Public base URL for ACP session links returned in responses. */
   readonly baseUrl?: string | URL;
   readonly now?: () => Date;
+  /** Active-session TTL applied on create and update. */
   readonly sessionTtlMs?: number;
+  /** Retention window for completed or canceled sessions before purge. */
   readonly terminalRetentionMs?: number;
+  /** Generator for ACP checkout session ids; defaults to a crypto-safe id. */
   readonly createSessionId?: () => string;
   readonly orderUrl?: (input: {
     readonly checkoutId?: MikaId;
@@ -758,6 +773,7 @@ export function createMikaAcpCheckoutHandlers(
   };
 }
 
+// Maps unexpected throws to a generic ACP 500 without leaking stack details.
 async function safelyHandleAcpRequest(
   request: Request,
   handler: () => Promise<Response>,
@@ -817,6 +833,7 @@ async function handleAcpCreate(
   }
 
   const now = nowIso(options);
+  // id = ACP URL session; sessionId = isolated Mika cart/checkout session.
   const session: MikaAcpSessionRecord = {
     id: options.createSessionId?.() ?? createDefaultAcpSessionId(),
     sessionId: `${MIKA_ACP_DEFAULT_SESSION_PREFIX}:${cryptoSafeId()}`,
@@ -879,6 +896,7 @@ async function handleAcpUpdate(
       return acpError(request, 400, "invalid_request", body.message);
     }
 
+    // Item mutations are blocked once checkout.start has bound a checkoutId.
     if (record.checkoutId && body.data.items) {
       await releaseAcpIdempotency(options, idempotency.lease);
 
@@ -937,6 +955,7 @@ async function handleAcpComplete(
     200,
   );
   if (!idempotency.ok) return idempotency.response;
+  // Second idempotency lease serializes concurrent completion on the same session.
   const completion = await beginAcpIdempotency(
     options,
     request,
@@ -1435,6 +1454,7 @@ async function reconcileAcpCart(
   }
 
   const originalCart = cartResult.data;
+  // Wipe-and-rebuild cart sync; restore originalCart on any add/remove failure.
   let cart = cartResult.data;
   for (const line of cart.items) {
     const removed = await options.api.cart.remove(ctx, { lineId: line.id });
@@ -1760,6 +1780,7 @@ async function verifyAcpRequest(
       return acpError(request, 401, "unauthorized", "ACP authorization failed.");
     }
   }
+  // Idempotency-Key is required for mutating requests; GET handlers pass bodyRequired=false.
   if (bodyRequired && !request.headers.get("Idempotency-Key")) {
     return acpError(request, 400, "request_not_idempotent", "Idempotency-Key header is required.");
   }

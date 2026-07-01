@@ -38,32 +38,44 @@ export const MIKA_MAINTENANCE_CRON_SCHEDULE = "* * * * *";
 
 /** Descriptor-level toggles for the maintenance cron job. */
 export interface MikaMaintenancePluginOptions {
+  /** When false, the maintenance cron task is not registered. */
   readonly enabled?: boolean;
+  /** Cron expression override; defaults to {@link MIKA_MAINTENANCE_CRON_SCHEDULE}. */
   readonly schedule?: string;
 }
 
 /** Runtime dependencies injected when the maintenance cron handler executes. */
 export interface MikaMaintenanceRuntimeOptions extends MikaMaintenancePluginOptions {
+  /** Repository ports injected into maintenance sweeps when the host uses a custom backend. */
   readonly repositories?: Pick<
     MikaBackendRepositories,
     "account" | "ephemeral" | "ledger" | "ops" | "session" | "stock"
   >;
+  /** ACP session store for expired-session cleanup during maintenance. */
   readonly acpSessionStore?: MikaAcpSessionStore;
+  /** Email outbox runner for lease-based delivery sweeps. */
   readonly emailOutboxRunner?: MikaEmailOutboxRunner;
 }
 
 /** Options passed to the static plugin descriptor factory (`mikaPlugin`). */
 export interface MikaDescriptorOptions {
+  /** npm package name or path used as the plugin entrypoint in the descriptor. */
   readonly entrypoint?: string;
+  /** Default API handler overrides registered at plugin activation. */
   readonly api?: MikaApiOverrides;
+  /** Default operation policy applied to plugin routes. */
   readonly operationPolicy?: MikaOperationPolicy;
+  /** Descriptor-level maintenance cron toggles. */
   readonly maintenance?: MikaMaintenancePluginOptions;
 }
 
 /** Options resolved at plugin activation for API overrides, policy, and maintenance wiring. */
 export interface MikaCreatePluginOptions {
+  /** Runtime API handler overrides merged at route construction. */
   readonly api?: MikaApiOverrides;
+  /** Runtime operation policy for plugin route handlers. */
   readonly operationPolicy?: MikaOperationPolicy;
+  /** Maintenance cron dependencies resolved when the cron handler runs. */
   readonly maintenance?: MikaMaintenanceRuntimeOptions;
 }
 
@@ -95,7 +107,11 @@ export function mikaPlugin(
   };
 }
 
-/** Registers the live Mika plugin: HTTP routes, storage schema, cron maintenance, and hooks. */
+/**
+ * Registers the live Mika plugin: HTTP routes, storage schema, cron maintenance, and hooks.
+ *
+ * @returns EmDash plugin runtime from `definePlugin`.
+ */
 export function createPlugin(options: MikaCreatePluginOptions = {}) {
   setDefaultMikaApiOverrides(options.api);
   setDefaultMikaOperationPolicy(options.operationPolicy);
@@ -142,6 +158,7 @@ export function createPlugin(options: MikaCreatePluginOptions = {}) {
           now: createISODateTime(event.scheduledAt),
         });
         logMikaMaintenanceResult(ctx, result);
+        // Only stock-reservation failure fails the cron; other task failures are logged as warnings.
         if (result.stockReservations.status === "failed") {
           throw new Error(result.stockReservations.error);
         }

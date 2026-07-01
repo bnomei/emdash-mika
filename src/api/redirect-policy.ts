@@ -3,7 +3,9 @@
  * Rejects open redirects, protocol-relative URLs, and dot-segment traversal.
  */
 export interface MikaSafeReturnPathOptions {
+  /** Request origin used to validate absolute return URLs; must match exactly. */
   readonly origin?: string | URL;
+  /** Site-relative fallback when the candidate is missing or unsafe; sanitized to a path. */
   readonly fallback?: string;
 }
 

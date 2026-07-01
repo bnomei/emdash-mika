@@ -1,6 +1,8 @@
 /**
- * Public type surface for the commerce document model, API DTOs, and agent contracts.
- * Re-exports primitives, aggregates, documents, and operational records via wildcard paths.
+ * Public type surface for wire DTOs, agent manifest constants, and branded primitives.
+ *
+ * Storage document and aggregate types are imported from `./documents`, `./aggregates`, and
+ * `./operational` subpaths; this entry re-exports API DTOs, agent contracts, and primitives only.
  */
 /** Stable API error codes and provider capability flags from the wire DTO layer. */
 export { MIKA_ERROR_CODES, MIKA_PROVIDER_CAPABILITIES } from "../api/types";

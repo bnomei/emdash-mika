@@ -11,6 +11,7 @@ import {
 
 import { mikaTemplateRoutes } from "./routes";
 
+/** Prefer importing form helpers from `@bnomei/emdash-mika/astro` in new templates. */
 export { mikaHiddenInput, mikaReturnToInput } from "@bnomei/emdash-mika/astro";
 
 /** Redirect hidden inputs with template checkout success/cancel fallbacks for copied Astro forms. */

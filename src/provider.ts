@@ -45,18 +45,24 @@ export const MIKA_DELEGATED_PAYMENT_CHECKOUT_SESSION_ID_METADATA_KEY = "acpCheck
 export interface MikaProviderAdapter {
   readonly id: ProviderName;
   capabilities(): Promise<readonly MikaProviderCapability[]> | readonly MikaProviderCapability[];
+  /** Optional liveness probe for admin provider.health. */
   health?(): Promise<ProviderHealthDTO>;
   createCheckoutSession(input: MikaProviderCheckoutInput): Promise<MikaProviderCheckoutSession>;
   retrieveCheckoutSession(id: string): Promise<MikaProviderCheckoutSession>;
+  /** Required when the host exposes account.portal for billing self-service. */
   createPortalSession?(input: MikaProviderPortalInput): Promise<MikaProviderPortalSession>;
+  /** Required when order.invoice requests a hosted provider invoice URL. */
   getInvoiceUrl?(input: MikaProviderInvoiceInput): Promise<OrderInvoiceDTO>;
   cancelSubscription?(input: MikaProviderSubscriptionActionInput): Promise<AdminActionResultDTO>;
   changeSubscription?(input: MikaProviderSubscriptionActionInput): Promise<AdminActionResultDTO>;
   renewSubscription?(input: MikaProviderSubscriptionActionInput): Promise<AdminActionResultDTO>;
   refundPayment?(input: MikaProviderRefundInput): Promise<AdminActionResultDTO>;
   cancelOrder?(input: MikaProviderOrderCancelInput): Promise<AdminActionResultDTO>;
+  /** Optional catalog sync hook for admin provider.sync. */
   syncCatalog?(input: MikaProviderSyncInput): Promise<AdminActionResultDTO>;
+  /** Required for webhook.receive signature verification. */
   verifyWebhook?(input: MikaProviderWebhookVerificationInput): Promise<MikaVerifiedWebhookPayload>;
+  /** Required to normalize verified webhook payloads into Mika payment events. */
   parseWebhookEvent?(input: MikaVerifiedWebhookPayload): Promise<MikaProviderWebhookEvent>;
 }
 

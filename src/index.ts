@@ -1,7 +1,12 @@
 /**
- * Public package entry for the EmDash Mika plugin: descriptor factory, plugin id/version constants,
- * and commerce operation descriptor types for host integration.
+ * Root package entry for the EmDash Mika plugin: descriptor factory, id/version constants, and
+ * published operation descriptor types for host registration.
+ *
+ * Runtime wiring lives on subpaths (`/server`, `/astro`, `/astro-actions`, `/agent`, `/acp`,
+ * `/stripe`, `/admin`, `/client`, `/email`, `/provider`, `/types`) — import those for API
+ * construction, storefront templates, and provider adapters.
  */
+/** Plugin descriptor factory, constants, and activation options for EmDash host registration. */
 export {
   MIKA_PACKAGE_NAME,
   MIKA_MAINTENANCE_CRON_SCHEDULE,

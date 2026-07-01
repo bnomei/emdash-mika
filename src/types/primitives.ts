@@ -95,7 +95,7 @@ export function isJsonObject(value: unknown): value is JsonObject {
   return isJsonValue(value) && isRecord(value);
 }
 
-/** Type guard for finite, acyclic JSON values. */
+/** Type guard for finite, acyclic JSON values (max depth 32, max 10_000 nodes). */
 export function isJsonValue(value: unknown): value is JsonValue {
   type JsonValueFrame =
     | { readonly value: unknown; readonly depth: number }

@@ -16,6 +16,7 @@ export async function mikaTemplateCurrentCartItemCount(
     const cartResult = await Mika.cart.get();
     return cartResult.ok ? mikaTemplateCartItemCount(cartResult.data) : 0;
   } catch {
+    // Layout shells must not break when cart reads fail.
     return 0;
   }
 }

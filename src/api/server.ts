@@ -102,6 +102,7 @@ export interface MikaApi {
     ): Promise<MikaApiResult<WishlistDTO>>;
     merge(ctx: MikaRequestContext, input: MergeWishlistInput): Promise<MikaApiResult<WishlistDTO>>;
   };
+  /** Hosted checkout handoff: reserves stock, claims cart, and opens a provider session. */
   readonly checkout: {
     start(
       ctx: MikaRequestContext,
@@ -120,6 +121,7 @@ export interface MikaApi {
       input: CheckoutCancelInput,
     ): Promise<MikaApiResult<CheckoutSessionDTO>>;
   };
+  /** Passwordless account access; verify consumes a one-time token and binds the customer session. */
   readonly magicLink: {
     request(
       ctx: MikaRequestContext,
@@ -167,6 +169,7 @@ export interface MikaApi {
       input: SubscriptionActionInput,
     ): Promise<MikaApiResult<AccountDTO>>;
   };
+  /** Download tokens: resolve returns the target URL; confirm consumes the token after delivery. */
   readonly download: {
     resolve(input: { readonly token: string }): Promise<MikaApiResult<DownloadResolutionDTO>>;
     confirm(input: { readonly token: string }): Promise<MikaApiResult<DownloadResolutionDTO>>;

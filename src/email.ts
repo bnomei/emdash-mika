@@ -6,8 +6,11 @@ import type { ISODateTime, Money } from "./types/primitives";
 
 /** Optional branding fields applied across built-in transactional email templates. */
 export interface MikaEmailBrand {
+  /** Storefront name rendered in subjects and headings. */
   readonly siteName?: string;
+  /** Sender display name paired with the host-configured from address. */
   readonly fromName?: string;
+  /** Optional support contact line appended to transactional emails. */
   readonly supportEmail?: string;
 }
 
@@ -54,10 +57,12 @@ interface MikaEmailTemplateDefinition<TInput> {
 
 /** Registry of built-in templates keyed by outbox kind with render functions. */
 export const mikaEmailTemplates = {
+  /** Sign-in, checkout continuation, and account-delete magic-link outbox kind. */
   magic_link: {
     outboxKind: "magic_link",
     render: renderMikaMagicLinkEmail,
   },
+  /** Post-checkout order summary outbox kind. */
   order_confirmation: {
     outboxKind: "order_confirmation",
     render: renderMikaOrderConfirmationEmail,

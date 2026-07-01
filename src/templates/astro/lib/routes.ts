@@ -2,6 +2,7 @@
  * Canonical storefront paths for the copyable Astro template.
  * Shared by pages, forms, and checkout redirect builders.
  */
+/** Host-owned canonical paths; copied template pages and forms must stay aligned with these keys. */
 export const mikaTemplateRoutes = {
   account: "/account",
   accountMagicLink: "/account/magic-link",

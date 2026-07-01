@@ -322,6 +322,7 @@ export function createMikaPurchaseModel(
   const hasExactlyOneActivePricePerSellable = activeSellables.every(
     (sellable) => sellable.prices.filter((price) => price.active).length === 1,
   );
+  // Grouped controls when variants span multiple sellables with exactly one active price each.
   const useGroupedVariantControls =
     hasGroupedVariants && activeSellables.length > 1 && hasExactlyOneActivePricePerSellable;
   const missingActivePrice = activeSellables.length > 0 && purchaseOptions.length === 0;

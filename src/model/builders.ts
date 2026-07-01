@@ -464,6 +464,7 @@ export function stockAvailabilityToDTO(
   };
 }
 
+// Synthetic epoch addedAt: totals only; checkout line timestamps are not meaningful here.
 function calculateCheckoutTotals(
   currency: CurrencyCode,
   lines: readonly CheckoutLine[],
