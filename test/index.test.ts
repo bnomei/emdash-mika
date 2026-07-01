@@ -187,6 +187,7 @@ import {
   type CartDTO,
   type CartQuoteDTO,
   type CartQuoteInput,
+  type AccountExportDownloadDTO,
   type CheckoutPreviewDTO,
   type CheckoutPreviewInput,
   type CheckoutPreviewProofRequirementDTO,
@@ -227,7 +228,7 @@ const expectedOperationContracts = [
   ["accountExport", "account", "export", "accountExport"],
   ["accountExportStatus", "account", "exportStatus", "accountExportStatus"],
   ["accountExportDownload", "account", "exportDownload", ""],
-  ["accountExportDownloadConsume", "account", "exportDownload", ""],
+  ["accountExportDownloadConsume", "account", "exportDownloadConsume", ""],
   ["accountDelete", "account", "delete", "accountDelete"],
   ["accountPortal", "account", "portal", "accountPortal"],
   ["subscriptionCancel", "subscription", "cancel", "subscriptionCancel"],
@@ -1483,7 +1484,7 @@ describe("Mika client", () => {
       "accountExport|account.export|account.export|accountExport|POST|body|trusted|ctx||form",
       "accountExportStatus|account.exportStatus|account.exportStatus|accountExportStatus|GET|search|trusted|ctx|exportId|json",
       "accountExportDownload|account.exportDownload|account.exportDownload|accountExportDownload|GET|search|trusted|ctx|exportId,token|",
-      "accountExportDownloadConsume|account.exportDownload.consume|account.exportDownload|accountExportDownload|POST|body|trusted|ctx||",
+      "accountExportDownloadConsume|account.exportDownloadConsume|account.exportDownloadConsume|accountExportDownload|POST|body|trusted|ctx||",
       "accountDelete|account.delete|account.delete|accountDelete|POST|body|trusted|ctx||form",
       "accountPortal|account.portal|account.portal|accountPortal|POST|body|trusted|ctx||form",
       "subscriptionCancel|subscription.cancel|subscription.cancel|subscriptionCancel|POST|body|trusted|ctx||form",
@@ -1534,6 +1535,50 @@ describe("Mika client", () => {
         ).toBe(false);
       }
     }
+  });
+
+  it("keeps operation descriptor namespace and method identities unique", () => {
+    const identities = Object.values(mikaOperationDescriptors).map(
+      (descriptor) => `${descriptor.namespace}.${descriptor.method}`,
+    );
+
+    expect(new Set(identities).size).toBe(identities.length);
+  });
+
+  it("dispatches account export download GET and POST through distinct operation identities", async () => {
+    const inputs: unknown[] = [];
+    const routes = createMikaPluginRoutes(
+      createMikaApi({
+        account: {
+          exportDownload: async (_ctx, input) => {
+            inputs.push(input);
+
+            return {
+              ok: true,
+              status: 200,
+              data: { id: id("account_export_1"), href: "https://shop.test/export.json" },
+            } as MikaApiResult<AccountExportDownloadDTO>;
+          },
+        },
+      } satisfies MikaApiOverrides),
+    );
+    const path = "https://shop.test/_emdash/api/plugins/mika/account/export/download";
+
+    await routes[mikaPluginRoutes.accountExportDownload].handler({
+      input: undefined,
+      request: new Request(`${path}?exportId=account_export_1&token=export_token_1`, {
+        method: "GET",
+      }),
+    });
+    await routes[mikaPluginRoutes.accountExportDownload].handler({
+      input: { exportId: id("account_export_1"), token: "export_token_1" },
+      request: new Request(path, { method: "POST" }),
+    });
+
+    expect(inputs).toEqual([
+      { exportId: "account_export_1", token: "export_token_1" },
+      { exportId: "account_export_1", token: "export_token_1", consumeToken: true },
+    ]);
   });
 
   it("keeps operation policy classes aligned with public and agent projections", () => {
@@ -1920,9 +1965,9 @@ describe("Mika client", () => {
 
     const methodsFromOperations = [
       ...new Set(
-        Object.values(mikaOperationDefinitions).map(
-          (operation) => `${operation.namespace}.${operation.method}`,
-        ),
+        Object.values(mikaOperationDefinitions)
+          .filter((operation) => !("apiMethod" in operation && operation.apiMethod === false))
+          .map((operation) => `${operation.namespace}.${operation.method}`),
       ),
     ].sort();
     const methodsFromPublicApi = Object.entries(mikaApiMethodNames)

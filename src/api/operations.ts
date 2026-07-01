@@ -133,6 +133,7 @@ interface MikaApiOperationBaseDefinition {
   readonly public: boolean;
   readonly requiresRequestContext: boolean;
   readonly agent: MikaAgentOperationMetadata;
+  readonly apiMethod?: false;
   readonly searchKeys?: readonly string[];
 }
 
@@ -810,15 +811,15 @@ export const mikaOperationDefinitions = defineMikaOperations({
     searchKeys: ["exportId", "token"],
   }),
   accountExportDownloadConsume: defineMikaOperation({
-    name: "account.exportDownload.consume",
     namespace: "account",
-    method: "exportDownload",
+    method: "exportDownloadConsume",
     routeKey: "accountExportDownload",
     routePath: "account/export/download",
     httpMethod: "POST",
     transport: "body",
     public: false,
     requiresRequestContext: true,
+    apiMethod: false,
     agent: agentOperationMetadata.accountRead,
     schema: accountExportDownloadInputSchema,
     call: (api, ctx, operationInput) =>
@@ -1127,9 +1128,10 @@ export const mikaOperationPublicRouteNames = mikaRoutedOperationDefinitions
   .map((operation) => operation.routeKey) as readonly MikaOperationPublicRouteName[];
 
 /** Type mapping namespaces to registered API method name lists. */
+type MikaApiExposedOperation = Exclude<MikaApiOperation, { readonly apiMethod: false }>;
 export type MikaOperationApiMethodNames = {
-  readonly [TNamespace in MikaApiOperation["namespace"]]: readonly Extract<
-    MikaApiOperation,
+  readonly [TNamespace in MikaApiExposedOperation["namespace"]]: readonly Extract<
+    MikaApiExposedOperation,
     { readonly namespace: TNamespace }
   >["method"][];
 };
@@ -1284,6 +1286,7 @@ function collectMikaApiMethodNames(): Record<string, readonly string[]> {
   const methodNames: Record<string, string[]> = {};
 
   for (const operation of Object.values(mikaOperationDefinitions)) {
+    if ("apiMethod" in operation && operation.apiMethod === false) continue;
     methodNames[operation.namespace] ??= [];
     if (!methodNames[operation.namespace]?.includes(operation.method)) {
       methodNames[operation.namespace]?.push(operation.method);

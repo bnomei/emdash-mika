@@ -52,15 +52,27 @@ import type {
 
 type MikaOperationKey = keyof typeof mikaOperationDefinitions;
 type MikaOperationDefinitionMap = typeof mikaOperationDefinitions;
-type MikaOperationDefinition = MikaOperationDefinitionMap[MikaOperationKey];
-type MikaOperationKeyFor<TNamespace extends string, TMethod extends string> = {
+type MikaFacadeOperationDefinitionKey = {
   readonly [TOperation in MikaOperationKey]: MikaOperationDefinitionMap[TOperation] extends {
+    readonly apiMethod: false;
+  }
+    ? never
+    : TOperation;
+}[MikaOperationKey];
+type MikaFacadeOperationDefinitionMap = Pick<
+  MikaOperationDefinitionMap,
+  MikaFacadeOperationDefinitionKey
+>;
+type MikaOperationDefinition =
+  MikaFacadeOperationDefinitionMap[MikaFacadeOperationDefinitionKey];
+type MikaOperationKeyFor<TNamespace extends string, TMethod extends string> = {
+  readonly [TOperation in MikaFacadeOperationDefinitionKey]: MikaFacadeOperationDefinitionMap[TOperation] extends {
     readonly namespace: TNamespace;
     readonly method: TMethod;
   }
     ? TOperation
     : never;
-}[MikaOperationKey];
+}[MikaFacadeOperationDefinitionKey];
 type MikaOperationFacadeSpec = {
   readonly [TNamespace in MikaOperationDefinition["namespace"]]: {
     readonly [TMethod in Extract<
@@ -84,10 +96,11 @@ function collectMikaOperationFacadeSpec(): MikaOperationFacadeSpec {
   const spec: Record<string, Record<string, MikaOperationKey>> = {};
 
   for (const [key, operation] of Object.entries(mikaOperationDefinitions) as Array<
-    [MikaOperationKey, MikaOperationDefinition]
+    [MikaOperationKey, (typeof mikaOperationDefinitions)[MikaOperationKey]]
   >) {
+    if ("apiMethod" in operation && operation.apiMethod === false) continue;
     const namespaceSpec = (spec[operation.namespace] ??= {});
-    namespaceSpec[operation.method] ??= key;
+    namespaceSpec[operation.method] ??= key as MikaFacadeOperationDefinitionKey;
   }
 
   return spec as MikaOperationFacadeSpec;
