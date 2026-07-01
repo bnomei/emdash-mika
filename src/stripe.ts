@@ -841,7 +841,9 @@ function parseStripeWebhookEvent(
       providerPaymentId: stripeObjectId(object["payment_intent"]),
       providerOrderId: stripeObjectId(object["payment_intent"]) ?? stringChild(object, "id"),
       customer: {
-        email: stringChild(object, "customer_email"),
+        email:
+          stringChild(jsonObjectChild(object, "customer_details"), "email") ??
+          stringChild(object, "customer_email"),
       },
       lines: [],
       totals: moneyTotalsFromStripeAmount(object),
@@ -876,7 +878,10 @@ function stripePaymentFailureEvent(
     ? (paymentIntentId ?? objectId)
     : (paymentIntentId ?? (isCheckoutSession ? undefined : objectId));
   const providerOrderId = isInvoice ? objectId : (paymentIntentId ?? objectId);
-  const email = stringChild(object, "customer_email") ?? stringChild(object, "receipt_email");
+  const email =
+    stringChild(jsonObjectChild(object, "customer_details"), "email") ??
+    stringChild(object, "customer_email") ??
+    stringChild(object, "receipt_email");
 
   return {
     kind: "payment",
