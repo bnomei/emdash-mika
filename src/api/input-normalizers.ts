@@ -6,7 +6,6 @@ import type {
   AccountExportStatusInput,
   MagicLinkVerifyInput,
 } from "./types";
-import { createMikaId } from "../types/primitives";
 
 /** Accepts a raw token string or structured verify input. */
 export function normalizeMagicLinkVerifyInput(
@@ -17,12 +16,12 @@ export function normalizeMagicLinkVerifyInput(
 
 /** Accepts an export id string or structured status input. */
 export function normalizeAccountExportInput(input: AccountExportStatusInput | string) {
-  return { exportId: typeof input === "string" ? createMikaId(input) : input.exportId };
+  return { exportId: typeof input === "string" ? input : input.exportId };
 }
 
 /** Accepts an export id string or structured download input with token. */
 export function normalizeAccountExportDownloadInput(input: AccountExportDownloadInput | string) {
   return typeof input === "string"
-    ? { exportId: createMikaId(input) }
+    ? { exportId: input }
     : { exportId: input.exportId, token: input.token };
 }

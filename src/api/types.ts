@@ -571,6 +571,7 @@ export interface CheckoutStatusInput {
 /** Checkout session to abandon before completion. */
 export interface CheckoutCancelInput {
   readonly checkoutId: MikaId;
+  readonly token?: string;
 }
 
 /** Order, optional invoice token, and return path for hosted invoice access. */

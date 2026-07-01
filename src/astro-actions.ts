@@ -12,6 +12,7 @@ import {
   type ActionErrorCode,
   type SafeResult,
 } from "astro/actions/runtime/entrypoints/server.js";
+import { MIKA_AGENT_IDEMPOTENCY_KEY_HEADER } from "./api/agent-types";
 import { createMikaRequestContext } from "./api/context";
 import {
   MikaActionInputError,
@@ -209,9 +210,15 @@ function actionRequestContext(ctx: ActionAPIContext): MikaRequestContext {
   return createMikaRequestContext({
     request: ctx.request,
     url: ctx.url,
+    idempotencyKey: actionIdempotencyKey(ctx.request),
     session: ctx.session,
     locale: ctx.currentLocale,
   });
+}
+
+function actionIdempotencyKey(request: Request): string | undefined {
+  const value = request.headers.get(MIKA_AGENT_IDEMPOTENCY_KEY_HEADER)?.trim();
+  return value && value.length > 0 ? value : undefined;
 }
 
 function unwrap<T>(result: MikaApiResult<T>): T {

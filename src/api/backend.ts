@@ -150,6 +150,7 @@ import type {
   CartQuoteDTO,
   CartQuoteInput,
   CartQuoteLineDTO,
+  CheckoutCustomerInput,
   CheckoutPreviewDTO,
   CheckoutCancelInput,
   CheckoutPreviewInput,
@@ -232,6 +233,10 @@ type MikaAdminAuditStartRecord = Omit<
 
 const DEFAULT_BACKEND_CURRENCY = createCurrencyCode("EUR");
 const CHECKOUT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY = "checkoutIdempotencyInputHash";
+const CHECKOUT_CUSTOMER_EMAIL_METADATA_KEY = "checkoutCustomerEmail";
+const CHECKOUT_CUSTOMER_NAME_METADATA_KEY = "checkoutCustomerName";
+const CHECKOUT_CUSTOMER_COMPANY_METADATA_KEY = "checkoutCustomerCompany";
+const CHECKOUT_CUSTOMER_VAT_ID_METADATA_KEY = "checkoutCustomerVatId";
 const CHECKOUT_INTERNAL_METADATA_KEYS = new Set<string>([
   "checkoutIdempotencyKey",
   CHECKOUT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY,
@@ -239,6 +244,21 @@ const CHECKOUT_INTERNAL_METADATA_KEYS = new Set<string>([
   "checkoutRedirectUrl",
   "checkoutPersistenceFailed",
   "checkoutOrderId",
+  CHECKOUT_CUSTOMER_EMAIL_METADATA_KEY,
+  CHECKOUT_CUSTOMER_NAME_METADATA_KEY,
+  CHECKOUT_CUSTOMER_COMPANY_METADATA_KEY,
+  CHECKOUT_CUSTOMER_VAT_ID_METADATA_KEY,
+]);
+const DELEGATED_PAYMENT_PROOF_VOLATILE_METADATA_KEYS = new Set<string>([
+  MIKA_DELEGATED_PAYMENT_TOKEN_METADATA_KEY,
+  MIKA_DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY,
+  MIKA_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY,
+  MIKA_DELEGATED_PAYMENT_AUTHORIZATION_METADATA_KEY,
+  MIKA_DELEGATED_PAYMENT_CHECKOUT_SESSION_ID_METADATA_KEY,
+]);
+const CHECKOUT_PERSISTED_METADATA_OMIT_KEYS = new Set<string>([
+  ...CHECKOUT_INTERNAL_METADATA_KEYS,
+  ...DELEGATED_PAYMENT_PROOF_VOLATILE_METADATA_KEYS,
 ]);
 
 function defaultBackendCurrency(input: { readonly defaults?: MikaBackendDefaults }): CurrencyCode {
@@ -603,10 +623,13 @@ type MikaStockLifecycleDependencies = Pick<
 
 type MikaCartWishlistBackendRepositories = Pick<
   MikaBackendRepositories,
-  "catalog" | "session" | "stock"
+  "account" | "catalog" | "session" | "stock"
 >;
 type MikaCartWishlistBackendInput = Omit<CreateMikaBackendApiInput, "repositories"> & {
   readonly repositories: MikaCartWishlistBackendRepositories;
+};
+type MikaCustomerHydrationInput = {
+  readonly repositories: Pick<MikaBackendRepositories, "account">;
 };
 
 /** Input for creating a time-bounded stock reservation tied to cart or checkout. */
@@ -860,6 +883,17 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
             };
           }
 
+          if (result.status === "idempotency_conflict") {
+            return {
+              ok: false,
+              status: 409,
+              error: {
+                code: "CONFLICT",
+                message: `Stock adjustment idempotency key was reused for a different stock item.`,
+              },
+            };
+          }
+
           return {
             ok: true,
             status: 200,
@@ -898,21 +932,21 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
     cart: createCartBackend(input),
     wishlist: createWishlistBackend(input),
     checkout: {
-      start: withHydratedCustomerHandler((ctx, checkoutInput) =>
+      start: withHydratedCustomerHandler(input, (ctx, checkoutInput) =>
         startCheckout(input, ctx, checkoutInput),
       ),
-      status: withHydratedCustomerHandler((ctx, statusInput) =>
+      status: withHydratedCustomerHandler(input, (ctx, statusInput) =>
         checkoutStatus(input, ctx, statusInput),
       ),
-      cancel: withHydratedCustomerHandler((ctx, cancelInput) =>
+      cancel: withHydratedCustomerHandler(input, (ctx, cancelInput) =>
         cancelCheckout(input, ctx, cancelInput),
       ),
-      preview: withHydratedCustomerHandler(async (ctx, previewInput) => {
+      preview: withHydratedCustomerHandler(input, async (ctx, previewInput) => {
         const preview = await createCheckoutPreview(input, ctx, previewInput);
 
         return { ok: true, status: 200, data: preview };
       }),
-      ...hydratedCheckoutOverrides(input.overrides?.checkout),
+      ...hydratedCheckoutOverrides(input, input.overrides?.checkout),
     },
     magicLink: {
       request: async (ctx, requestInput) => requestMagicLink(input, ctx, requestInput),
@@ -1011,13 +1045,15 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
       const sellable = catalog?.aggregate.sellables.find(
         (item) => item.id === line.item.sellableId,
       );
-      const stock = await input.repositories.stock.findBySellableId(line.item.sellableId);
-      if (sellable) {
-        const sellableDemand =
-          itemInput.quantity + siblingSellableQuantity(document.aggregate.items, line);
-        const quantityError = validateQuantityLimit(sellable, stock, sellableDemand);
-        if (quantityError) return quantityError;
+      if (!sellable) {
+        return sellableNotFound(line.item.sellableId);
       }
+
+      const stock = await input.repositories.stock.findBySellableId(line.item.sellableId);
+      const sellableDemand =
+        itemInput.quantity + siblingSellableQuantity(document.aggregate.items, line);
+      const quantityError = validateQuantityLimit(sellable, stock, sellableDemand);
+      if (quantityError) return quantityError;
 
       const updated = updateCartDocument(
         document,
@@ -1149,15 +1185,15 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
   } satisfies MikaApi["cart"];
 
   return {
-    get: withHydratedCustomerHandler(cart.get),
-    quote: withHydratedCustomerHandler(cart.quote),
-    add: withHydratedCustomerHandler(cart.add),
-    update: withHydratedCustomerHandler(cart.update),
-    remove: withHydratedCustomerHandler(cart.remove),
-    merge: withHydratedCustomerHandler(cart.merge),
-    applyCoupon: withHydratedCustomerHandler(cart.applyCoupon),
-    removeCoupon: withHydratedCustomerHandler(cart.removeCoupon),
-    ...hydratedCartOverrides(input.overrides?.cart),
+    get: withHydratedCustomerHandler(input, cart.get),
+    quote: withHydratedCustomerHandler(input, cart.quote),
+    add: withHydratedCustomerHandler(input, cart.add),
+    update: withHydratedCustomerHandler(input, cart.update),
+    remove: withHydratedCustomerHandler(input, cart.remove),
+    merge: withHydratedCustomerHandler(input, cart.merge),
+    applyCoupon: withHydratedCustomerHandler(input, cart.applyCoupon),
+    removeCoupon: withHydratedCustomerHandler(input, cart.removeCoupon),
+    ...hydratedCartOverrides(input, input.overrides?.cart),
   };
 }
 
@@ -1319,13 +1355,13 @@ function createWishlistBackend(input: MikaCartWishlistBackendInput): MikaApi["wi
   } satisfies MikaApi["wishlist"];
 
   return {
-    get: withHydratedCustomerHandler(wishlist.get),
-    add: withHydratedCustomerHandler(wishlist.add),
-    remove: withHydratedCustomerHandler(wishlist.remove),
-    moveToCart: withHydratedCustomerHandler(wishlist.moveToCart),
-    saveForLater: withHydratedCustomerHandler(wishlist.saveForLater),
-    merge: withHydratedCustomerHandler(wishlist.merge),
-    ...hydratedWishlistOverrides(input.overrides?.wishlist),
+    get: withHydratedCustomerHandler(input, wishlist.get),
+    add: withHydratedCustomerHandler(input, wishlist.add),
+    remove: withHydratedCustomerHandler(input, wishlist.remove),
+    moveToCart: withHydratedCustomerHandler(input, wishlist.moveToCart),
+    saveForLater: withHydratedCustomerHandler(input, wishlist.saveForLater),
+    merge: withHydratedCustomerHandler(input, wishlist.merge),
+    ...hydratedWishlistOverrides(input, input.overrides?.wishlist),
   };
 }
 
@@ -1372,6 +1408,17 @@ function isAnonymizedCustomer(customer: CustomerDocument): boolean {
   return customer.aggregate.metadata?.["anonymizedAt"] != null;
 }
 
+function customerIsCompatibleWithContext(
+  customer: CustomerDocument,
+  ctx: MikaRequestContext,
+): boolean {
+  return !isAnonymizedCustomer(customer) && !(ctx.userId && customer.userId && customer.userId !== ctx.userId);
+}
+
+function customerEmailHash(customer: CustomerDocument): string | undefined {
+  return customer.emailHash ?? customer.aggregate.emailHash;
+}
+
 async function resolveAccountIdentity(
   input: CreateMikaBackendApiInput,
   ctx: MikaRequestContext,
@@ -1402,18 +1449,14 @@ async function resolveAccountIdentity(
 
   if (customerId) {
     const customer = await input.repositories.account.findCustomerById(customerId);
-    if (
-      !customer ||
-      isAnonymizedCustomer(customer) ||
-      (userId && customer.userId && customer.userId !== userId)
-    )
+    if (!customer || !customerIsCompatibleWithContext(customer, { ...ctx, userId }))
       return null;
 
     return {
       customer,
       entitlements: (await input.repositories.account.listEntitlementsByCustomer(customerId)).items,
       userId: customer.userId,
-      emailHash: customer.emailHash,
+      emailHash: customerEmailHash(customer),
     };
   }
 
@@ -1970,6 +2013,13 @@ async function refundOrder(
       `Provider '${providerName}' does not support order refunds.`,
   });
   if (!providerFeature.ok) return providerFeature;
+  const refundableAmount = Math.max(0, order.totalAmount - orderRefundedAmount(order));
+  if (refundInput.amount !== undefined && refundInput.amount > refundableAmount) {
+    return validationFailed(
+      "amount",
+      `Refund amount exceeds the remaining refundable amount for order '${order.id}'.`,
+    );
+  }
 
   const providerInput: MikaProviderRefundInput = {
     orderId: order.id,
@@ -1997,15 +2047,13 @@ async function refundOrder(
     },
     async () => {
       const result = await providerFeature.method.call(providerFeature.provider, providerInput);
-      if (result.status !== "completed") {
-        return { ...result, id: result.id ?? order.id };
-      }
+      assertCompletedProviderAction(result, "Provider order refund did not complete.");
 
       const now = currentBackendISODateTime(input);
       const updated = updateOrderAfterRefund(order, refundInput, now);
       await input.repositories.ledger.put(updated);
       if (updated.status === "refunded") {
-        await revokeOrderFulfillmentAccess(input, updated, now);
+        await revokeOrderFulfillmentAccess(input, updated, now, "order_refunded");
       }
 
       return {
@@ -2030,6 +2078,7 @@ async function revokeOrderFulfillmentAccess(
   input: CreateMikaBackendApiInput,
   order: OrderDocument,
   now: ISODateTime,
+  revokeReason: "order_refunded" | "order_cancelled" = "order_refunded",
 ): Promise<void> {
   for (const line of order.aggregate.lines) {
     switch (line.item.fulfillmentKind) {
@@ -2048,7 +2097,7 @@ async function revokeOrderFulfillmentAccess(
               revokedAt: now,
               metadata: {
                 ...entitlement.record.metadata,
-                revokeReason: "order_refunded",
+                revokeReason,
               },
             },
           });
@@ -2070,7 +2119,7 @@ async function revokeOrderFulfillmentAccess(
               revokedAt: now,
               metadata: {
                 ...license.record.metadata,
-                revokeReason: "order_refunded",
+                revokeReason,
               },
             },
           });
@@ -2100,6 +2149,7 @@ async function cancelOrder(
 
   const providerInput: MikaProviderOrderCancelInput = {
     orderId: order.id,
+    ...(order.providerPaymentId ? { providerPaymentId: order.providerPaymentId } : {}),
     ...(order.providerOrderId ? { providerOrderId: order.providerOrderId } : {}),
     ...(cancelInput.reason ? { reason: cancelInput.reason } : {}),
   };
@@ -2115,18 +2165,19 @@ async function cancelOrder(
       metadata: {
         provider: order.provider,
         orderId: order.id,
+        ...(order.providerPaymentId ? { providerPaymentId: order.providerPaymentId } : {}),
         ...(order.providerOrderId ? { providerOrderId: order.providerOrderId } : {}),
         ...(cancelInput.reason ? { reason: cancelInput.reason } : {}),
       },
     },
     async () => {
       const result = await providerFeature.method.call(providerFeature.provider, providerInput);
-      if (result.status !== "completed") {
-        return { ...result, id: result.id ?? order.id };
-      }
+      assertCompletedProviderAction(result, "Provider order cancellation did not complete.");
 
-      const updated = updateOrderAfterCancel(order, cancelInput, currentBackendISODateTime(input));
+      const now = currentBackendISODateTime(input);
+      const updated = updateOrderAfterCancel(order, cancelInput, now);
       await input.repositories.ledger.put(updated);
+      await revokeOrderFulfillmentAccess(input, updated, now, "order_cancelled");
 
       return {
         ...result,
@@ -2264,8 +2315,9 @@ async function revokeEntitlement(
   input: CreateMikaBackendApiInput,
   revokeInput: EntitlementRevokeInput,
 ): Promise<MikaApiResult<AdminActionResultDTO>> {
-  const entitlement = await findEntitlementForRevoke(input, revokeInput);
-  if (!entitlement) {
+  const entitlements = await findEntitlementsForRevoke(input, revokeInput);
+  const primaryEntitlement = entitlements[0];
+  if (!primaryEntitlement) {
     return missingTargetWithAudit(input, {
       action: "entitlement.revoke",
       targetType: "entitlement",
@@ -2284,19 +2336,20 @@ async function revokeEntitlement(
     {
       action: "entitlement.revoke",
       targetType: "entitlement",
-      targetId: entitlement.id,
+      targetId: primaryEntitlement.id,
       idempotencyKey: revokeInput.idempotencyKey,
       idempotencyInput: revokeInput as unknown as JsonValue,
       metadata: {
-        entitlementId: entitlement.id,
-        entitlementKey: entitlement.entitlementKey,
-        ...(entitlement.customerId ? { customerId: entitlement.customerId } : {}),
+        entitlementId: primaryEntitlement.id,
+        entitlementIds: entitlements.map((entitlement) => entitlement.id),
+        entitlementKey: primaryEntitlement.entitlementKey,
+        ...(primaryEntitlement.customerId ? { customerId: primaryEntitlement.customerId } : {}),
         ...(revokeInput.reason ? { reason: revokeInput.reason } : {}),
       },
     },
     async (audit) => {
       const now = audit.createdAt;
-      const updated: EntitlementDocument = {
+      const updated: EntitlementDocument[] = entitlements.map((entitlement) => ({
         ...entitlement,
         status: "revoked",
         updatedAt: now,
@@ -2309,14 +2362,16 @@ async function revokeEntitlement(
             ...(revokeInput.reason ? { revokeReason: revokeInput.reason } : {}),
           },
         },
-      };
-      await input.repositories.account.put(updated);
+      }));
+      for (const entitlement of updated) {
+        await input.repositories.account.put(entitlement);
+      }
 
       return {
-        id: updated.id,
+        id: primaryEntitlement.id,
         status: "completed",
         affected: {
-          entitlements: 1,
+          entitlements: updated.length,
         },
       };
     },
@@ -2583,24 +2638,26 @@ function createManualEntitlementDocument(
   };
 }
 
-async function findEntitlementForRevoke(
+async function findEntitlementsForRevoke(
   input: CreateMikaBackendApiInput,
   revokeInput: EntitlementRevokeInput,
-): Promise<EntitlementDocument | null> {
+): Promise<readonly EntitlementDocument[]> {
   if (revokeInput.entitlementId) {
-    return input.repositories.account.findEntitlementById(revokeInput.entitlementId);
+    const entitlement = await input.repositories.account.findEntitlementById(
+      revokeInput.entitlementId,
+    );
+    return entitlement ? [entitlement] : [];
   }
 
-  if (!revokeInput.customerId || !revokeInput.entitlementKey) return null;
+  if (!revokeInput.customerId || !revokeInput.entitlementKey) return [];
 
   const entitlements = await input.repositories.account.listEntitlementsByCustomer(
     revokeInput.customerId,
   );
-  return (
-    entitlements.items.find(
-      (item) =>
-        item.data.entitlementKey === revokeInput.entitlementKey && item.data.status === "active",
-    )?.data ?? null
+  return entitlements.items.flatMap((item) =>
+    item.data.entitlementKey === revokeInput.entitlementKey && item.data.status === "active"
+      ? [item.data]
+      : [],
   );
 }
 
@@ -2815,6 +2872,12 @@ async function runAdminProviderAction<TData>(
   fallbackMessage: string,
 ): Promise<MikaApiResult<TData>> {
   return runAdminAction(input, record, action, fallbackMessage, providerFailed);
+}
+
+function assertCompletedProviderAction(result: AdminActionResultDTO, fallbackMessage: string): void {
+  if (result.status === "completed") return;
+
+  throw new Error(result.message ?? `${fallbackMessage} (status: ${result.status}).`);
 }
 
 async function runAdminRepositoryAction<TData>(
@@ -3116,6 +3179,10 @@ async function verifyMagicLink(
   ctx: MikaRequestContext,
   verifyInput: { readonly token: string; readonly returnTo?: string },
 ): Promise<MikaApiResult<AccountDTO>> {
+  if (!ctx.session) {
+    return authRequired("Magic link verification requires a writable session.");
+  }
+
   const tokenHash = await hashMagicLinkToken(input, verifyInput.token.trim());
   const record = await input.repositories.ephemeral.get(tokenHash);
   const tokenError = magicLinkTokenError(record, ctx.now);
@@ -3136,17 +3203,19 @@ async function verifyMagicLink(
       : null;
     if (customer) {
       const data = await accountDTOForCustomer(input, ctx, customer);
-      await ctx.session?.regenerate?.();
-      await ctx.session?.set("mika.customerId", customer.customerId);
-      if (customer.userId) await ctx.session?.set("mika.userId", customer.userId);
+      await ctx.session.regenerate?.();
+      await clearSessionKeys(ctx.session, ["mika.emailHash", "mika.userId"]);
+      await ctx.session.set("mika.customerId", customer.customerId);
+      if (customer.userId) await ctx.session.set("mika.userId", customer.userId);
 
       return { ok: true, status: 200, data };
     }
 
     const email = record?.data ? stringChild(record.data, "email") : undefined;
     if (record?.subjectHash) {
-      await ctx.session?.regenerate?.();
-      await ctx.session?.set("mika.emailHash", record.subjectHash);
+      await ctx.session.regenerate?.();
+      await clearSessionKeys(ctx.session, ["mika.customerId", "mika.userId"]);
+      await ctx.session.set("mika.emailHash", record.subjectHash);
     }
 
     return {
@@ -3166,6 +3235,19 @@ async function verifyMagicLink(
   }
 }
 
+async function clearSessionKeys(
+  session: NonNullable<MikaRequestContext["session"]>,
+  keys: readonly string[],
+): Promise<void> {
+  for (const key of keys) {
+    if (session.delete) {
+      await session.delete(key);
+    } else {
+      await session.set<undefined>(key, undefined);
+    }
+  }
+}
+
 const ACCOUNT_EXPORT_LIMIT = Number.MAX_SAFE_INTEGER;
 
 async function accountDTOForCustomer(
@@ -3174,18 +3256,36 @@ async function accountDTOForCustomer(
   customer: CustomerDocument,
   limit?: number,
 ): Promise<AccountDTO> {
-  const [orders, subscriptions, entitlements] = await Promise.all([
+  const emailHash = customerEmailHash(customer);
+  const [
+    customerOrders,
+    emailHashOrders,
+    subscriptions,
+    customerEntitlements,
+    emailHashEntitlements,
+  ] = await Promise.all([
     input.repositories.ledger.listOrdersByCustomer(customer.customerId, limit),
+    emailHash
+      ? input.repositories.ledger.listOrdersByEmailHash(emailHash, limit)
+      : Promise.resolve({ items: [], nextCursor: undefined }),
     input.repositories.account.listSubscriptionsByCustomer(customer.customerId, limit),
     input.repositories.account.listEntitlementsByCustomer(customer.customerId, limit),
+    emailHash
+      ? input.repositories.account.listEntitlementsByEmailHash(emailHash, limit)
+      : Promise.resolve({ items: [], nextCursor: undefined }),
   ]);
   await Promise.all([
     input.repositories.account.listProviderAccountsByCustomer(customer.customerId),
     input.repositories.account.listLicensesByCustomer(customer.customerId),
   ]);
 
+  const orders = uniqueDocumentsById([...customerOrders.items, ...emailHashOrders.items]);
+  const entitlements = uniqueDocumentsById([
+    ...customerEntitlements.items,
+    ...emailHashEntitlements.items,
+  ]);
   const orderSummaries = await Promise.all(
-    orders.items.map((item) => orderSummaryDTO(input, ctx, item.data)),
+    orders.map((item) => orderSummaryDTO(input, ctx, item.data)),
   );
 
   return {
@@ -3197,11 +3297,35 @@ async function accountDTOForCustomer(
     },
     orders: orderSummaries,
     subscriptions: subscriptions.items.map((item) => subscriptionDTO(item.data)),
-    entitlements: entitlements.items.map((item) => entitlementDTO(item.data)),
+    entitlements: entitlements.map((item) => entitlementDTO(item.data)),
     downloads: (
-      await Promise.all(orders.items.map((item) => orderDownloadDTOs(input, ctx, item.data)))
+      await Promise.all(orders.map((item) => orderDownloadDTOs(input, ctx, item.data)))
     ).flat(),
   };
+}
+
+function uniqueDocumentsById<TDocument extends { readonly id: string }>(
+  items: readonly {
+    readonly id: string;
+    readonly data: TDocument;
+  }[],
+): readonly {
+  readonly id: string;
+  readonly data: TDocument;
+}[] {
+  const seen = new Set<string>();
+  const unique: {
+    readonly id: string;
+    readonly data: TDocument;
+  }[] = [];
+
+  for (const item of items) {
+    if (seen.has(item.data.id)) continue;
+    seen.add(item.data.id);
+    unique.push(item);
+  }
+
+  return unique;
 }
 
 async function orderSummaryDTO(
@@ -3387,7 +3511,7 @@ async function resolveDownload(
   const line = order?.aggregate.lines.find((candidate) =>
     candidate.downloadRefs?.includes(downloadRef),
   );
-  if (!order || !line || order.status !== "paid" || order.paymentStatus !== "paid") {
+  if (!order || !line || !orderAllowsDownload(order)) {
     return tokenResult("TOKEN_INVALID", "Download token is invalid.");
   }
   if (orderAccessRevokedForAccountDelete(order)) {
@@ -3446,6 +3570,13 @@ async function resolveDownload(
       expiresAt: record?.expiresAt,
     },
   };
+}
+
+function orderAllowsDownload(order: OrderDocument): boolean {
+  return (
+    (order.status === "paid" || order.status === "partially_refunded") &&
+    (order.paymentStatus === "paid" || order.paymentStatus === "partially_refunded")
+  );
 }
 
 function accountExportArtifactRef(account: AccountDTO, exportedAt: ISODateTime): string {
@@ -3508,10 +3639,11 @@ async function createOrderInvoiceToken(
 ): Promise<string> {
   const token = input.createId("order_invoice_token");
   const customerId = order.customerId ?? order.aggregate.customer.customerId;
+  const subjectHash = orderDownloadSubjectHash(order);
   await input.repositories.ephemeral.put({
     key: await hashOrderInvoiceToken(input, token),
     kind: "token",
-    ...(customerId ? { subjectHash: `customer:${customerId}` } : {}),
+    ...(subjectHash ? { subjectHash } : {}),
     status: "active",
     count: 0,
     expiresAt: addMilliseconds(ctx.now, input.config?.order?.invoiceTokenTtlMs ?? 15 * 60_000),
@@ -3522,6 +3654,7 @@ async function createOrderInvoiceToken(
       purpose: "order_invoice",
       orderId: order.id,
       ...(customerId ? { customerId } : {}),
+      ...(subjectHash ? { subjectHash } : {}),
     },
   });
 
@@ -3556,10 +3689,14 @@ async function validateOrderInvoiceToken(
   token: string,
   order: OrderDocument,
 ): Promise<MikaApiFailure | null> {
+  if (orderAccessRevokedForAccountDelete(order)) {
+    return tokenResult("DOWNLOAD_REVOKED", "Order invoice access has been revoked.");
+  }
   const record = await input.repositories.ephemeral.get(
     await hashOrderInvoiceToken(input, token.trim()),
   );
   const customerId = order.customerId ?? order.aggregate.customer.customerId;
+  const subjectHash = orderDownloadSubjectHash(order);
 
   return reusableCapabilityTokenError(record, {
     now,
@@ -3568,6 +3705,7 @@ async function validateOrderInvoiceToken(
     target: {
       orderId: order.id,
       ...(customerId ? { customerId } : {}),
+      ...(subjectHash ? { subjectHash } : {}),
     },
   });
 }
@@ -4358,6 +4496,10 @@ async function processStoredWebhook(
       }
 
       if (event.paymentStatus !== "paid") {
+        if (event.type === "checkout.session.expired") {
+          return processCheckoutExpiredWebhook(input, ctx, webhook, event);
+        }
+
         const failed = await markWebhookFailed(
           input,
           webhook,
@@ -4429,12 +4571,21 @@ async function processPaymentReversalWebhook(
   }
 
   if (order.paymentStatus === "refunded") {
-    await revokeOrderFulfillmentAccess(input, order, ctx.now);
+    await revokeOrderFulfillmentAccess(input, order, ctx.now, "order_refunded");
     return markWebhookProcessedForOrder(input, webhook, ctx.now, order);
   }
 
   const now = ctx.now;
   const cumulativeReversed = event.totals?.total?.amount;
+  if (event.paymentStatus === "partially_refunded" && cumulativeReversed === undefined) {
+    return markWebhookFailed(
+      input,
+      webhook,
+      ctx.now,
+      "Partial refund webhook is missing cumulative refund totals.",
+      { strict: true },
+    );
+  }
   const refundAmount =
     event.paymentStatus === "partially_refunded" && cumulativeReversed !== undefined
       ? Math.max(0, cumulativeReversed - orderRefundedAmount(order))
@@ -4451,10 +4602,34 @@ async function processPaymentReversalWebhook(
   );
   await input.repositories.ledger.put(updated);
   if (updated.status === "refunded") {
-    await revokeOrderFulfillmentAccess(input, updated, now);
+    await revokeOrderFulfillmentAccess(input, updated, now, "order_refunded");
   }
 
   return markWebhookProcessedForOrder(input, webhook, now, updated);
+}
+
+async function processCheckoutExpiredWebhook(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  webhook: WebhookDocument,
+  event: MikaProviderPaymentEvent,
+): Promise<WebhookDocument> {
+  const checkout = await findPaymentEventCheckout(input, event);
+  if (!checkout) {
+    return markWebhookFailed(
+      input,
+      webhook,
+      ctx.now,
+      "Expired checkout webhook could not be linked to a checkout.",
+      { strict: true },
+    );
+  }
+
+  const expired = await expireCheckoutDocument(input, checkout, ctx.now);
+
+  return markWebhookProcessed(input, webhook, ctx.now, {
+    relatedCustomerId: expired.customerId,
+  });
 }
 
 function reversalHasStrongOrderIdentity(event: MikaProviderPaymentEvent): boolean {
@@ -4891,6 +5066,12 @@ async function processSubscriptionWebhook(
       "Subscription event could not be linked to a subscription.",
     );
   }
+  if (resolved.kind === "anonymized_customer") {
+    return markWebhookProcessed(input, webhook, ctx.now, {
+      relatedCustomerId: resolved.customerId,
+      ...(resolved.subscription ? { relatedSubscriptionId: resolved.subscription.id } : {}),
+    });
+  }
 
   const previous = resolved.created ? undefined : resolved.subscription;
   const updated = await updateSubscriptionFromEvent(input, ctx, resolved.subscription, event);
@@ -4904,10 +5085,17 @@ async function processSubscriptionWebhook(
   return markWebhookProcessedForSubscription(input, webhook, ctx.now, fulfilled);
 }
 
-type SubscriptionFromEventResult = {
-  readonly subscription: SubscriptionDocument;
-  readonly created: boolean;
-};
+type SubscriptionFromEventResult =
+  | {
+      readonly kind: "subscription";
+      readonly subscription: SubscriptionDocument;
+      readonly created: boolean;
+    }
+  | {
+      readonly kind: "anonymized_customer";
+      readonly customerId: MikaId;
+      readonly subscription?: SubscriptionDocument;
+    };
 
 async function findOrCreateSubscriptionFromEvent(
   input: CreateMikaBackendApiInput,
@@ -4919,7 +5107,16 @@ async function findOrCreateSubscriptionFromEvent(
       event.provider,
       event.providerSubscriptionId,
     );
-    if (existing) return { subscription: existing, created: false };
+    if (existing) {
+      const customerId = existing.customerId ?? existing.aggregate.customer.customerId;
+      if (customerId) {
+        const customer = await input.repositories.account.findCustomerById(customerId);
+        if (customer && isAnonymizedCustomer(customer)) {
+          return { kind: "anonymized_customer", customerId, subscription: existing };
+        }
+      }
+      return { kind: "subscription", subscription: existing, created: false };
+    }
   }
 
   if (!event.providerSubscriptionId || !event.providerCustomerId || !event.providerPriceId) {
@@ -4939,6 +5136,9 @@ async function findOrCreateSubscriptionFromEvent(
   if (!priceMatch) return null;
 
   const customer = await input.repositories.account.findCustomerById(providerAccount.customerId);
+  if (customer && isAnonymizedCustomer(customer)) {
+    return { kind: "anonymized_customer", customerId: providerAccount.customerId };
+  }
   const customerSnapshot: CustomerSnapshot = {
     customerId: providerAccount.customerId,
     userId: customer?.userId,
@@ -4969,6 +5169,7 @@ async function findOrCreateSubscriptionFromEvent(
   });
 
   return {
+    kind: "subscription",
     subscription: {
       id: subscriptionId,
       type: "subscription",
@@ -5015,14 +5216,41 @@ async function updateSubscriptionFromEvent(
       appliedStart &&
       new Date(eventStart).getTime() > new Date(appliedStart).getTime(),
   );
+  const localStatusIsTerminal =
+    subscription.status === "cancelled" || subscription.status === "expired";
+  const eventStatusIsTerminal = event.status === "cancelled" || event.status === "expired";
+  if (localStatusIsTerminal && !eventStatusIsTerminal && !eventAdvancesPeriod) {
+    return subscription;
+  }
   const preserveLocalCancel =
     subscription.status === "cancel_at_period_end" &&
     event.status === "active" &&
     !eventAdvancesPeriod;
+  const preserveRenewedActive =
+    subscription.status === "active" &&
+    subscription.aggregate.cancelAtPeriodEnd === false &&
+    subscription.aggregate.metadata?.["lastAdminAction"] === "subscription.renew" &&
+    event.status === "active" &&
+    event.cancelAtPeriodEnd === true &&
+    !eventAdvancesPeriod;
   const status = preserveLocalCancel ? "cancel_at_period_end" : event.status;
   const cancelAtPeriodEnd = preserveLocalCancel
     ? true
+    : preserveRenewedActive
+      ? false
     : (event.cancelAtPeriodEnd ?? subscription.aggregate.cancelAtPeriodEnd ?? false);
+  const priceMatch = event.providerPriceId
+    ? await input.repositories.catalog.findItemByProviderPrice(event.provider, event.providerPriceId)
+    : null;
+  const sellable =
+    priceMatch && priceMatch.price.mode === "subscription"
+      ? snapshotPrice({
+          content: priceMatch.catalog.aggregate.content,
+          sellable: priceMatch.sellable,
+          price: priceMatch.price,
+          fallbackTitle: priceMatch.catalog.titleSnapshot ?? priceMatch.sellable.id,
+        })
+      : subscription.aggregate.sellable;
 
   const updated: SubscriptionDocument = {
     ...subscription,
@@ -5041,6 +5269,7 @@ async function updateSubscriptionFromEvent(
         customerId: event.providerCustomerId ?? subscription.aggregate.providerRef.customerId,
         priceId: event.providerPriceId ?? subscription.aggregate.providerRef.priceId,
       },
+      sellable,
       status,
       cancelAtPeriodEnd,
       currentPeriodStart: event.currentPeriodStart ?? subscription.aggregate.currentPeriodStart,
@@ -5068,7 +5297,10 @@ async function updateSubscriptionEntitlement(
     subscription.aggregate.entitlementId ??
     fulfillmentDocumentId("entitlement", subscription.id, "subscription");
   const existing = await input.repositories.account.findEntitlementById(entitlementId);
-  const status = entitlementStatusForSubscription(subscription.status);
+  const status =
+    existing?.status === "revoked"
+      ? existing.status
+      : entitlementStatusForSubscription(subscription.status);
   const record = {
     id: entitlementId,
     customerId: subscription.customerId ?? subscription.aggregate.customer.customerId,
@@ -5200,12 +5432,12 @@ function entitlementStatusForSubscription(
     case "active":
     case "trialing":
     case "cancel_at_period_end":
+    case "past_due":
       return "active";
     case "cancelled":
     case "expired":
       return "expired";
     case "incomplete":
-    case "past_due":
       return "inactive";
   }
 }
@@ -5439,10 +5671,17 @@ async function paymentCustomerSnapshot(
   checkout: CheckoutDocument,
   event: MikaProviderPaymentEvent,
 ): Promise<CustomerSnapshot> {
-  const checkoutCustomer = checkout.customerId
+  const checkoutCustomerRecord = checkout.customerId
     ? await input.repositories.account.findCustomerById(checkout.customerId)
     : null;
-  const email = checkoutCustomer?.aggregate.email ?? event.customer?.email;
+  const checkoutCustomerAnonymized =
+    checkoutCustomerRecord !== null && isAnonymizedCustomer(checkoutCustomerRecord);
+  const checkoutCustomer =
+    checkoutCustomerRecord && !checkoutCustomerAnonymized ? checkoutCustomerRecord : null;
+  const checkoutCustomerId = checkoutCustomerAnonymized ? undefined : checkout.customerId;
+  const checkoutMetadataCustomer = checkoutCustomerFromMetadata(checkout.aggregate.metadata);
+  const email =
+    checkoutCustomer?.aggregate.email ?? event.customer?.email ?? checkoutMetadataCustomer.email;
   const normalizedEmail = email?.trim().toLowerCase();
   const payerEmailHash = normalizedEmail
     ? await input.hash(`email:${normalizedEmail}`)
@@ -5455,13 +5694,15 @@ async function paymentCustomerSnapshot(
       : null);
 
   return {
-    customerId: customer?.customerId ?? checkout.customerId,
+    ...((customer?.customerId ?? checkoutCustomerId)
+      ? { customerId: customer?.customerId ?? checkoutCustomerId }
+      : {}),
     ...(customer?.userId ? { userId: customer.userId } : {}),
     email: customer?.aggregate.email ?? email,
     emailHash: customer?.emailHash ?? customer?.aggregate.emailHash ?? payerEmailHash,
-    name: event.customer?.name,
-    company: event.customer?.company,
-    vatId: event.customer?.vatId,
+    name: event.customer?.name ?? checkoutMetadataCustomer.name,
+    company: event.customer?.company ?? checkoutMetadataCustomer.company,
+    vatId: event.customer?.vatId ?? checkoutMetadataCustomer.vatId,
   };
 }
 
@@ -6192,6 +6433,17 @@ function webhookReceiptResult(
   if (event.kind === "payment" && event.paymentStatus === "paid" && webhook.status === "received") {
     return webhookProcessingDeferred(webhook.id);
   }
+  if (
+    event.kind === "payment" &&
+    (event.paymentStatus === "refunded" || event.paymentStatus === "partially_refunded") &&
+    webhook.status === "failed"
+  ) {
+    return apiFailure(
+      502,
+      "PROVIDER_FAILED",
+      webhook.record.lastError ?? "Refund webhook could not be processed.",
+    );
+  }
 
   return {
     ok: true,
@@ -6238,11 +6490,7 @@ async function findOwnedActiveWishlistById(
     return invalidWishlist("targetWishlistId", wishlistId);
   }
 
-  if (document.customerId) {
-    if (document.customerId !== ctx.customerId) {
-      return invalidWishlist("targetWishlistId", wishlistId);
-    }
-  } else if (document.sessionId && document.sessionId !== ctx.sessionId) {
+  if (!callerOwnsMergeSource(ctx, document)) {
     return invalidWishlist("targetWishlistId", wishlistId);
   }
 
@@ -6342,7 +6590,7 @@ async function reopenAbandonedCheckoutCart(
     .map((item) => item.reservationId)
     .filter((id): id is MikaId => Boolean(id));
   if (reservationIds.length > 0) {
-    await releaseCheckoutReservations(input, reservationIds, ctx.now);
+    await expireCheckoutReservations(input, reservationIds, ctx.now);
   }
 
   const reopened = reopenCartDocument(pending, ctx.now);
@@ -6404,16 +6652,26 @@ async function createCartQuote(
     }
   }
 
-  if (cartResult.cart) {
-    for (const line of cartResult.cart.aggregate.items) {
-      const quoted = await quoteCartLine(input, line);
-      quoteLines.push(quoted.line);
-      changed = changed || quoted.changed;
-      unavailable = unavailable || quoted.unavailable;
-    }
+  const cartLines = cartResult.cart?.aggregate.items ?? [];
+  for (const line of cartLines) {
+    const quoted = await quoteCartLine(input, line, {
+      quantityForLimit: line.quantity + siblingSellableQuantity(cartLines, line),
+    });
+    quoteLines.push(quoted.line);
+    changed = changed || quoted.changed;
+    unavailable = unavailable || quoted.unavailable;
   }
 
-  if (quoteInput.sellableId) {
+  if (quoteInput.cartId && quoteInput.sellableId) {
+    unavailable = true;
+    const message = "Provide either a cartId or a sellableId for checkout, not both.";
+    warnings.push(message);
+    errors.push({
+      code: "VALIDATION_FAILED",
+      message,
+      fieldErrors: { sellableId: message },
+    });
+  } else if (quoteInput.sellableId) {
     const quoted = await quoteInputLine(input, quoteInput, currency);
     quoteLines.push(quoted.line);
     unavailable = unavailable || quoted.unavailable;
@@ -6510,14 +6768,6 @@ type CheckoutStartResolution = {
   readonly lines: readonly CheckoutStartLineResolution[];
 };
 
-const DELEGATED_PAYMENT_PROOF_VOLATILE_METADATA_KEYS = new Set<string>([
-  MIKA_DELEGATED_PAYMENT_TOKEN_METADATA_KEY,
-  MIKA_DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY,
-  MIKA_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY,
-  MIKA_DELEGATED_PAYMENT_AUTHORIZATION_METADATA_KEY,
-  MIKA_DELEGATED_PAYMENT_CHECKOUT_SESSION_ID_METADATA_KEY,
-]);
-
 /**
  * Gates delegated-payment handoff at checkout start.
  *
@@ -6574,13 +6824,17 @@ async function startCheckout(
     ? await input.repositories.session.findCheckoutByIdempotencyKey(ctx.idempotencyKey)
     : null;
   if (replayedCheckout) {
-    if (!(await checkoutBelongsToContext(replayedCheckout, ctx))) {
+    if (!(await checkoutBelongsToContext(input, replayedCheckout, ctx))) {
       return checkoutIdempotencyInputMismatch();
     }
 
     const replayedInputHash = checkoutStoredIdempotencyInputHash(replayedCheckout);
     if (replayedInputHash && idempotencyInputHash && replayedInputHash !== idempotencyInputHash) {
       return checkoutIdempotencyInputMismatch();
+    }
+    if (checkoutIsExpired(input, replayedCheckout)) {
+      const expired = await expireCheckoutDocument(input, replayedCheckout, ctx.now);
+      return checkoutStatusExpired(expired);
     }
 
     return checkoutDocumentResult(replayedCheckout);
@@ -6660,6 +6914,23 @@ async function startCheckout(
 
     return providerFailed("Checkout provider failed to create a session.");
   }
+  if (providerSession.status === "failed") {
+    await releaseCheckoutReservations(input, reserved.reservationIds, ctx.now);
+    await emitBackendNotification(input, "checkout.payment_failed", ctx.now, {
+      ...(checkoutInput.customer?.email ? { toEmail: checkoutInput.customer.email } : {}),
+      ...(ctx.customerId ? { customerId: ctx.customerId } : {}),
+      ...(ctx.userId ? { userId: ctx.userId } : {}),
+      provider: providerName,
+      status: "failed",
+      error: "Checkout provider returned a failed session.",
+      total: {
+        amount: reserved.lines.reduce((sum, line) => sum + line.item.unitAmount * line.quantity, 0),
+        currency: resolved.currency,
+      },
+    });
+
+    return providerFailed("Checkout provider returned a failed session.");
+  }
 
   const providerCheckoutId = providerSession.providerCheckoutId ?? providerSession.id;
   const documentExpiresAt = providerSession.expiresAt ?? expiresAt;
@@ -6715,6 +6986,7 @@ async function startCheckout(
       },
       metadata: checkoutMetadata({
         customFields: checkoutInput.customFields,
+        customer: checkoutInput.customer,
         idempotencyInputHash,
         idempotencyKey: ctx.idempotencyKey,
         providerSession,
@@ -6784,11 +7056,13 @@ async function resolveCheckoutStart(
   const lines: CheckoutStartLineResolution[] = [];
   const currency = cartResult.cart?.aggregate.currency ?? defaultCurrency;
 
-  for (const cartLine of cartResult.cart?.aggregate.items ?? []) {
+  const cartLines = cartResult.cart?.aggregate.items ?? [];
+  for (const cartLine of cartLines) {
     const line = await resolveCheckoutStartLine(input, {
       sellableId: cartLine.item.sellableId,
       priceId: cartLine.item.priceId,
       quantity: cartLine.quantity,
+      quantityForLimit: cartLine.quantity + siblingSellableQuantity(cartLines, cartLine),
       currency,
       cartLineId: cartLine.id,
       metadata: cartLine.metadata,
@@ -6871,6 +7145,7 @@ async function resolveCheckoutStartLine(
     readonly sellableId: MikaId;
     readonly priceId?: MikaId;
     readonly quantity: number;
+    readonly quantityForLimit?: number;
     readonly currency: CurrencyCode;
     readonly cartLineId?: MikaId;
     readonly metadata?: JsonObject;
@@ -6920,7 +7195,11 @@ async function resolveCheckoutStartLine(
   }
 
   const stock = await input.repositories.stock.findBySellableId(sellable.id);
-  const quantityError = validateQuantityLimit(sellable, stock, lineInput.quantity);
+  const quantityError = validateQuantityLimit(
+    sellable,
+    stock,
+    lineInput.quantityForLimit ?? lineInput.quantity,
+  );
   if (quantityError) return quantityError;
 
   return {
@@ -6959,40 +7238,49 @@ async function reserveCheckoutLines(
   const lines: CheckoutLine[] = [];
   const reservationIds: MikaId[] = [];
 
-  for (const resolution of checkout.lines) {
-    if (!resolution.stock) {
-      lines.push(resolution.line);
-      continue;
-    }
+  try {
+    for (const resolution of checkout.lines) {
+      if (!resolution.stock) {
+        lines.push(resolution.line);
+        continue;
+      }
 
-    const reservation = await stock.reserve({
-      stockItemId: resolution.stock.id,
-      quantity: resolution.line.quantity,
-      expiresAt,
-      now: ctx.now,
-      cartId: checkout.cart?.id,
-      checkoutSessionId: checkoutId,
-      customerId: ctx.customerId,
-      sessionId: ctx.sessionId,
-      idempotencyKey: checkoutReservationIdempotencyKey(ctx, resolution),
-      metadata: { source: "checkout.start" },
-    });
+      const reservation = await stock.reserve({
+        stockItemId: resolution.stock.id,
+        quantity: resolution.line.quantity,
+        expiresAt,
+        now: ctx.now,
+        cartId: checkout.cart?.id,
+        checkoutSessionId: checkoutId,
+        customerId: ctx.customerId,
+        sessionId: ctx.sessionId,
+        idempotencyKey: checkoutReservationIdempotencyKey(ctx, resolution),
+        metadata: { source: "checkout.start" },
+      });
 
-    if (reservation.status === "insufficient_stock") {
-      await releaseCheckoutReservations(input, reservationIds, ctx.now);
-      return outOfStock(resolution.line.item.sellableId);
-    }
-    if (reservation.status === "not_found") {
-      await releaseCheckoutReservations(input, reservationIds, ctx.now);
-      return outOfStock(resolution.line.item.sellableId);
-    }
-    if (reservation.status === "replayed") {
-      await releaseCheckoutReservations(input, reservationIds, ctx.now);
-      return checkoutIdempotencyInProgress();
-    }
+      if (reservation.status === "insufficient_stock") {
+        await releaseCheckoutReservations(input, reservationIds, ctx.now);
+        return outOfStock(resolution.line.item.sellableId);
+      }
+      if (reservation.status === "not_found") {
+        await releaseCheckoutReservations(input, reservationIds, ctx.now);
+        return outOfStock(resolution.line.item.sellableId);
+      }
+      if (reservation.status === "replayed") {
+        await releaseCheckoutReservations(input, reservationIds, ctx.now);
+        return checkoutIdempotencyInProgress();
+      }
+      if (reservation.status === "idempotency_conflict") {
+        await releaseCheckoutReservations(input, reservationIds, ctx.now);
+        return checkoutIdempotencyInputMismatch();
+      }
 
-    reservationIds.push(reservation.event.id);
-    lines.push({ ...resolution.line, reservationId: reservation.event.id });
+      reservationIds.push(reservation.event.id);
+      lines.push({ ...resolution.line, reservationId: reservation.event.id });
+    }
+  } catch (error) {
+    await releaseCheckoutReservations(input, reservationIds, ctx.now);
+    throw error;
   }
 
   return { ok: true, lines, reservationIds };
@@ -7123,6 +7411,7 @@ async function expireCheckoutReservations(
 
 function checkoutMetadata(input: {
   readonly customFields: JsonObject | undefined;
+  readonly customer?: CheckoutCustomerInput;
   readonly idempotencyInputHash?: string;
   readonly idempotencyKey: string | undefined;
   readonly providerSession: {
@@ -7131,7 +7420,8 @@ function checkoutMetadata(input: {
   };
 }): JsonObject {
   return {
-    ...checkoutCustomMetadata(input.customFields),
+    ...checkoutPersistedCustomMetadata(input.customFields),
+    ...checkoutCustomerToMetadata(input.customer),
     checkoutProviderStatus: input.providerSession.status,
     ...(input.idempotencyKey ? { checkoutIdempotencyKey: input.idempotencyKey } : {}),
     ...(input.idempotencyInputHash
@@ -7143,8 +7433,43 @@ function checkoutMetadata(input: {
   };
 }
 
+function checkoutCustomerToMetadata(customer: CheckoutCustomerInput | undefined): JsonObject {
+  return {
+    ...(customer?.email?.trim()
+      ? { [CHECKOUT_CUSTOMER_EMAIL_METADATA_KEY]: customer.email.trim() }
+      : {}),
+    ...(customer?.name?.trim()
+      ? { [CHECKOUT_CUSTOMER_NAME_METADATA_KEY]: customer.name.trim() }
+      : {}),
+    ...(customer?.company?.trim()
+      ? { [CHECKOUT_CUSTOMER_COMPANY_METADATA_KEY]: customer.company.trim() }
+      : {}),
+    ...(customer?.vatId?.trim()
+      ? { [CHECKOUT_CUSTOMER_VAT_ID_METADATA_KEY]: customer.vatId.trim() }
+      : {}),
+  };
+}
+
+function checkoutCustomerFromMetadata(metadata: JsonObject | undefined): CheckoutCustomerInput {
+  const email = metadataString(metadata, CHECKOUT_CUSTOMER_EMAIL_METADATA_KEY);
+  const name = metadataString(metadata, CHECKOUT_CUSTOMER_NAME_METADATA_KEY);
+  const company = metadataString(metadata, CHECKOUT_CUSTOMER_COMPANY_METADATA_KEY);
+  const vatId = metadataString(metadata, CHECKOUT_CUSTOMER_VAT_ID_METADATA_KEY);
+
+  return {
+    ...(email ? { email } : {}),
+    ...(name ? { name } : {}),
+    ...(company ? { company } : {}),
+    ...(vatId ? { vatId } : {}),
+  };
+}
+
 function checkoutCustomMetadata(customFields: JsonObject | undefined): JsonObject {
   return filterJsonObject(customFields, CHECKOUT_INTERNAL_METADATA_KEYS);
+}
+
+function checkoutPersistedCustomMetadata(customFields: JsonObject | undefined): JsonObject {
+  return filterJsonObject(customFields, CHECKOUT_PERSISTED_METADATA_OMIT_KEYS);
 }
 
 function filterJsonObject(
@@ -7228,9 +7553,45 @@ async function checkoutStatus(
   const bindingError = checkoutBindingError(document);
   if (bindingError) return bindingError;
 
-  if (checkoutIsExpired(input, document)) return checkoutStatusExpired(document);
+  if (checkoutIsExpired(input, document)) {
+    const expired = await expireCheckoutDocument(input, document, ctx.now);
+    return checkoutStatusExpired(expired);
+  }
 
   return checkoutDocumentSuccessResult(document);
+}
+
+async function expireCheckoutDocument(
+  input: CreateMikaBackendApiInput,
+  document: CheckoutDocument,
+  now: ISODateTime,
+): Promise<CheckoutDocument> {
+  if (
+    document.status === "completed" ||
+    document.orderId ||
+    !checkoutStatusCanExpire(document.status)
+  ) {
+    return document;
+  }
+
+  const reservationIds = document.aggregate.lines
+    .map((line) => line.reservationId)
+    .filter((id): id is MikaId => Boolean(id));
+  if (reservationIds.length > 0) {
+    await expireCheckoutReservations(input, reservationIds, now);
+  }
+
+  if (document.status === "expired" && document.providerStatus === "expired") return document;
+
+  const expired: CheckoutDocument = {
+    ...document,
+    status: "expired",
+    providerStatus: "expired",
+    updatedAt: now,
+  };
+  await input.repositories.session.put(expired);
+
+  return expired;
 }
 
 async function cancelCheckout(
@@ -7242,11 +7603,8 @@ async function cancelCheckout(
   const document = await input.repositories.session.findCheckoutById(checkoutId);
   if (!document) return invalidCheckout("checkoutId", checkoutId);
 
-  if (!(await checkoutBelongsToContext(document, ctx))) {
-    return authRequired(
-      "Checkout cancellation requires the matching session or customer identity.",
-    );
-  }
+  const accessError = await checkoutCancelAccessError(input, ctx, document, cancelInput.token);
+  if (accessError) return accessError;
 
   if (document.status === "completed" || document.orderId) {
     return checkoutDocumentSuccessResult(document);
@@ -7266,22 +7624,55 @@ async function cancelCheckout(
     await expireCheckoutReservations(input, reservationIds, ctx.now);
   }
 
-  const cartDocument = document.cartId
-    ? await input.repositories.session.findById(document.cartId)
-    : null;
-  if (cartDocument && cartDocument.type === "cart") {
-    await input.repositories.session.put(reopenCartDocument(cartDocument, ctx.now));
+  const current = await input.repositories.session.findCheckoutById(checkoutId);
+  if (!current) return invalidCheckout("checkoutId", checkoutId);
+  if (current.status === "completed" || current.orderId) {
+    return checkoutDocumentSuccessResult(current);
+  }
+  if (
+    current.status === "cancelled" ||
+    current.status === "expired" ||
+    current.status === "failed"
+  ) {
+    return checkoutDocumentSuccessResult(current);
   }
 
   const cancelled: CheckoutDocument = {
-    ...document,
+    ...current,
     status: "cancelled",
     providerStatus: "cancelled",
     updatedAt: ctx.now,
   };
   await input.repositories.session.put(cancelled);
 
+  const stored = await input.repositories.session.findCheckoutById(checkoutId);
+  if (!stored) return invalidCheckout("checkoutId", checkoutId);
+  if (stored.status === "completed" || stored.orderId) {
+    return checkoutDocumentSuccessResult(stored);
+  }
+
+  const cartDocument = stored.cartId
+    ? await input.repositories.session.findById(stored.cartId)
+    : null;
+  if (cartDocument && cartDocument.type === "cart" && cartDocument.status === "checkout_pending") {
+    await input.repositories.session.put(reopenCartDocument(cartDocument, ctx.now));
+  }
+
   return checkoutDocumentSuccessResult(cancelled);
+}
+
+async function checkoutCancelAccessError(
+  input: CreateMikaBackendApiInput,
+  ctx: MikaRequestContext,
+  document: CheckoutDocument,
+  token: string | undefined,
+): Promise<MikaApiFailure | null> {
+  if (await checkoutBelongsToContext(input, document, ctx)) return null;
+  if (token) return validateCheckoutStatusToken(input, ctx.now, token, document);
+
+  return authRequired(
+    "Checkout cancellation requires the matching session, customer identity, or checkout status token.",
+  );
 }
 
 async function checkoutStatusAccessError(
@@ -7290,7 +7681,7 @@ async function checkoutStatusAccessError(
   document: CheckoutDocument,
   token: string | undefined,
 ): Promise<MikaApiFailure | null> {
-  if (await checkoutBelongsToContext(document, ctx)) return null;
+  if (await checkoutBelongsToContext(input, document, ctx)) return null;
   if (token) return validateCheckoutStatusToken(input, ctx.now, token, document);
 
   return authRequired(
@@ -7299,84 +7690,103 @@ async function checkoutStatusAccessError(
 }
 
 async function checkoutBelongsToContext(
+  input: MikaCustomerHydrationInput,
   document: CheckoutDocument,
   ctx: MikaRequestContext,
 ): Promise<boolean> {
-  const customerId = await effectiveCustomerId(ctx);
+  const customerId = await effectiveCustomerId(input, ctx);
   if (document.customerId) return document.customerId === customerId;
 
   return Boolean(document.sessionId && ctx.sessionId && document.sessionId === ctx.sessionId);
 }
 
-async function effectiveCustomerId(ctx: MikaRequestContext): Promise<MikaId | undefined> {
+async function effectiveCustomerId(
+  input: MikaCustomerHydrationInput,
+  ctx: MikaRequestContext,
+): Promise<MikaId | undefined> {
   if (ctx.customerId) return ctx.customerId;
 
-  return ctx.session?.get<MikaId>("mika.customerId");
+  const sessionCustomerId = await ctx.session?.get<MikaId>("mika.customerId");
+  if (!sessionCustomerId) return undefined;
+
+  const customer = await input.repositories.account.findCustomerById(sessionCustomerId);
+  return customer && customerIsCompatibleWithContext(customer, ctx) ? sessionCustomerId : undefined;
 }
 
-async function withEffectiveCustomer(ctx: MikaRequestContext): Promise<MikaRequestContext> {
+async function withEffectiveCustomer(
+  input: MikaCustomerHydrationInput,
+  ctx: MikaRequestContext,
+): Promise<MikaRequestContext> {
   if (ctx.customerId) return ctx;
   const sessionCustomerId = await ctx.session?.get<MikaId>("mika.customerId");
+  if (!sessionCustomerId) return ctx;
 
-  return sessionCustomerId ? { ...ctx, customerId: sessionCustomerId } : ctx;
+  const customer = await input.repositories.account.findCustomerById(sessionCustomerId);
+  return customer && customerIsCompatibleWithContext(customer, ctx)
+    ? { ...ctx, customerId: sessionCustomerId }
+    : ctx;
 }
 
 function withHydratedCustomerHandler<TArgs extends readonly unknown[], TResult>(
+  input: MikaCustomerHydrationInput,
   handler: (ctx: MikaRequestContext, ...args: TArgs) => Promise<TResult>,
 ): (ctx: MikaRequestContext, ...args: TArgs) => Promise<TResult> {
-  return async (ctx, ...args) => handler(await withEffectiveCustomer(ctx), ...args);
+  return async (ctx, ...args) => handler(await withEffectiveCustomer(input, ctx), ...args);
 }
 
 function hydratedCheckoutOverrides(
+  input: MikaCustomerHydrationInput,
   overrides: MikaApiOverrides["checkout"] | undefined,
 ): MikaApiOverrides["checkout"] | undefined {
   if (!overrides) return undefined;
 
   return {
-    ...(overrides.start ? { start: withHydratedCustomerHandler(overrides.start) } : {}),
-    ...(overrides.preview ? { preview: withHydratedCustomerHandler(overrides.preview) } : {}),
-    ...(overrides.status ? { status: withHydratedCustomerHandler(overrides.status) } : {}),
-    ...(overrides.cancel ? { cancel: withHydratedCustomerHandler(overrides.cancel) } : {}),
+    ...(overrides.start ? { start: withHydratedCustomerHandler(input, overrides.start) } : {}),
+    ...(overrides.preview ? { preview: withHydratedCustomerHandler(input, overrides.preview) } : {}),
+    ...(overrides.status ? { status: withHydratedCustomerHandler(input, overrides.status) } : {}),
+    ...(overrides.cancel ? { cancel: withHydratedCustomerHandler(input, overrides.cancel) } : {}),
   };
 }
 
 function hydratedCartOverrides(
+  input: MikaCustomerHydrationInput,
   overrides: MikaApiOverrides["cart"] | undefined,
 ): MikaApiOverrides["cart"] | undefined {
   if (!overrides) return undefined;
 
   return {
-    ...(overrides.get ? { get: withHydratedCustomerHandler(overrides.get) } : {}),
-    ...(overrides.quote ? { quote: withHydratedCustomerHandler(overrides.quote) } : {}),
-    ...(overrides.add ? { add: withHydratedCustomerHandler(overrides.add) } : {}),
-    ...(overrides.update ? { update: withHydratedCustomerHandler(overrides.update) } : {}),
-    ...(overrides.remove ? { remove: withHydratedCustomerHandler(overrides.remove) } : {}),
-    ...(overrides.merge ? { merge: withHydratedCustomerHandler(overrides.merge) } : {}),
+    ...(overrides.get ? { get: withHydratedCustomerHandler(input, overrides.get) } : {}),
+    ...(overrides.quote ? { quote: withHydratedCustomerHandler(input, overrides.quote) } : {}),
+    ...(overrides.add ? { add: withHydratedCustomerHandler(input, overrides.add) } : {}),
+    ...(overrides.update ? { update: withHydratedCustomerHandler(input, overrides.update) } : {}),
+    ...(overrides.remove ? { remove: withHydratedCustomerHandler(input, overrides.remove) } : {}),
+    ...(overrides.merge ? { merge: withHydratedCustomerHandler(input, overrides.merge) } : {}),
     ...(overrides.applyCoupon
-      ? { applyCoupon: withHydratedCustomerHandler(overrides.applyCoupon) }
+      ? { applyCoupon: withHydratedCustomerHandler(input, overrides.applyCoupon) }
       : {}),
     ...(overrides.removeCoupon
-      ? { removeCoupon: withHydratedCustomerHandler(overrides.removeCoupon) }
+      ? { removeCoupon: withHydratedCustomerHandler(input, overrides.removeCoupon) }
       : {}),
   };
 }
 
 function hydratedWishlistOverrides(
+  input: MikaCustomerHydrationInput,
   overrides: MikaApiOverrides["wishlist"] | undefined,
 ): MikaApiOverrides["wishlist"] | undefined {
   if (!overrides) return undefined;
 
   return {
-    ...(overrides.get ? { get: withHydratedCustomerHandler(overrides.get) } : {}),
-    ...(overrides.add ? { add: withHydratedCustomerHandler(overrides.add) } : {}),
-    ...(overrides.remove ? { remove: withHydratedCustomerHandler(overrides.remove) } : {}),
+    ...(overrides.get ? { get: withHydratedCustomerHandler(input, overrides.get) } : {}),
+    ...(overrides.add ? { add: withHydratedCustomerHandler(input, overrides.add) } : {}),
+    ...(overrides.remove ? { remove: withHydratedCustomerHandler(input, overrides.remove) } : {}),
     ...(overrides.moveToCart
-      ? { moveToCart: withHydratedCustomerHandler(overrides.moveToCart) }
+      ? { moveToCart: withHydratedCustomerHandler(input, overrides.moveToCart) }
       : {}),
     ...(overrides.saveForLater
-      ? { saveForLater: withHydratedCustomerHandler(overrides.saveForLater) }
+      ? { saveForLater: withHydratedCustomerHandler(input, overrides.saveForLater) }
       : {}),
-    ...(overrides.merge ? { merge: withHydratedCustomerHandler(overrides.merge) } : {}),
+    ...(overrides.merge ? { merge: withHydratedCustomerHandler(input, overrides.merge) } : {}),
   };
 }
 
@@ -7820,9 +8230,7 @@ async function findOwnedCartById(
 ): Promise<CartDocument | null> {
   const document = await input.repositories.session.findById(cartId);
   if (!document || document.type !== "cart") return null;
-  if (document.customerId && document.customerId !== ctx.customerId) return null;
-  if (!document.customerId && document.sessionId && document.sessionId !== ctx.sessionId)
-    return null;
+  if (!callerOwnsMergeSource(ctx, document)) return null;
 
   return document;
 }
@@ -7830,6 +8238,7 @@ async function findOwnedCartById(
 async function quoteCartLine(
   input: MikaCartWishlistBackendInput,
   line: CartLine,
+  options: { readonly quantityForLimit?: number } = {},
 ): Promise<{
   readonly line: CartQuoteLineDTO;
   readonly changed: boolean;
@@ -7870,7 +8279,11 @@ async function quoteCartLine(
       unitAmount = price.amount;
     }
 
-    const quantityError = validateQuantityLimit(sellable, stock, line.quantity);
+    const quantityError = validateQuantityLimit(
+      sellable,
+      stock,
+      options.quantityForLimit ?? line.quantity,
+    );
     if (quantityError) {
       unavailable = true;
       warnings.push(quantityError.error.message);
@@ -8017,11 +8430,7 @@ async function findOwnedOpenCartById(
     return invalidCart(field, cartId);
   }
 
-  if (document.customerId) {
-    if (document.customerId !== ctx.customerId) {
-      return invalidCart(field, cartId);
-    }
-  } else if (document.sessionId && document.sessionId !== ctx.sessionId) {
+  if (!callerOwnsMergeSource(ctx, document)) {
     return invalidCart(field, cartId);
   }
 
@@ -8125,7 +8534,7 @@ async function validateExistingLineQuantity(
 ): Promise<MikaApiFailure | null> {
   const catalog = await input.repositories.catalog.findItemBySellableId(line.item.sellableId);
   const sellable = catalog?.aggregate.sellables.find((item) => item.id === line.item.sellableId);
-  if (!sellable) return null;
+  if (!sellable) return sellableNotFound(line.item.sellableId);
 
   const stock = await input.repositories.stock.findBySellableId(line.item.sellableId);
   return validateQuantityLimit(sellable, stock, quantity);
@@ -8620,6 +9029,10 @@ function validationFailed(field: string, message: string): MikaApiFailure {
   return apiFailure(422, "VALIDATION_FAILED", "Mika input validation failed.", {
     [field]: message,
   });
+}
+
+function sellableNotFound(sellableId: MikaId): MikaApiFailure {
+  return apiFailure(404, "SELLABLE_NOT_FOUND", `Sellable '${sellableId}' was not found.`);
 }
 
 function cartLineNotFound(lineId: MikaId): MikaApiFailure {

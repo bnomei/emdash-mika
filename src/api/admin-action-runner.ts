@@ -584,7 +584,7 @@ function targetMatchesRequirement(
   if (isMikaAdminActionTargetMetadata(requirement)) {
     if (!target) return requirement.required !== true;
     if (requirement.surfaces && !requirement.surfaces.includes(target.type)) return false;
-    return !requirement.kind || target.kind === requirement.kind;
+    return !requirement.kind || !target.kind || target.kind === requirement.kind;
   }
   if (!target) return true;
   return isMikaAdminActionTargetList(requirement)

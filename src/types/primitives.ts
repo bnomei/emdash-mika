@@ -28,7 +28,7 @@ export interface JsonObject {
 }
 
 const CURRENCY_CODE_PATTERN = /^[A-Z]{3}$/;
-const ISO_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T/;
+const ISO_DATE_TIME_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T/;
 
 /** Constructs a branded id from a non-empty trimmed string. */
 export function createMikaId(value: string): MikaId {
@@ -38,7 +38,8 @@ export function createMikaId(value: string): MikaId {
 /** Constructs a branded, canonical-UTC (`Z`) ISO datetime after parse validation. */
 export function createISODateTime(value: string): ISODateTime {
   const dateTime = nonEmptyTrimmed(value, "ISODateTime");
-  if (!ISO_DATE_TIME_PATTERN.test(dateTime) || Number.isNaN(Date.parse(dateTime))) {
+  const match = ISO_DATE_TIME_PATTERN.exec(dateTime);
+  if (!match || !isValidCalendarDate(match) || Number.isNaN(Date.parse(dateTime))) {
     throw new TypeError(`Invalid ISODateTime '${value}'.`);
   }
 
@@ -67,11 +68,14 @@ export function isMikaId(value: unknown): value is MikaId {
 
 /** Type guard for branded ISO datetime strings. */
 export function isISODateTime(value: unknown): value is ISODateTime {
+  const match = typeof value === "string" ? ISO_DATE_TIME_PATTERN.exec(value) : null;
+
   return (
     typeof value === "string" &&
     value.length > 0 &&
     value === value.trim() &&
-    ISO_DATE_TIME_PATTERN.test(value) &&
+    match !== null &&
+    isValidCalendarDate(match) &&
     !Number.isNaN(Date.parse(value))
   );
 }
@@ -154,6 +158,19 @@ function nonEmptyTrimmed(value: string, label: string): string {
   }
 
   return trimmed;
+}
+
+function isValidCalendarDate(match: RegExpExecArray): boolean {
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

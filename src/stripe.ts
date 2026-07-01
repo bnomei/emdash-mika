@@ -309,14 +309,18 @@ export function createMikaStripeProvider(
         return unsupportedAction("subscription_cancel", "Stripe subscription id is required.");
       }
 
-      const subscription = await options.stripe.subscriptions.update(input.providerSubscriptionId, {
-        cancel_at_period_end: true,
-      });
+      try {
+        const subscription = await options.stripe.subscriptions.update(input.providerSubscriptionId, {
+          cancel_at_period_end: true,
+        });
 
-      return completedAction(
-        "subscription_cancel",
-        `Stripe subscription ${subscription.id} set to cancel at period end.`,
-      );
+        return completedAction(
+          "subscription_cancel",
+          `Stripe subscription ${subscription.id} set to cancel at period end.`,
+        );
+      } catch (error) {
+        return failedAction("subscription_cancel", stripeActionErrorMessage(error));
+      }
     },
     changeSubscription: async (input) => changeStripeSubscription(options, input),
     renewSubscription: async (input) => renewStripeSubscription(options, input),
@@ -458,7 +462,8 @@ async function createStripeDelegatedPayment(
     (amount, line) => amount + line.unitAmount * line.quantity,
     0,
   );
-  const total = Math.max(0, subtotal - (input.discount?.amount ?? 0));
+  const discountAmount = input.discount && input.discount.amount > 0 ? input.discount.amount : 0;
+  const total = Math.max(0, subtotal - discountAmount);
   const currency = input.lines[0]?.currency;
   if (!currency) {
     throw new Error("Delegated Stripe checkout requires at least one line item.");
@@ -628,18 +633,22 @@ async function changeStripeSubscription(
     );
   }
 
-  const metadata = stripeMetadata(input.metadata);
-  const subscription = await options.stripe.subscriptions.update(
-    input.providerSubscriptionId,
-    {
-      cancel_at_period_end: false,
-      items: [{ price: input.providerPriceId }],
-      ...(metadata ? { metadata } : {}),
-    },
-    requestOptions(input.metadata ? stringChild(input.metadata, "idempotencyKey") : undefined),
-  );
+  try {
+    const metadata = stripeMetadata(input.metadata);
+    const subscription = await options.stripe.subscriptions.update(
+      input.providerSubscriptionId,
+      {
+        cancel_at_period_end: false,
+        items: [{ price: input.providerPriceId }],
+        ...(metadata ? { metadata } : {}),
+      },
+      requestOptions(input.metadata ? stringChild(input.metadata, "idempotencyKey") : undefined),
+    );
 
-  return completedAction("subscription_change", `Stripe subscription ${subscription.id} updated.`);
+    return completedAction("subscription_change", `Stripe subscription ${subscription.id} updated.`);
+  } catch (error) {
+    return failedAction("subscription_change", stripeActionErrorMessage(error));
+  }
 }
 
 async function renewStripeSubscription(
@@ -650,13 +659,17 @@ async function renewStripeSubscription(
     return unsupportedAction("subscription_renew", "Stripe subscription id is required.");
   }
 
-  const subscription = options.stripe.subscriptions.resume
-    ? await options.stripe.subscriptions.resume(input.providerSubscriptionId)
-    : await options.stripe.subscriptions.update(input.providerSubscriptionId, {
-        cancel_at_period_end: false,
-      });
+  try {
+    const subscription = options.stripe.subscriptions.resume
+      ? await options.stripe.subscriptions.resume(input.providerSubscriptionId)
+      : await options.stripe.subscriptions.update(input.providerSubscriptionId, {
+          cancel_at_period_end: false,
+        });
 
-  return completedAction("subscription_renew", `Stripe subscription ${subscription.id} renewed.`);
+    return completedAction("subscription_renew", `Stripe subscription ${subscription.id} renewed.`);
+  } catch (error) {
+    return failedAction("subscription_renew", stripeActionErrorMessage(error));
+  }
 }
 
 async function refundStripePayment(
@@ -686,7 +699,7 @@ async function cancelStripeOrder(
   options: CreateMikaStripeProviderOptions,
   input: MikaProviderOrderCancelInput,
 ): Promise<AdminActionResultDTO> {
-  const paymentIntentId = input.providerOrderId;
+  const paymentIntentId = input.providerPaymentId ?? input.providerOrderId;
   if (!options.stripe.paymentIntents?.cancel || !paymentIntentId) {
     return unsupportedAction(
       "order_cancel",
@@ -694,15 +707,19 @@ async function cancelStripeOrder(
     );
   }
 
-  const intent = await options.stripe.paymentIntents.cancel(
-    paymentIntentId,
-    input.reason ? { cancellation_reason: input.reason } : {},
-  );
+  try {
+    const intent = await options.stripe.paymentIntents.cancel(
+      paymentIntentId,
+      input.reason ? { cancellation_reason: input.reason } : {},
+    );
 
-  return {
-    id: createMikaId(intent.id),
-    status: intent.status === "canceled" ? "completed" : "running",
-  };
+    return {
+      id: createMikaId(intent.id),
+      status: intent.status === "canceled" ? "completed" : "running",
+    };
+  } catch (error) {
+    return failedAction("order_cancel", stripeActionErrorMessage(error));
+  }
 }
 
 async function verifyStripeWebhook(
@@ -794,6 +811,7 @@ function parseStripeWebhookEvent(
       provider,
       providerEventId,
       type,
+      providerCheckoutId: stringChild(object, "id"),
       providerPaymentId: stringChild(object, "id"),
       providerOrderId: stringChild(object, "id"),
       customer: undefined,
@@ -831,6 +849,7 @@ function parseStripeWebhookEvent(
 const STRIPE_PAYMENT_FAILURE_TYPES = new Set([
   "payment_intent.payment_failed",
   "checkout.session.async_payment_failed",
+  "checkout.session.expired",
   "invoice.payment_failed",
 ]);
 
@@ -870,7 +889,6 @@ function stripePaymentFailureEvent(
 
 const STRIPE_PAYMENT_REVERSAL_TYPES = new Set([
   "charge.refunded",
-  "charge.dispute.created",
   "invoice.marked_uncollectible",
 ]);
 
@@ -939,13 +957,18 @@ function stripeInvoiceEventIsPaid(type: string, object: JsonObject): boolean {
 }
 
 function stripeCheckoutSessionIsPaid(object: JsonObject): boolean {
-  return stringChild(object, "payment_status") === "paid";
+  const paymentStatus = stringChild(object, "payment_status");
+  return paymentStatus === "paid" || paymentStatus === "no_payment_required";
 }
 
 function moneyTotalsFromStripeAmount(
   object: JsonObject,
 ): { readonly total?: MoneyDTO } | undefined {
-  const amount = numberChild(object, "amount_total") ?? numberChild(object, "amount_paid");
+  const amount =
+    numberChild(object, "amount_total") ??
+    numberChild(object, "amount_paid") ??
+    numberChild(object, "amount_received") ??
+    numberChild(object, "amount");
   const currency = stringChild(object, "currency")?.toUpperCase();
   if (amount === undefined || !currency) return undefined;
 
@@ -1065,6 +1088,18 @@ function unsupportedAction(
     status: "unsupported",
     message,
   };
+}
+
+function failedAction(id: string, message: string): AdminActionResultDTO {
+  return {
+    id: createMikaId(id),
+    status: "failed",
+    message,
+  };
+}
+
+function stripeActionErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Stripe action failed.";
 }
 
 function stringChild(input: JsonObject | undefined, key: string): string | undefined {

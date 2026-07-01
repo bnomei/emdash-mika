@@ -186,30 +186,37 @@ const MIKA_FIELD_ROW_ACTION_TARGET = {
 
 const MIKA_STOCK_ITEM_ACTION_TARGET = {
   ...MIKA_FIELD_ROW_ACTION_TARGET,
+  kind: "stockItem",
 } as const satisfies MikaAdminActionTargetMetadata;
 
 const MIKA_WEBHOOK_ACTION_TARGET = {
   ...MIKA_FIELD_ROW_ACTION_TARGET,
+  kind: "webhook",
 } as const satisfies MikaAdminActionTargetMetadata;
 
 const MIKA_ORDER_ACTION_TARGET = {
   ...MIKA_FIELD_ROW_ACTION_TARGET,
+  kind: "order",
 } as const satisfies MikaAdminActionTargetMetadata;
 
 const MIKA_ENTITLEMENT_ACTION_TARGET = {
   ...MIKA_FIELD_ROW_ACTION_TARGET,
+  kind: "entitlement",
 } as const satisfies MikaAdminActionTargetMetadata;
 
 const MIKA_EMAIL_ACTION_TARGET = {
   ...MIKA_FIELD_ROW_ACTION_TARGET,
+  kind: "email",
 } as const satisfies MikaAdminActionTargetMetadata;
 
 const MIKA_LICENSE_ACTION_TARGET = {
   ...MIKA_FIELD_ROW_ACTION_TARGET,
+  kind: "license",
 } as const satisfies MikaAdminActionTargetMetadata;
 
 const MIKA_DOWNLOAD_ACTION_TARGET = {
   ...MIKA_FIELD_ROW_ACTION_TARGET,
+  kind: "download",
 } as const satisfies MikaAdminActionTargetMetadata;
 
 /** Canonical catalog of Mika admin runner actions (provider, stock, orders, entitlements, etc.). */

@@ -108,10 +108,20 @@ export const quantitySchema = z.preprocess(
   (value) => (value === null || value === undefined || value === "" ? 1 : Number(value)),
   z.number().int().positive(),
 );
+/** Required positive integer quantity; empty or missing values are rejected. */
+export const requiredQuantitySchema = z.preprocess(
+  (value) => (value === null || value === undefined || value === "" ? undefined : Number(value)),
+  z.number().int().positive(),
+);
 /** Optional positive integer quantity; empty form values become undefined. */
 export const optionalQuantitySchema = z.preprocess(
   (value) => (value === null || value === undefined || value === "" ? undefined : Number(value)),
   z.number().int().positive().optional(),
+);
+/** Optional coupon override; explicit empty strings are preserved so callers can clear a coupon. */
+export const optionalCouponCodeSchema = z.preprocess(
+  (value) => (value === null || value === undefined ? undefined : value),
+  z.string().trim().optional(),
 );
 /** Signed integer parsed from string or numeric form values. */
 export const integerSchema = z.preprocess((value) => Number(value), z.number().int());
@@ -166,6 +176,7 @@ export const checkoutStatusInputSchema = z.object({
 /** Checkout session id for abandoning an in-flight checkout. */
 export const checkoutCancelInputSchema = z.object({
   checkoutId: mikaIdSchema,
+  token: optionalStringSchema,
 }) satisfies z.ZodType<CheckoutCancelInput>;
 
 /** Export job id for polling account export readiness. */
@@ -220,7 +231,7 @@ export const cartAddFormInputSchema = z.object({
 /** Line id and target quantity for cart line quantity updates. */
 export const updateCartItemInputSchema = z.object({
   lineId: mikaIdSchema,
-  quantity: quantitySchema,
+  quantity: requiredQuantitySchema,
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<UpdateCartItemInput>;
 
@@ -296,7 +307,7 @@ export const cartQuoteInputSchema = z.object({
   sellableId: optionalMikaIdSchema,
   priceId: optionalMikaIdSchema,
   quantity: optionalQuantitySchema,
-  couponCode: optionalStringSchema,
+  couponCode: optionalCouponCodeSchema,
   customer: checkoutCustomerInputSchema.optional(),
   customFields: optionalJsonObjectSchema,
   returnTo: optionalStringSchema,
@@ -309,7 +320,7 @@ export const startCheckoutInputSchema = z.object({
   priceId: optionalMikaIdSchema,
   quantity: optionalQuantitySchema,
   provider: optionalProviderNameSchema,
-  couponCode: optionalStringSchema,
+  couponCode: optionalCouponCodeSchema,
   customer: checkoutCustomerInputSchema.optional(),
   customFields: optionalJsonObjectSchema,
   successPath: optionalStringSchema,
@@ -368,7 +379,7 @@ export const checkoutStartFormInputSchema = z.object({
   priceId: optionalMikaIdSchema,
   quantity: optionalQuantitySchema,
   provider: optionalProviderNameSchema,
-  couponCode: optionalStringSchema,
+  couponCode: optionalCouponCodeSchema,
   email: optionalStringSchema,
   name: optionalStringSchema,
   company: optionalStringSchema,

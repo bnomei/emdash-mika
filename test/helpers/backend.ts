@@ -166,6 +166,9 @@ function createTestSession(sessionID: string): NonNullable<MikaRequestContext["s
     set<T = unknown>(key: string, value: T): void {
       values.set(key, value);
     },
+    delete(key: string): void {
+      values.delete(key);
+    },
   };
 }
 

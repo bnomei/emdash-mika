@@ -271,6 +271,13 @@ export interface AssertMikaApiWiredOptions {
 /** Throws when any requested method still resolves to the not-implemented stub. */
 export function assertMikaApiWired(api: MikaApi, options: AssertMikaApiWiredOptions = {}): void {
   const scope = options.scope ? new Set(options.scope) : undefined;
+  const unknownScope = scope
+    ? [...scope].filter((entry) => !mikaApiWireScopeNames().has(entry)).sort()
+    : [];
+  if (unknownScope.length > 0) {
+    throw new Error(`Unknown Mika API wiring scope: ${unknownScope.join(", ")}.`);
+  }
+
   const missing: string[] = [];
 
   for (const [namespace, methods] of Object.entries(mikaApiMethodNames)) {
@@ -286,6 +293,18 @@ export function assertMikaApiWired(api: MikaApi, options: AssertMikaApiWiredOpti
   if (missing.length > 0) {
     throw new Error(`Mika API is missing wired methods: ${missing.sort().join(", ")}.`);
   }
+}
+
+function mikaApiWireScopeNames(): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const [namespace, methods] of Object.entries(mikaApiMethodNames)) {
+    names.add(namespace);
+    for (const method of methods) {
+      names.add(`${namespace}.${String(method)}`);
+    }
+  }
+
+  return names;
 }
 
 /** Standard not-implemented {@link MikaApiResult} returned by unwired stub methods. */

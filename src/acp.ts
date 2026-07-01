@@ -17,6 +17,8 @@ import type {
   CheckoutCustomerInput,
   CheckoutPreviewDTO,
   CheckoutSessionDTO,
+  MikaError,
+  MikaErrorCode,
   MikaApiResult,
   MoneyDTO,
   SellableDTO,
@@ -420,9 +422,11 @@ export interface MikaAcpError {
     | "request_not_idempotent"
     | "invalid_request"
     | "unauthorized"
-    | "signature_invalid";
+    | "signature_invalid"
+    | Lowercase<MikaErrorCode>;
   readonly message: string;
   readonly param?: string;
+  readonly retry_after?: number;
 }
 
 /** ACP order webhook payload emitted after checkout completion or order status changes. */
@@ -453,13 +457,8 @@ export function createMikaAcpProductFeed(input: {
 }): MikaAcpProductFeed {
   return {
     ...(input.targetCountry ? { target_country: input.targetCountry } : {}),
-    products: input.products.map((product) => ({
-      id: product.id,
-      ...(product.title ? { title: product.title } : {}),
-      ...(product.description ? { description: product.description } : {}),
-      ...(product.url ? { url: product.url } : {}),
-      ...(product.media ? { media: product.media } : {}),
-      variants: product.sellables.flatMap((sellable) =>
+    products: input.products.flatMap((product) => {
+      const variants = product.sellables.flatMap((sellable) =>
         sellable.prices
           .filter((price) => price.active)
           .map((price) => ({
@@ -478,8 +477,20 @@ export function createMikaAcpProductFeed(input: {
               : {}),
             ...(product.seller ? { seller: product.seller } : {}),
           })),
-      ),
-    })),
+      );
+      if (variants.length === 0) return [];
+
+      return [
+        {
+          id: product.id,
+          ...(product.title ? { title: product.title } : {}),
+          ...(product.description ? { description: product.description } : {}),
+          ...(product.url ? { url: product.url } : {}),
+          ...(product.media ? { media: product.media } : {}),
+          variants,
+        },
+      ];
+    }),
   };
 }
 
@@ -726,7 +737,7 @@ async function handleAcpCreate(
   if (!reconciled.ok) {
     await releaseAcpIdempotency(options, idempotency.lease);
 
-    return acpError(request, 400, "invalid_request", reconciled.message);
+    return reconciled.response;
   }
   await options.store.put(reconciled.record);
   await commitAcpIdempotency(options, idempotency.lease);
@@ -785,7 +796,7 @@ async function handleAcpUpdate(
   if (!reconciled.ok) {
     await releaseAcpIdempotency(options, idempotency.lease);
 
-    return acpError(request, 400, "invalid_request", reconciled.message);
+    return reconciled.response;
   }
   await options.store.put(reconciled.record);
   await commitAcpIdempotency(options, idempotency.lease);
@@ -876,7 +887,7 @@ async function handleAcpComplete(
   if (!preview.ok) {
     await releaseAcpIdempotency(options, idempotency.lease);
 
-    return acpError(request, preview.status, "invalid_request", resultMessage(preview));
+    return acpErrorFromResult(request, preview);
   }
   if (!preview.data.inputHash || preview.data.status !== "requires_payment_authorization") {
     await releaseAcpIdempotency(options, idempotency.lease);
@@ -901,7 +912,23 @@ async function handleAcpComplete(
   if (!checkout.ok) {
     await releaseAcpIdempotency(options, idempotency.lease);
 
-    return acpError(request, checkout.status, "invalid_request", resultMessage(checkout));
+    return acpErrorFromResult(request, checkout);
+  }
+  if (acpCheckoutStartTerminalStatus(checkout.data.status)) {
+    await options.store.put({
+      ...record,
+      buyer: body.data.buyer ?? record.buyer,
+      status: "not_ready_for_payment",
+      updatedAt: nowIso(options),
+    });
+    await releaseAcpIdempotency(options, idempotency.lease);
+
+    return acpError(
+      request,
+      409,
+      "invalid_request",
+      `Checkout session is ${checkout.data.status} and cannot be completed.`,
+    );
   }
 
   const completed: MikaAcpSessionRecord = {
@@ -917,6 +944,15 @@ async function handleAcpComplete(
   await commitAcpIdempotency(options, idempotency.lease);
 
   return acpJson(request, await recordToAcpSession(options, request, completed), 200);
+}
+
+function acpCheckoutStartTerminalStatus(status: CheckoutSessionDTO["status"]): boolean {
+  return (
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "expired" ||
+    status === "binding_mismatch"
+  );
 }
 
 async function handleAcpGet(
@@ -965,7 +1001,7 @@ async function handleAcpCancel(
     if (!cancellation.ok && cancellation.status !== 404) {
       await releaseAcpIdempotency(options, idempotency.lease);
 
-      return acpError(request, cancellation.status, "invalid_request", resultMessage(cancellation));
+      return acpErrorFromResult(request, cancellation);
     }
   }
 
@@ -1128,11 +1164,11 @@ async function reconcileAcpCart(
   items: readonly MikaAcpItem[],
 ): Promise<
   | { readonly ok: true; readonly record: MikaAcpSessionRecord }
-  | { readonly ok: false; readonly message: string }
+  | { readonly ok: false; readonly response: Response }
 > {
   const ctx = acpContext(options, request, record.sessionId);
   const cartResult = await options.api.cart.get(ctx);
-  if (!cartResult.ok) return { ok: false, message: resultMessage(cartResult) };
+  if (!cartResult.ok) return { ok: false, response: acpErrorFromResult(request, cartResult) };
 
   const parsedItems: {
     readonly item: MikaAcpItem;
@@ -1144,7 +1180,12 @@ async function reconcileAcpCart(
     } catch (error) {
       return {
         ok: false,
-        message: error instanceof Error ? error.message : "ACP item id is invalid.",
+        response: acpError(
+          request,
+          400,
+          "invalid_request",
+          error instanceof Error ? error.message : "ACP item id is invalid.",
+        ),
       };
     }
   }
@@ -1158,9 +1199,13 @@ async function reconcileAcpCart(
 
       return {
         ok: false,
-        message: rollbackMessage
-          ? `${resultMessage(removed)} Cart rollback failed: ${rollbackMessage}`
-          : resultMessage(removed),
+        response: acpErrorFromResult(
+          request,
+          removed,
+          rollbackMessage
+            ? `${resultMessage(removed)} Cart rollback failed: ${rollbackMessage}`
+            : undefined,
+        ),
       };
     }
     cart = removed.data;
@@ -1177,9 +1222,13 @@ async function reconcileAcpCart(
 
       return {
         ok: false,
-        message: rollbackMessage
-          ? `${resultMessage(added)} Cart rollback failed: ${rollbackMessage}`
-          : resultMessage(added),
+        response: acpErrorFromResult(
+          request,
+          added,
+          rollbackMessage
+            ? `${resultMessage(added)} Cart rollback failed: ${rollbackMessage}`
+            : undefined,
+        ),
       };
     }
     cart = added.data;
@@ -1386,7 +1435,7 @@ async function verifyAcpRequest(
 ): Promise<Response | undefined> {
   if (options.apiKey) {
     const expected = `Bearer ${options.apiKey}`;
-    if (request.headers.get("Authorization") !== expected) {
+    if (!constantTimeEqual(request.headers.get("Authorization") ?? "", expected)) {
       return acpError(request, 401, "unauthorized", "ACP authorization failed.");
     }
   }
@@ -1627,6 +1676,27 @@ function resultMessage(result: MikaApiResult<unknown>): string {
   return result.ok ? "OK" : result.error.message;
 }
 
+function acpErrorCodeFromMika(error: MikaError): MikaAcpError["code"] {
+  return error.code.toLowerCase() as Lowercase<MikaErrorCode>;
+}
+
+function acpErrorFromResult(
+  request: Request,
+  result: Extract<MikaApiResult<unknown>, { readonly ok: false }>,
+  message?: string,
+): Response {
+  const fieldName = Object.keys(result.error.fieldErrors ?? {})[0];
+
+  return acpError(
+    request,
+    result.status,
+    acpErrorCodeFromMika(result.error),
+    message ?? result.error.message,
+    fieldName ? `$.${fieldName}` : undefined,
+    { retryAfter: result.error.retryAfter },
+  );
+}
+
 function nowIso(options: CreateMikaAcpCheckoutHandlersOptions): ISODateTime {
   return createISODateTime((options.now?.() ?? new Date()).toISOString());
 }
@@ -1644,17 +1714,21 @@ function acpError(
   code: MikaAcpError["code"],
   message: string,
   param?: string,
+  options: { readonly retryAfter?: number } = {},
 ): Response {
   const body: MikaAcpError = {
     type: "invalid_request",
     code,
     message,
     ...(param ? { param } : {}),
+    ...(options.retryAfter !== undefined ? { retry_after: options.retryAfter } : {}),
   };
+  const headers = acpResponseHeaders(request);
+  if (options.retryAfter !== undefined) headers.set("Retry-After", String(options.retryAfter));
 
   return new Response(JSON.stringify(body), {
     status,
-    headers: acpResponseHeaders(request),
+    headers,
   });
 }
 

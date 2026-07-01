@@ -110,7 +110,14 @@ async function handleActionRunner(
       mikaContext.idempotencyKey,
     ),
     operationPolicy: options.operationPolicy,
-  });
+  }).catch(() => ({
+    ok: false as const,
+    status: 500,
+    error: {
+      code: "PROVIDER_FAILED" as const,
+      message: "Mika operation failed.",
+    },
+  }));
 
   return toMikaAdminActionRunResult(result, resolved.data.resultAdapter);
 }
@@ -163,6 +170,21 @@ async function handleRouteOperation(
   if (!parsedInput.ok) return parsedInput.result;
 
   const mikaContext = requestContext(ctx);
+  if (
+    operation.name.startsWith("admin.") &&
+    operation.agent.idempotency === "required" &&
+    !mikaContext.idempotencyKey
+  ) {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "CONFLICT",
+        message: `Mika operation '${operation.name}' requires an idempotency key.`,
+      },
+    } as const;
+  }
+
   return runMikaOperation({
     operation,
     api,

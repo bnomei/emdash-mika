@@ -97,6 +97,11 @@ export type ReserveStockRepositoryResult =
       readonly stock: StockItemRecord | null;
     }
   | {
+      readonly status: "idempotency_conflict";
+      readonly event: StockEventRecord;
+      readonly stock: StockItemRecord | null;
+    }
+  | {
       readonly status: "insufficient_stock";
       readonly stock: StockItemRecord;
     }
@@ -164,6 +169,11 @@ export type AdjustStockRepositoryResult =
     }
   | {
       readonly status: "replayed";
+      readonly event: StockEventRecord;
+      readonly stock: StockItemRecord | null;
+    }
+  | {
+      readonly status: "idempotency_conflict";
       readonly event: StockEventRecord;
       readonly stock: StockItemRecord | null;
     }
@@ -1472,6 +1482,7 @@ export class OpsRepository {
         leaseExpiresAt: undefined,
         lastError: undefined,
         sentAt: input.now,
+        metadata: emailSentMetadata(email, input.now),
       });
     });
 
@@ -1493,6 +1504,7 @@ export class OpsRepository {
         leaseExpiresAt: undefined,
         lastError: undefined,
         sentAt: input.now,
+        metadata: emailSentMetadata(email, input.now),
       });
     });
 
@@ -1741,6 +1753,18 @@ function emailDocumentWithRecord(
     kind: record.kind,
     record,
     updatedAt: now,
+  };
+}
+
+function emailSentMetadata(email: EmailDocument, now: ISODateTime): JsonObject | undefined {
+  const metadata = email.record.metadata;
+  if (email.kind !== "magic_link" || !metadata) return metadata;
+  if (metadata["link"] === undefined && metadata["url"] === undefined) return metadata;
+
+  const { link: _link, url: _url, ...redacted } = metadata;
+  return {
+    ...redacted,
+    linkRedactedAt: now,
   };
 }
 
@@ -2207,6 +2231,11 @@ async function mutateStockWithEvent<
       readonly stock: StockItemRecord | null;
     }
   | {
+      readonly status: "idempotency_conflict";
+      readonly event: StockEventRecord;
+      readonly stock: StockItemRecord | null;
+    }
+  | {
       readonly status: TFailureStatus;
       readonly stock: StockItemRecord;
     }
@@ -2219,10 +2248,19 @@ async function mutateStockWithEvent<
       ? null
       : await findStockEventByIdempotencyKey(input.executor, input.idempotencyKey);
   if (replayed) {
+    const replayedStock = await findStockItemById(input.executor, replayed.stockItemId);
+    if (replayed.stockItemId !== input.stockItemId) {
+      return {
+        status: "idempotency_conflict",
+        event: replayed,
+        stock: replayedStock,
+      };
+    }
+
     return {
       status: "replayed",
       event: replayed,
-      stock: await findStockItemById(input.executor, replayed.stockItemId),
+      stock: replayedStock,
     };
   }
 

@@ -9,6 +9,7 @@ import {
   createMikaAcpFileUploadRows,
   createMikaAcpProductFeed,
   serializeMikaAcpFileUploadRows,
+  serializeMikaAcpProductFeed,
   validateMikaAcpProductFeed,
   type MikaAcpSeller,
 } from "../src/acp";
@@ -184,6 +185,45 @@ describe("Mika ACP projection", () => {
     });
 
     expect(rows[0]?.availability).toBe("backorder");
+  });
+
+  it("skips zero-variant products instead of failing the whole ACP product feed", () => {
+    const active = createTestSellableDTO({
+      id: createMikaId("sellable_active"),
+      title: "Active print",
+    });
+    const pausedBase = createTestSellableDTO({
+      id: createMikaId("sellable_paused"),
+      title: "Paused print",
+    });
+    const paused = {
+      ...pausedBase,
+      prices: pausedBase.prices.map((price) => ({ ...price, active: false })),
+    };
+
+    const feed = createMikaAcpProductFeed({
+      products: [
+        {
+          id: "product_paused",
+          title: "Paused print",
+          sellables: [paused],
+        },
+        {
+          id: "product_empty",
+          title: "Empty product",
+          sellables: [],
+        },
+        {
+          id: "product_active",
+          title: "Active print",
+          sellables: [active],
+        },
+      ],
+    });
+
+    expect(feed.products.map((product) => product.id)).toEqual(["product_active"]);
+    expect(validateMikaAcpProductFeed(feed)).toEqual([]);
+    expect(() => serializeMikaAcpProductFeed(feed)).not.toThrow();
   });
 
   it("creates and completes ACP checkout sessions with Stripe SPT metadata", async () => {
@@ -650,6 +690,121 @@ describe("Mika ACP projection", () => {
     });
   });
 
+  it("does not mark ACP complete ready for payment when checkout.start returns a failed checkout", async () => {
+    let cart = createCart([]);
+    const store = createMemoryMikaAcpSessionStore();
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+        checkoutSessionStatus: "failed",
+      }),
+      store,
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      createSessionId: () => "checkout_session_acp_failed_checkout",
+    });
+
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_failed_checkout", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+      }),
+    );
+
+    const completed = await handlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_failed_checkout/complete",
+        "idem_complete_failed_checkout",
+        { payment_data: { provider: "stripe", token: "spt_declined" } },
+      ),
+      "checkout_session_acp_failed_checkout",
+    );
+    expect(completed.status).toBe(409);
+    await expect(completed.json()).resolves.toMatchObject({
+      code: "invalid_request",
+      message: "Checkout session is failed and cannot be completed.",
+    });
+    const record = await store.get("checkout_session_acp_failed_checkout");
+    expect(record).toMatchObject({ status: "not_ready_for_payment" });
+    expect(record).not.toHaveProperty("checkoutId");
+  });
+
+  it("preserves Mika failure codes and retry hints in ACP error envelopes", async () => {
+    let cart = createCart([]);
+    const api = createAcpTestApi({
+      getCart: () => cart,
+      setCart: (next) => {
+        cart = next;
+      },
+      onCheckoutPreview: () =>
+        fail(429, "RATE_LIMITED", "Too many checkout attempts.", { retryAfter: 30 }),
+    });
+    const handlers = createMikaAcpCheckoutHandlers({
+      api,
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      createSessionId: () => "checkout_session_acp_rate_limited",
+    });
+
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_rate_limit_create", {
+        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+      }),
+    );
+    const response = await handlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_rate_limited/complete",
+        "idem_rate_limit_complete",
+        { payment_data: { provider: "stripe", token: "spt_test_123" } },
+      ),
+      "checkout_session_acp_rate_limited",
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("30");
+    await expect(response.json()).resolves.toMatchObject({
+      type: "invalid_request",
+      code: "rate_limited",
+      message: "Too many checkout attempts.",
+      retry_after: 30,
+    });
+  });
+
+  it("authenticates ACP API keys through the bearer credential gate", async () => {
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => createCart([]),
+        setCart: () => undefined,
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+    });
+
+    const unauthorized = await handlers.get(
+      new Request("https://shop.example.test/checkout_sessions/missing", {
+        headers: { Authorization: "Bearer acp_test_bad" },
+      }),
+      "missing",
+    );
+    expect(unauthorized.status).toBe(401);
+
+    const authorized = await handlers.get(
+      new Request("https://shop.example.test/checkout_sessions/missing", {
+        headers: { Authorization: "Bearer acp_test_key" },
+      }),
+      "missing",
+    );
+    expect(authorized.status).toBe(404);
+  });
+
   it("pins ACP checkout context URLs to the configured baseUrl", async () => {
     let cart = createCart([]);
     let checkoutContextUrl = "";
@@ -838,9 +993,9 @@ describe("Mika ACP projection", () => {
       "checkout_session_acp_rollback",
     );
 
-    expect(updated.status).toBe(400);
+    expect(updated.status).toBe(409);
     await expect(updated.json()).resolves.toMatchObject({
-      code: "invalid_request",
+      code: "out_of_stock",
       message: "Requested item is out of stock.",
     });
     expect(cart.items).toMatchObject([
@@ -1304,6 +1459,44 @@ describe("Mika Stripe provider", () => {
     expect(intentCalls[0]).toMatchObject({ params: { amount: 2160, currency: "eur" } });
   });
 
+  it("does not let a negative delegated-payment discount increase the charge amount", async () => {
+    const intentCalls: unknown[] = [];
+    const stripe: MikaStripeClient = {
+      paymentIntents: {
+        create: async (params) => {
+          intentCalls.push({ params });
+          return { id: "pi_disc_negative", status: "succeeded", amount: 2400, currency: "eur" };
+        },
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe });
+
+    await provider.createCheckoutSession({
+      idempotencyKey: "idem_spt_disc_negative",
+      mode: "payment",
+      provider: createProviderName("stripe"),
+      successUrl: "https://shop.example.test/success",
+      cancelUrl: "https://shop.example.test/cancel",
+      metadata: { [MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY]: "spt_test_123" },
+      discount: { amount: -500, currency: createCurrencyCode("EUR") },
+      lines: [
+        {
+          sellableId: createMikaId("sellable_1"),
+          priceId: createMikaId("price_1"),
+          contentRef: { collection: "products", id: "print" },
+          title: "Limited print",
+          quantity: 2,
+          unitAmount: 1200,
+          currency: createCurrencyCode("EUR"),
+          mode: "payment",
+          fulfillmentKind: "download",
+        },
+      ],
+    });
+
+    expect(intentCalls[0]).toMatchObject({ params: { amount: 2400, currency: "eur" } });
+  });
+
   it("resolves the invoice id from a payment-intent id before retrieving the invoice", async () => {
     const invoiceCalls: string[] = [];
     const intentCalls: string[] = [];
@@ -1405,6 +1598,95 @@ describe("Mika Stripe provider", () => {
     expect(updateCalls).toEqual([{ id: "sub_123", params: { cancel_at_period_end: true } }]);
   });
 
+  it("returns failed admin action DTOs for Stripe SDK rejections", async () => {
+    const stripe: MikaStripeClient = {
+      paymentIntents: {
+        create: async () => ({ id: "pi_unused" }),
+        cancel: async () => {
+          throw new Error("payment intent cannot be cancelled");
+        },
+      },
+      subscriptions: {
+        update: async () => {
+          throw new Error("subscription update failed");
+        },
+        resume: async () => {
+          throw new Error("subscription resume failed");
+        },
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe });
+
+    await expect(
+      provider.cancelOrder?.({
+        orderId: createMikaId("order_1"),
+        providerOrderId: "pi_succeeded",
+      }),
+    ).resolves.toMatchObject({
+      id: "order_cancel",
+      status: "failed",
+      message: "payment intent cannot be cancelled",
+    });
+    await expect(
+      provider.cancelSubscription?.({
+        subscriptionId: createMikaId("subscription_1"),
+        providerSubscriptionId: "sub_123",
+      }),
+    ).resolves.toMatchObject({
+      id: "subscription_cancel",
+      status: "failed",
+      message: "subscription update failed",
+    });
+    await expect(
+      provider.changeSubscription?.({
+        subscriptionId: createMikaId("subscription_1"),
+        providerSubscriptionId: "sub_123",
+        providerPriceId: "price_next",
+      }),
+    ).resolves.toMatchObject({
+      id: "subscription_change",
+      status: "failed",
+      message: "subscription update failed",
+    });
+    await expect(
+      provider.renewSubscription?.({
+        subscriptionId: createMikaId("subscription_1"),
+        providerSubscriptionId: "sub_123",
+      }),
+    ).resolves.toMatchObject({
+      id: "subscription_renew",
+      status: "failed",
+      message: "subscription resume failed",
+    });
+  });
+
+  it("prefers providerPaymentId over providerOrderId when cancelling Stripe orders", async () => {
+    const cancelCalls: string[] = [];
+    const stripe: MikaStripeClient = {
+      paymentIntents: {
+        create: async () => ({ id: "pi_unused" }),
+        cancel: async (id) => {
+          cancelCalls.push(id);
+          return { id, status: "canceled" };
+        },
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe });
+
+    await expect(
+      provider.cancelOrder?.({
+        orderId: createMikaId("order_1"),
+        providerPaymentId: "pi_payment",
+        providerOrderId: "in_invoice",
+      }),
+    ).resolves.toMatchObject({
+      id: "pi_payment",
+      status: "completed",
+    });
+
+    expect(cancelCalls).toEqual(["pi_payment"]);
+  });
+
   it("derives Stripe capabilities from the configured client by default", async () => {
     const stripe: MikaStripeClient = {
       checkout: {
@@ -1487,6 +1769,101 @@ describe("Mika Stripe provider", () => {
       providerOrderId: "pi_test_123",
       customer: { email: "ada@example.test" },
       totals: { total: { amount: 2400, currency: "EUR" } },
+    });
+  });
+
+  it("normalizes delegated Stripe payment_intent.succeeded webhooks with a checkout id", async () => {
+    const payload = {
+      id: "evt_delegated_paid",
+      type: "payment_intent.succeeded",
+      data: {
+        object: {
+          id: "pi_delegated_paid",
+          status: "succeeded",
+          amount: 2400,
+          currency: "eur",
+        },
+      },
+    };
+    const stripe: MikaStripeClient = {
+      webhooks: {
+        constructEvent: (body) => JSON.parse(body) as JsonObject,
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe, webhookSecret: "whsec_test" });
+    const rawBody = new TextEncoder().encode(JSON.stringify(payload));
+    const verified = await provider.verifyWebhook?.({
+      provider: createProviderName("stripe"),
+      request: new Request("https://shop.example.test/api/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig_test" },
+        body: rawBody,
+      }),
+      rawBody,
+    });
+
+    const event = await provider.parseWebhookEvent?.(verified!);
+    if (!event) throw new Error("Expected Stripe delegated payment webhook event.");
+
+    expectPaidProviderPaymentEvent(event);
+    expect(event).toMatchObject({
+      kind: "payment",
+      paymentStatus: "paid",
+      provider: "stripe",
+      providerEventId: "evt_delegated_paid",
+      type: "payment_intent.succeeded",
+      providerCheckoutId: "pi_delegated_paid",
+      providerPaymentId: "pi_delegated_paid",
+      providerOrderId: "pi_delegated_paid",
+      totals: { total: { amount: 2400, currency: "EUR" } },
+    });
+  });
+
+  it("normalizes no-payment-required completed Stripe checkout webhooks as paid", async () => {
+    const payload = {
+      id: "evt_zero_total",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_zero_total",
+          customer_email: "ada@example.test",
+          payment_status: "no_payment_required",
+          amount_total: 0,
+          currency: "eur",
+        },
+      },
+    };
+    const stripe: MikaStripeClient = {
+      webhooks: {
+        constructEvent: (body) => JSON.parse(body) as JsonObject,
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe, webhookSecret: "whsec_test" });
+    const rawBody = new TextEncoder().encode(JSON.stringify(payload));
+    const verified = await provider.verifyWebhook?.({
+      provider: createProviderName("stripe"),
+      request: new Request("https://shop.example.test/api/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig_test" },
+        body: rawBody,
+      }),
+      rawBody,
+    });
+
+    const event = await provider.parseWebhookEvent?.(verified!);
+    if (!event) throw new Error("Expected Stripe zero-total checkout webhook event.");
+
+    expectPaidProviderPaymentEvent(event);
+    expect(event).toMatchObject({
+      kind: "payment",
+      paymentStatus: "paid",
+      provider: "stripe",
+      providerEventId: "evt_zero_total",
+      type: "checkout.session.completed",
+      providerCheckoutId: "cs_zero_total",
+      providerOrderId: "cs_zero_total",
+      customer: { email: "ada@example.test" },
+      totals: { total: { amount: 0, currency: "EUR" } },
     });
   });
 
@@ -1618,11 +1995,6 @@ describe("Mika Stripe provider", () => {
 
     const unknownCases: readonly JsonObject[] = [
       {
-        id: "evt_expired",
-        type: "checkout.session.expired",
-        data: { object: { id: "cs_expired", payment_intent: "pi_expired" } },
-      },
-      {
         id: "evt_payment_canceled",
         type: "payment_intent.canceled",
         data: { object: { id: "pi_canceled", status: "canceled" } },
@@ -1697,6 +2069,31 @@ describe("Mika Stripe provider", () => {
       providerCheckoutId: "cs_async_failed",
       providerPaymentId: "pi_async",
       providerOrderId: "pi_async",
+      customer: { email: "ada@example.test" },
+    });
+
+    const checkoutExpired = await parse({
+      id: "evt_checkout_expired",
+      type: "checkout.session.expired",
+      data: {
+        object: {
+          id: "cs_expired",
+          payment_status: "unpaid",
+          payment_intent: "pi_expired",
+          customer_email: "ada@example.test",
+        },
+      },
+    });
+    expectNonFulfillingProviderEvent(checkoutExpired);
+    expect(checkoutExpired).toMatchObject({
+      kind: "payment",
+      paymentStatus: "failed",
+      provider: "stripe",
+      providerEventId: "evt_checkout_expired",
+      type: "checkout.session.expired",
+      providerCheckoutId: "cs_expired",
+      providerPaymentId: "pi_expired",
+      providerOrderId: "pi_expired",
       customer: { email: "ada@example.test" },
     });
 
@@ -1815,11 +2212,10 @@ describe("Mika Stripe provider", () => {
     });
     expectNonFulfillingProviderEvent(dispute);
     expect(dispute).toMatchObject({
-      kind: "payment",
-      paymentStatus: "refunded",
+      kind: "unknown",
+      provider: "stripe",
+      providerEventId: "evt_dispute",
       type: "charge.dispute.created",
-      providerPaymentId: "pi_disputed",
-      providerOrderId: "pi_disputed",
     });
 
     const uncollectible = await parse({
@@ -1862,7 +2258,7 @@ function createAcpTestApi(input: {
   readonly onCheckoutPreview?: (
     previewInput: CheckoutPreviewInput,
     ctx: MikaRequestContext,
-  ) => void | Promise<void>;
+  ) => MikaApiResult<CheckoutPreviewDTO> | void | Promise<MikaApiResult<CheckoutPreviewDTO> | void>;
   readonly onCheckoutStart?: (
     metadata: JsonObject | undefined,
     ctx: MikaRequestContext,
@@ -1916,7 +2312,8 @@ function createAcpTestApi(input: {
         ctx: MikaRequestContext,
         previewInput: CheckoutPreviewInput,
       ): Promise<MikaApiResult<CheckoutPreviewDTO>> => {
-        await input.onCheckoutPreview?.(previewInput, ctx);
+        const override = await input.onCheckoutPreview?.(previewInput, ctx);
+        if (override) return override;
 
         return ok({
           id: createMikaId("checkout_preview_1"),
@@ -2027,6 +2424,15 @@ function fail<T>(
   status: number,
   code: Extract<MikaApiResult<T>, { readonly ok: false }>["error"]["code"],
   message: string,
+  options: { readonly retryAfter?: number } = {},
 ): MikaApiResult<T> {
-  return { ok: false, status, error: { code, message } };
+  return {
+    ok: false,
+    status,
+    error: {
+      code,
+      message,
+      ...(options.retryAfter !== undefined ? { retryAfter: options.retryAfter } : {}),
+    },
+  };
 }

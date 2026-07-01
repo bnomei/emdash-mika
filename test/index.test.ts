@@ -142,6 +142,7 @@ import {
   mikaReturnToInput,
   mikaSafeReturnTo,
 } from "../src/astro";
+import { mikaRedirectInputs as mikaShimRedirectInputs } from "../src/templates/astro/lib/form";
 import {
   createMikaProviderRegistry,
   defineMikaProvider,
@@ -163,7 +164,11 @@ import {
   mikaRoutedOperationDefinitions,
   mikaRouteOnlyDefinitions,
 } from "../src/api/operations";
-import { startCheckoutInputSchema } from "../src/api/validation";
+import {
+  cartQuoteInputSchema,
+  startCheckoutInputSchema,
+  updateCartItemInputSchema,
+} from "../src/api/validation";
 import {
   adminActionOperation,
   mikaAdminActionRuntimeDefinitions,
@@ -249,6 +254,7 @@ import {
   createISODateTime,
   createMikaId,
   createProviderName,
+  isISODateTime,
   type CurrencyCode,
   type ISODateTime,
   type MikaId,
@@ -671,6 +677,24 @@ describe("Mika Astro helpers", () => {
     expect(redirectInputs.returnTo).toEqual({ name: "returnTo", value: "/cart" });
   });
 
+  it("preserves checkout redirect fallbacks in the copied-template form shim", () => {
+    const redirectInputs = mikaShimRedirectInputs({
+      successPath: undefined,
+      cancelPath: undefined,
+      returnTo: undefined,
+    });
+
+    expect(redirectInputs.successPath).toEqual({
+      name: "successPath",
+      value: "/checkout/success",
+    });
+    expect(redirectInputs.cancelPath).toEqual({
+      name: "cancelPath",
+      value: "/checkout/cancel",
+    });
+    expect(redirectInputs.returnTo).toEqual({ name: "returnTo", value: "/" });
+  });
+
   it("uses native plugin API overrides for direct Astro helpers by default", async () => {
     const api = {
       cart: {
@@ -1063,6 +1087,22 @@ describe("Mika client", () => {
       status: 0,
       error: {
         code: "PROVIDER_FAILED",
+      },
+    });
+  });
+
+  it("normalizes invalid request URL construction into Mika API results", async () => {
+    await expect(
+      requestMika("catalogSellables", undefined, {
+        baseUrl: "shop.test",
+        fetch: async () => Response.json({ ok: true, status: 200, data: [] }),
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 0,
+      error: {
+        code: "PROVIDER_FAILED",
+        message: "Mika request URL is invalid.",
       },
     });
   });
@@ -1658,15 +1698,30 @@ describe("Mika client", () => {
       }),
     });
 
-    await routes[mikaPluginRoutes.adminStockAdjust].handler({
+    const rejected = await routes[mikaPluginRoutes.adminStockAdjust].handler({
       input: adjustInput,
       request: new Request(adjustUrl, { method: "POST" }),
     });
 
     expect(received).toEqual([
       expect.objectContaining({ idempotencyKey: "adjust_header_key" }),
-      expect.not.objectContaining({ idempotencyKey: expect.anything() }),
     ]);
+    expect(rejected).toMatchObject({
+      ok: false,
+      status: 409,
+      error: {
+        code: "CONFLICT",
+        message: "Mika operation 'admin.stockAdjust' requires an idempotency key.",
+      },
+    });
+  });
+
+  it("wires Astro action request context to the Idempotency-Key header", () => {
+    const source = readFileSync(new URL("../src/astro-actions.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("MIKA_AGENT_IDEMPOTENCY_KEY_HEADER");
+    expect(source).toContain("idempotencyKey: actionIdempotencyKey(ctx.request)");
+    expect(source).toContain("request.headers.get(MIKA_AGENT_IDEMPOTENCY_KEY_HEADER)");
   });
 
   it("pins action descriptors to their operation metadata", () => {
@@ -1737,6 +1792,7 @@ describe("Mika client", () => {
       priceId: undefined,
       quantity: 1,
       provider: undefined,
+      couponCode: undefined,
       customer: {
         email: "customer@example.test",
         name: "Customer Test",
@@ -1747,6 +1803,25 @@ describe("Mika client", () => {
       successPath: undefined,
       cancelPath: undefined,
       returnTo: undefined,
+    });
+  });
+
+  it("keeps update quantities strict and preserves explicit coupon clears", () => {
+    expect(updateCartItemInputSchema.safeParse({ lineId: "cart_line_1" }).success).toBe(false);
+    expect(
+      updateCartItemInputSchema.safeParse({ lineId: "cart_line_1", quantity: "" }).success,
+    ).toBe(false);
+    expect(updateCartItemInputSchema.parse({ lineId: "cart_line_1", quantity: "2" })).toEqual({
+      lineId: id("cart_line_1"),
+      quantity: 2,
+    });
+    expect(cartQuoteInputSchema.parse({ cartId: "cart_1", couponCode: "" })).toMatchObject({
+      cartId: id("cart_1"),
+      couponCode: "",
+    });
+    expect(startCheckoutInputSchema.parse({ cartId: "cart_1", couponCode: "" })).toMatchObject({
+      cartId: id("cart_1"),
+      couponCode: "",
     });
   });
 
@@ -1951,6 +2026,35 @@ describe("Mika client", () => {
         },
       ]);
     }
+  });
+
+  it("does not throw from account export string shorthand normalizers on empty ids", async () => {
+    const client = createMikaServerClient({
+      baseUrl: "https://shop.test",
+      fetch: async () =>
+        Response.json(
+          {
+            ok: false,
+            status: 422,
+            error: {
+              code: "VALIDATION_FAILED",
+              message: "Mika input validation failed.",
+            },
+          },
+          { status: 422 },
+        ),
+    });
+
+    await expect(client.account.exportStatus("")).resolves.toMatchObject({
+      ok: false,
+      status: 422,
+      error: { code: "VALIDATION_FAILED" },
+    });
+    await expect(client.account.exportDownload("   ")).resolves.toMatchObject({
+      ok: false,
+      status: 422,
+      error: { code: "VALIDATION_FAILED" },
+    });
   });
 
   it("keeps dynamic operation dispatch centralized", () => {
@@ -2674,6 +2778,79 @@ describe("Mika client", () => {
     });
     expect(policyCalled).toBe(false);
     expect(apiCalled).toBe(false);
+  });
+
+  it("rejects action runner targets with an explicit mismatched kind", async () => {
+    let apiCalled = false;
+    const routes = createMikaPluginRoutes(
+      createMikaApi({
+        admin: {
+          stockAdjust: async () => {
+            apiCalled = true;
+            return { ok: true, status: 200, data: { status: "completed" } };
+          },
+        },
+      } satisfies MikaApiOverrides),
+    );
+
+    await expect(
+      routes[mikaPluginRoutes.actionsRunner].handler({
+        input: {
+          actionId: "mika.stock.adjust",
+          invocationId: "stock_adjust_invocation_wrong_kind",
+          payload: { quantityDelta: 1 },
+          target: {
+            type: "row",
+            kind: "order",
+            value: { stockItemId: "stock_1" },
+          },
+        },
+        request: new Request("https://shop.test/_emdash/api/plugins/mika/.well-known/actions/run", {
+          method: "POST",
+        }),
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 422,
+      severity: "warning",
+      message: "Mika action 'mika.stock.adjust' cannot run for this target.",
+    });
+    expect(apiCalled).toBe(false);
+  });
+
+  it("normalizes thrown admin runner operations into action result envelopes", async () => {
+    const routes = createMikaPluginRoutes(
+      createMikaApi({
+        admin: {
+          stockAdjust: async () => {
+            throw new Error("database unavailable");
+          },
+        },
+      } satisfies MikaApiOverrides),
+    );
+
+    await expect(
+      routes[mikaPluginRoutes.actionsRunner].handler({
+        input: {
+          actionId: "mika.stock.adjust",
+          invocationId: "stock_adjust_invocation_throw",
+          payload: { quantityDelta: 1 },
+          target: {
+            type: "row",
+            kind: "stockItem",
+            value: { stockItemId: "stock_1" },
+          },
+        },
+        request: new Request("https://shop.test/_emdash/api/plugins/mika/.well-known/actions/run", {
+          method: "POST",
+        }),
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 500,
+      severity: "error",
+      message: "Mika operation failed.",
+    });
   });
 
   it("does not use UI row ids as action operation ids", async () => {
@@ -3949,6 +4126,11 @@ describe("createISODateTime canonicalization", () => {
     expect(createISODateTime("2026-06-29T10:00:00.000Z")).toBe("2026-06-29T10:00:00.000Z");
   });
 
+  it("rejects impossible calendar dates instead of rolling them forward", () => {
+    expect(() => createISODateTime("2026-02-30T00:00:00Z")).toThrow("Invalid ISODateTime");
+    expect(isISODateTime("2026-02-30T00:00:00Z")).toBe(false);
+  });
+
   it("still rejects values that are not ISO date-times", () => {
     expect(() => createISODateTime("not-a-date")).toThrow("Invalid ISODateTime");
     expect(() => createISODateTime("2026-06-29")).toThrow("Invalid ISODateTime");
@@ -4235,7 +4417,14 @@ describe("Mika Astro template contracts", () => {
     expect(checkoutSuccess).not.toContain("checkout_id");
     expect(checkoutSuccess).not.toContain("session_id");
     expect(checkoutSuccess).toContain('import { Link, Text } from "@cloudflare/kumo"');
+    expect(checkoutCancel).toContain('Astro.url.searchParams.get("checkoutId")');
+    expect(checkoutCancel).toContain('Astro.url.searchParams.get("token")');
+    expect(checkoutCancel).toContain("Mika.checkout.cancel({ checkoutId, token })");
+    expect(checkoutCancel).toContain("Checkout cancel link is missing.");
     expect(checkoutCancel).toContain("No payment was confirmed by this return page.");
+    expect(checkoutCancel).toContain(
+      "Payment was completed before this cancellation could be applied.",
+    );
     expect(checkoutCancel).toContain('import { Link, Text } from "@cloudflare/kumo"');
     expect(accountOrdersComponent).toContain("order.invoiceHref");
     expect(accountOrdersComponent).not.toContain("order.invoiceUrl");

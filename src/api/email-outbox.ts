@@ -329,6 +329,12 @@ async function prepareEmailDelivery(
       if (!order) {
         return { status: "fail", error: `Order '${orderId}' was not found for email delivery.` };
       }
+      if (order.status === "refunded" || order.status === "cancelled") {
+        return {
+          status: "skip",
+          error: `Order '${orderId}' is ${order.status}; order-confirmation email skipped.`,
+        };
+      }
 
       const orderLineIds = new Set(jsonStringArray(email.record.metadata, "orderLineIds"));
       const lines =

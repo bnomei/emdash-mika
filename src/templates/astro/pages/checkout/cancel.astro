@@ -1,18 +1,35 @@
 ---
 import { Link, Text } from "@cloudflare/kumo";
+import { createMika } from "@bnomei/emdash-mika/astro";
 import MikaKumoPage from "../../components/MikaKumoPage.astro";
 import { mikaTemplateCurrentCartItemCount } from "../../lib/cart";
 import { mikaTemplateRoutes } from "../../lib/routes";
 
 export const prerender = false;
 
+const checkoutId = Astro.url.searchParams.get("checkoutId");
+const token = Astro.url.searchParams.get("token") ?? undefined;
+const Mika = createMika(Astro);
+const result = checkoutId ? await Mika.checkout.cancel({ checkoutId, token }) : null;
+const checkout = result?.ok ? result.data : null;
+const status = checkout?.status ?? "cancelled";
+const statusMessage = !checkoutId
+  ? "Checkout cancel link is missing."
+  : result && !result.ok
+    ? result.error.message
+    : checkout?.status === "completed"
+      ? "Payment was completed before this cancellation could be applied."
+      : "No payment was confirmed by this return page.";
 const cartHref = mikaTemplateRoutes.cart;
 const cartItemCount = await mikaTemplateCurrentCartItemCount(Astro);
 ---
 
 <MikaKumoPage title="Checkout cancelled" pageSize="narrow" cartItemCount={cartItemCount} data-mika-checkout-cancel>
-  <section class="mika-kumo-panel mika-kumo-stack">
-    <Text as="p" variant="secondary">No payment was confirmed by this return page.</Text>
-    <Link href={cartHref}>Return to cart</Link>
+  <section class="mika-kumo-panel mika-kumo-stack" data-mika-checkout-status={status}>
+    <Text as="p" variant={result && !result.ok ? "error" : "secondary"}>{statusMessage}</Text>
+    <div class="mika-kumo-actions">
+      {checkout?.orderId && <Link href={mikaTemplateRoutes.accountOrders}>View orders</Link>}
+      <Link href={cartHref}>Return to cart</Link>
+    </div>
   </section>
 </MikaKumoPage>

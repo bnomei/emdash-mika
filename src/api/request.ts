@@ -25,18 +25,31 @@ export async function requestMika<TData>(
 ): Promise<MikaApiResult<TData>> {
   const fetcher = options.fetch ?? globalThis.fetch;
   const origin = options.baseUrl ?? options.request?.url;
-  const url = mikaPluginRoute(route, {
-    apiBase: options.apiBase,
-    pluginId: options.pluginId,
-    origin,
-    search: init.search,
-  });
-  const headers = new Headers(options.headers);
-  headers.set("accept", "application/json");
+  let url: string;
+  let headers: Headers;
+  try {
+    url = mikaPluginRoute(route, {
+      apiBase: options.apiBase,
+      pluginId: options.pluginId,
+      origin,
+      search: init.search,
+    });
+    headers = new Headers(options.headers);
+    headers.set("accept", "application/json");
 
-  const cookie = options.request?.headers.get("cookie");
-  if (cookie && !headers.has("cookie") && shouldForwardRequestCookie(url, options)) {
-    headers.set("cookie", cookie);
+    const cookie = options.request?.headers.get("cookie");
+    if (cookie && !headers.has("cookie") && shouldForwardRequestCookie(url, options)) {
+      headers.set("cookie", cookie);
+    }
+  } catch {
+    return {
+      ok: false,
+      status: 0,
+      error: {
+        code: "PROVIDER_FAILED",
+        message: "Mika request URL is invalid.",
+      },
+    };
   }
 
   let body: BodyInit | undefined;

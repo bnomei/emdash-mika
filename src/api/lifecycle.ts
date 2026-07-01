@@ -93,8 +93,9 @@ export function applyOrderRefund(
   now: ISODateTime,
 ): OrderDocument {
   const priorRefunded = orderRefundedAmount(order);
-  const thisRefund = refundInput.amount ?? Math.max(0, order.totalAmount - priorRefunded);
-  const cumulativeRefunded = priorRefunded + thisRefund;
+  const requestedRefund = refundInput.amount ?? Math.max(0, order.totalAmount - priorRefunded);
+  const thisRefund = Math.max(0, requestedRefund);
+  const cumulativeRefunded = Math.min(order.totalAmount, priorRefunded + thisRefund);
   const fullRefund = refundInput.amount === undefined || cumulativeRefunded >= order.totalAmount;
   const status = fullRefund ? "refunded" : "partially_refunded";
 

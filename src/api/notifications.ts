@@ -210,7 +210,12 @@ export async function emitMikaNotification(
   intent: MikaNotificationIntent,
   defaultHandler?: () => Promise<void> | void,
 ): Promise<void> {
-  const result = await hook?.(intent);
+  let result: MikaNotificationHookResult | void;
+  try {
+    result = await hook?.(intent);
+  } catch {
+    result = undefined;
+  }
   if (result?.handled === true) return;
 
   await defaultHandler?.();

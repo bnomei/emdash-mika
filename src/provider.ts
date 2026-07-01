@@ -138,6 +138,7 @@ export interface MikaProviderRefundInput {
 /** Cancel request for a provider-side order or payment intent tied to a Mika order. */
 export interface MikaProviderOrderCancelInput {
   readonly orderId: MikaId;
+  readonly providerPaymentId?: string;
   readonly providerOrderId?: string;
   readonly reason?: string;
 }
