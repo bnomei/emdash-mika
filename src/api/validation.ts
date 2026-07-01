@@ -167,7 +167,7 @@ export const stockAvailabilityInputSchema = z.object({
   sellableId: mikaIdSchema,
 }) satisfies z.ZodType<{ readonly sellableId: MikaId }>;
 
-/** Account export, checkout polling, invoice, and shared returnTo schemas. */
+/** Checkout session id and optional polling token for {@link CheckoutStatusInput}. */
 export const checkoutStatusInputSchema = z.object({
   checkoutId: mikaIdSchema,
   token: optionalStringSchema,
@@ -442,6 +442,7 @@ export const providerSyncInputSchema = z
     mode: z.enum(["dry_run", "apply"]).optional(),
     scope: z.enum(["all", "entry"]).optional(),
     contentRef: contentRefInputSchema.optional(),
+    idempotencyKey: optionalStringSchema,
   })
   .superRefine((input, ctx) => {
     if (input.scope === "entry" && !input.contentRef) {
@@ -466,11 +467,13 @@ export const stockAdjustInputSchema = z.object({
 /** Optional clock override for expired reservation maintenance sweeps. */
 export const releaseExpiredReservationsInputSchema = z.object({
   now: optionalISODateTimeSchema,
+  idempotencyKey: optionalStringSchema,
 }) satisfies z.ZodType<ReleaseExpiredReservationsInput>;
 
 /** Stored webhook event identifier for admin replay. */
 export const webhookReplayInputSchema = z.object({
   webhookId: mikaIdSchema,
+  idempotencyKey: optionalStringSchema,
 }) satisfies z.ZodType<WebhookReplayInput>;
 
 /** Order, optional partial amount, reason, and idempotency key for refunds. */

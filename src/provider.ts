@@ -1,6 +1,9 @@
 /**
  * Provider adapter contract and registry for payment providers: checkout, portal, subscriptions,
  * refunds, catalog sync, and webhook verification that feed Mika order fulfillment workflows.
+ *
+ * Optional adapter methods must align with the capabilities returned by {@link capabilities};
+ * hosts gate operations with {@link MIKA_PROVIDER_CAPABILITIES} from the wire type layer.
  */
 import type {
   AdminActionResultDTO,

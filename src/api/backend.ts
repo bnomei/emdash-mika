@@ -314,6 +314,10 @@ export interface MikaSessionRepositoryPort {
     customerId: MikaId,
     limit?: number,
   ): Promise<MikaDocumentList<CartDocument>>;
+  /**
+   * Optimistic checkout claim: succeeds only when `expectedUpdatedAt` matches the cart row.
+   * Serializes concurrent checkout starts against the same open cart.
+   */
   claimCartForCheckout(input: {
     readonly cartId: MikaId;
     readonly checkoutId: MikaId;
@@ -321,6 +325,7 @@ export interface MikaSessionRepositoryPort {
     readonly claimExpiresAt: ISODateTime;
     readonly now: ISODateTime;
   }): Promise<CartDocument | null>;
+  /** Clears a checkout claim when start fails or the session is abandoned. */
   releaseCartCheckoutClaim(input: {
     readonly cartId: MikaId;
     readonly checkoutId: MikaId;
@@ -521,16 +526,16 @@ export interface MikaOpsRepositoryPort {
   redactAccountExportsForAccountDelete(
     input: AccountDeleteEmailRedactionRepositoryInput,
   ): Promise<number>;
-  /** @deprecated Use workflow-specific leasing APIs for webhook fulfillment work. */
+  /** @deprecated Use {@link tryLeaseWorkflow} and {@link listDueWorkflows} for webhook fulfillment. */
   listWebhookFailures(now: string, limit?: number): Promise<MikaDocumentList<WebhookDocument>>;
   writeAudit(document: AdminAuditDocument): Promise<void>;
-  /** @deprecated Use listDueWorkflows for workflow-backed webhook fulfillment. */
+  /** @deprecated Use {@link listDueWorkflows} with kind `payment_webhook_fulfillment`. */
   listDue(
     type: WebhookDocument["type"],
     now: string,
     limit?: number,
   ): Promise<MikaDocumentList<WebhookDocument>>;
-  /** @deprecated Use email-specific processing infrastructure when available. */
+  /** @deprecated Use {@link listDueEmails} and {@link tryLeaseEmail} for outbox delivery. */
   listDue(
     type: EmailDocument["type"],
     now: string,
@@ -766,8 +771,14 @@ export type AdjustStockResult = AdjustStockRepositoryResult;
 /** Stock reservation and adjustment API used by cart, checkout, and maintenance. */
 export interface MikaStockLifecycleService {
   reserve(input: ReserveStockInput): Promise<ReserveStockResult>;
+  /** Returns reserved quantity to available stock when checkout is cancelled before payment. */
   release(input: ReleaseReservedStockInput): Promise<ReleaseReservedStockResult>;
+  /**
+   * Marks a reservation expired while keeping it consumable for late payment fulfillment
+   * after checkout cancel or reservation TTL expiry.
+   */
   expire(input: ReleaseReservedStockInput): Promise<ExpireReservedStockResult>;
+  /** Finalizes a reservation into a sale consumption event at order fulfillment. */
   consume(input: ConsumeReservedStockInput): Promise<ConsumeReservedStockResult>;
   releaseExpiredReservations(
     input?: ReleaseExpiredReservationsInput,
@@ -979,24 +990,8 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
             data: adminStockAdjustmentResult(result),
           };
         },
-        releaseExpiredReservations: async (releaseInput = {}) => {
-          const result = await createMikaStockLifecycleService(input).releaseExpiredReservations({
-            now: releaseInput.now ?? currentBackendISODateTime(input),
-          });
-
-          return {
-            ok: true,
-            status: 200,
-            data: {
-              status: "completed",
-              affected: {
-                reservationsScanned: result.scannedCount,
-                reservationsReleased: result.releasedCount,
-                stockItems: result.stockItemsAffected,
-              },
-            },
-          };
-        },
+        releaseExpiredReservations: async (releaseInput = {}) =>
+          releaseExpiredReservations(input, releaseInput),
         webhookReplay: async (replayInput) => replayWebhook(input, replayInput),
         orderRefund: async (refundInput) => refundOrder(input, refundInput),
         orderCancel: async (cancelInput) => cancelOrder(input, cancelInput),
@@ -2161,10 +2156,54 @@ async function providerSync(
     input,
     {
       action: "provider.syncCatalog",
+      idempotencyKey: syncInput.idempotencyKey,
+      idempotencyInput: syncInput as unknown as JsonValue,
       metadata: syncMetadata,
     },
     () => providerFeature.method.call(providerFeature.provider, providerInput),
     "Provider catalog sync failed.",
+  );
+}
+
+async function releaseExpiredReservations(
+  input: CreateMikaBackendApiInput,
+  releaseInput: { readonly now?: ISODateTime; readonly idempotencyKey?: string } = {},
+): Promise<MikaApiResult<AdminActionResultDTO>> {
+  const release = async (): Promise<AdminActionResultDTO> => {
+    const result = await createMikaStockLifecycleService(input).releaseExpiredReservations({
+      now: releaseInput.now ?? currentBackendISODateTime(input),
+    });
+
+    return {
+      status: "completed",
+      affected: {
+        reservationsScanned: result.scannedCount,
+        reservationsReleased: result.releasedCount,
+        stockItems: result.stockItemsAffected,
+      },
+    };
+  };
+
+  if (!releaseInput.idempotencyKey) {
+    return {
+      ok: true,
+      status: 200,
+      data: await release(),
+    };
+  }
+
+  return runAdminRepositoryAction(
+    input,
+    {
+      action: "stock.releaseExpiredReservations",
+      idempotencyKey: releaseInput.idempotencyKey,
+      idempotencyInput: releaseInput as unknown as JsonValue,
+      metadata: {
+        ...(releaseInput.now ? { now: releaseInput.now } : {}),
+      },
+    },
+    release,
+    "Expired reservation release failed.",
   );
 }
 
@@ -4190,18 +4229,46 @@ async function replayWebhook(
     };
   }
 
+  if (replayInput.idempotencyKey) {
+    return runAdminRepositoryAction(
+      input,
+      {
+        action: "webhook.replay",
+        targetType: "webhook",
+        targetId: webhook.id,
+        idempotencyKey: replayInput.idempotencyKey,
+        idempotencyInput: replayInput as unknown as JsonValue,
+        metadata: {
+          webhookId: webhook.id,
+          provider: webhook.provider,
+          eventType: webhook.eventType,
+          ...(webhook.providerEventId ? { providerEventId: webhook.providerEventId } : {}),
+        },
+      },
+      () => replayStoredWebhook(input, webhook),
+      "Webhook replay failed.",
+    );
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    data: await replayStoredWebhook(input, webhook),
+  };
+}
+
+async function replayStoredWebhook(
+  input: CreateMikaBackendApiInput,
+  webhook: WebhookDocument,
+): Promise<AdminActionResultDTO> {
   if (!isReplayableWebhookStatus(webhook.status)) {
     return {
-      ok: true,
-      status: 200,
-      data: {
-        id: webhook.id,
-        status: "completed",
-        message: `Webhook '${webhook.id}' is not eligible for replay.`,
-        affected: {
-          processed: 0,
-          failed: 0,
-        },
+      id: webhook.id,
+      status: "completed",
+      message: `Webhook '${webhook.id}' is not eligible for replay.`,
+      affected: {
+        processed: 0,
+        failed: 0,
       },
     };
   }
@@ -4216,16 +4283,12 @@ async function replayWebhook(
     );
 
     return {
-      ok: true,
-      status: 200,
-      data: {
-        id: failed.id,
-        status: "failed",
-        message: "Webhook payload could not be reconstructed for replay.",
-        affected: {
-          processed: 0,
-          failed: 1,
-        },
+      id: failed.id,
+      status: "failed",
+      message: "Webhook payload could not be reconstructed for replay.",
+      affected: {
+        processed: 0,
+        failed: 1,
       },
     };
   }
@@ -4238,16 +4301,12 @@ async function replayWebhook(
   );
   if (event.kind === "payment" && processed === webhook) {
     return {
-      ok: true,
-      status: 200,
-      data: {
-        id: webhook.id,
-        status: "running",
-        message: `Webhook '${webhook.id}' workflow is already running or not due for replay.`,
-        affected: {
-          processed: 0,
-          failed: 0,
-        },
+      id: webhook.id,
+      status: "running",
+      message: `Webhook '${webhook.id}' workflow is already running or not due for replay.`,
+      affected: {
+        processed: 0,
+        failed: 0,
       },
     };
   }
@@ -4256,15 +4315,11 @@ async function replayWebhook(
   const failedCount = processed.status === "failed" ? 1 : 0;
 
   return {
-    ok: true,
-    status: 200,
-    data: {
-      id: processed.id,
-      status: processed.status === "failed" ? "failed" : "completed",
-      affected: {
-        processed: processedCount,
-        failed: failedCount,
-      },
+    id: processed.id,
+    status: processed.status === "failed" ? "failed" : "completed",
+    affected: {
+      processed: processedCount,
+      failed: failedCount,
     },
   };
 }
@@ -5001,9 +5056,6 @@ async function processPaymentWebhook(
     );
     if (!checkout) {
       if (event.providerSubscriptionId) {
-        // A paid subscription-renewal invoice has no Mika checkout; the
-        // subscription lifecycle is reconciled from customer.subscription.*
-        // events, so acknowledge it instead of flagging a processing failure.
         return runWorkflowStep("mark_webhook", () =>
           markWebhookProcessed(input, webhook, ctx.now, {}, { strict: true }),
         );

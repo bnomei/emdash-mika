@@ -27,7 +27,10 @@ export function mikaOperationRequestInit(
   };
 }
 
-/** Extracts and validates operation input from body, search params, or empty transport. */
+/**
+ * Extracts and validates operation input from body, search params, or empty transport.
+ * Returns a {@link MikaValidationResult}; throws when the operation is missing a schema.
+ */
 export function parseMikaOperationInput(
   operation: MikaRouteOperation,
   input: unknown,

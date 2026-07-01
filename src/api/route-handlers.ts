@@ -123,6 +123,10 @@ async function handleActionRunner(
   return toMikaAdminActionRunResult(result, resolved.data.resultAdapter);
 }
 
+/**
+ * Injects `idempotencyKey` from {@link MikaRequestContext} when the operation requires agent
+ * idempotency, the input schema accepts the field, and the caller did not supply a non-empty key.
+ */
 export function mikaOperationInputWithIdempotencyContext(
   operation: MikaRouteOperation,
   input: unknown,
@@ -145,12 +149,14 @@ export function mikaOperationInputWithIdempotencyContext(
   };
 }
 
+// Caller-supplied idempotency keys take precedence over the request-context header value.
 function hasNonEmptyIdempotencyKey(input: Record<string, unknown>): boolean {
   const value = input["idempotencyKey"];
 
   return typeof value === "string" && value.trim().length > 0;
 }
 
+// Only merge context keys into operations whose Zod schema exposes `idempotencyKey`.
 function operationSchemaHasIdempotencyKey(operation: MikaRouteOperation): boolean {
   const schema = "schema" in operation ? operation.schema : undefined;
   const shape = schema ? zodObjectShape(schema) : undefined;

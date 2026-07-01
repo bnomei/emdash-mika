@@ -84,6 +84,7 @@ export async function requestMika<TData>(
   }
 
   if (isRecord(payload)) {
+    // Some hosts wrap the envelope in `{ data: MikaApiResult }`; accept either wire shape.
     const nestedResult = normalizeMikaApiResult<TData>(payload["data"], response.status);
     if (nestedResult) {
       return nestedResult;

@@ -3067,6 +3067,7 @@ describe("Mika client", () => {
         id: "ring",
         locale: "en",
       },
+      idempotencyKey: "catalog_sync_invocation_1",
     };
     expect(apiInput).toEqual(expectedInput);
     expect(policyCalls).toEqual([{ operation: "admin.providerSync", input: expectedInput }]);

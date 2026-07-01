@@ -582,7 +582,10 @@ function typedCollection<TDocument extends TypedDocument & { readonly id: string
   };
 }
 
-/** Reads an open cart by session id across currencies via repository internals. */
+/**
+ * Reads an open cart by session id across currencies without importing {@link SessionRepository}.
+ * Duck-types the repository instance so Astro layout shells can read cart badges with loose coupling.
+ */
 export function findSessionRepositoryOpenCartBySessionAnyCurrency(
   repository: unknown,
   sessionId: string,
@@ -1996,7 +1999,7 @@ export class OpsRepository {
     return redacted;
   }
 
-  /** @deprecated Use workflow-specific leasing APIs for webhook fulfillment work. */
+  /** @deprecated Use {@link tryLeaseWorkflow} and {@link listDueWorkflows} for webhook fulfillment. */
   async listWebhookFailures(now: string, limit = 50): Promise<DocumentList<WebhookDocument>> {
     return this.documents.listByType("webhook", {
       where: { status: "failed", nextAttemptAt: { lte: now } },
@@ -2009,13 +2012,13 @@ export class OpsRepository {
     await this.put(document);
   }
 
-  /** @deprecated Use listDueWorkflows for workflow-backed webhook fulfillment. */
+  /** @deprecated Use {@link listDueWorkflows} with kind `payment_webhook_fulfillment`. */
   async listDue(
     type: WebhookDocument["type"],
     now: string,
     limit?: number,
   ): Promise<DocumentList<WebhookDocument>>;
-  /** @deprecated Use email-specific processing infrastructure when available. */
+  /** @deprecated Use {@link listDueEmails} and {@link tryLeaseEmail} for outbox delivery. */
   async listDue(
     type: EmailDocument["type"],
     now: string,

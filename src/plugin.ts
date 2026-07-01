@@ -1,6 +1,8 @@
 /**
  * EmDash plugin descriptor and runtime registration for Mika commerce routes, storage collections,
  * and scheduled maintenance (stock reservation release, email outbox, ephemeral purge).
+ *
+ * Descriptor storage config omits composite indexes that {@link mikaStorageConfig} applies at runtime.
  */
 import {
   definePlugin,
@@ -102,7 +104,6 @@ export function mikaPlugin(
     entrypoint,
     options: pluginOptions,
     capabilities: ["content:read", "email:send"],
-    // EmDash descriptors do not yet model composite indexes; runtime storage below does.
     storage: mikaStorageConfig as never,
   };
 }

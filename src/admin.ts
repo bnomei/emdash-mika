@@ -96,7 +96,7 @@ export interface MikaAdminActionDefinition {
   readonly contextValueKey?: string;
   readonly target?: MikaAdminActionTargetRequirement;
   readonly form?: MikaAdminActionFormMetadata;
-  /** @deprecated Use form. */
+  /** @deprecated Use {@link MikaAdminActionFormMetadata} via `form`. */
   readonly input?: MikaAdminActionInputMetadata;
   readonly disabled?: boolean;
   /** Minimum milliseconds between repeated runs of the same action. */
@@ -141,10 +141,10 @@ export interface MikaActionButtonFieldOptions {
   readonly provider?: string;
   readonly providerLabel?: string;
   readonly runnerRoute?: string;
-  /** @deprecated Use provider. */
+  /** @deprecated Use `provider`. */
   readonly actionPluginId?: string;
   readonly pluginId?: string;
-  /** @deprecated Use providerLabel. */
+  /** @deprecated Use `providerLabel`. */
   readonly actionPluginLabel?: string;
   readonly action?: MikaAdminActionId | (string & {});
   readonly route?: string;

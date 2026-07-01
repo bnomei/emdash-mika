@@ -3321,6 +3321,79 @@ describe("backend test Kysely stock database harness", () => {
     }
   });
 
+  it("deduplicates expired reservation release by idempotency key", async () => {
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const repository = new StockRepository(db);
+    const repositories = { ...createTestBackendRepositories(), stock: repository };
+    const dependencies = createIncrementingBackendDependencies({ repositories });
+    const api = createMikaBackendApi(dependencies);
+    const service = createMikaStockLifecycleService(dependencies);
+    const clock = createTestClock();
+    const stockItem = createStockRecord({
+      quantityOnHand: 10,
+      quantityReserved: 0,
+    });
+
+    try {
+      await mikaInitialMigration.up(db);
+      await repository.putItem(stockItem);
+
+      const expiredReservation = await service.reserve({
+        stockItemId: stockItem.id,
+        quantity: 3,
+        expiresAt: clock.isoAt(30_000),
+        idempotencyKey: "release_expired_idem_reserve_1",
+      });
+      if (expiredReservation.status !== "reserved") {
+        throw new Error("Expected stock reservation to be created.");
+      }
+      const releaseInput = {
+        now: clock.isoAt(60_000),
+        idempotencyKey: "release_expired_idem_1",
+      };
+
+      const first = await api.admin.releaseExpiredReservations(releaseInput);
+      expect(first).toMatchObject({
+        ok: true,
+        status: 200,
+        data: {
+          status: "completed",
+          affected: {
+            reservationsScanned: 1,
+            reservationsReleased: 1,
+            stockItems: 1,
+          },
+        },
+      });
+
+      const second = await api.admin.releaseExpiredReservations(releaseInput);
+      expect(second).toMatchObject({
+        ok: true,
+        status: 200,
+        data: {
+          status: "completed",
+          affected: {
+            reservationsScanned: 1,
+            reservationsReleased: 1,
+            stockItems: 1,
+          },
+        },
+      });
+
+      await expect(repository.findEventById(expiredReservation.event.id)).resolves.toMatchObject({
+        status: "expired",
+      });
+      await expect(countStockEvents(db)).resolves.toBe(1);
+      await expect(
+        repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 2)),
+      ).resolves.toBeNull();
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
+    }
+  });
+
   it("applies admin stock adjustment once and records movement audit metadata", async () => {
     const database = createTransactionTestMikaDb();
     const { db } = database;
@@ -7486,6 +7559,55 @@ describe("backend API composition", () => {
     });
   });
 
+  it("deduplicates provider sync by idempotency key", async () => {
+    const fake = createFakeMikaProvider({
+      optionalMethods: ["syncCatalog"],
+    });
+    const repositories = createTestBackendRepositories();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+      }),
+    );
+    const syncInput = {
+      mode: "apply" as const,
+      idempotencyKey: "provider_sync_idem_1",
+    };
+
+    const first = await api.admin.providerSync(syncInput);
+    expect(first).toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "catalog_sync", status: "completed" },
+    });
+
+    const second = await api.admin.providerSync(syncInput);
+    expect(second).toMatchObject({
+      ok: true,
+      status: 200,
+      data: { id: "catalog_sync", status: "completed" },
+    });
+
+    expect(fake.getCalls().syncCatalog).toEqual([{ mode: "apply" }]);
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
+    ).resolves.toMatchObject({
+      action: "provider.syncCatalog",
+      status: "completed",
+      record: {
+        idempotencyKey: "provider_sync_idem_1",
+        metadata: {
+          provider: TEST_PROVIDER,
+          mode: "apply",
+        },
+      },
+    });
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 2)),
+    ).resolves.toBeNull();
+  });
+
   it("passes entry-scoped provider sync input to adapters and audit metadata", async () => {
     const contentRef = createTestContentRef({ id: "ring" });
     const fake = createFakeMikaProvider({
@@ -10118,6 +10240,61 @@ describe("backend API composition", () => {
       status: "processed",
       record: { status: "processed" },
     });
+  });
+
+  it("deduplicates webhook replay by idempotency key", async () => {
+    const repositories = createTestBackendRepositories();
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    await repositories.ops.put(
+      createWebhookDocument({
+        status: "processed",
+        record: {
+          status: "processed",
+          processedAt: TEST_NOW,
+        },
+      }),
+    );
+    const replayInput = {
+      webhookId: createTestMikaId("webhook", 1),
+      idempotencyKey: "webhook_replay_idem_1",
+    };
+
+    const first = await api.admin.webhookReplay(replayInput);
+    expect(first).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "webhook_1",
+        status: "completed",
+        affected: { processed: 0, failed: 0 },
+      },
+    });
+
+    const second = await api.admin.webhookReplay(replayInput);
+    expect(second).toMatchObject({
+      ok: true,
+      status: 200,
+      data: {
+        id: "webhook_1",
+        status: "completed",
+        affected: { processed: 0, failed: 0 },
+      },
+    });
+
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 1)),
+    ).resolves.toMatchObject({
+      action: "webhook.replay",
+      status: "completed",
+      record: {
+        targetType: "webhook",
+        targetId: "webhook_1",
+        idempotencyKey: "webhook_replay_idem_1",
+      },
+    });
+    await expect(
+      repositories.ops.findAdminAudit(createTestMikaId("admin_audit", 2)),
+    ).resolves.toBeNull();
   });
 
   it("rejects non-paid provider payment events before paid-order fulfillment", async () => {

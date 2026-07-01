@@ -7,7 +7,7 @@
  * completion, stuck workflow lease reclaim, and due payment-webhook retry.
  */
 import type { MikaBackendNow, MikaBackendRepositories } from "./backend";
-import type { AdminActionResultDTO, MikaApiResult, ReleaseExpiredReservationsInput } from "./types";
+import type { AdminActionResultDTO, MikaApiResult } from "./types";
 import type { MikaApi } from "./server";
 import type { AccountDeleteRequestDocument } from "../types/documents";
 import type {
@@ -68,7 +68,7 @@ export interface MikaMaintenanceEphemeralRecordsResult {
   readonly purged: number;
 }
 
-/** Counts from re-driving due payment-webhook fulfillment workflows. */
+/** Counts from re-driving due payment-webhook fulfillment workflows during maintenance. */
 export interface MikaMaintenanceWebhookRetriesResult {
   readonly scanned: number;
   readonly retried: number;
@@ -143,7 +143,7 @@ export interface MikaMaintenanceRunner {
 }
 
 type MikaMaintenanceReleaseExpiredReservations = (
-  input: Required<ReleaseExpiredReservationsInput>,
+  input: { readonly now: ISODateTime },
 ) => Promise<MikaMaintenanceStockReservationsResult>;
 
 type MikaMaintenancePurgeExpiredEphemeralRecords = (input: {
@@ -364,8 +364,6 @@ async function retryDuePaymentWebhooks(input: {
 
   for (const item of due.items) {
     const workflow = item.data;
-    // Respect the workflow's own attempt cap; webhookReplay force-leases, so an
-    // exhausted workflow would otherwise be re-driven on every cron tick.
     if (workflow.record.attemptCount >= workflow.record.maxAttempts) {
       skippedExhausted += 1;
       continue;

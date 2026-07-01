@@ -14,12 +14,18 @@ export function normalizeMagicLinkVerifyInput(
   return typeof input === "string" ? { token: input } : input;
 }
 
-/** Accepts an export id string or structured status input. */
+/**
+ * Accepts an export id string or structured status input for {@link account.exportStatus}.
+ * String shorthand maps to `{ exportId }`.
+ */
 export function normalizeAccountExportInput(input: AccountExportStatusInput | string) {
   return { exportId: typeof input === "string" ? input : input.exportId };
 }
 
-/** Accepts an export id string or structured download input with token. */
+/**
+ * Accepts an export id string or structured download input for {@link account.exportDownload}.
+ * String shorthand maps to `{ exportId }`; structured input preserves an optional token.
+ */
 export function normalizeAccountExportDownloadInput(input: AccountExportDownloadInput | string) {
   return typeof input === "string"
     ? { exportId: input }

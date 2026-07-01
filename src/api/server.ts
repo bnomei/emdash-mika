@@ -64,14 +64,17 @@ import { mikaOperationApiMethodNames } from "./operations";
 
 /** Typed commerce API surface grouped by namespace (catalog through admin). */
 export interface MikaApi {
+  /** Catalog reads keyed by content reference; returns active sellables with availability snapshots. */
   readonly catalog: {
     sellables(input: {
       readonly contentRef: ContentRefDTO;
     }): Promise<MikaApiResult<readonly SellableDTO[]>>;
   };
+  /** On-hand stock availability for a sellable id. */
   readonly stock: {
     availability(input: { readonly sellableId: string }): Promise<MikaApiResult<AvailabilityDTO>>;
   };
+  /** Session-bound cart mutations: lines, coupons, and anonymous-session merge. */
   readonly cart: {
     get(ctx: MikaRequestContext): Promise<MikaApiResult<CartDTO>>;
     quote(ctx: MikaRequestContext, input: CartQuoteInput): Promise<MikaApiResult<CartQuoteDTO>>;
@@ -85,6 +88,7 @@ export interface MikaApi {
       input: RemoveCouponInput,
     ): Promise<MikaApiResult<CartDTO>>;
   };
+  /** Saved-for-later list with move-to-cart and cart-line save helpers. */
   readonly wishlist: {
     get(ctx: MikaRequestContext): Promise<MikaApiResult<WishlistDTO>>;
     add(ctx: MikaRequestContext, input: WishlistItemInput): Promise<MikaApiResult<WishlistDTO>>;
@@ -132,6 +136,7 @@ export interface MikaApi {
       input: MagicLinkVerifyInput,
     ): Promise<MikaApiResult<AccountDTO>>;
   };
+  /** Customer profile, GDPR export/delete, and provider billing portal handoff. */
   readonly account: {
     get(ctx: MikaRequestContext): Promise<MikaApiResult<AccountDTO>>;
     export(
@@ -155,6 +160,7 @@ export interface MikaApi {
       input: AccountPortalInput,
     ): Promise<MikaApiResult<{ redirectUrl: string }>>;
   };
+  /** Provider-backed subscription cancel, plan change, and renewal actions. */
   readonly subscription: {
     cancel(
       ctx: MikaRequestContext,
@@ -174,18 +180,21 @@ export interface MikaApi {
     resolve(input: { readonly token: string }): Promise<MikaApiResult<DownloadResolutionDTO>>;
     confirm(input: { readonly token: string }): Promise<MikaApiResult<DownloadResolutionDTO>>;
   };
+  /** Customer order invoice resolution with optional capability token. */
   readonly order: {
     invoice(
       ctx: MikaRequestContext,
       input: OrderInvoiceInput,
     ): Promise<MikaApiResult<OrderInvoiceDTO>>;
   };
+  /** Provider webhook ingest: signature verification, deduplication, and fulfillment workflows. */
   readonly webhook: {
     receive(
       ctx: MikaRequestContext,
       input: WebhookReceiveInput,
     ): Promise<MikaApiResult<WebhookReceiveDTO>>;
   };
+  /** Operator mutations: provider sync, stock, webhooks, orders, entitlements, and email replay. */
   readonly admin: {
     providerHealth(input: ProviderHealthInput): Promise<MikaApiResult<ProviderHealthDTO>>;
     providerSync(input: ProviderSyncInput): Promise<MikaApiResult<AdminActionResultDTO>>;

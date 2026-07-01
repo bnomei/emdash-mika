@@ -656,6 +656,7 @@ export interface ProviderSyncInput {
   readonly mode?: "dry_run" | "apply";
   readonly scope?: "all" | "entry";
   readonly contentRef?: ContentRefDTO;
+  readonly idempotencyKey?: string;
 }
 
 /** Stock item delta, reason, and idempotency metadata for admin inventory changes. */
@@ -671,11 +672,13 @@ export interface StockAdjustInput {
 /** Optional clock override for expired reservation maintenance sweeps. */
 export interface ReleaseExpiredReservationsInput {
   readonly now?: ISODateTime;
+  readonly idempotencyKey?: string;
 }
 
 /** Stored webhook event identifier for admin replay. */
 export interface WebhookReplayInput {
   readonly webhookId: MikaId;
+  readonly idempotencyKey?: string;
 }
 
 /** Order, optional partial amount, reason, and idempotency key for refunds. */

@@ -230,6 +230,7 @@ function actionIdempotencyKey(request: Request): string | undefined {
   return value && value.length > 0 ? value : undefined;
 }
 
+// Maps MikaApiResult HTTP statuses to Astro ActionError codes for form and JSON actions.
 function unwrap<T>(result: MikaApiResult<T>): T {
   if (result.ok) return result.data;
   throw new ActionError({
