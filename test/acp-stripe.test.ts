@@ -12,6 +12,7 @@ import {
   serializeMikaAcpFileUploadRows,
   serializeMikaAcpProductFeed,
   validateMikaAcpProductFeed,
+  type MikaAcpSessionStore,
   type MikaAcpSessionRecord,
   type MikaAcpSeller,
 } from "../src/acp";
@@ -503,7 +504,9 @@ describe("Mika ACP projection", () => {
       purgeAt: createISODateTime("2026-01-01T00:01:02.000Z"),
     });
     await expect(store.get(retainedTerminal.id)).resolves.toBeUndefined();
-    await expect(store.getByIdempotencyKey!("idem_cleanup_terminal")).resolves.toBeUndefined();
+    await expect(
+      store.claimIdempotencyKey("idem_cleanup_terminal", retainedTerminal.id),
+    ).resolves.toEqual({ status: "claimed" });
   });
 
   it("replays the original session on an idempotent ACP create retry instead of returning 409", async () => {
@@ -556,6 +559,61 @@ describe("Mika ACP projection", () => {
     );
     expect(fresh.status).toBe(201);
     await expect(fresh.json()).resolves.toMatchObject({ id: "checkout_session_acp_retry_3" });
+  });
+
+  it("rejects concurrent ACP create replays while the first request is in progress", async () => {
+    let cart = createCart([]);
+    let releaseCartAdd!: () => void;
+    let enteredCartAdd!: () => void;
+    const cartAddEntered = new Promise<void>((resolve) => {
+      enteredCartAdd = resolve;
+    });
+    const cartAddRelease = new Promise<void>((resolve) => {
+      releaseCartAdd = resolve;
+    });
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+        onCartAdd: async () => {
+          enteredCartAdd();
+          await cartAddRelease;
+        },
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      createSessionId: () => "checkout_session_acp_create_race",
+    });
+    const body = { items: [{ id: "sellable_1:price_1", quantity: 1 }] };
+
+    const first = handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_concurrent", body),
+    );
+    await cartAddEntered;
+    const second = await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_concurrent", body),
+    );
+
+    expect(second.status).toBe(409);
+    await expect(second.json()).resolves.toMatchObject({
+      code: "request_not_idempotent",
+      message: "Idempotency-Key replay is already in progress.",
+    });
+
+    releaseCartAdd();
+    await expect(first).resolves.toMatchObject({ status: 201 });
+    const retry = await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_concurrent", body),
+    );
+    expect(retry.status).toBe(201);
+    await expect(retry.json()).resolves.toMatchObject({
+      id: "checkout_session_acp_create_race",
+    });
   });
 
   it("releases an ACP create idempotency claim when the session store write throws", async () => {
@@ -732,6 +790,64 @@ describe("Mika ACP projection", () => {
     expect(startCount).toBe(1);
   });
 
+  it("releases an ACP complete claim when the completion lock claim throws", async () => {
+    let cart = createCart([]);
+    let failCompletionLock = true;
+    let checkoutStartCount = 0;
+    const baseStore = createMemoryMikaAcpSessionStore();
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+        onCheckoutStart: () => {
+          checkoutStartCount += 1;
+        },
+      }),
+      store: {
+        ...baseStore,
+        claimIdempotencyKey: async (key, id) => {
+          if (key.startsWith("acp_complete_lock:") && failCompletionLock) {
+            failCompletionLock = false;
+            throw new Error("completion lock unavailable");
+          }
+
+          return baseStore.claimIdempotencyKey(key, id);
+        },
+      },
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      createSessionId: () => "checkout_session_acp_lock_failure",
+    });
+
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_lock_failure", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+      }),
+    );
+
+    const completeRequest = () =>
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_lock_failure/complete",
+        "idem_complete_lock_failure",
+        { payment_data: { provider: "stripe", token: "spt_test_123" } },
+      );
+
+    const failed = await handlers.complete(
+      completeRequest(),
+      "checkout_session_acp_lock_failure",
+    );
+    expect(failed.status).toBe(500);
+
+    const retry = await handlers.complete(completeRequest(), "checkout_session_acp_lock_failure");
+    expect(retry.status).toBe(200);
+    await expect(retry.json()).resolves.toMatchObject({ status: "completed" });
+    expect(checkoutStartCount).toBe(1);
+  });
+
   it("refuses to build ACP handlers without an apiKey or signatureSecret", () => {
     let cart = createCart([]);
     const baseOptions = {
@@ -755,6 +871,31 @@ describe("Mika ACP projection", () => {
     expect(() =>
       createMikaAcpCheckoutHandlers({ ...baseOptions, signatureSecret: "shh" }),
     ).not.toThrow();
+  });
+
+  it("refuses to build ACP handlers with a non-atomic idempotency store", () => {
+    let cart = createCart([]);
+    const store = {
+      async get() {
+        return undefined;
+      },
+      async put() {},
+    } as unknown as MikaAcpSessionStore;
+
+    expect(() =>
+      createMikaAcpCheckoutHandlers({
+        api: createAcpTestApi({
+          getCart: () => cart,
+          setCart: (next) => {
+            cart = next;
+          },
+        }),
+        store,
+        seller: { name: "Mika Studio", links: [] },
+        apiKey: "acp_test_key",
+        provider: createProviderName("stripe"),
+      }),
+    ).toThrow("requires an ACP session store with atomic claimIdempotencyKey");
   });
 
   it("accepts a canonical ACP request signature", async () => {
@@ -2676,7 +2817,7 @@ function createAcpTestApi(input: {
     readonly sellableId: MikaIdLike;
     readonly priceId?: MikaIdLike;
     readonly quantity?: number;
-  }) => MikaApiResult<CartDTO> | undefined;
+  }) => MikaApiResult<CartDTO> | void | Promise<MikaApiResult<CartDTO> | void>;
   readonly onCheckoutPreview?: (
     previewInput: CheckoutPreviewInput,
     ctx: MikaRequestContext,
@@ -2711,7 +2852,7 @@ function createAcpTestApi(input: {
           readonly quantity?: number;
         },
       ) => {
-        const failure = input.onCartAdd?.(item);
+        const failure = await input.onCartAdd?.(item);
         if (failure) return failure;
         const line = createCartLine({
           id: `cart_line_${input.getCart().items.length + 1}`,

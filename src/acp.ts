@@ -245,17 +245,16 @@ export interface MikaAcpSessionCleanupResult {
   readonly hasMore: boolean;
 }
 
-/** Pluggable store for ACP session records with optional idempotency-key coordination. */
+/** Pluggable store for ACP session records with atomic idempotency-key coordination. */
 export interface MikaAcpSessionStore {
   get(id: string): Promise<MikaAcpSessionRecord | undefined>;
   put(record: MikaAcpSessionRecord): Promise<void>;
   /** Claim before mutating; replay returns the stored record, conflict returns the other session id. */
-  claimIdempotencyKey?(key: string, id: string): Promise<MikaAcpIdempotencyClaim>;
-  getByIdempotencyKey?(key: string): Promise<MikaAcpSessionRecord | undefined>;
+  claimIdempotencyKey(key: string, id: string): Promise<MikaAcpIdempotencyClaim>;
   /** Bind after successful handler completion so replays return the committed record. */
-  bindIdempotencyKey?(key: string, id: string): Promise<void>;
+  bindIdempotencyKey(key: string, id: string): Promise<void>;
   /** Release after handler failure so the key can be retried. */
-  releaseIdempotencyKey?(key: string, id: string): Promise<void>;
+  releaseIdempotencyKey(key: string, id: string): Promise<void>;
   cleanupExpired?(input: MikaAcpSessionCleanupInput): Promise<MikaAcpSessionCleanupResult>;
 }
 
@@ -686,12 +685,6 @@ export function createMemoryMikaAcpSessionStore(): MikaAcpSessionStore {
 
       return { status: "claimed" };
     },
-    async getByIdempotencyKey(key) {
-      const binding = idempotencyKeys.get(key);
-      if (!binding || binding.pending) return undefined;
-
-      return sessions.get(binding.id);
-    },
     async bindIdempotencyKey(key, id) {
       idempotencyKeys.set(key, { id, pending: false });
     },
@@ -757,6 +750,7 @@ export function createMikaAcpCheckoutHandlers(
       "createMikaAcpCheckoutHandlers requires an apiKey or signatureSecret; refusing to expose ACP checkout sessions without authentication.",
     );
   }
+  assertAcpAtomicIdempotencyStore(options.store);
 
   return {
     create: async (request) =>
@@ -783,6 +777,18 @@ async function safelyHandleAcpRequest(
     return await handler();
   } catch {
     return acpUnhandledFailure(request);
+  }
+}
+
+function assertAcpAtomicIdempotencyStore(store: MikaAcpSessionStore): void {
+  if (
+    typeof store.claimIdempotencyKey !== "function" ||
+    typeof store.bindIdempotencyKey !== "function" ||
+    typeof store.releaseIdempotencyKey !== "function"
+  ) {
+    throw new Error(
+      "createMikaAcpCheckoutHandlers requires an ACP session store with atomic claimIdempotencyKey, bindIdempotencyKey, and releaseIdempotencyKey methods.",
+    );
   }
 }
 
@@ -957,14 +963,21 @@ async function handleAcpComplete(
   );
   if (!idempotency.ok) return idempotency.response;
   // Second idempotency lease serializes concurrent completion on the same session.
-  const completion = await beginAcpIdempotency(
-    options,
-    request,
-    checkoutSessionId,
-    409,
-    false,
-    `acp_complete_lock:${checkoutSessionId}`,
-  );
+  let completion: MikaAcpIdempotencyBegin;
+  try {
+    completion = await beginAcpIdempotency(
+      options,
+      request,
+      checkoutSessionId,
+      409,
+      false,
+      `acp_complete_lock:${checkoutSessionId}`,
+    );
+  } catch {
+    await releaseAcpIdempotencyQuietly(options, idempotency.lease);
+
+    return acpUnhandledFailure(request);
+  }
   if (!completion.ok) {
     await releaseAcpIdempotency(options, idempotency.lease);
 
@@ -1224,7 +1237,6 @@ async function handleAcpCancel(
 interface MikaAcpIdempotencyLease {
   readonly key: string;
   readonly id: string;
-  readonly claimed: boolean;
 }
 
 type MikaAcpIdempotencyBegin =
@@ -1242,68 +1254,43 @@ async function beginAcpIdempotency(
   const key = storeKeyOverride ?? acpIdempotencyStoreKey(request);
   if (!key) return { ok: true };
 
-  if (options.store.claimIdempotencyKey) {
-    const claim = await options.store.claimIdempotencyKey(key, checkoutSessionId);
-    if (claim.status === "claimed") {
-      return { ok: true, lease: { key, id: checkoutSessionId, claimed: true } };
-    }
-    if (claim.status === "replayed") {
-      return {
-        ok: false,
-        response: acpJson(
-          request,
-          await recordToAcpSession(options, request, claim.record),
-          replayStatus,
-        ),
-      };
-    }
-
-    if (replayExistingBinding && claim.status === "conflict") {
-      const bound = await options.store.get(claim.id);
-
-      return {
-        ok: false,
-        response: bound
-          ? acpJson(request, await recordToAcpSession(options, request, bound), replayStatus)
-          : acpError(
-              request,
-              409,
-              "request_not_idempotent",
-              "Idempotency-Key replay is already in progress.",
-            ),
-      };
-    }
-
+  const claim = await options.store.claimIdempotencyKey(key, checkoutSessionId);
+  if (claim.status === "claimed") {
+    return { ok: true, lease: { key, id: checkoutSessionId } };
+  }
+  if (claim.status === "replayed") {
     return {
       ok: false,
-      response: acpError(
-        request,
-        409,
-        "request_not_idempotent",
-        claim.status === "conflict"
-          ? "Idempotency-Key is already bound to another checkout session."
-          : "Idempotency-Key replay is already in progress.",
-      ),
+      response: acpJson(request, await recordToAcpSession(options, request, claim.record), replayStatus),
     };
   }
 
-  const replayed = await options.store.getByIdempotencyKey?.(key);
-  if (!replayed) return { ok: true, lease: { key, id: checkoutSessionId, claimed: false } };
-  if (!replayExistingBinding && replayed.id !== checkoutSessionId) {
+  if (replayExistingBinding && claim.status === "conflict") {
+    const bound = await options.store.get(claim.id);
+
     return {
       ok: false,
-      response: acpError(
-        request,
-        409,
-        "request_not_idempotent",
-        "Idempotency-Key is already bound to another checkout session.",
-      ),
+      response: bound
+        ? acpJson(request, await recordToAcpSession(options, request, bound), replayStatus)
+        : acpError(
+            request,
+            409,
+            "request_not_idempotent",
+            "Idempotency-Key replay is already in progress.",
+          ),
     };
   }
 
   return {
     ok: false,
-    response: acpJson(request, await recordToAcpSession(options, request, replayed), replayStatus),
+    response: acpError(
+      request,
+      409,
+      "request_not_idempotent",
+      claim.status === "conflict"
+        ? "Idempotency-Key is already bound to another checkout session."
+        : "Idempotency-Key replay is already in progress.",
+    ),
   };
 }
 
@@ -1311,14 +1298,14 @@ async function commitAcpIdempotency(
   options: CreateMikaAcpCheckoutHandlersOptions,
   lease: MikaAcpIdempotencyLease | undefined,
 ): Promise<void> {
-  if (lease) await options.store.bindIdempotencyKey?.(lease.key, lease.id);
+  if (lease) await options.store.bindIdempotencyKey(lease.key, lease.id);
 }
 
 async function releaseAcpIdempotency(
   options: CreateMikaAcpCheckoutHandlersOptions,
   lease: MikaAcpIdempotencyLease | undefined,
 ): Promise<void> {
-  if (lease?.claimed) await options.store.releaseIdempotencyKey?.(lease.key, lease.id);
+  if (lease) await options.store.releaseIdempotencyKey(lease.key, lease.id);
 }
 
 async function releaseAcpIdempotencyQuietly(
