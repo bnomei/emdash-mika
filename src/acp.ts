@@ -2,7 +2,7 @@
  * Agentic Commerce Protocol (ACP) support: product feeds, checkout session HTTP handlers backed
  * by MikaApi cart/checkout, session storage, delegated Stripe payments, and order webhooks.
  */
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 import {
   createMikaRequestContext,
@@ -51,6 +51,7 @@ export const MIKA_ACP_DEFAULT_SESSION_PREFIX = "acp_checkout";
 
 const MIKA_ACP_DEFAULT_SESSION_TTL_MS = 15 * 60_000;
 const MIKA_ACP_DEFAULT_TERMINAL_RETENTION_MS = 24 * 60 * 60_000;
+const MIKA_ACP_SIGNATURE_TOLERANCE_MS = 5 * 60_000;
 
 /** Seller identity and policy links attached to ACP catalog products. */
 export interface MikaAcpSeller {
@@ -1776,7 +1777,7 @@ async function verifyAcpRequest(
 ): Promise<Response | undefined> {
   if (options.apiKey) {
     const expected = `Bearer ${options.apiKey}`;
-    if (!constantTimeEqual(request.headers.get("Authorization") ?? "", expected)) {
+    if (!safeStringEqual(request.headers.get("Authorization") ?? "", expected)) {
       return acpError(request, 401, "unauthorized", "ACP authorization failed.");
     }
   }
@@ -1789,9 +1790,21 @@ async function verifyAcpRequest(
   const signature = request.headers.get("Signature");
   if (!signature)
     return acpError(request, 401, "signature_invalid", "Signature header is required.");
+  const timestamp = request.headers.get("Signature-Timestamp");
+  if (!timestamp) {
+    return acpError(
+      request,
+      401,
+      "signature_invalid",
+      "Signature-Timestamp header is required.",
+    );
+  }
+  if (!acpSignatureTimestampIsFresh(timestamp, options.now?.() ?? new Date())) {
+    return acpError(request, 401, "signature_invalid", "ACP request signature timestamp is invalid.");
+  }
   const payload = await request.clone().text();
-  const expected = await hmacBase64(options.signatureSecret, payload);
-  if (!constantTimeEqual(signature, expected)) {
+  const expected = await hmacBase64(options.signatureSecret, acpCanonicalSignaturePayload(request, payload, timestamp));
+  if (!safeStringEqual(signature, expected)) {
     return acpError(request, 401, "signature_invalid", "ACP request signature is invalid.");
   }
 
@@ -2096,12 +2109,51 @@ async function hmacBase64(secret: string, payload: string): Promise<string> {
   return createHmac("sha256", secret).update(payload).digest("base64");
 }
 
-function constantTimeEqual(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  if (leftBuffer.byteLength !== rightBuffer.byteLength) return false;
+function acpCanonicalSignaturePayload(request: Request, rawBody: string, timestamp: string): string {
+  const url = new URL(request.url);
 
-  return timingSafeEqual(leftBuffer, rightBuffer);
+  return [
+    request.method.toUpperCase(),
+    `${url.pathname}${url.search}`,
+    sha256Hex(rawBody),
+    timestamp,
+  ].join("\n");
+}
+
+function acpSignatureTimestampIsFresh(timestamp: string, now: Date): boolean {
+  const parsed = parseAcpSignatureTimestamp(timestamp);
+  if (!parsed) return false;
+  const nowMs = now.getTime();
+  if (!Number.isFinite(nowMs)) return false;
+
+  return Math.abs(nowMs - parsed.getTime()) <= MIKA_ACP_SIGNATURE_TOLERANCE_MS;
+}
+
+function parseAcpSignatureTimestamp(timestamp: string): Date | undefined {
+  const value = timestamp.trim();
+  if (!value) return undefined;
+  const numeric = Number(value);
+  const ms = Number.isFinite(numeric)
+    ? value.length >= 13
+      ? numeric
+      : numeric * 1000
+    : Date.parse(value);
+  if (!Number.isFinite(ms)) return undefined;
+  const parsed = new Date(ms);
+
+  return Number.isFinite(parsed.getTime()) ? parsed : undefined;
+}
+
+function sha256Hex(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function safeStringEqual(left: string, right: string): boolean {
+  return timingSafeEqual(sha256Buffer(left), sha256Buffer(right));
+}
+
+function sha256Buffer(value: string): Buffer {
+  return createHash("sha256").update(value).digest();
 }
 
 function createDefaultAcpSessionId(): string {

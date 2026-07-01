@@ -2,6 +2,7 @@
  * ACP product projection and Stripe provider adapter tests.
  */
 import { describe, expect, it } from "vite-plus/test";
+import { createHash, createHmac } from "node:crypto";
 
 import {
   createMemoryMikaAcpSessionStore,
@@ -754,6 +755,163 @@ describe("Mika ACP projection", () => {
     expect(() =>
       createMikaAcpCheckoutHandlers({ ...baseOptions, signatureSecret: "shh" }),
     ).not.toThrow();
+  });
+
+  it("accepts a canonical ACP request signature", async () => {
+    let cart = createCart([]);
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      signatureSecret: "acp_signature_secret",
+      provider: createProviderName("stripe"),
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      createSessionId: () => "checkout_session_acp_signed",
+    });
+
+    const response = await handlers.create(
+      signedAcpRequest(
+        "https://shop.example.test/checkout_sessions?expand=totals",
+        "idem_signed_create",
+        { items: [{ id: "sellable_1:price_1", quantity: 1 }] },
+        "acp_signature_secret",
+        "2026-01-01T00:00:00.000Z",
+      ),
+    );
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({
+      id: "checkout_session_acp_signed",
+      status: "ready_for_payment",
+    });
+  });
+
+  it("rejects a canonical ACP request signature replayed on a different path", async () => {
+    let cart = createCart([]);
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      signatureSecret: "acp_signature_secret",
+      provider: createProviderName("stripe"),
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      createSessionId: () => "checkout_session_acp_replay",
+    });
+
+    const response = await handlers.create(
+      signedAcpRequest(
+        "https://shop.example.test/checkout_sessions/replayed",
+        "idem_signed_replay",
+        { items: [{ id: "sellable_1:price_1", quantity: 1 }] },
+        "acp_signature_secret",
+        "2026-01-01T00:00:00.000Z",
+        { signedUrl: "https://shop.example.test/checkout_sessions" },
+      ),
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "signature_invalid",
+      message: "ACP request signature is invalid.",
+    });
+  });
+
+  it("rejects stale and malformed ACP request signature timestamps", async () => {
+    let cart = createCart([]);
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      signatureSecret: "acp_signature_secret",
+      provider: createProviderName("stripe"),
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      createSessionId: () => "checkout_session_acp_timestamp",
+    });
+    const body = { items: [{ id: "sellable_1:price_1", quantity: 1 }] };
+
+    const stale = await handlers.create(
+      signedAcpRequest(
+        "https://shop.example.test/checkout_sessions",
+        "idem_signed_stale",
+        body,
+        "acp_signature_secret",
+        "2025-12-31T23:54:59.000Z",
+      ),
+    );
+    expect(stale.status).toBe(401);
+    await expect(stale.json()).resolves.toMatchObject({
+      code: "signature_invalid",
+      message: "ACP request signature timestamp is invalid.",
+    });
+
+    const malformed = await handlers.create(
+      signedAcpRequest(
+        "https://shop.example.test/checkout_sessions",
+        "idem_signed_malformed",
+        body,
+        "acp_signature_secret",
+        "not-a-timestamp",
+      ),
+    );
+    expect(malformed.status).toBe(401);
+    await expect(malformed.json()).resolves.toMatchObject({
+      code: "signature_invalid",
+      message: "ACP request signature timestamp is invalid.",
+    });
+  });
+
+  it("rejects ACP bearer-token mismatches", async () => {
+    let cart = createCart([]);
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      createSessionId: () => "checkout_session_acp_auth",
+    });
+    const body = JSON.stringify({ items: [{ id: "sellable_1:price_1", quantity: 1 }] });
+
+    const response = await handlers.create(
+      new Request("https://shop.example.test/checkout_sessions", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer acp_wrong_key",
+          "Content-Type": "application/json",
+          "Idempotency-Key": "idem_wrong_bearer",
+          "Request-Id": "req_wrong_bearer",
+          "API-Version": "2025-09-12",
+        },
+        body,
+      }),
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "unauthorized",
+      message: "ACP authorization failed.",
+    });
   });
 
   it("cancels the bound Mika checkout when an ACP session is canceled", async () => {
@@ -2476,6 +2634,38 @@ function acpRequest(url: string, idempotencyKey: string, body: JsonObject): Requ
       "API-Version": "2025-09-12",
     },
     body: JSON.stringify(body),
+  });
+}
+
+function signedAcpRequest(
+  url: string,
+  idempotencyKey: string,
+  body: JsonObject,
+  secret: string,
+  timestamp: string,
+  options: { readonly signedUrl?: string } = {},
+): Request {
+  const rawBody = JSON.stringify(body);
+  const signatureUrl = new URL(options.signedUrl ?? url);
+  const canonical = [
+    "POST",
+    `${signatureUrl.pathname}${signatureUrl.search}`,
+    createHash("sha256").update(rawBody).digest("hex"),
+    timestamp,
+  ].join("\n");
+  const signature = createHmac("sha256", secret).update(canonical).digest("base64");
+
+  return new Request(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+      "Request-Id": `req_${idempotencyKey}`,
+      "API-Version": "2025-09-12",
+      Signature: signature,
+      "Signature-Timestamp": timestamp,
+    },
+    body: rawBody,
   });
 }
 
