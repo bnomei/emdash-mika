@@ -8725,6 +8725,10 @@ async function quoteInputLine(
     if (!price) {
       unavailable = true;
       warnings.push(`Price for sellable '${sellable.id}' is unavailable.`);
+    } else if (price.currency !== currency) {
+      warnings.push(`Price '${price.id}' uses currency '${price.currency}'.`);
+      price = null;
+      unavailable = true;
     }
     const quantityError = validateQuantityLimit(sellable, stock, quantity);
     if (quantityError) {
