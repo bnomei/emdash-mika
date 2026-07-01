@@ -4997,7 +4997,7 @@ describe("backend API composition", () => {
     }
   });
 
-  it("resolves a valid download token without leaking account data", async () => {
+  it("resolves a valid download token repeatedly without leaking account data", async () => {
     const harness = await createAccountServicesHarness();
 
     try {
@@ -5019,6 +5019,7 @@ describe("backend API composition", () => {
       });
 
       const result = await harness.api.download.resolve({ token: "download_token_1" });
+      const replay = await harness.api.download.resolve({ token: "download_token_1" });
 
       expect(result).toMatchObject({
         ok: true,
@@ -5029,10 +5030,64 @@ describe("backend API composition", () => {
           expiresAt: "2026-01-01T00:01:00.000Z",
         },
       });
+      expect(replay).toMatchObject({
+        ok: true,
+        status: 200,
+        data: {
+          redirectUrl: "https://files.example.test/downloads/order_1/order_line_1",
+        },
+      });
       expect(JSON.stringify(result)).not.toContain("customer_1");
       expect(JSON.stringify(result)).not.toContain("Subscriber@Example.test");
       await expect(
         harness.repositories.ephemeral.get(createTestHash("download-token:download_token_1")),
+      ).resolves.toMatchObject({ status: "pending" });
+    } finally {
+      await harness.destroy();
+    }
+  });
+
+  it("confirms a download token exactly once after resolve", async () => {
+    const harness = await createAccountServicesHarness();
+
+    try {
+      await harness.repositories.ledger.put(createOrderDocument());
+      await harness.repositories.account.put(createEntitlementDocument());
+      await harness.repositories.account.put(createLicenseDocument());
+      await issueDownloadToken(harness.repositories, {
+        token: "download_confirm_token_1",
+        expiresAt: createTestClock().isoAt(60_000),
+        data: {
+          downloadRef: "download:order_1:order_line_1",
+          orderId: createTestMikaId("order", 1),
+          orderLineId: createTestMikaId("order_line", 1),
+          entitlementId: createTestMikaId("entitlement", 1),
+          licenseId: createTestMikaId("license", 1),
+          redirectUrl: "https://files.example.test/downloads/order_1/order_line_1",
+        },
+      });
+
+      await expect(
+        harness.api.download.resolve({ token: "download_confirm_token_1" }),
+      ).resolves.toMatchObject({ ok: true, status: 200 });
+      await expect(
+        harness.api.download.confirm({ token: "download_confirm_token_1" }),
+      ).resolves.toMatchObject({
+        ok: true,
+        status: 200,
+        data: { redirectUrl: "https://files.example.test/downloads/order_1/order_line_1" },
+      });
+      await expect(
+        harness.api.download.confirm({ token: "download_confirm_token_1" }),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 410,
+        error: { code: "TOKEN_USED" },
+      });
+      await expect(
+        harness.repositories.ephemeral.get(
+          createTestHash("download-token:download_confirm_token_1"),
+        ),
       ).resolves.toMatchObject({ status: "consumed" });
     } finally {
       await harness.destroy();

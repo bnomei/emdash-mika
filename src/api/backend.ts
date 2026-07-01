@@ -1038,8 +1038,8 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
       ...input.overrides?.subscription,
     },
     download: {
-      resolve: async (downloadInput) => resolveDownload(input, downloadInput),
-      confirm: async (downloadInput) => resolveDownload(input, downloadInput),
+      resolve: async (downloadInput) => resolveDownload(input, downloadInput, false),
+      confirm: async (downloadInput) => resolveDownload(input, downloadInput, true),
       ...input.overrides?.download,
     },
     order: {
@@ -3675,6 +3675,7 @@ function orderAccessRevokedForAccountDelete(order: OrderDocument): boolean {
 async function resolveDownload(
   input: CreateMikaBackendApiInput,
   downloadInput: { readonly token: string },
+  consumeToken: boolean,
 ): Promise<MikaApiResult<DownloadResolutionDTO>> {
   const now = input.isoNow?.() ?? createISODateTime(input.now().toISOString());
   const tokenHash = await hashDownloadToken(input, downloadInput.token.trim());
@@ -3734,12 +3735,15 @@ async function resolveDownload(
     }
   }
 
-  const consumed = await input.repositories.ephemeral.consumeToken(tokenHash, now);
-  if (!consumed) {
-    const current = await input.repositories.ephemeral.get(tokenHash);
-    return (
-      downloadTokenError(current, now) ?? tokenResult("TOKEN_INVALID", "Download token is invalid.")
-    );
+  if (consumeToken) {
+    const consumed = await input.repositories.ephemeral.consumeToken(tokenHash, now);
+    if (!consumed) {
+      const current = await input.repositories.ephemeral.get(tokenHash);
+      return (
+        downloadTokenError(current, now) ??
+        tokenResult("TOKEN_INVALID", "Download token is invalid.")
+      );
+    }
   }
 
   return {
