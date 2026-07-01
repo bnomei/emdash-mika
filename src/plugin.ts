@@ -231,6 +231,12 @@ function summarizeMikaMaintenanceResult(result: MikaMaintenanceRunResult) {
         scanned: taskResult.scanned,
         reclaimed: taskResult.reclaimed,
       })),
+      webhookRetries: summarizeTask(result.webhookRetries, (taskResult) => ({
+        scanned: taskResult.scanned,
+        retried: taskResult.retried,
+        skippedExhausted: taskResult.skippedExhausted,
+        hasMore: taskResult.hasMore,
+      })),
     },
   };
 }

@@ -1,10 +1,10 @@
 /**
  * Scheduled maintenance orchestrator for background commerce hygiene.
  *
- * `runOnce` sweeps eight optional tasks — each skips when its dependency is unconfigured:
+ * `runOnce` sweeps nine optional tasks — each skips when its dependency is unconfigured:
  * email outbox delivery, stuck email lease reclaim, raw webhook payload purge, ACP session
  * cleanup, expired stock reservation release, ephemeral record purge, queued account-delete
- * completion, and stuck workflow lease reclaim.
+ * completion, stuck workflow lease reclaim, and due payment-webhook retry.
  */
 import type { MikaBackendNow, MikaBackendRepositories } from "./backend";
 import type { AdminActionResultDTO, MikaApiResult, ReleaseExpiredReservationsInput } from "./types";
@@ -39,6 +39,7 @@ export interface MikaMaintenanceRunOptions {
   readonly acpSessionLimit?: number;
   readonly accountDeleteLimit?: number;
   readonly stuckWorkflowLimit?: number;
+  readonly webhookRetryLimit?: number;
 }
 
 type MikaMaintenanceTaskResult<TResult> =
@@ -65,6 +66,14 @@ export interface MikaMaintenanceStockReservationsResult {
 /** Count of expired ephemeral records purged in one maintenance sweep. */
 export interface MikaMaintenanceEphemeralRecordsResult {
   readonly purged: number;
+}
+
+/** Counts from re-driving due payment-webhook fulfillment workflows. */
+export interface MikaMaintenanceWebhookRetriesResult {
+  readonly scanned: number;
+  readonly retried: number;
+  readonly skippedExhausted: number;
+  readonly hasMore: boolean;
 }
 
 /** Aggregated outcome of processing queued account-delete requests. */
@@ -125,6 +134,7 @@ export interface MikaMaintenanceRunResult {
   readonly ephemeralRecords: MikaMaintenanceTaskResult<MikaMaintenanceEphemeralRecordsResult>;
   readonly accountDeleteRequests: MikaMaintenanceTaskResult<MikaMaintenanceAccountDeleteRequestsResult>;
   readonly stuckWorkflows: MikaMaintenanceTaskResult<MikaMaintenanceStuckWorkflowsResult>;
+  readonly webhookRetries: MikaMaintenanceTaskResult<MikaMaintenanceWebhookRetriesResult>;
 }
 
 /** Runs background hygiene tasks; skips tasks when dependencies are not configured. */
@@ -164,6 +174,7 @@ const DEFAULT_RAW_PROVIDER_PAYLOAD_BATCH_SIZE = 50;
 const DEFAULT_RAW_PROVIDER_PAYLOAD_RETENTION_DAYS = 14;
 const DEFAULT_ACP_SESSION_BATCH_SIZE = 50;
 const DEFAULT_STUCK_WORKFLOW_BATCH_SIZE = 50;
+const DEFAULT_WEBHOOK_RETRY_BATCH_SIZE = 50;
 
 /** Composes optional outbox, stock, ephemeral, and account-delete processors. */
 export function createMikaMaintenanceRunner(
@@ -303,6 +314,23 @@ export function createMikaMaintenanceRunner(
           ),
         };
       });
+      const webhookRetries = await runMaintenanceTask(async () => {
+        if (!input.repositories || !input.api) {
+          return {
+            status: "skipped" as const,
+            reason: "Webhook retry driver requires repositories and api.",
+          };
+        }
+        return {
+          status: "completed" as const,
+          result: await retryDuePaymentWebhooks({
+            repositories: input.repositories,
+            api: input.api,
+            now,
+            limit: options.webhookRetryLimit ?? DEFAULT_WEBHOOK_RETRY_BATCH_SIZE,
+          }),
+        };
+      });
 
       return {
         now,
@@ -314,8 +342,45 @@ export function createMikaMaintenanceRunner(
         ephemeralRecords,
         accountDeleteRequests,
         stuckWorkflows,
+        webhookRetries,
       };
     },
+  };
+}
+
+async function retryDuePaymentWebhooks(input: {
+  readonly repositories: MikaMaintenanceRepositories;
+  readonly api: Pick<MikaApi, "admin">;
+  readonly now: ISODateTime;
+  readonly limit: number;
+}): Promise<MikaMaintenanceWebhookRetriesResult> {
+  const due = await input.repositories.ops.listDueWorkflows(
+    input.now,
+    input.limit,
+    "payment_webhook_fulfillment",
+  );
+  let retried = 0;
+  let skippedExhausted = 0;
+
+  for (const item of due.items) {
+    const workflow = item.data;
+    // Respect the workflow's own attempt cap; webhookReplay force-leases, so an
+    // exhausted workflow would otherwise be re-driven on every cron tick.
+    if (workflow.record.attemptCount >= workflow.record.maxAttempts) {
+      skippedExhausted += 1;
+      continue;
+    }
+    if (!workflow.subjectId) continue;
+
+    await input.api.admin.webhookReplay({ webhookId: workflow.subjectId });
+    retried += 1;
+  }
+
+  return {
+    scanned: due.items.length,
+    retried,
+    skippedExhausted,
+    hasMore: due.hasMore,
   };
 }
 

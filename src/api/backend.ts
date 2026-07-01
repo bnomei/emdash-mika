@@ -4761,7 +4761,7 @@ async function processStoredWebhook(
           webhook,
           ctx.now,
           "Payment webhook could not be processed.",
-          { strict: true },
+          { strict: true, retryable: true },
         );
       }
     case "subscription":
@@ -4777,6 +4777,7 @@ async function processStoredWebhook(
           webhook,
           ctx.now,
           "Subscription webhook could not be processed.",
+          { strict: true, retryable: true },
         );
       }
     case "unknown":
@@ -6695,7 +6696,7 @@ async function markWebhookFailed(
   webhook: WebhookDocument,
   now: ISODateTime,
   lastError: string,
-  options: { readonly strict?: boolean } = { strict: true },
+  options: { readonly strict?: boolean; readonly retryable?: boolean } = { strict: true },
 ): Promise<WebhookDocument> {
   const failed: WebhookDocument = {
     ...webhook,
@@ -6705,6 +6706,7 @@ async function markWebhookFailed(
       status: "failed",
       attemptCount: webhook.record.attemptCount + 1,
       lastError,
+      retryable: options.retryable ?? false,
     },
     updatedAt: now,
   };
@@ -6775,6 +6777,17 @@ function webhookReceiptResult(
       502,
       "PROVIDER_FAILED",
       webhook.record.lastError ?? "Refund webhook could not be processed.",
+    );
+  }
+  if (
+    (event.kind === "payment" || event.kind === "subscription") &&
+    webhook.status === "failed" &&
+    webhook.record.retryable === true
+  ) {
+    return apiFailure(
+      502,
+      "PROVIDER_FAILED",
+      webhook.record.lastError ?? "Webhook could not be processed.",
     );
   }
 

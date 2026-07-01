@@ -531,6 +531,7 @@ describe("Mika native plugin package", () => {
             reclaimExhaustedEmails: async () => ({ scanned: 0, reclaimed: 0 }),
             purgeWebhookRawPayloads: async () => ({ scanned: 0, purged: 0 }),
             reclaimExhaustedWorkflows: async () => ({ scanned: 0, reclaimed: 0 }),
+            listDueWorkflows: async () => ({ items: [], hasMore: false }),
           },
           session: {
             listCheckoutPendingCartsByCustomer: async () => ({ items: [], hasMore: false }),
@@ -557,6 +558,7 @@ describe("Mika native plugin package", () => {
             ephemeralRecords: expect.objectContaining({ status: "completed", purged: 4 }),
             accountDeleteRequests: expect.objectContaining({ status: "completed" }),
             stuckWorkflows: expect.objectContaining({ status: "completed" }),
+            webhookRetries: expect.objectContaining({ status: "completed" }),
           }),
         }),
       ],
