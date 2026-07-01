@@ -5918,6 +5918,12 @@ async function completeCheckoutForPaymentOrder(
 
   const document = await input.repositories.session.findById(checkout.cartId);
   if (!document || document.type !== "cart") return;
+  if (
+    document.status !== "checkout_pending" ||
+    metadataMikaId(document.aggregate.metadata, "checkoutSessionId") !== checkout.id
+  ) {
+    return;
+  }
 
   await input.repositories.session.put({
     ...document,
