@@ -2,7 +2,9 @@
  * Public type surface for the commerce document model, API DTOs, and agent contracts.
  * Re-exports primitives, aggregates, documents, and operational records via wildcard paths.
  */
+/** Stable API error codes and provider capability flags from the wire DTO layer. */
 export { MIKA_ERROR_CODES, MIKA_PROVIDER_CAPABILITIES } from "../api/types";
+/** Agent manifest constants for capability, risk, and idempotency policy discovery. */
 export {
   MIKA_ACTION_RUN_STATUSES,
   MIKA_AGENT_ACTOR_REQUIREMENTS,
@@ -19,6 +21,7 @@ export {
   MIKA_AGENT_RISKS,
   MIKA_AGENT_VISIBILITIES,
 } from "../api/agent-types";
+/** Agent actor, proof, approval, and manifest descriptor types. */
 export type {
   MikaActorContext,
   MikaActorKind,
@@ -51,6 +54,7 @@ export type {
   MikaPaymentAuthorizationRef,
   MikaReceiptRef,
 } from "../api/agent-types";
+/** Wire DTOs and operation input shapes shared by clients, actions, and handlers. */
 export type {
   AccountDTO,
   AccountDeleteInput,
@@ -130,4 +134,5 @@ export type {
   WishlistItemDTO,
   WishlistItemInput,
 } from "../api/types";
+/** Branded primitive ids, money, status enums, and JSON helpers for the storage model. */
 export * from "./primitives";

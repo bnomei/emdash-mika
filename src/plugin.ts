@@ -20,6 +20,7 @@ import type { MikaOperationPolicy } from "./api/operation-policy";
 import { mikaStorageConfig } from "./storage/collections";
 import { createISODateTime } from "./types/primitives";
 
+/** Stable EmDash plugin id registered for Mika routes and storage. */
 export { MIKA_PLUGIN_ID } from "./api/routes";
 
 /** Published plugin semver wired into the EmDash descriptor and runtime. */
@@ -229,4 +230,5 @@ function summarizeTask<TResult extends object>(
 
 /** Alias for `mikaPlugin` used in EmDash plugin manifests. */
 export const mika = mikaPlugin;
+/** Default export alias for EmDash manifest entrypoints. */
 export default mikaPlugin;

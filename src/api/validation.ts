@@ -61,6 +61,7 @@ import {
   type StockMovementReason,
 } from "../types/primitives";
 
+/** Astro Zod re-export for co-located operation schemas and action input definitions. */
 export { z };
 
 /** Local validation outcome before mapping to a {@link MikaApiResult} failure. */
@@ -70,6 +71,7 @@ export type MikaValidationResult<T> =
 
 /** Primitive string, branded id, quantity, and JSON object schemas shared across operations. */
 export const requiredStringSchema = z.string().trim().min(1);
+/** Trimmed non-empty string, or undefined when the form field is empty. */
 export const optionalStringSchema = z.preprocess(
   emptyToUndefined,
   z.string().trim().min(1).optional(),
@@ -77,44 +79,58 @@ export const optionalStringSchema = z.preprocess(
 
 /** Branded {@link MikaId} string validated through {@link createMikaId}. */
 export const mikaIdSchema = brandedStringSchema(createMikaId, "MikaId");
+/** Optional branded {@link MikaId}; empty form values become undefined. */
 export const optionalMikaIdSchema = z.preprocess(emptyToUndefined, mikaIdSchema.optional());
+/** Branded {@link ISODateTime} string validated through {@link createISODateTime}. */
 export const isoDateTimeSchema = brandedStringSchema(createISODateTime, "ISODateTime");
+/** Optional branded {@link ISODateTime}; empty form values become undefined. */
 export const optionalISODateTimeSchema = z.preprocess(
   emptyToUndefined,
   isoDateTimeSchema.optional(),
 );
+/** Branded {@link CurrencyCode} string validated through {@link createCurrencyCode}. */
 export const currencyCodeSchema = brandedStringSchema(createCurrencyCode, "CurrencyCode");
+/** Optional branded {@link CurrencyCode}; empty form values become undefined. */
 export const optionalCurrencyCodeSchema = z.preprocess(
   emptyToUndefined,
   currencyCodeSchema.optional(),
 );
+/** Branded {@link ProviderName} string validated through {@link createProviderName}. */
 export const providerNameSchema = brandedStringSchema(createProviderName, "ProviderName");
+/** Optional branded {@link ProviderName}; empty form values become undefined. */
 export const optionalProviderNameSchema = z.preprocess(
   emptyToUndefined,
   providerNameSchema.optional(),
 );
 
+/** Positive integer quantity; empty form values default to 1. */
 export const quantitySchema = z.preprocess(
   (value) => (value === null || value === undefined || value === "" ? 1 : Number(value)),
   z.number().int().positive(),
 );
+/** Optional positive integer quantity; empty form values become undefined. */
 export const optionalQuantitySchema = z.preprocess(
   (value) => (value === null || value === undefined || value === "" ? undefined : Number(value)),
   z.number().int().positive().optional(),
 );
+/** Signed integer parsed from string or numeric form values. */
 export const integerSchema = z.preprocess((value) => Number(value), z.number().int());
+/** Optional non-negative money amount in minor units. */
 export const optionalAmountSchema = z.preprocess(
   (value) => (value === null || value === undefined || value === "" ? undefined : Number(value)),
   z.number().finite().nonnegative().optional(),
 );
 
+/** Plain JSON object guard used for custom fields and provider metadata. */
 export const jsonObjectSchema = z.custom<JsonObject>(isJsonObject, {
   message: "Expected JSON object.",
 });
+/** Optional JSON object parsed from hidden form fields or request bodies. */
 export const optionalJsonObjectSchema = z.preprocess(
   parseJsonFormValue,
   jsonObjectSchema.optional(),
 );
+/** Stock ledger movement reason accepted by admin stock adjustments. */
 export const stockMovementReasonSchema = z.enum([
   "manual_adjustment",
   "reservation",
@@ -123,6 +139,7 @@ export const stockMovementReasonSchema = z.enum([
   "refund",
   "sync",
 ]) satisfies z.ZodType<StockMovementReason>;
+/** Variant axis selections keyed by option name, parsed from JSON form transport. */
 export const variantOptionsSchema = z.preprocess(
   parseJsonFormValue,
   z.record(z.string(), z.string()).optional(),
@@ -135,6 +152,7 @@ export const contentRefInputSchema = z.object({
   locale: optionalStringSchema,
 }) satisfies z.ZodType<ContentRefDTO>;
 
+/** Sellable id for on-hand stock availability lookups. */
 export const stockAvailabilityInputSchema = z.object({
   sellableId: mikaIdSchema,
 }) satisfies z.ZodType<{ readonly sellableId: MikaId }>;
@@ -145,34 +163,39 @@ export const checkoutStatusInputSchema = z.object({
   token: optionalStringSchema,
 }) satisfies z.ZodType<CheckoutStatusInput>;
 
+/** Checkout session id for abandoning an in-flight checkout. */
 export const checkoutCancelInputSchema = z.object({
   checkoutId: mikaIdSchema,
 }) satisfies z.ZodType<CheckoutCancelInput>;
 
+/** Export job id for polling account export readiness. */
 export const accountExportStatusInputSchema = z.object({
   exportId: mikaIdSchema,
 }) satisfies z.ZodType<AccountExportStatusInput>;
 
+/** Export id and optional download token for account export retrieval. */
 export const accountExportDownloadInputSchema = z.object({
   exportId: mikaIdSchema,
   token: optionalStringSchema,
 }) satisfies z.ZodType<AccountExportDownloadInput>;
 
+/** Signed download token for entitlement file resolution. */
 export const downloadResolveInputSchema = z.object({
   token: requiredStringSchema,
 }) satisfies z.ZodType<{ readonly token: string }>;
 
+/** Order id and optional invoice token for customer invoice access. */
 export const orderInvoiceInputSchema = z.object({
   orderId: mikaIdSchema,
   token: optionalStringSchema,
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<OrderInvoiceInput>;
 
+/** Optional post-action redirect path shared by account portal flows. */
 export const returnToInputSchema = z.object({
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<AccountExportInput & AccountDeleteInput & AccountPortalInput>;
 
-/** Cart line mutations, coupons, and wishlist transfer schemas. */
 /** Sellable, price, quantity, and variant fields for {@link AddCartItemInput}. */
 export const addCartItemInputSchema = z.object({
   sellableId: mikaIdSchema,
@@ -183,6 +206,7 @@ export const addCartItemInputSchema = z.object({
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<AddCartItemInput>;
 
+/** HTML form transport for add-to-cart posts, including purchase mode shortcuts. */
 export const cartAddFormInputSchema = z.object({
   sellableId: optionalMikaIdSchema,
   priceId: optionalMikaIdSchema,
@@ -193,56 +217,66 @@ export const cartAddFormInputSchema = z.object({
   returnTo: optionalStringSchema,
 });
 
+/** Line id and target quantity for cart line quantity updates. */
 export const updateCartItemInputSchema = z.object({
   lineId: mikaIdSchema,
   quantity: quantitySchema,
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<UpdateCartItemInput>;
 
+/** Line id for removing a single cart line. */
 export const removeCartItemInputSchema = z.object({
   lineId: mikaIdSchema,
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<RemoveCartItemInput>;
 
+/** Anonymous session cart merged into the current or target cart. */
 export const mergeCartInputSchema = z.object({
   sourceSessionId: optionalStringSchema,
   targetCartId: optionalMikaIdSchema,
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<MergeCartInput>;
 
+/** Coupon code applied to the active or specified cart. */
 export const applyCouponInputSchema = z.object({
   code: requiredStringSchema,
   cartId: optionalMikaIdSchema,
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<ApplyCouponInput>;
 
+/** Clears the applied coupon from the active or specified cart. */
 export const removeCouponInputSchema = z.object({
   cartId: optionalMikaIdSchema,
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<RemoveCouponInput>;
 
+/** Sellable and optional price for adding a wishlist item. */
 export const wishlistItemInputSchema = z.object({
   sellableId: mikaIdSchema,
   priceId: optionalMikaIdSchema,
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<WishlistItemInput>;
 
+/** Wishlist item id for removal. */
 export const removeWishlistItemInputSchema = z.object({
   itemId: mikaIdSchema,
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<RemoveWishlistItemInput>;
 
+/** Wishlist item moved into the cart with optional quantity override. */
 export const moveWishlistItemToCartInputSchema = z.object({
   itemId: mikaIdSchema,
   quantity: optionalQuantitySchema,
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<MoveWishlistItemToCartInput>;
 
+/** Cart line saved to the wishlist without deleting the sellable selection. */
 export const saveCartLineForLaterInputSchema = z.object({
   lineId: mikaIdSchema,
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<SaveCartLineForLaterInput>;
 
+/** Anonymous session wishlist merged into the current or target wishlist. */
 export const mergeWishlistInputSchema = z.object({
   sourceSessionId: optionalStringSchema,
   targetWishlistId: optionalMikaIdSchema,
@@ -293,6 +327,7 @@ const proofRefBaseShape = {
   raw: optionalJsonObjectSchema,
 } as const;
 
+/** Discriminated agent proof references attached to checkout preview and sensitive operations. */
 export const agentProofRefSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("consent"),
@@ -326,6 +361,7 @@ export const checkoutPreviewInputSchema = startCheckoutInputSchema.extend({
   proofRefs: z.array(agentProofRefSchema).optional(),
 }) satisfies z.ZodType<CheckoutPreviewInput>;
 
+/** HTML form transport for checkout start posts with flattened customer fields. */
 export const checkoutStartFormInputSchema = z.object({
   cartId: optionalMikaIdSchema,
   sellableId: optionalMikaIdSchema,
@@ -354,17 +390,20 @@ export const magicLinkVerifyInputSchema = z.object({
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<MagicLinkVerifyInput>;
 
+/** Subscription id for cancel-at-period-end or immediate cancellation. */
 export const subscriptionCancelInputSchema = z.object({
   subscriptionId: mikaIdSchema,
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<SubscriptionActionInput>;
 
+/** Subscription id and optional replacement price for plan changes. */
 export const subscriptionChangeInputSchema = z.object({
   subscriptionId: mikaIdSchema,
   priceId: optionalMikaIdSchema,
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<SubscriptionActionInput>;
 
+/** Subscription id for manual renewal or payment retry handoff. */
 export const subscriptionRenewInputSchema = z.object({
   subscriptionId: mikaIdSchema,
   returnTo: optionalStringSchema,

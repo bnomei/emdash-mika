@@ -293,6 +293,7 @@ function toAgentOperationMetadata(agent: MikaAgentOperationMetadata): MikaAgentO
   };
 }
 
+/** Agent manifest constants re-exported from {@link ./api/agent-types}. */
 export {
   MIKA_ACTION_RUN_STATUSES,
   MIKA_AGENT_ACTOR_REQUIREMENTS,
@@ -309,6 +310,7 @@ export {
   MIKA_AGENT_RISKS,
   MIKA_AGENT_VISIBILITIES,
 } from "./api/agent-types";
+/** Agent actor, proof, approval, and action-run types re-exported from {@link ./api/agent-types}. */
 export type {
   MikaActorContext,
   MikaActorKind,

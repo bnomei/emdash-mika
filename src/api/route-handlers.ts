@@ -39,6 +39,7 @@ export interface MikaPluginRoutesOptions {
   readonly operationPolicy?: MikaOperationPolicy;
 }
 
+/** Concrete plugin route path resolved from {@link MikaPluginRouteName}. */
 export type MikaPluginRoutePath = (typeof mikaPluginRoutes)[MikaPluginRouteName];
 
 /** Complete path-to-handler map for the Mika EmDash plugin. */

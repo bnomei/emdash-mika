@@ -15,5 +15,7 @@ export {
   type MikaDescriptorOptions,
   type MikaMaintenancePluginOptions,
 } from "./plugin";
+/** Host policy toggles applied when constructing plugin routes and operation runners. */
 export type { MikaOperationPolicy } from "./api/operation-policy";
+/** Published commerce operation descriptor surfaced to hosts and agent manifests. */
 export type { MikaOperationDescriptor } from "./api/operations";

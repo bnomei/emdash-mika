@@ -53,6 +53,7 @@ export interface MikaActionsOptions {
 
 /** Stable action id for HTML form posts wired through {@link mikaActionDefinitions}. */
 export type MikaActionName = MikaOperationActionName;
+/** Host policy toggles for Astro action route guards and operation runners. */
 export type { MikaOperationPolicy } from "./api/operation-policy";
 
 type MikaActionDefinition<

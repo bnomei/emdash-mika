@@ -1,9 +1,10 @@
 /**
- * Stable subject references used to bind capability tokens to customers, users, emails, or sessions.
+ * Subject reference parsing and serialization for capability token binding.
+ * Canonical `kind:id` strings tie download, invoice, and magic-link tokens to a principal.
  */
 import { createMikaId, type MikaId } from "../types/primitives";
 
-/** Discriminated subject identity used to bind capability tokens to customers, users, emails, or sessions. */
+/** Discriminated principal identity accepted when issuing or resolving capability tokens. */
 export type SubjectRef =
   | { readonly kind: "customer"; readonly id: MikaId }
   | { readonly kind: "user"; readonly id: string }

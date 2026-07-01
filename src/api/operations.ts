@@ -56,6 +56,7 @@ import {
   type z,
 } from "./validation";
 
+/** Operation input transport helpers for body, search-param, and form-encoded requests. */
 export { mikaOperationRequestInit, parseMikaOperationInput } from "./operation-transport";
 
 /** HTTP verbs used by plugin route operations. */

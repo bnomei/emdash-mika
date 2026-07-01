@@ -9,6 +9,7 @@ export const MIKA_AGENT_MANIFEST_VERSION = 1 as const;
 
 /** Visibility tiers controlling which operations appear in agent manifests. */
 export const MIKA_AGENT_VISIBILITIES = ["public", "trusted", "admin", "hidden"] as const;
+/** Union of {@link MIKA_AGENT_VISIBILITIES} manifest visibility tiers. */
 export type MikaAgentVisibility = (typeof MIKA_AGENT_VISIBILITIES)[number];
 
 /** Fine-grained authorization scopes agents must hold to invoke operations. */
@@ -31,6 +32,7 @@ export const MIKA_AGENT_CAPABILITIES = [
   "admin:read",
   "admin:write",
 ] as const;
+/** Union of {@link MIKA_AGENT_CAPABILITIES} authorization scopes. */
 export type MikaAgentCapability = (typeof MIKA_AGENT_CAPABILITIES)[number];
 
 /** Side-effect class used for policy and confirmation decisions. */
@@ -45,10 +47,12 @@ export const MIKA_AGENT_EFFECTS = [
   "webhook_ingest",
   "admin_mutation",
 ] as const;
+/** Union of {@link MIKA_AGENT_EFFECTS} side-effect classes. */
 export type MikaAgentEffect = (typeof MIKA_AGENT_EFFECTS)[number];
 
 /** Risk tier guiding confirmation and proof requirements. */
 export const MIKA_AGENT_RISKS = ["none", "low", "purchase", "account", "admin"] as const;
+/** Union of {@link MIKA_AGENT_RISKS} confirmation and proof tiers. */
 export type MikaAgentRisk = (typeof MIKA_AGENT_RISKS)[number];
 
 /** Minimum actor kind required before an operation may run. */
@@ -59,20 +63,24 @@ export const MIKA_AGENT_ACTOR_REQUIREMENTS = [
   "service",
   "admin",
 ] as const;
+/** Union of {@link MIKA_AGENT_ACTOR_REQUIREMENTS} minimum actor kinds. */
 export type MikaAgentActorRequirement = (typeof MIKA_AGENT_ACTOR_REQUIREMENTS)[number];
 
 /** Who must approve before a mutating operation proceeds. */
 export const MIKA_AGENT_CONFIRMATION_POLICIES = ["none", "host", "user", "payment"] as const;
+/** Union of {@link MIKA_AGENT_CONFIRMATION_POLICIES} approval owners. */
 export type MikaAgentConfirmationPolicy = (typeof MIKA_AGENT_CONFIRMATION_POLICIES)[number];
 
 /** Whether callers should supply an idempotency key for safe retries. */
 export const MIKA_AGENT_IDEMPOTENCY_POLICIES = ["not_needed", "recommended", "required"] as const;
+/** Union of {@link MIKA_AGENT_IDEMPOTENCY_POLICIES} retry key requirements. */
 export type MikaAgentIdempotencyPolicy = (typeof MIKA_AGENT_IDEMPOTENCY_POLICIES)[number];
 
 /** HTTP header name hosts use to pass idempotency keys. */
 export const MIKA_AGENT_IDEMPOTENCY_KEY_HEADER = "Idempotency-Key" as const;
 /** Replay scope: same actor, operation, resource, and input hash. */
 export const MIKA_AGENT_IDEMPOTENCY_SCOPES = ["actor_operation_resource_input"] as const;
+/** Union of {@link MIKA_AGENT_IDEMPOTENCY_SCOPES} replay attribution scopes. */
 export type MikaAgentIdempotencyScope = (typeof MIKA_AGENT_IDEMPOTENCY_SCOPES)[number];
 
 /** Commerce resources an operation may read or mutate. */
@@ -90,6 +98,7 @@ export const MIKA_AGENT_RESOURCES = [
   "webhook",
   "admin",
 ] as const;
+/** Union of {@link MIKA_AGENT_RESOURCES} commerce entities an operation may touch. */
 export type MikaAgentResource = (typeof MIKA_AGENT_RESOURCES)[number];
 
 /** Proof kinds operations may accept or require at invocation time. */
@@ -99,6 +108,7 @@ export const MIKA_AGENT_PROOF_KINDS = [
   "payment_authorization",
   "receipt",
 ] as const;
+/** Union of {@link MIKA_AGENT_PROOF_KINDS} externally issued proof kinds. */
 export type MikaAgentProofKind = (typeof MIKA_AGENT_PROOF_KINDS)[number];
 
 /** Host-owned idempotency contract attached to operation metadata. */
@@ -195,6 +205,7 @@ export const MIKA_AGENT_APPROVAL_STATUSES = [
   "expired",
   "revoked",
 ] as const;
+/** Union of {@link MIKA_AGENT_APPROVAL_STATUSES} host approval lifecycle states. */
 export type MikaAgentApprovalStatus = (typeof MIKA_AGENT_APPROVAL_STATUSES)[number];
 
 /** Proof reference recording an approval decision for a gated operation. */
@@ -215,6 +226,7 @@ export const MIKA_ACTION_RUN_STATUSES = [
   "conflict",
   "requires_approval",
 ] as const;
+/** Union of {@link MIKA_ACTION_RUN_STATUSES} tracked agent action run states. */
 export type MikaActionRunStatus = (typeof MIKA_ACTION_RUN_STATUSES)[number];
 
 /** Structured failure surfaced on an action run. */

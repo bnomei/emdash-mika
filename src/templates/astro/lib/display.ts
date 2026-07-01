@@ -54,7 +54,7 @@ export function mikaTemplateStatusLabel(status: string | undefined): string {
   );
 }
 
-/** Badge color variant for a Mika status code. */
+/** Maps a status code to a {@link MikaTemplateBadgeVariant} for Kumo badge rendering. */
 export function mikaTemplateStatusVariant(status: string | undefined): MikaTemplateBadgeVariant {
   if (!status) return "neutral";
   if (successStatuses.has(status)) return "success";

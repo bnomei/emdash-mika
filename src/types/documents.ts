@@ -46,7 +46,7 @@ export interface MikaStorageDocument {
   readonly updatedAt: ISODateTime;
 }
 
-/** Document narrowed to a fixed type discriminator. */
+/** Document narrowed to a fixed type discriminator before aggregate or record payload attachment. */
 export type MikaBaseDocument<TType extends string> = MikaStorageDocument & {
   readonly type: TType;
 };
