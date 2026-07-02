@@ -226,8 +226,11 @@ such as `magic_link.requested`, `order.confirmed`,
 subscription lifecycle events, account export/delete events, and webhook
 failures. `undefined` or `{ handled: false }` lets Mika continue default
 handling when one exists. `{ handled: true }` suppresses Mika's built-in email
-for that intent. Hook exceptions fail the backend operation, so hosts should
-queue their own notification/email work durably.
+for that intent. Hook exceptions are swallowed and default delivery still
+runs — only an explicit `{ handled: true }` suppresses it. A throwing hook is
+not retried and does not fail the backend operation, so hosts should queue
+their own notification/email work durably inside the hook rather than relying
+on backend retries.
 
 Mika currently ships default email rows and renderers for magic links and order
 confirmations only. Other notification kinds are host hooks; they do not create

@@ -201,7 +201,12 @@ export interface MikaNotificationHookResult {
   readonly handled: boolean;
 }
 
-/** Host hook that may fully handle a notification and suppress the default handler. */
+/**
+ * Host hook that may fully handle a notification and suppress the default handler.
+ *
+ * Throws are swallowed: default delivery still runs and the backend operation continues, so a
+ * failed hook is never retried — queue host-side notification work durably inside the hook.
+ */
 export type MikaNotificationHook = (
   intent: MikaNotificationIntent,
 ) => MikaNotificationHookResult | void | Promise<MikaNotificationHookResult | void>;
