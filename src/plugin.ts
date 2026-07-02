@@ -17,7 +17,7 @@ import { createMikaMaintenanceRunner, type MikaMaintenanceRunResult } from "./ap
 import { createMikaPluginRoutes } from "./api/route-handlers";
 import { setDefaultMikaApiOverrides, setDefaultMikaOperationPolicy } from "./api/runtime-api";
 import { MIKA_PLUGIN_ID } from "./api/routes";
-import { createMikaApi, type MikaApiOverrides } from "./api/server";
+import { assertMikaApiWired, createMikaApi, type MikaApiOverrides } from "./api/server";
 import type { MikaOperationPolicy } from "./api/operation-policy";
 import { mikaStorageConfig } from "./storage/collections";
 import { createISODateTime } from "./types/primitives";
@@ -69,6 +69,8 @@ export interface MikaDescriptorOptions {
   readonly operationPolicy?: MikaOperationPolicy;
   /** Descriptor-level maintenance cron toggles. */
   readonly maintenance?: MikaMaintenancePluginOptions;
+  /** Wiring assertion forwarded to {@link createPlugin}; see {@link MikaCreatePluginOptions}. */
+  readonly assertWired?: boolean | readonly string[];
 }
 
 /** Options resolved at plugin activation for API overrides, policy, and maintenance wiring. */
@@ -79,6 +81,13 @@ export interface MikaCreatePluginOptions {
   readonly operationPolicy?: MikaOperationPolicy;
   /** Maintenance cron dependencies resolved when the cron handler runs. */
   readonly maintenance?: MikaMaintenanceRuntimeOptions;
+  /**
+   * Asserts the constructed MikaApi has no not-implemented stubs at plugin construction, so a
+   * missing backend fails loudly instead of answering 501 on every route at runtime. Defaults to
+   * asserting every namespace; pass a scope array (namespace or `namespace.method` names) to
+   * assert a subset, or `false` to accept partial wiring.
+   */
+  readonly assertWired?: boolean | readonly string[];
 }
 
 type MikaCronEvent = {
@@ -95,6 +104,7 @@ export function mikaPlugin(
     ...(options.api === undefined ? {} : { api: options.api }),
     ...(options.operationPolicy === undefined ? {} : { operationPolicy: options.operationPolicy }),
     ...(options.maintenance === undefined ? {} : { maintenance: options.maintenance }),
+    ...(options.assertWired === undefined ? {} : { assertWired: options.assertWired }),
   };
 
   return {
@@ -114,9 +124,20 @@ export function mikaPlugin(
  * @returns EmDash plugin runtime from `definePlugin`.
  */
 export function createPlugin(options: MikaCreatePluginOptions = {}) {
+  const api = createMikaApi(options.api);
+  const assertWired = options.assertWired ?? true;
+  if (assertWired !== false) {
+    try {
+      assertMikaApiWired(api, Array.isArray(assertWired) ? { scope: assertWired } : {});
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `${message} Every unwired method answers 501 at runtime. Wire the backend (e.g. createMikaBackendApi()) into the plugin's api option, scope the check with assertWired: ["cart", ...], or pass assertWired: false to accept partial wiring.`,
+      );
+    }
+  }
   setDefaultMikaApiOverrides(options.api);
   setDefaultMikaOperationPolicy(options.operationPolicy);
-  const api = createMikaApi(options.api);
   const maintenance = options.maintenance ?? {};
   const maintenanceEnabled = maintenance.enabled !== false;
   const maintenanceSchedule = maintenance.schedule ?? MIKA_MAINTENANCE_CRON_SCHEDULE;

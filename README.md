@@ -97,6 +97,11 @@ export default defineConfig({
 repositories and provider adapters with `createMikaBackendApi()`, or supplied as
 explicit `MikaApi` method overrides.
 
+Plugin construction asserts every `MikaApi` method is wired and throws
+otherwise — unwired methods would answer `501` on every route at runtime. Pass
+`assertWired: ["cart", "checkout.start"]` to assert a subset, or
+`assertWired: false` to accept partial wiring.
+
 ## Examples
 
 The package includes copyable Astro templates and stable example docs under:

@@ -383,7 +383,7 @@ describe("Mika native plugin package", () => {
   });
 
   it("creates a runtime plugin with Mika routes", () => {
-    const plugin = createPlugin();
+    const plugin = createPlugin({ assertWired: false });
 
     expect(plugin.id).toBe(MIKA_PLUGIN_ID);
     expect(plugin.version).toBe(MIKA_PLUGIN_VERSION);
@@ -392,8 +392,28 @@ describe("Mika native plugin package", () => {
     );
   });
 
+  it("fails loudly at construction when the Mika API is not fully wired", () => {
+    expect(() => createPlugin()).toThrow(/missing wired methods/);
+    expect(() => createPlugin()).toThrow(/assertWired: false/);
+    expect(() => createPlugin({ assertWired: ["checkout"] })).toThrow(/checkout\.start/);
+  });
+
+  it("scopes the wiring assertion to requested namespaces and methods", () => {
+    expect(() =>
+      createPlugin({
+        api: {
+          catalog: {
+            sellables: async () => ({ ok: true, status: 200, data: [] }),
+          },
+        },
+        assertWired: ["catalog"],
+      }),
+    ).not.toThrow();
+    expect(() => createPlugin({ assertWired: false })).not.toThrow();
+  });
+
   it("registers the default Mika maintenance cron task", async () => {
-    const plugin = createPlugin();
+    const plugin = createPlugin({ assertWired: false });
     const calls: unknown[] = [];
 
     await plugin.hooks["plugin:install"]?.handler({} as never, createPluginCronContext(calls));
@@ -404,8 +424,8 @@ describe("Mika native plugin package", () => {
   });
 
   it("supports disabled and custom Mika maintenance schedules", async () => {
-    const disabled = createPlugin({ maintenance: { enabled: false } });
-    const custom = createPlugin({ maintenance: { schedule: "*/5 * * * *" } });
+    const disabled = createPlugin({ assertWired: false, maintenance: { enabled: false } });
+    const custom = createPlugin({ assertWired: false, maintenance: { schedule: "*/5 * * * *" } });
     const disabledCalls: unknown[] = [];
     const customCalls: unknown[] = [];
 
@@ -423,7 +443,7 @@ describe("Mika native plugin package", () => {
   });
 
   it("cancels Mika maintenance cron on plugin deactivate and uninstall", async () => {
-    const plugin = createPlugin();
+    const plugin = createPlugin({ assertWired: false });
     const calls: unknown[] = [];
     const ctx = createPluginCronContext(calls);
 
@@ -440,6 +460,7 @@ describe("Mika native plugin package", () => {
     const calls: unknown[] = [];
     const logCalls: unknown[] = [];
     const plugin = createPlugin({
+      assertWired: false,
       api: {
         admin: {
           releaseExpiredReservations: async (input) => {
@@ -493,6 +514,7 @@ describe("Mika native plugin package", () => {
     const emailRunCalls: unknown[] = [];
     const purgeCalls: unknown[] = [];
     const plugin = createPlugin({
+      assertWired: false,
       api: {
         admin: {
           releaseExpiredReservations: async () => ({
@@ -568,6 +590,7 @@ describe("Mika native plugin package", () => {
   it("logs Mika maintenance failures before surfacing stock cleanup errors", async () => {
     const logCalls: unknown[] = [];
     const plugin = createPlugin({
+      assertWired: false,
       api: {
         admin: {
           releaseExpiredReservations: async () => ({
@@ -716,7 +739,7 @@ describe("Mika Astro helpers", () => {
     } satisfies MikaApiOverrides;
 
     try {
-      createPlugin({ api });
+      createPlugin({ api, assertWired: false });
       const Mika = createMika({
         request: new Request("https://shop.test/cart"),
         url: new URL("https://shop.test/cart"),
@@ -727,7 +750,7 @@ describe("Mika Astro helpers", () => {
         data: { id: "cart_1" },
       });
     } finally {
-      createPlugin();
+      createPlugin({ assertWired: false });
     }
   });
 
@@ -752,7 +775,7 @@ describe("Mika Astro helpers", () => {
     } satisfies MikaApiOverrides;
 
     try {
-      createPlugin({ api: defaultApi });
+      createPlugin({ api: defaultApi, assertWired: false });
       const Mika = createMika(
         {
           request: new Request("https://shop.test/cart"),
@@ -766,7 +789,7 @@ describe("Mika Astro helpers", () => {
         data: { id: "cart_explicit" },
       });
     } finally {
-      createPlugin();
+      createPlugin({ assertWired: false });
     }
   });
 
@@ -781,8 +804,8 @@ describe("Mika Astro helpers", () => {
       },
     } satisfies MikaApiOverrides;
 
-    createPlugin({ api });
-    createPlugin();
+    createPlugin({ api, assertWired: false });
+    createPlugin({ assertWired: false });
 
     const Mika = createMika({
       request: new Request("https://shop.test/cart"),
