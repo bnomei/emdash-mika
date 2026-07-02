@@ -67,6 +67,7 @@ import type {
 import { createMikaProviderRegistry } from "../src/provider";
 import type { PriceDefinition, SellableDefinition } from "../src/types/aggregates";
 import type {
+  AccountExportDocument,
   CatalogItemDocument,
   AdminAuditDocument,
   CartDocument,
@@ -5991,6 +5992,10 @@ describe("backend API composition", () => {
     const order = createOrderDocument();
     const license = createLicenseDocument({ customerId: customer.customerId });
     const stockItem = createStockRecord({ quantityOnHand: 4, quantityReserved: 0 });
+    const accountExport = createAccountExportDocument({
+      customerId: customer.customerId,
+      record: { customerId: customer.customerId },
+    });
     const email = createEmailDocument({
       id: createTestMikaId("email", 1),
       record: {
@@ -6085,6 +6090,7 @@ describe("backend API composition", () => {
         updatedAt: TEST_NOW,
       });
       await repositories.ops.put(email);
+      await repositories.ops.put(accountExport);
 
       await expect(api.account.delete(createTestRequestContext(), {})).resolves.toMatchObject({
         ok: true,
@@ -6106,6 +6112,7 @@ describe("backend API composition", () => {
                 tokensDeleted: 5,
                 reservationsReleased: 1,
                 emailsRedacted: 1,
+                accountExportsRedacted: 1,
                 licensesAnonymized: 1,
               },
             ],
@@ -6184,6 +6191,18 @@ describe("backend API composition", () => {
           toEmail: "redacted-email_1@redacted.invalid",
           subject: "Redacted email",
           status: "skipped",
+          lastError: "Redacted after account deletion.",
+          metadata: { redactedAt: clock.isoAt(60_000) },
+        },
+      });
+      await expect(repositories.ops.findAccountExport(accountExport.id)).resolves.toMatchObject({
+        status: "expired",
+        expiresAt: clock.isoAt(60_000),
+        record: {
+          status: "expired",
+          expiresAt: clock.isoAt(60_000),
+          artifactRef: undefined,
+          downloadTokenHash: undefined,
           lastError: "Redacted after account deletion.",
           metadata: { redactedAt: clock.isoAt(60_000) },
         },
@@ -22340,6 +22359,37 @@ function createEmailDocument(
     orderId: record.orderId,
     tokenId: record.tokenId,
     kind: record.kind,
+    record,
+    createdAt: TEST_NOW,
+    updatedAt: TEST_NOW,
+  };
+}
+
+function createAccountExportDocument(
+  overrides: Partial<Omit<AccountExportDocument, "record">> & {
+    readonly record?: Partial<AccountExportDocument["record"]>;
+  } = {},
+): AccountExportDocument {
+  const record = {
+    id: overrides.id ?? createTestMikaId("account_export", 1),
+    customerId: createTestMikaId("customer", 1),
+    status: "ready" as const,
+    requestedAt: TEST_NOW,
+    expiresAt: TEST_NOW,
+    downloadTokenHash: createTestHash("account-export-download-token:account_export_token_1"),
+    artifactRef: "data:application/json;base64,e30=",
+    ...overrides.record,
+  };
+
+  return {
+    id: record.id,
+    type: "accountExport",
+    schemaVersion: 1,
+    ...overrides,
+    customerId: record.customerId,
+    userId: record.userId,
+    status: record.status,
+    expiresAt: record.expiresAt,
     record,
     createdAt: TEST_NOW,
     updatedAt: TEST_NOW,
