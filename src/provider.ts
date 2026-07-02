@@ -88,6 +88,15 @@ export interface MikaProviderCheckoutInput {
    * top so the provider charge matches the Mika checkout/order total.
    */
   readonly discount?: MoneyDTO;
+  /**
+   * Authoritative charge total for this checkout as computed by the Mika backend (subtotal minus
+   * discount, plus any host-added amounts such as tax or shipping). Adapters that create a direct
+   * charge — e.g. delegated ACP payments — MUST charge exactly this amount when present instead
+   * of recomputing from `lines`, or the charge drifts from the total the buyer confirmed.
+   * Hosted-checkout adapters may ignore it when the provider derives its own total from lines
+   * and discounts.
+   */
+  readonly total?: MoneyDTO;
   readonly successUrl: string;
   readonly cancelUrl: string;
   readonly metadata?: JsonObject;

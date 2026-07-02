@@ -468,8 +468,10 @@ async function createStripeDelegatedPayment(
     0,
   );
   const discountAmount = input.discount && input.discount.amount > 0 ? input.discount.amount : 0;
-  const total = Math.max(0, subtotal - discountAmount);
-  const currency = input.lines[0]?.currency;
+  // The backend's authoritative total wins over the line recomputation: hosts may include tax
+  // or shipping the lines cannot express, and the charge must match what the buyer confirmed.
+  const total = input.total?.amount ?? Math.max(0, subtotal - discountAmount);
+  const currency = input.total?.currency ?? input.lines[0]?.currency;
   if (!currency) {
     throw new Error("Delegated Stripe checkout requires at least one line item.");
   }

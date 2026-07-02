@@ -7379,6 +7379,10 @@ async function startCheckout(
         ...(checkoutDiscountAmount > 0
           ? { discount: moneyDTO(checkoutDiscountAmount, resolved.currency) }
           : {}),
+        total: moneyDTO(
+          Math.max(0, checkoutSubtotal - checkoutDiscountAmount),
+          resolved.currency,
+        ),
         successUrl: checkoutSuccessUrl(input, ctx, checkoutInput, checkoutId, statusToken),
         cancelUrl: checkoutCancelUrl(input, ctx, checkoutInput, checkoutId, statusToken),
         metadata: checkoutCustomMetadata(checkoutInput.customFields),

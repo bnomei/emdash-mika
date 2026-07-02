@@ -15326,6 +15326,9 @@ describe("backend API composition", () => {
     );
     expect(lineSubtotal).toBe(2400);
     expect(lineSubtotal - (call?.discount?.amount ?? 0)).toBe(2160);
+    // The backend hands the provider its authoritative charge total so direct-charge
+    // adapters (delegated payments) never have to recompute it from lines.
+    expect(call?.total).toMatchObject({ amount: 2160, currency: TEST_CURRENCY });
   });
 
   it("serializes concurrent checkout starts on the same cart before provider handoff", async () => {
