@@ -20,7 +20,6 @@ import {
   typedCollection,
   type DocumentList,
   type TypedCollectionFacade,
-  type TypeScopedQueryOptions,
 } from "./repositories/kit";
 import { mirrorRecordFields } from "./repositories/record-mirror";
 import type { MikaDbExecutor } from "./repositories/db-shared";
@@ -30,6 +29,14 @@ import { CatalogRepository } from "./repositories/catalog";
 import { LedgerRepository } from "./repositories/ledger";
 import { SessionRepository } from "./repositories/session";
 import { AccountRepository } from "./repositories/account";
+import {
+  listLeaseableWorkflowCandidates,
+  workflowDocumentWithRecord,
+  workflowDueSortKey,
+  workflowHasActiveLease,
+  workflowIsDueForLease,
+  workflowIsExhausted,
+} from "./repositories/ops/workflow-helpers";
 
 export type { MikaDb, MikaDbExecutor, MikaTransaction } from "./repositories/db-shared";
 export { EphemeralRepository } from "./repositories/ephemeral";
@@ -1010,48 +1017,6 @@ export class OpsRepository {
   }
 }
 
-async function listLeaseableWorkflowCandidates(
-  documents: TypedCollectionFacade<OpsDocument>,
-  now: ISODateTime,
-  target: number,
-  options: TypeScopedQueryOptions<WorkflowDocument>,
-): Promise<DocumentList<WorkflowDocument>> {
-  return listByTypeCandidates(documents, "workflow", target, options, (workflow) =>
-    workflowIsDueForLease(workflow, now),
-  );
-}
-
-function workflowIsDueForLease(
-  workflow: WorkflowDocument,
-  now: ISODateTime,
-  force = false,
-): boolean {
-  if (workflow.record.leaseExpiresAt && workflow.record.leaseExpiresAt > now) return false;
-  if (workflow.status === "running" && !workflow.record.leaseExpiresAt) return false;
-  if (force) return workflow.status !== "completed";
-  if (workflow.record.attemptCount >= workflow.record.maxAttempts) return false;
-
-  return !workflow.nextAttemptAt || workflow.nextAttemptAt <= now;
-}
-
-function workflowIsExhausted(workflow: WorkflowDocument, now: ISODateTime): boolean {
-  return (
-    workflow.status === "running" &&
-    workflow.record.leaseExpiresAt !== undefined &&
-    workflow.record.leaseExpiresAt <= now &&
-    workflow.record.attemptCount >= workflow.record.maxAttempts
-  );
-}
-
-function workflowDueSortKey(workflow: WorkflowDocument): ISODateTime {
-  return (
-    workflow.nextAttemptAt ??
-    workflow.record.leaseExpiresAt ??
-    workflow.leaseExpiresAt ??
-    workflow.updatedAt
-  );
-}
-
 function webhookRawPayloadIsPurgeable(webhook: WebhookDocument, cutoff: ISODateTime): boolean {
   return (
     webhook.record.receivedAt <= cutoff &&
@@ -1067,33 +1032,6 @@ function webhookDocumentWithRecord(
   patch: Partial<WebhookDocument["record"]>,
 ): WebhookDocument {
   return mirrorRecordFields(webhook, now, patch, ["status", "nextAttemptAt", "receivedAt"]);
-}
-
-function workflowHasActiveLease(
-  workflow: WorkflowDocument,
-  input: { readonly leaseKey: string; readonly now: ISODateTime },
-): boolean {
-  if (workflow.status !== "running") return false;
-  if (workflow.record.leaseKey !== input.leaseKey) return false;
-  if (!workflow.record.leaseExpiresAt || workflow.record.leaseExpiresAt <= input.now) return false;
-
-  return true;
-}
-
-function workflowDocumentWithRecord(
-  workflow: WorkflowDocument,
-  now: ISODateTime,
-  patch: Partial<WorkflowDocument["record"]>,
-): WorkflowDocument {
-  return mirrorRecordFields(workflow, now, { ...patch, updatedAt: now }, [
-    "kind",
-    "status",
-    "subjectType",
-    "subjectId",
-    "idempotencyKey",
-    "nextAttemptAt",
-    "leaseExpiresAt",
-  ]);
 }
 
 function emailIsDueForLease(email: EmailDocument, now: ISODateTime, force = false): boolean {
