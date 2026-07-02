@@ -2064,6 +2064,87 @@ describe("Mika ACP projection", () => {
     await expect(completed.json()).resolves.toMatchObject({ status: "completed" });
   });
 
+  it("does not retry a completion write past a genuine concurrent update", async () => {
+    // acpRecordIsOnlyIncidentallyExpired must not misclassify a REAL concurrent write (e.g. a
+    // legitimate handleAcpUpdate changing the buyer) as "merely incidental" just because it also
+    // has no checkoutId bound and a non-terminal status — the same shape an expiry sweep leaves.
+    // Retrying past a genuine conflict would silently clobber the update's changes with this
+    // handler's own stale computation.
+    let cart = createCart([]);
+    let releaseGate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    let signalStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+        onCheckoutStart: async () => {
+          signalStarted();
+          await gate;
+        },
+        checkoutSessionStatus: "completed",
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      createSessionId: () => "checkout_session_acp_real_conflict",
+    });
+
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_real_conflict", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+      }),
+    );
+
+    const completePromise = handlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_real_conflict/complete",
+        "idem_complete_real_conflict",
+        { payment_data: { provider: "stripe", token: "spt_test_123" } },
+      ),
+      "checkout_session_acp_real_conflict",
+    );
+    await started;
+
+    // A genuine concurrent update changes the buyer while complete() is still blocked.
+    const updated = await handlers.update(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_real_conflict",
+        "idem_update_real_conflict",
+        { buyer: { name: "Bea Buyer", email: "bea@example.test" } },
+      ),
+      "checkout_session_acp_real_conflict",
+    );
+    expect(updated.status).toBe(200);
+    await expect(updated.json()).resolves.toMatchObject({
+      buyer: { name: "Bea Buyer", email: "bea@example.test" },
+    });
+
+    releaseGate();
+    const completed = await completePromise;
+
+    // The completion must not silently overwrite the update — it lost a genuine conflict, not an
+    // incidental one, so it must report the update's real, persisted state (buyer "Bea Buyer",
+    // not "completed") rather than this attempt's own stale computation.
+    expect(completed.status).toBe(200);
+    const completedBody = (await completed.json()) as {
+      status?: string;
+      buyer?: { name?: string };
+    };
+    expect(completedBody.status).not.toBe("completed");
+    expect(completedBody.buyer?.name).toBe("Bea Buyer");
+  });
+
   it("reports the real persisted outcome when a compensating revert loses its CAS race", async () => {
     // Handler A's own checkout.start attempt fails terminally (e.g. the provider declines), and
     // A tries to compensate by reverting the session to not_ready_for_payment. But if a reclaiming

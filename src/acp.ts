@@ -1362,7 +1362,7 @@ async function handleAcpComplete(
         break;
       }
       const current = await options.store.get(checkoutSessionId);
-      if (!current || !acpRecordIsOnlyIncidentallyExpired(current)) break;
+      if (!current || !acpRecordIsOnlyIncidentallyExpired(record, current)) break;
       writeVersion = current.version;
     }
     commitMainLease = true;
@@ -1641,20 +1641,43 @@ function acpRecordIsExpired(record: MikaAcpSessionRecord, now: ISODateTime): boo
 }
 
 /**
- * True when `current` looks like nothing more than expireAcpRecordIfNeeded's lazy expiry sweep
- * landed on top of the record a completion attempt started from — no checkout attempt bound, no
- * terminal outcome — rather than a genuine competing decision (another completion, cancellation,
- * or checkout attempt) that must be deferred to. expireAcpRecordIfNeeded runs unconditionally at
- * the top of every handler, including plain GETs with no locking of their own, so an ordinary
- * concurrent status poll can legitimately tick a session's TTL and bump its version while a slow
- * (not crashed) handleAcpComplete is still mid checkout.start — losing that handler's final CAS
- * check to a bystander write, not a real conflict. Without distinguishing the two, a genuinely
- * successful completion would be silently discarded: its own caller would be told the session is
- * "not_ready_for_payment" while a real payment already went through, and nothing ever revisits
- * that record afterward to set it right.
+ * True when `current` is exactly `original` with nothing but expireAcpRecordIfNeeded's lazy
+ * expiry sweep applied on top — the only fields that differ are the ones that sweep touches
+ * (`status`, `expiredAt`, `purgeAt`, `updatedAt`, `version`), and `status` landed on a
+ * non-terminal value. Every other field (`checkoutId`, `buyer`, `items`,
+ * `fulfillmentAddress`/`fulfillmentOptionId`, etc.) must be unchanged — a genuine concurrent write
+ * (e.g. handleAcpUpdate legitimately changing `buyer` or `items`) has no `checkoutId` and a
+ * non-terminal `status` either, so checking those two fields alone would misclassify a real
+ * conflict as "merely incidental" and silently retry past it, discarding the other write.
+ *
+ * expireAcpRecordIfNeeded runs unconditionally at the top of every handler, including plain GETs
+ * with no locking of their own, so an ordinary concurrent status poll can legitimately tick a
+ * session's TTL and bump its version while a slow (not crashed) handleAcpComplete is still mid
+ * checkout.start — losing that handler's final CAS check to a bystander write, not a real
+ * conflict. Without distinguishing the two, a genuinely successful completion would be silently
+ * discarded: its own caller would be told the session is "not_ready_for_payment" while a real
+ * payment already went through, and nothing ever revisits that record afterward to set it right.
  */
-function acpRecordIsOnlyIncidentallyExpired(current: MikaAcpSessionRecord): boolean {
-  return !current.checkoutId && current.status !== "completed" && current.status !== "canceled";
+function acpRecordIsOnlyIncidentallyExpired(
+  original: MikaAcpSessionRecord,
+  current: MikaAcpSessionRecord,
+): boolean {
+  return (
+    current.status !== "completed" &&
+    current.status !== "canceled" &&
+    current.cartId === original.cartId &&
+    current.checkoutId === original.checkoutId &&
+    current.buyer === original.buyer &&
+    current.items === original.items &&
+    current.fulfillmentAddress === original.fulfillmentAddress &&
+    current.fulfillmentOptionId === original.fulfillmentOptionId &&
+    current.currency === original.currency &&
+    current.provider === original.provider &&
+    current.paymentAuthorizationId === original.paymentAuthorizationId &&
+    current.quoteInputHash === original.quoteInputHash &&
+    current.quoteSnapshot === original.quoteSnapshot &&
+    current.expiresAt === original.expiresAt
+  );
 }
 
 async function expireAcpRecordIfNeeded(
