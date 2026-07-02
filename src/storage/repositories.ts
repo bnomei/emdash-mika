@@ -2,7 +2,7 @@
  * Repository layer over document collections and operational SQLite tables.
  * Encapsulates typed queries, stock mutations, workflow leases, and ephemeral record access.
  */
-import { sql, type Kysely, type Transaction } from "kysely";
+import { sql } from "kysely";
 
 import type {
   AccountDeleteRequestDocument,
@@ -38,9 +38,9 @@ import {
   type JsonObject,
   type MikaId,
 } from "../types/primitives";
-import { decodeJsonObject, encodeJson } from "./json";
+import { encodeJson } from "./json";
 import type { MikaStorageCollections, StorageCollection } from "./collections";
-import type { MikaDatabase, MikaInsertable, MikaSelectable, MikaUpdateable } from "./schema";
+import type { MikaInsertable, MikaSelectable, MikaUpdateable } from "./schema";
 import {
   adjustStockStatement,
   consumeOnHandStatement,
@@ -59,13 +59,9 @@ import {
   type TypeScopedQueryOptions,
 } from "./repositories/kit";
 import { mirrorRecordFields } from "./repositories/record-mirror";
+import { affected, parseMetadata, undef, type MikaDbExecutor } from "./repositories/db-shared";
 
-/** Kysely database handle for operational SQLite tables. */
-export type MikaDb = Kysely<MikaDatabase>;
-/** Transaction scope for atomic stock and ephemeral mutations. */
-export type MikaTransaction = Transaction<MikaDatabase>;
-/** Database or transaction executor accepted by operational repositories. */
-export type MikaDbExecutor = MikaDb | MikaTransaction;
+export type { MikaDb, MikaDbExecutor, MikaTransaction } from "./repositories/db-shared";
 
 /** Catalog item, sellable, and price tuple resolved from provider price lookup. */
 export interface CatalogProviderPriceMatch {
@@ -3051,15 +3047,6 @@ function ephemeralLockOwnerData(owner: string): string {
   return encodeJson({ owner });
 }
 
-function parseMetadata(text: string | null): JsonObject | undefined {
-  if (!text) return undefined;
-  return decodeJsonObject(text, "Mika metadata");
-}
-
-function undef<T>(value: T | null): T | undefined {
-  return value ?? undefined;
-}
-
 function isoOrUndefined(value: string | null): ReturnType<typeof createISODateTime> | undefined {
   return value === null ? undefined : createISODateTime(value);
 }
@@ -3099,9 +3086,4 @@ async function withTransaction<T>(
 
 function mutationAffected(result: StockMutationResult): boolean {
   return affected(result.numAffectedRows ?? result.numUpdatedRows ?? result.numChangedRows);
-}
-
-function affected(count: bigint | number | undefined): boolean {
-  if (typeof count === "bigint") return count > 0n;
-  return (count ?? 0) > 0;
 }
