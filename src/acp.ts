@@ -53,7 +53,9 @@ export const MIKA_ACP_DEFAULT_SESSION_PREFIX = "acp_checkout";
 
 const MIKA_ACP_DEFAULT_SESSION_TTL_MS = 15 * 60_000;
 const MIKA_ACP_DEFAULT_TERMINAL_RETENTION_MS = 24 * 60 * 60_000;
-const MIKA_ACP_DEFAULT_IDEMPOTENCY_CLAIM_TTL_MS = 60_000;
+// Must comfortably exceed the slowest handler run, including provider SDK timeouts (80s+ for
+// some Stripe operations); an expired-but-live claim reopens the key to concurrent execution.
+const MIKA_ACP_DEFAULT_IDEMPOTENCY_CLAIM_TTL_MS = 120_000;
 const MIKA_ACP_SIGNATURE_TOLERANCE_MS = 5 * 60_000;
 
 /** Seller identity and policy links attached to ACP catalog products. */
@@ -1052,7 +1054,7 @@ async function handleAcpComplete(
     return acpUnhandledFailure(request);
   }
   if (!completion.ok) {
-    await releaseAcpIdempotency(options, idempotency.lease);
+    await releaseAcpIdempotencyQuietly(options, idempotency.lease);
 
     return completion.response;
   }
