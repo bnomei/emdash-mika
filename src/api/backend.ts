@@ -3009,7 +3009,17 @@ function addDownloadRefToOrder(
 }
 
 const ADMIN_AUDIT_RESULT_METADATA_KEY = "result";
+const ADMIN_AUDIT_RESULT_SCHEMA_VERSION_METADATA_KEY = "resultSchemaVersion";
 const ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY = "idempotencyInputHash";
+
+/**
+ * Bump whenever a public admin action result DTO's shape changes. A stored replay snapshot
+ * whose tagged version does not match the running code's version — including any snapshot
+ * written before this tag existed — is treated as unsafe to replay rather than blindly cast to
+ * the caller's current TData: {@link adminAuditReplayResult} returns null, and the idempotency
+ * claim falls through to the standard "already in progress" conflict, forcing a fresh key.
+ */
+const ADMIN_AUDIT_RESULT_SCHEMA_VERSION = 1;
 
 async function completeAdminAudit(
   input: CreateMikaBackendApiInput,
@@ -3030,6 +3040,7 @@ async function completeAdminAudit(
             metadata: {
               ...audit.record.metadata,
               [ADMIN_AUDIT_RESULT_METADATA_KEY]: resultSnapshot,
+              [ADMIN_AUDIT_RESULT_SCHEMA_VERSION_METADATA_KEY]: ADMIN_AUDIT_RESULT_SCHEMA_VERSION,
             },
           }
         : {}),
@@ -3038,6 +3049,9 @@ async function completeAdminAudit(
 }
 
 function adminAuditReplayResult<TData extends JsonObject>(audit: AdminAuditDocument): TData | null {
+  const storedVersion = audit.record.metadata?.[ADMIN_AUDIT_RESULT_SCHEMA_VERSION_METADATA_KEY];
+  if (storedVersion !== ADMIN_AUDIT_RESULT_SCHEMA_VERSION) return null;
+
   const snapshot = audit.record.metadata?.[ADMIN_AUDIT_RESULT_METADATA_KEY];
 
   return isJsonObject(snapshot) ? (snapshot as TData) : null;
@@ -3227,6 +3241,17 @@ function adminIdempotencyClaimResult<TData>(
     if (replay !== null) {
       return { ok: true, status: 200, data: replay as TData };
     }
+
+    // Completed, but its result snapshot is untrusted (missing or from a different result
+    // schema version) — refuse to replay a possibly shape-mismatched payload as a typed success.
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "CONFLICT",
+        message: `Admin action '${action}' already completed for this idempotency key, but its stored result cannot be safely replayed. Retry with a new idempotency key.`,
+      },
+    };
   }
 
   return {

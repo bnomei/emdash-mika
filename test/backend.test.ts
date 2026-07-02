@@ -9597,6 +9597,43 @@ describe("backend API composition", () => {
     ).resolves.toBeNull();
   });
 
+  it("refuses to replay a completed admin action whose result snapshot has no trusted schema version", async () => {
+    // adminAuditReplayResult previously cast whatever JSON was stored (`snapshot as TData`) with
+    // no check that it matches the caller's current result shape. A stale snapshot — written by
+    // an older code version whose result DTO had a different shape, or one lacking the version
+    // tag entirely — must not be replayed as a typed success; the caller should be told to retry
+    // with a fresh idempotency key instead of receiving a shape-mismatched payload.
+    const repositories = createTestBackendRepositories();
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+
+    const grantArgs = {
+      entitlementKey: "course.pro",
+      customerId: createTestMikaId("customer", 1),
+      idempotencyKey: "grant_untrusted_snapshot",
+    };
+    const first = await api.admin.entitlementGrant(grantArgs);
+    expect(first).toMatchObject({ ok: true, status: 200 });
+
+    const auditId = createTestMikaId("admin_audit", 1);
+    const completedAudit = await repositories.ops.findAdminAudit(auditId);
+    if (!completedAudit) throw new Error("Expected the admin audit to be persisted.");
+    const { resultSchemaVersion: _drop, ...metadataWithoutVersion } =
+      completedAudit.record.metadata ?? {};
+    await repositories.ops.writeAudit({
+      ...completedAudit,
+      record: { ...completedAudit.record, metadata: metadataWithoutVersion },
+    });
+
+    await expect(api.admin.entitlementGrant(grantArgs)).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: {
+        code: "CONFLICT",
+        message: expect.stringContaining("cannot be safely replayed"),
+      },
+    });
+  });
+
   it("replays an admin action when the same idempotency key was also used by another action", async () => {
     const repositories = createTestBackendRepositories();
     const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
