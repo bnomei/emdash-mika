@@ -58,6 +58,7 @@ import {
   type TypedCollectionFacade,
   type TypeScopedQueryOptions,
 } from "./repositories/kit";
+import { mirrorRecordFields } from "./repositories/record-mirror";
 
 /** Kysely database handle for operational SQLite tables. */
 export type MikaDb = Kysely<MikaDatabase>;
@@ -1921,19 +1922,7 @@ function webhookDocumentWithRecord(
   now: ISODateTime,
   patch: Partial<WebhookDocument["record"]>,
 ): WebhookDocument {
-  const record = {
-    ...webhook.record,
-    ...patch,
-  };
-
-  return {
-    ...webhook,
-    status: record.status,
-    nextAttemptAt: record.nextAttemptAt,
-    receivedAt: record.receivedAt,
-    record,
-    updatedAt: now,
-  };
+  return mirrorRecordFields(webhook, now, patch, ["status", "nextAttemptAt", "receivedAt"]);
 }
 
 function workflowHasActiveLease(
@@ -1952,24 +1941,15 @@ function workflowDocumentWithRecord(
   now: ISODateTime,
   patch: Partial<WorkflowDocument["record"]>,
 ): WorkflowDocument {
-  const record = {
-    ...workflow.record,
-    ...patch,
-    updatedAt: now,
-  };
-
-  return {
-    ...workflow,
-    kind: record.kind,
-    status: record.status,
-    subjectType: record.subjectType,
-    subjectId: record.subjectId,
-    idempotencyKey: record.idempotencyKey,
-    nextAttemptAt: record.nextAttemptAt,
-    leaseExpiresAt: record.leaseExpiresAt,
-    record,
-    updatedAt: now,
-  };
+  return mirrorRecordFields(workflow, now, { ...patch, updatedAt: now }, [
+    "kind",
+    "status",
+    "subjectType",
+    "subjectId",
+    "idempotencyKey",
+    "nextAttemptAt",
+    "leaseExpiresAt",
+  ]);
 }
 
 function emailIsDueForLease(email: EmailDocument, now: ISODateTime, force = false): boolean {
@@ -2006,21 +1986,13 @@ function emailDocumentWithRecord(
   now: ISODateTime,
   patch: Partial<EmailDocument["record"]>,
 ): EmailDocument {
-  const record = {
-    ...email.record,
-    ...patch,
-  };
-
-  return {
-    ...email,
-    status: record.status,
-    nextAttemptAt: record.nextAttemptAt,
-    orderId: record.orderId,
-    tokenId: record.tokenId,
-    kind: record.kind,
-    record,
-    updatedAt: now,
-  };
+  return mirrorRecordFields(email, now, patch, [
+    "status",
+    "nextAttemptAt",
+    "orderId",
+    "tokenId",
+    "kind",
+  ]);
 }
 
 function emailSentMetadata(email: EmailDocument, now: ISODateTime): JsonObject | undefined {
@@ -2095,21 +2067,13 @@ function accountDeleteRequestDocumentWithRecord(
   now: ISODateTime,
   patch: Partial<AccountDeleteRequestDocument["record"]>,
 ): AccountDeleteRequestDocument {
-  const record = {
-    ...request.record,
-    ...patch,
-  };
-
-  return {
-    ...request,
-    customerId: record.customerId,
-    userId: record.userId,
-    emailHash: record.emailHash,
-    status: record.status,
-    expiresAt: record.expiresAt,
-    record,
-    updatedAt: now,
-  };
+  return mirrorRecordFields(request, now, patch, [
+    "customerId",
+    "userId",
+    "emailHash",
+    "status",
+    "expiresAt",
+  ]);
 }
 
 /** Operational repository for atomic stock items, reservations, and movement events. */
