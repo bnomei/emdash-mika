@@ -24,14 +24,19 @@ export {
  * `/types/documents`, `/types/aggregates`, and `/types/operational` subpaths.
  */
 export type {
+  MikaAccountDeleteJobRepositoryPort,
   MikaAccountRepositoryPort,
+  MikaAdminAuditRepositoryPort,
   MikaCatalogRepositoryPort,
   MikaDocumentList,
+  MikaEmailOutboxRepositoryPort,
   MikaEphemeralRepositoryPort,
   MikaLedgerRepositoryPort,
   MikaOpsRepositoryPort,
   MikaSessionRepositoryPort,
   MikaStockRepositoryPort,
+  MikaWebhookRepositoryPort,
+  MikaWorkflowRepositoryPort,
 } from "./api/backend";
 /** Input and result shapes named by the repository port method signatures. */
 export type {

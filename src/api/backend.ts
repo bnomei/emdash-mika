@@ -111,7 +111,6 @@ import type {
   OrderDocument,
   OpsDocument,
   ProviderAccountDocument,
-  ProviderSyncRunDocument,
   SessionDocument,
   SubscriptionDocument,
   WebhookDocument,
@@ -437,8 +436,8 @@ export interface MikaLedgerRepositoryPort {
   put(document: LedgerDocument): Promise<void>;
 }
 
-/** Operational store: webhooks, workflows, emails, audits, and account-delete jobs. */
-export interface MikaOpsRepositoryPort {
+/** Webhook receipt dedup, lookup, and raw-payload retention. */
+export interface MikaWebhookRepositoryPort {
   findWebhookDuplicate(input: {
     readonly provider: string;
     readonly providerEventId?: string;
@@ -446,6 +445,16 @@ export interface MikaOpsRepositoryPort {
     readonly payloadHash: string;
   }): Promise<WebhookDocument | null>;
   findWebhookById(webhookId: MikaId): Promise<WebhookDocument | null>;
+  purgeWebhookRawPayloads(
+    cutoff: ISODateTime,
+    now: ISODateTime,
+    limit?: number,
+  ): Promise<{ readonly scanned: number; readonly purged: number }>;
+  put(document: WebhookDocument): Promise<void>;
+}
+
+/** Account data-export requests and account-delete job tracking. */
+export interface MikaAccountDeleteJobRepositoryPort {
   findAccountExport(exportId: MikaId): Promise<AccountExportDocument | null>;
   findAccountDeleteRequest(requestId: MikaId): Promise<AccountDeleteRequestDocument | null>;
   listAccountExportsByCustomer(
@@ -471,7 +480,14 @@ export interface MikaOpsRepositoryPort {
   failAccountDeleteRequest(
     input: AccountDeleteRequestFailureRepositoryInput,
   ): Promise<AccountDeleteRequestDocument | null>;
-  findProviderSyncRun(runId: MikaId): Promise<ProviderSyncRunDocument | null>;
+  redactAccountExportsForAccountDelete(
+    input: AccountDeleteEmailRedactionRepositoryInput,
+  ): Promise<number>;
+  put(document: AccountExportDocument | AccountDeleteRequestDocument): Promise<void>;
+}
+
+/** Durable multi-step workflow leases: webhook fulfillment, subscription renewal, and the like. */
+export interface MikaWorkflowRepositoryPort {
   findWorkflow(workflowId: MikaId): Promise<WorkflowDocument | null>;
   createWorkflow(document: WorkflowDocument): Promise<WorkflowDocument | null>;
   listDueWorkflows(
@@ -484,11 +500,6 @@ export interface MikaOpsRepositoryPort {
     limit?: number,
     kind?: WorkflowDocument["kind"],
   ): Promise<{ readonly scanned: number; readonly reclaimed: number }>;
-  purgeWebhookRawPayloads(
-    cutoff: ISODateTime,
-    now: ISODateTime,
-    limit?: number,
-  ): Promise<{ readonly scanned: number; readonly purged: number }>;
   tryLeaseWorkflow(input: WorkflowLeaseRepositoryInput): Promise<WorkflowDocument | null>;
   startWorkflowStep(input: WorkflowStepRepositoryInput): Promise<WorkflowDocument | null>;
   completeWorkflowStep(input: WorkflowStepRepositoryInput): Promise<WorkflowDocument | null>;
@@ -502,6 +513,11 @@ export interface MikaOpsRepositoryPort {
     readonly state?: JsonObject;
   }): Promise<WorkflowDocument | null>;
   failWorkflow(input: WorkflowFailureRepositoryInput): Promise<WorkflowDocument | null>;
+  put(document: WorkflowDocument): Promise<void>;
+}
+
+/** Admin action audit trail with idempotency claim and replay support. */
+export interface MikaAdminAuditRepositoryPort {
   findAdminAudit(auditId: MikaId): Promise<AdminAuditDocument | null>;
   findAdminAuditByIdempotencyKey(
     action: string,
@@ -510,6 +526,12 @@ export interface MikaOpsRepositoryPort {
   claimAdminAuditIdempotency(
     document: AdminAuditDocument,
   ): Promise<AdminAuditIdempotencyClaimResult>;
+  writeAudit(document: AdminAuditDocument): Promise<void>;
+  put(document: AdminAuditDocument): Promise<void>;
+}
+
+/** Transactional email outbox: lease, delivery, retry, and skip bookkeeping. */
+export interface MikaEmailOutboxRepositoryPort {
   findEmail(emailId: MikaId): Promise<EmailDocument | null>;
   listDueEmails(now: ISODateTime, limit?: number): Promise<MikaDocumentList<EmailDocument>>;
   reclaimExhaustedEmails(
@@ -524,24 +546,21 @@ export interface MikaOpsRepositoryPort {
   redactQueuedFailedEmailsForAccountDelete(
     input: AccountDeleteEmailRedactionRepositoryInput,
   ): Promise<number>;
-  redactAccountExportsForAccountDelete(
-    input: AccountDeleteEmailRedactionRepositoryInput,
-  ): Promise<number>;
-  /** @deprecated Use {@link tryLeaseWorkflow} and {@link listDueWorkflows} for webhook fulfillment. */
-  listWebhookFailures(now: string, limit?: number): Promise<MikaDocumentList<WebhookDocument>>;
-  writeAudit(document: AdminAuditDocument): Promise<void>;
-  /** @deprecated Use {@link listDueWorkflows} with kind `payment_webhook_fulfillment`. */
-  listDue(
-    type: WebhookDocument["type"],
-    now: string,
-    limit?: number,
-  ): Promise<MikaDocumentList<WebhookDocument>>;
-  /** @deprecated Use {@link listDueEmails} and {@link tryLeaseEmail} for outbox delivery. */
-  listDue(
-    type: EmailDocument["type"],
-    now: string,
-    limit?: number,
-  ): Promise<MikaDocumentList<EmailDocument>>;
+  put(document: EmailDocument): Promise<void>;
+}
+
+/**
+ * Operational store: webhooks, workflows, emails, audits, and account-delete jobs. Composed from
+ * the five per-store ports above so a host implementing only one concern (e.g. a custom email
+ * outbox) can target the narrower port directly instead of the full union.
+ */
+export interface MikaOpsRepositoryPort
+  extends
+    MikaWebhookRepositoryPort,
+    MikaAccountDeleteJobRepositoryPort,
+    MikaWorkflowRepositoryPort,
+    MikaAdminAuditRepositoryPort,
+    MikaEmailOutboxRepositoryPort {
   put(document: OpsDocument): Promise<void>;
 }
 

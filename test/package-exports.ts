@@ -65,14 +65,19 @@ import type {
   MikaOperationPolicy as MikaServerOperationPolicy,
   MikaOperationDescriptor as MikaServerOperationDescriptor,
   MikaServerClient,
+  MikaAccountDeleteJobRepositoryPort,
   MikaAccountRepositoryPort,
+  MikaAdminAuditRepositoryPort,
   MikaCatalogRepositoryPort,
   MikaDocumentList,
+  MikaEmailOutboxRepositoryPort,
   MikaEphemeralRepositoryPort,
   MikaLedgerRepositoryPort,
   MikaOpsRepositoryPort,
   MikaSessionRepositoryPort,
   MikaStockRepositoryPort,
+  MikaWebhookRepositoryPort,
+  MikaWorkflowRepositoryPort,
   PaginatedStorageResult,
   ReserveStockRepositoryInput,
   ReserveStockRepositoryResult,
@@ -191,6 +196,11 @@ export type PackageEntryContract = {
   readonly accountRepositoryPort: MikaAccountRepositoryPort;
   readonly ledgerRepositoryPort: MikaLedgerRepositoryPort;
   readonly opsRepositoryPort: MikaOpsRepositoryPort;
+  readonly webhookRepositoryPort: MikaWebhookRepositoryPort;
+  readonly accountDeleteJobRepositoryPort: MikaAccountDeleteJobRepositoryPort;
+  readonly workflowRepositoryPort: MikaWorkflowRepositoryPort;
+  readonly adminAuditRepositoryPort: MikaAdminAuditRepositoryPort;
+  readonly emailOutboxRepositoryPort: MikaEmailOutboxRepositoryPort;
   readonly stockRepositoryPort: MikaStockRepositoryPort;
   readonly ephemeralRepositoryPort: MikaEphemeralRepositoryPort;
   readonly sellableDefinition: SellableDefinition;

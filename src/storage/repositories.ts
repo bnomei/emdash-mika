@@ -21,7 +21,6 @@ import type {
   OrderDocument,
   OpsDocument,
   ProviderAccountDocument,
-  ProviderSyncRunDocument,
   SessionDocument,
   SubscriptionDocument,
   WebhookDocument,
@@ -342,7 +341,6 @@ type StorageResultItem<TDocument> = {
   data: TDocument;
 };
 type DocumentList<TDocument> = PaginatedStorageResult<StorageResultItem<TDocument>>;
-type DueOpsDocument = WebhookDocument | EmailDocument;
 type StockMutationResult = {
   readonly numAffectedRows?: bigint | number;
   readonly numUpdatedRows?: bigint | number;
@@ -1189,11 +1187,9 @@ export class LedgerRepository {
 /** Document repository for webhooks, emails, workflows, audits, and account ops records. */
 export class OpsRepository {
   private readonly documents: TypedCollectionFacade<OpsDocument>;
-  private readonly dueDocuments: TypedCollectionFacade<DueOpsDocument>;
 
   constructor(collection: StorageCollection<OpsDocument>) {
     this.documents = typedCollection(collection);
-    this.dueDocuments = typedCollection(collection as StorageCollection<DueOpsDocument>);
   }
 
   async findWebhookDuplicate(input: {
@@ -1329,10 +1325,6 @@ export class OpsRepository {
     });
 
     return documentOfType(updated, "accountDeleteRequest");
-  }
-
-  async findProviderSyncRun(runId: MikaId): Promise<ProviderSyncRunDocument | null> {
-    return this.documents.findByIdOfType(runId, "providerSyncRun");
   }
 
   async findWorkflow(workflowId: MikaId): Promise<WorkflowDocument | null> {
@@ -1996,41 +1988,8 @@ export class OpsRepository {
     return redacted;
   }
 
-  /** @deprecated Use {@link tryLeaseWorkflow} and {@link listDueWorkflows} for webhook fulfillment. */
-  async listWebhookFailures(now: string, limit = 50): Promise<DocumentList<WebhookDocument>> {
-    return this.documents.listByType("webhook", {
-      where: { status: "failed", nextAttemptAt: { lte: now } },
-      orderBy: { nextAttemptAt: "asc" },
-      limit,
-    });
-  }
-
   async writeAudit(document: AdminAuditDocument): Promise<void> {
     await this.put(document);
-  }
-
-  /** @deprecated Use {@link listDueWorkflows} with kind `payment_webhook_fulfillment`. */
-  async listDue(
-    type: WebhookDocument["type"],
-    now: string,
-    limit?: number,
-  ): Promise<DocumentList<WebhookDocument>>;
-  /** @deprecated Use {@link listDueEmails} and {@link tryLeaseEmail} for outbox delivery. */
-  async listDue(
-    type: EmailDocument["type"],
-    now: string,
-    limit?: number,
-  ): Promise<DocumentList<EmailDocument>>;
-  async listDue(
-    type: DueOpsDocument["type"],
-    now: string,
-    limit = 50,
-  ): Promise<DocumentList<DueOpsDocument>> {
-    return this.dueDocuments.listByType(type, {
-      where: { status: "queued", nextAttemptAt: { lte: now } },
-      orderBy: { nextAttemptAt: "asc" },
-      limit,
-    });
   }
 
   async put(document: OpsDocument): Promise<void> {

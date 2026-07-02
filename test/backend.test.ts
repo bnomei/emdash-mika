@@ -17,13 +17,18 @@ import {
   type CreateMikaBackendApiInput,
   type MikaBackendDependencies,
   type MikaBackendRepositories,
+  type MikaAccountDeleteJobRepositoryPort,
   type MikaAccountRepositoryPort,
+  type MikaAdminAuditRepositoryPort,
   type MikaCatalogRepositoryPort,
+  type MikaEmailOutboxRepositoryPort,
   type MikaEphemeralRepositoryPort,
   type MikaLedgerRepositoryPort,
   type MikaOpsRepositoryPort,
   type MikaSessionRepositoryPort,
   type MikaStockRepositoryPort,
+  type MikaWebhookRepositoryPort,
+  type MikaWorkflowRepositoryPort,
 } from "../src/api/backend";
 import { MIKA_AGENT_IDEMPOTENCY_KEY_HEADER } from "../src/api/agent-types";
 import { callMikaOperation, mikaActionDefinitions } from "../src/api/operations";
@@ -232,6 +237,18 @@ describe("backend test storage helpers", () => {
     expectTypeOf<StockRepository>().toMatchTypeOf<MikaStockRepositoryPort>();
     expectTypeOf<EphemeralRepository>().toMatchTypeOf<MikaEphemeralRepositoryPort>();
     expectTypeOf(createTestStockRepository()).toMatchTypeOf<MikaStockRepositoryPort>();
+  });
+
+  it("lets a host target a single ops concern via the segregated per-store ports", () => {
+    // MikaOpsRepositoryPort is one flat interface because OpsRepository backs every ops concern
+    // with a single storage collection, but the port itself is composed from five independently
+    // satisfiable pieces so a host implementing only e.g. a custom email outbox isn't forced to
+    // also implement webhook, workflow, admin-audit, and account-delete-job methods.
+    expectTypeOf<OpsRepository>().toMatchTypeOf<MikaWebhookRepositoryPort>();
+    expectTypeOf<OpsRepository>().toMatchTypeOf<MikaAccountDeleteJobRepositoryPort>();
+    expectTypeOf<OpsRepository>().toMatchTypeOf<MikaWorkflowRepositoryPort>();
+    expectTypeOf<OpsRepository>().toMatchTypeOf<MikaAdminAuditRepositoryPort>();
+    expectTypeOf<OpsRepository>().toMatchTypeOf<MikaEmailOutboxRepositoryPort>();
   });
 
   it("enforces configured unique indexes in memory storage", async () => {
