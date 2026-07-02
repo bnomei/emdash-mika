@@ -20,6 +20,7 @@ import {
   type MikaProviderAdapter,
   type MikaProviderCheckoutInput,
   type MikaProviderCheckoutSession,
+  type MikaProviderDelegatedPaymentInput,
   type MikaProviderLineItem,
   type MikaProviderOrderCancelInput,
   type MikaProviderRefundInput,
@@ -276,6 +277,7 @@ export function createMikaStripeProvider(
     capabilities: () => stripeCapabilities(options),
     health: async () => stripeHealth(id, options),
     createCheckoutSession: async (input) => createStripeCheckoutSession(id, options, input),
+    createDelegatedPayment: async (input) => createStripeDelegatedPayment(id, options, input),
     retrieveCheckoutSession: async (checkoutSessionId) =>
       retrieveStripeCheckoutSession(id, options, checkoutSessionId),
     createPortalSession: async (input) => {
@@ -350,6 +352,7 @@ function stripeCapabilities(
 
   const capabilities: MikaProviderCapability[] = [];
   if (options.stripe.checkout?.sessions) capabilities.push("hosted_checkout");
+  if (options.stripe.paymentIntents?.create) capabilities.push("delegated_payment");
   if (options.stripe.paymentIntents?.create || options.stripe.checkout?.sessions) {
     capabilities.push("payments");
   }
@@ -392,15 +395,6 @@ async function createStripeCheckoutSession(
   options: CreateMikaStripeProviderOptions,
   input: MikaProviderCheckoutInput,
 ): Promise<MikaProviderCheckoutSession> {
-  const delegatedToken = readMetadataString(
-    input.metadata,
-    MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY,
-  );
-  // Delegated ACP token routes to PaymentIntent creation instead of Checkout Session.
-  if (delegatedToken) {
-    return createStripeDelegatedPayment(provider, options, input, delegatedToken);
-  }
-
   if (!options.stripe.checkout?.sessions) {
     throw new Error("Stripe checkout sessions are not available.");
   }
@@ -471,33 +465,25 @@ async function stripeCheckoutDiscounts(
 async function createStripeDelegatedPayment(
   provider: ProviderName,
   options: CreateMikaStripeProviderOptions,
-  input: MikaProviderCheckoutInput,
-  delegatedToken: string,
+  input: MikaProviderDelegatedPaymentInput,
 ): Promise<MikaProviderCheckoutSession> {
   if (!options.stripe.paymentIntents?.create) {
     throw new Error("Stripe payment intents are required for delegated payments.");
   }
-
-  const subtotal = input.lines.reduce(
-    (amount, line) => amount + line.unitAmount * line.quantity,
-    0,
-  );
-  const discountAmount = input.discount && input.discount.amount > 0 ? input.discount.amount : 0;
-  // The backend's authoritative total wins over the line recomputation: hosts may include tax
-  // or shipping the lines cannot express, and the charge must match what the buyer confirmed.
-  const total = input.total?.amount ?? Math.max(0, subtotal - discountAmount);
-  const currency = input.total?.currency ?? input.lines[0]?.currency;
-  if (input.lines.length === 0 || !currency) {
+  if (input.lines.length === 0) {
     throw new Error("Delegated Stripe checkout requires at least one line item.");
   }
 
   const intent = await options.stripe.paymentIntents.create(
     {
-      amount: total,
-      currency: currency.toLowerCase(),
+      // input.total is the backend's authoritative charge amount (subtotal minus discount, plus
+      // any host-added tax/shipping the lines cannot express) — never recomputed from lines here,
+      // or the charge would drift from the total the buyer confirmed.
+      amount: input.total.amount,
+      currency: input.total.currency.toLowerCase(),
       confirm: true,
       payment_method_data: {
-        shared_payment_granted_token: delegatedToken,
+        shared_payment_granted_token: input.token,
       },
       metadata: stripeMetadata({
         ...input.metadata,
@@ -1073,12 +1059,6 @@ function stripeMetadata(input: JsonObject | undefined): Record<string, string> |
   );
 
   return Object.keys(metadata).length > 0 ? metadata : undefined;
-}
-
-function readMetadataString(metadata: JsonObject | undefined, key: string): string | undefined {
-  const value = metadata?.[key];
-
-  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function stripeTimestamp(

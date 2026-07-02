@@ -595,6 +595,7 @@ export interface OrderInvoiceDTO {
 /** Provider adapter capability flags surfaced in health checks. */
 export const MIKA_PROVIDER_CAPABILITIES = [
   "hosted_checkout",
+  "delegated_payment",
   "payments",
   "subscriptions",
   "subscription_renew",

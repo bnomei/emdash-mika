@@ -12,6 +12,7 @@ import type {
   MikaProviderAdapter,
   MikaProviderCheckoutInput,
   MikaProviderCheckoutSession,
+  MikaProviderDelegatedPaymentInput,
   MikaProviderInvoiceInput,
   MikaProviderOrderCancelInput,
   MikaProviderPortalInput,
@@ -32,6 +33,7 @@ import {
 
 export type FakeMikaProviderOptionalMethod =
   | "health"
+  | "createDelegatedPayment"
   | "createPortalSession"
   | "getInvoiceUrl"
   | "cancelSubscription"
@@ -47,6 +49,7 @@ export type FakeMikaProviderCallLog = {
   readonly capabilities: undefined[];
   readonly health: undefined[];
   readonly createCheckoutSession: MikaProviderCheckoutInput[];
+  readonly createDelegatedPayment: MikaProviderDelegatedPaymentInput[];
   readonly retrieveCheckoutSession: string[];
   readonly createPortalSession: MikaProviderPortalInput[];
   readonly getInvoiceUrl: MikaProviderInvoiceInput[];
@@ -64,6 +67,7 @@ export type FakeMikaProviderOverrides = Partial<{
   readonly capabilities: MikaProviderAdapter["capabilities"];
   readonly health: NonNullable<MikaProviderAdapter["health"]>;
   readonly createCheckoutSession: MikaProviderAdapter["createCheckoutSession"];
+  readonly createDelegatedPayment: NonNullable<MikaProviderAdapter["createDelegatedPayment"]>;
   readonly retrieveCheckoutSession: MikaProviderAdapter["retrieveCheckoutSession"];
   readonly createPortalSession: NonNullable<MikaProviderAdapter["createPortalSession"]>;
   readonly getInvoiceUrl: NonNullable<MikaProviderAdapter["getInvoiceUrl"]>;
@@ -127,6 +131,16 @@ export function createFakeMikaProvider(
       );
     },
   };
+
+  if (includesOptionalMethod(options.optionalMethods, "createDelegatedPayment")) {
+    provider.createDelegatedPayment = async (input) => {
+      calls.createDelegatedPayment.push(input);
+      return (
+        (await overrides.createDelegatedPayment?.(input)) ??
+        createDelegatedPaymentSession(id, input)
+      );
+    };
+  }
 
   if (includesOptionalMethod(options.optionalMethods, "health")) {
     provider.health = async () => {
@@ -222,6 +236,7 @@ export function createFakeMikaProvider(
 const DEFAULT_CAPABILITIES = ["hosted_checkout"] satisfies readonly MikaProviderCapability[];
 const DEFAULT_OPTIONAL_METHODS = [
   "health",
+  "createDelegatedPayment",
   "createPortalSession",
   "getInvoiceUrl",
   "cancelSubscription",
@@ -245,6 +260,7 @@ function createCallLog(): FakeMikaProviderCallLog {
     capabilities: [],
     health: [],
     createCheckoutSession: [],
+    createDelegatedPayment: [],
     retrieveCheckoutSession: [],
     createPortalSession: [],
     getInvoiceUrl: [],
@@ -264,6 +280,7 @@ function cloneCallLog(calls: FakeMikaProviderCallLog): FakeMikaProviderCallLog {
     capabilities: [...calls.capabilities],
     health: [...calls.health],
     createCheckoutSession: [...calls.createCheckoutSession],
+    createDelegatedPayment: [...calls.createDelegatedPayment],
     retrieveCheckoutSession: [...calls.retrieveCheckoutSession],
     createPortalSession: [...calls.createPortalSession],
     getInvoiceUrl: [...calls.getInvoiceUrl],
@@ -310,6 +327,19 @@ function createCheckoutSession(
     expiresAt: createISODateTime("2026-01-01T01:00:00.000Z"),
     providerCheckoutId: "provider_checkout_fake",
     ...overrides,
+  };
+}
+
+function createDelegatedPaymentSession(
+  provider: ProviderName,
+  input: MikaProviderDelegatedPaymentInput,
+): MikaProviderCheckoutSession {
+  return {
+    id: createMikaId("payment_fake"),
+    status: "completed",
+    mode: input.mode,
+    provider,
+    providerCheckoutId: "provider_payment_fake",
   };
 }
 

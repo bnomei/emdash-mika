@@ -52,6 +52,17 @@ export interface MikaProviderAdapter {
   health?(): Promise<ProviderHealthDTO>;
   createCheckoutSession(input: MikaProviderCheckoutInput): Promise<MikaProviderCheckoutSession>;
   retrieveCheckoutSession(id: string): Promise<MikaProviderCheckoutSession>;
+  /**
+   * Charges a payment token an agent obtained out-of-band (e.g. an ACP shared payment token)
+   * directly, without a hosted checkout redirect. Required when the host exposes ACP delegated
+   * checkout completion; gated by the `delegated_payment` capability. Distinct from
+   * {@link createCheckoutSession} because a direct charge needs no `successUrl`/`cancelUrl`/
+   * `customer` and MUST use {@link MikaProviderDelegatedPaymentInput.total} verbatim rather than
+   * deriving it from `lines`/`discount`.
+   */
+  createDelegatedPayment?(
+    input: MikaProviderDelegatedPaymentInput,
+  ): Promise<MikaProviderCheckoutSession>;
   /** Required when the host exposes account.portal for billing self-service. */
   createPortalSession?(input: MikaProviderPortalInput): Promise<MikaProviderPortalSession>;
   /** Required when order.invoice requests a hosted provider invoice URL. */
@@ -100,6 +111,20 @@ export interface MikaProviderCheckoutInput {
   readonly total?: MoneyDTO;
   readonly successUrl: string;
   readonly cancelUrl: string;
+  readonly metadata?: JsonObject;
+}
+
+/** Input for charging an out-of-band payment token directly (e.g. an ACP delegated payment). */
+export interface MikaProviderDelegatedPaymentInput {
+  readonly idempotencyKey?: string;
+  readonly mode: PurchaseMode;
+  /** Payment token the agent obtained out-of-band and forwarded for a direct charge. */
+  readonly token: string;
+  readonly lines: readonly MikaProviderLineItem[];
+  /** Order-level discount already folded into {@link total}; see {@link MikaProviderCheckoutInput.discount}. */
+  readonly discount?: MoneyDTO;
+  /** Authoritative charge amount; adapters MUST charge exactly this, never recompute from `lines`. */
+  readonly total: MoneyDTO;
   readonly metadata?: JsonObject;
 }
 

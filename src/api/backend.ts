@@ -7337,11 +7337,11 @@ type CheckoutStartResolution = {
 /**
  * Gates delegated-payment handoff at checkout start.
  *
- * `checkout.start` forwards `customFields` to the provider as metadata, and the Stripe adapter
- * begins a delegated charge whenever the shared payment token key is present. Without this gate any
- * caller holding a leaked/intercepted token could trigger a charge for an attacker-chosen cart,
- * bypassing the `checkout.preview` payment-authorization contract. We require the caller to present
- * the `payment_authorization` input hash that a fresh preview of this exact cart produces (the same
+ * `checkout.start` dispatches to the provider's `createDelegatedPayment` method whenever the
+ * shared payment token key is present in `customFields`. Without this gate any caller holding a
+ * leaked/intercepted token could trigger a charge for an attacker-chosen cart, bypassing the
+ * `checkout.preview` payment-authorization contract. We require the caller to present the
+ * `payment_authorization` input hash that a fresh preview of this exact cart produces (the same
  * hash `checkout.preview` returns and the ACP complete handler forwards), binding the delegated
  * payment to a current, previewed quote.
  */
@@ -7381,6 +7381,74 @@ async function requireDelegatedPaymentAuthorization(
   }
 
   return { ok: true };
+}
+
+type CheckoutProviderDispatch =
+  | {
+      readonly ok: true;
+      readonly kind: "hosted";
+      readonly providerName: ProviderName;
+      readonly provider: MikaProviderAdapter;
+      readonly method: NonNullable<MikaProviderAdapter["createCheckoutSession"]>;
+    }
+  | {
+      readonly ok: true;
+      readonly kind: "delegated";
+      readonly providerName: ProviderName;
+      readonly provider: MikaProviderAdapter;
+      readonly method: NonNullable<MikaProviderAdapter["createDelegatedPayment"]>;
+      readonly token: string;
+    }
+  | MikaApiFailure;
+
+/**
+ * Resolves which provider method `checkout.start` calls: `createDelegatedPayment` when the caller
+ * (already authorized by {@link requireDelegatedPaymentAuthorization}) presents a shared payment
+ * token, or `createCheckoutSession` for the ordinary hosted-checkout redirect flow.
+ */
+async function resolveCheckoutProviderDispatch(
+  input: CreateMikaBackendApiInput,
+  providerName: ProviderName,
+  checkoutInput: StartCheckoutInput,
+): Promise<CheckoutProviderDispatch> {
+  const token = checkoutInput.customFields?.[MIKA_DELEGATED_PAYMENT_TOKEN_METADATA_KEY];
+  if (typeof token === "string" && token.length > 0) {
+    const feature = await requireProviderFeature(input, {
+      providerName,
+      method: "createDelegatedPayment",
+      capability: "delegated_payment",
+      capabilityFailureMessage: "Checkout provider capabilities could not be verified.",
+      unsupportedMessage: (provider) =>
+        `Provider '${provider}' does not support delegated payments.`,
+    });
+    if (!feature.ok) return feature;
+
+    return {
+      ok: true,
+      kind: "delegated",
+      providerName: feature.providerName,
+      provider: feature.provider,
+      method: feature.method,
+      token,
+    };
+  }
+
+  const feature = await requireProviderFeature(input, {
+    providerName,
+    method: "createCheckoutSession",
+    capability: "hosted_checkout",
+    capabilityFailureMessage: "Checkout provider capabilities could not be verified.",
+    unsupportedMessage: (provider) => `Provider '${provider}' does not support hosted checkout.`,
+  });
+  if (!feature.ok) return feature;
+
+  return {
+    ok: true,
+    kind: "hosted",
+    providerName: feature.providerName,
+    provider: feature.provider,
+    method: feature.method,
+  };
 }
 
 async function startCheckout(
@@ -7427,15 +7495,15 @@ async function startCheckout(
     return validationFailed("provider", "A checkout provider is required.");
   }
 
-  const providerFeature = await requireProviderFeature(input, {
+  const providerDispatch = await resolveCheckoutProviderDispatch(
+    input,
     providerName,
-    method: "createCheckoutSession",
-    capability: "hosted_checkout",
-    capabilityFailureMessage: "Checkout provider capabilities could not be verified.",
-    unsupportedMessage: (provider) => `Provider '${provider}' does not support hosted checkout.`,
-  });
-  if (!providerFeature.ok) return providerFeature;
-  if (!ctx.url) return validationFailed("url", "Checkout requires a request URL.");
+    checkoutInput,
+  );
+  if (!providerDispatch.ok) return providerDispatch;
+  if (providerDispatch.kind === "hosted" && !ctx.url) {
+    return validationFailed("url", "Checkout requires a request URL.");
+  }
 
   const checkoutId = input.createId("checkout");
   const expiresAt = checkoutExpiresAt(input, ctx);
@@ -7471,16 +7539,36 @@ async function startCheckout(
 
   const providerSession = await (async () => {
     try {
-      return await providerFeature.method.call(providerFeature.provider, {
+      const total = moneyDTO(
+        Math.max(0, checkoutSubtotal - checkoutDiscountAmount),
+        resolved.currency,
+      );
+      const discount =
+        checkoutDiscountAmount > 0
+          ? moneyDTO(checkoutDiscountAmount, resolved.currency)
+          : undefined;
+      const lines = reserved.lines.map((line) => checkoutLineToProviderLine(providerName, line));
+
+      if (providerDispatch.kind === "delegated") {
+        return await providerDispatch.method.call(providerDispatch.provider, {
+          idempotencyKey: ctx.idempotencyKey,
+          mode: resolved.mode,
+          token: providerDispatch.token,
+          lines,
+          ...(discount ? { discount } : {}),
+          total,
+          metadata: checkoutPersistedCustomMetadata(checkoutInput.customFields),
+        });
+      }
+
+      return await providerDispatch.method.call(providerDispatch.provider, {
         idempotencyKey: ctx.idempotencyKey,
         mode: resolved.mode,
         provider: providerName,
         customer: checkoutInput.customer,
-        lines: reserved.lines.map((line) => checkoutLineToProviderLine(providerName, line)),
-        ...(checkoutDiscountAmount > 0
-          ? { discount: moneyDTO(checkoutDiscountAmount, resolved.currency) }
-          : {}),
-        total: moneyDTO(Math.max(0, checkoutSubtotal - checkoutDiscountAmount), resolved.currency),
+        lines,
+        ...(discount ? { discount } : {}),
+        total,
         successUrl: checkoutSuccessUrl(input, ctx, checkoutInput, checkoutId, statusToken),
         cancelUrl: checkoutCancelUrl(input, ctx, checkoutInput, checkoutId, statusToken),
         metadata: checkoutCustomMetadata(checkoutInput.customFields),

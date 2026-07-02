@@ -2149,17 +2149,16 @@ describe("Mika Stripe provider", () => {
       },
     };
     const provider = createMikaStripeProvider({ stripe });
+    if (!provider.createDelegatedPayment) {
+      throw new Error("Expected the Stripe provider to support delegated payments.");
+    }
 
     await expect(
-      provider.createCheckoutSession({
+      provider.createDelegatedPayment({
         idempotencyKey: "idem_spt_1",
         mode: "payment",
-        provider: createProviderName("stripe"),
-        successUrl: "https://shop.example.test/success",
-        cancelUrl: "https://shop.example.test/cancel",
-        metadata: {
-          [MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY]: "spt_test_123",
-        },
+        token: "spt_test_123",
+        total: { amount: 2400, currency: createCurrencyCode("EUR") },
         lines: [
           {
             sellableId: createMikaId("sellable_1"),
@@ -2293,45 +2292,7 @@ describe("Mika Stripe provider", () => {
     ).rejects.toThrow(/coupons are required/i);
   });
 
-  it("subtracts an order-level discount from the delegated payment amount", async () => {
-    const intentCalls: unknown[] = [];
-    const stripe: MikaStripeClient = {
-      paymentIntents: {
-        create: async (params) => {
-          intentCalls.push({ params });
-          return { id: "pi_disc_1", status: "succeeded", amount: 2160, currency: "eur" };
-        },
-      },
-    };
-    const provider = createMikaStripeProvider({ stripe });
-
-    await provider.createCheckoutSession({
-      idempotencyKey: "idem_spt_disc_1",
-      mode: "payment",
-      provider: createProviderName("stripe"),
-      successUrl: "https://shop.example.test/success",
-      cancelUrl: "https://shop.example.test/cancel",
-      metadata: { [MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY]: "spt_test_123" },
-      discount: { amount: 240, currency: createCurrencyCode("EUR") },
-      lines: [
-        {
-          sellableId: createMikaId("sellable_1"),
-          priceId: createMikaId("price_1"),
-          contentRef: { collection: "products", id: "print" },
-          title: "Limited print",
-          quantity: 2,
-          unitAmount: 1200,
-          currency: createCurrencyCode("EUR"),
-          mode: "payment",
-          fulfillmentKind: "download",
-        },
-      ],
-    });
-
-    expect(intentCalls[0]).toMatchObject({ params: { amount: 2160, currency: "eur" } });
-  });
-
-  it("charges the backend's authoritative total for delegated payments", async () => {
+  it("charges the backend's authoritative total for delegated payments verbatim, never recomputing from lines or discount", async () => {
     const intentCalls: unknown[] = [];
     const stripe: MikaStripeClient = {
       paymentIntents: {
@@ -2342,14 +2303,14 @@ describe("Mika Stripe provider", () => {
       },
     };
     const provider = createMikaStripeProvider({ stripe });
+    if (!provider.createDelegatedPayment) {
+      throw new Error("Expected the Stripe provider to support delegated payments.");
+    }
 
-    await provider.createCheckoutSession({
+    await provider.createDelegatedPayment({
       idempotencyKey: "idem_spt_total_1",
       mode: "payment",
-      provider: createProviderName("stripe"),
-      successUrl: "https://shop.example.test/success",
-      cancelUrl: "https://shop.example.test/cancel",
-      metadata: { [MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY]: "spt_test_123" },
+      token: "spt_test_123",
       discount: { amount: 240, currency: createCurrencyCode("EUR") },
       // Authoritative backend total (e.g. host-added tax): lines minus discount would be 2160.
       total: { amount: 2460, currency: createCurrencyCode("EUR") },
@@ -2369,44 +2330,6 @@ describe("Mika Stripe provider", () => {
     });
 
     expect(intentCalls[0]).toMatchObject({ params: { amount: 2460, currency: "eur" } });
-  });
-
-  it("does not let a negative delegated-payment discount increase the charge amount", async () => {
-    const intentCalls: unknown[] = [];
-    const stripe: MikaStripeClient = {
-      paymentIntents: {
-        create: async (params) => {
-          intentCalls.push({ params });
-          return { id: "pi_disc_negative", status: "succeeded", amount: 2400, currency: "eur" };
-        },
-      },
-    };
-    const provider = createMikaStripeProvider({ stripe });
-
-    await provider.createCheckoutSession({
-      idempotencyKey: "idem_spt_disc_negative",
-      mode: "payment",
-      provider: createProviderName("stripe"),
-      successUrl: "https://shop.example.test/success",
-      cancelUrl: "https://shop.example.test/cancel",
-      metadata: { [MIKA_STRIPE_DELEGATED_PAYMENT_TOKEN_METADATA_KEY]: "spt_test_123" },
-      discount: { amount: -500, currency: createCurrencyCode("EUR") },
-      lines: [
-        {
-          sellableId: createMikaId("sellable_1"),
-          priceId: createMikaId("price_1"),
-          contentRef: { collection: "products", id: "print" },
-          title: "Limited print",
-          quantity: 2,
-          unitAmount: 1200,
-          currency: createCurrencyCode("EUR"),
-          mode: "payment",
-          fulfillmentKind: "download",
-        },
-      ],
-    });
-
-    expect(intentCalls[0]).toMatchObject({ params: { amount: 2400, currency: "eur" } });
   });
 
   it("resolves the invoice id from a payment-intent id before retrieving the invoice", async () => {

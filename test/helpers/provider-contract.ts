@@ -13,6 +13,7 @@ const METHOD_BACKED_CAPABILITIES = [
     capability: "hosted_checkout",
     methods: ["createCheckoutSession", "retrieveCheckoutSession"],
   },
+  { capability: "delegated_payment", methods: ["createDelegatedPayment"] },
   { capability: "portal", methods: ["createPortalSession"] },
   { capability: "invoice_url", methods: ["getInvoiceUrl"] },
   { capability: "subscription_renew", methods: ["renewSubscription"] },

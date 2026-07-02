@@ -18355,7 +18355,9 @@ describe("backend API composition", () => {
         ],
       ]),
     });
-    const fake = createFakeMikaProvider();
+    const fake = createFakeMikaProvider({
+      capabilities: ["hosted_checkout", "delegated_payment"],
+    });
     await repositories.catalog.put(
       createCatalogItemDocument({ contentRef, sellables: [sellable] }),
     );
@@ -18402,6 +18404,7 @@ describe("backend API composition", () => {
       }),
     ).resolves.toMatchObject({ ok: false, status: 403, error: { code: "FORBIDDEN" } });
     expect(fake.getCalls().createCheckoutSession).toHaveLength(0);
+    expect(fake.getCalls().createDelegatedPayment).toHaveLength(0);
 
     const started = await api.checkout.start(ctx, {
       ...previewInput,
@@ -18418,23 +18421,21 @@ describe("backend API composition", () => {
     if (!started.ok) {
       throw new Error("Expected checkout start to succeed.");
     }
-    expect(fake.getCalls().createCheckoutSession).toHaveLength(1);
-    expect(fake.getCalls().createCheckoutSession[0]).toMatchObject({
-      provider: TEST_PROVIDER,
-      customer: { email: "Delegated@Example.test", name: "Delegated Buyer" },
+    expect(fake.getCalls().createCheckoutSession).toHaveLength(0);
+    expect(fake.getCalls().createDelegatedPayment).toHaveLength(1);
+    expect(fake.getCalls().createDelegatedPayment[0]).toMatchObject({
+      mode: "payment",
+      token: "spt_authorized_123",
       metadata: {
         publicNote: "deliver after 5pm",
-        acpPaymentToken: "spt_authorized_123",
-        acpPaymentProvider: "stripe",
-        acpPaymentAuthorizationId: "acp_payment_authorization_generated_after_preview",
-        acpCheckoutSessionId: "checkout_session_acp_1",
-        acpPaymentAuthorizationInputHash: inputHash,
       },
-      successUrl:
-        "https://shop.example.test/checkout/success/delegated?checkoutId=checkout_1&token=checkout_status_token_1",
-      cancelUrl:
-        "https://shop.example.test/checkout/cancel/delegated?checkoutId=checkout_1&token=checkout_status_token_1",
     });
+    expect(fake.getCalls().createDelegatedPayment[0]?.metadata).not.toHaveProperty(
+      "acpPaymentToken",
+    );
+    expect(fake.getCalls().createDelegatedPayment[0]?.metadata).not.toHaveProperty(
+      "acpPaymentAuthorizationInputHash",
+    );
     const persisted = await repositories.session.findById(started.data.id);
     if (!persisted || persisted.type !== "checkout") {
       throw new Error("Expected checkout document to be persisted.");
@@ -18460,7 +18461,9 @@ describe("backend API composition", () => {
         ],
       ]),
     });
-    const fake = createFakeMikaProvider();
+    const fake = createFakeMikaProvider({
+      capabilities: ["hosted_checkout", "delegated_payment"],
+    });
     await repositories.catalog.put(
       createCatalogItemDocument({ contentRef, sellables: [sellable] }),
     );
@@ -18500,7 +18503,7 @@ describe("backend API composition", () => {
 
     expect(started).toMatchObject({ ok: true });
     if (!started.ok) throw new Error("Expected checkout.start to succeed.");
-    const call = fake.getCalls().createCheckoutSession[0];
+    const call = fake.getCalls().createDelegatedPayment[0];
     expect(call?.discount).toMatchObject({ amount: 240, currency: TEST_CURRENCY });
     await expect(repositories.session.findCheckoutById(started.data.id)).resolves.toMatchObject({
       aggregate: { coupon: { label: "SAVE10" } },

@@ -481,7 +481,13 @@ function calculateCheckoutTotals(
   return calculateTotals(currency, cartLines, coupon);
 }
 
-/** Computes coupon discount amount capped by subtotal. */
+/**
+ * Computes coupon discount amount clamped to `[0, subtotalAmount]`. A negative `rate` or
+ * `discountAmount` (e.g. from a buggy or malicious host-supplied `CouponResolverPort`) must never
+ * pass through as a negative discount, or subtracting it from a checkout total would inflate the
+ * charge above what the buyer confirmed — this is now the sole guard, since delegated-payment
+ * adapters trust the backend's computed total verbatim rather than recomputing it themselves.
+ */
 export function couponDiscountAmount(
   coupon: CouponSnapshot | undefined,
   subtotalAmount: number,
@@ -489,10 +495,10 @@ export function couponDiscountAmount(
   if (!coupon) return 0;
   const cap = Math.max(0, subtotalAmount);
   if (coupon.rate !== undefined) {
-    return Math.min(Math.floor(cap * coupon.rate), cap);
+    return Math.max(0, Math.min(Math.floor(cap * coupon.rate), cap));
   }
 
-  return Math.min(coupon.discountAmount ?? 0, cap);
+  return Math.max(0, Math.min(coupon.discountAmount ?? 0, cap));
 }
 
 function calculateTotals(

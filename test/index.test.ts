@@ -128,7 +128,7 @@ import {
 import { createMikaClient, type MikaClient } from "../src/api/client";
 import { requestMika } from "../src/api/request";
 import { createMikaPluginRoutes } from "../src/api/route-handlers";
-import { catalogSellablesToDTO } from "../src/model/index";
+import { catalogSellablesToDTO, couponDiscountAmount } from "../src/model/index";
 import {
   createMika,
   createMikaPurchaseModel,
@@ -3505,6 +3505,16 @@ describe("Mika model mappers", () => {
         maxPerOrder: 2,
       },
     });
+  });
+
+  it("never lets a negative coupon rate or amount inflate a checkout total", () => {
+    // Delegated-payment providers trust the backend's computed total verbatim rather than
+    // recomputing it, so this clamp is the only guard against a negative discount (e.g. from a
+    // buggy or malicious host-supplied CouponResolverPort) increasing the charge.
+    expect(couponDiscountAmount({ rate: -0.5 }, 2400)).toBe(0);
+    expect(couponDiscountAmount({ discountAmount: -500 }, 2400)).toBe(0);
+    expect(couponDiscountAmount({ discountAmount: 240 }, 2400)).toBe(240);
+    expect(couponDiscountAmount(undefined, 2400)).toBe(0);
   });
 });
 
