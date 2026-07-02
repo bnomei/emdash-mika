@@ -41,10 +41,17 @@ import {
   webhookDocumentWithRecord,
   webhookRawPayloadIsPurgeable,
 } from "./repositories/ops/webhook-helpers";
+import {
+  adminAuditHasTopLevelAction,
+  adminAuditInputHashMatches,
+  adminAuditWithId,
+  type AdminAuditIdempotencyClaimResult,
+} from "./repositories/ops/admin-audit-helpers";
 
 export type { MikaDb, MikaDbExecutor, MikaTransaction } from "./repositories/db-shared";
 export { EphemeralRepository } from "./repositories/ephemeral";
 export { CatalogRepository, type CatalogProviderPriceMatch } from "./repositories/catalog";
+export type { AdminAuditIdempotencyClaimResult } from "./repositories/ops/admin-audit-helpers";
 export { LedgerRepository } from "./repositories/ledger";
 export { AccountRepository } from "./repositories/account";
 export {
@@ -166,38 +173,6 @@ export interface AccountDeleteEmailRedactionRepositoryInput {
   readonly customerId?: MikaId;
   readonly userId?: string;
   readonly emailHash?: string;
-}
-
-/** Result of atomically claiming an admin action idempotency key. */
-export type AdminAuditIdempotencyClaimResult =
-  | { readonly status: "claimed"; readonly audit: AdminAuditDocument }
-  | { readonly status: "existing"; readonly audit: AdminAuditDocument };
-
-const ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY = "idempotencyInputHash";
-
-function adminAuditInputHashMatches(
-  current: AdminAuditDocument,
-  next: AdminAuditDocument,
-): boolean {
-  const currentHash = current.record.metadata?.[ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY];
-  const nextHash = next.record.metadata?.[ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY];
-
-  return typeof currentHash === "string" && currentHash === nextHash;
-}
-
-function adminAuditHasTopLevelAction(document: AdminAuditDocument): boolean {
-  return typeof (document as { readonly action?: unknown }).action === "string";
-}
-
-function adminAuditWithId(document: AdminAuditDocument, id: MikaId): AdminAuditDocument {
-  return {
-    ...document,
-    id,
-    record: {
-      ...document.record,
-      id,
-    },
-  };
 }
 
 /** Document repository for webhooks, emails, workflows, audits, and account ops records. */
