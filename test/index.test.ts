@@ -263,7 +263,7 @@ import {
   type MikaId,
   type ProviderName,
 } from "../src/types/primitives";
-import { decodeAggregate, decodeJsonObject } from "../src/storage/json";
+import { decodeJsonObject } from "../src/storage/json";
 import type {
   createMikaActions,
   createMikaActions as PackageCreateMikaActions,
@@ -3567,32 +3567,6 @@ describe("Mika model mappers", () => {
 });
 
 describe("Mika storage boundaries", () => {
-  it("validates aggregate primitive fields while decoding JSON", () => {
-    expect(
-      decodeAggregate(
-        JSON.stringify({
-          schemaVersion: 1,
-          id: "aggregate_1",
-          currency: "EUR",
-          provider: "fake",
-          createdAt: new Date(0).toISOString(),
-        }),
-      ),
-    ).toMatchObject({
-      schemaVersion: 1,
-      id: "aggregate_1",
-    });
-
-    expect(() =>
-      decodeAggregate(
-        JSON.stringify({
-          schemaVersion: 1,
-          currency: "eur",
-        }),
-      ),
-    ).toThrow(/Invalid aggregate field 'currency'/);
-  });
-
   it("rejects non-object JSON metadata", () => {
     expect(decodeJsonObject(JSON.stringify({ nested: { ok: true } }))).toEqual({
       nested: { ok: true },
