@@ -221,6 +221,15 @@ export interface MikaAcpSessionRecord {
   readonly purgeAt?: ISODateTime;
   readonly createdAt: ISODateTime;
   readonly updatedAt: ISODateTime;
+  /**
+   * Monotonically incremented on every write. Optimistic-concurrency writes (see
+   * {@link MikaAcpSessionStore.putIfUnchanged}) compare this instead of relying on the fencing
+   * tokens that guard idempotency-key bookkeeping alone — those only protect the claim map, not
+   * this record itself, so a handler reclaimed mid-flight could otherwise still overwrite a newer
+   * write with its own stale one. Optional (not `undefined`-hostile) because records persisted
+   * before this field existed have none at runtime despite any type claiming otherwise.
+   */
+  readonly version?: number;
 }
 
 /** Frozen ACP quote projection captured before delegated payment handoff. */
@@ -259,7 +268,23 @@ export interface MikaAcpIdempotencyLeaseWindow {
 /** Pluggable store for ACP session records with atomic idempotency-key coordination. */
 export interface MikaAcpSessionStore {
   get(id: string): Promise<MikaAcpSessionRecord | undefined>;
+  /** Unconditional write, for records with no prior state to protect (only session creation). */
   put(record: MikaAcpSessionRecord): Promise<void>;
+  /**
+   * Optimistic-concurrency write: persists `record` only if the store's currently-stored version
+   * for `record.id` still equals `expectedVersion`, and reports whether the write landed. Every
+   * handler that reads a record and later writes a mutated copy of it must use this instead of
+   * `put` — the idempotency-key fencing tokens above only protect the claim bookkeeping, not this
+   * record, so without this a handler reclaimed mid-flight (its lease TTL expired while it was
+   * merely slow, not crashed) could still silently overwrite a newer write already committed by
+   * whoever reclaimed it. `expectedVersion` is `undefined` when the caller read a record persisted
+   * before `version` existed, or when writing brand-new state with nothing to compare against —
+   * implementations must allow the write in that case rather than always rejecting it.
+   */
+  putIfUnchanged(
+    record: MikaAcpSessionRecord,
+    expectedVersion: number | undefined,
+  ): Promise<boolean>;
   /**
    * Claim before mutating; replay returns the stored record, conflict returns the other session
    * id. Stores must treat a PENDING (unbound) claim whose `expiresAt` lies at or before
@@ -758,6 +783,16 @@ export function serializeMikaAcpProductFeed(feed: MikaAcpProductFeed): string {
   return JSON.stringify(feed, null, 2);
 }
 
+/**
+ * Increments an ACP session record's optimistic-concurrency version, tolerating a missing
+ * `current` (a record persisted before this field existed, or a brand-new record) by treating it
+ * as version 0 rather than producing NaN — which would otherwise permanently fail every
+ * `putIfUnchanged` CAS check against that record from here on (NaN !== NaN).
+ */
+function nextAcpVersion(current: number | undefined): number {
+  return (current ?? 0) + 1;
+}
+
 /** In-memory `MikaAcpSessionStore` for development and tests. */
 export function createMemoryMikaAcpSessionStore(): MikaAcpSessionStore {
   const sessions = new Map<string, MikaAcpSessionRecord>();
@@ -780,6 +815,15 @@ export function createMemoryMikaAcpSessionStore(): MikaAcpSessionStore {
     },
     async put(record) {
       sessions.set(record.id, record);
+    },
+    async putIfUnchanged(record, expectedVersion) {
+      const current = sessions.get(record.id);
+      if (current && current.version !== undefined && current.version !== expectedVersion) {
+        return false;
+      }
+      sessions.set(record.id, record);
+
+      return true;
     },
     async claimIdempotencyKey(key, id, lease) {
       const existing = idempotencyKeys.get(key);
@@ -845,6 +889,7 @@ export function createMemoryMikaAcpSessionStore(): MikaAcpSessionStore {
             expiredAt: input.now,
             purgeAt: addMilliseconds(input.now, terminalRetentionMs),
             updatedAt: input.now,
+            version: nextAcpVersion(record.version),
           });
           expired += 1;
         }
@@ -930,10 +975,11 @@ function assertAcpAtomicIdempotencyStore(store: MikaAcpSessionStore): void {
   if (
     typeof store.claimIdempotencyKey !== "function" ||
     typeof store.bindIdempotencyKey !== "function" ||
-    typeof store.releaseIdempotencyKey !== "function"
+    typeof store.releaseIdempotencyKey !== "function" ||
+    typeof store.putIfUnchanged !== "function"
   ) {
     throw new Error(
-      "createMikaAcpCheckoutHandlers requires an ACP session store with atomic claimIdempotencyKey, bindIdempotencyKey, and releaseIdempotencyKey methods.",
+      "createMikaAcpCheckoutHandlers requires an ACP session store with atomic claimIdempotencyKey, bindIdempotencyKey, releaseIdempotencyKey, and putIfUnchanged methods.",
     );
   }
 }
@@ -995,6 +1041,7 @@ async function handleAcpCreate(
     expiresAt: addMilliseconds(now, acpSessionTtlMs(options)),
     createdAt: now,
     updatedAt: now,
+    version: 1,
   };
   const idempotency = await beginAcpIdempotency(options, request, session.id, 201, true);
   if (!idempotency.ok) return idempotency.response;
@@ -1067,6 +1114,7 @@ async function handleAcpUpdate(
       fulfillmentOptionId: body.data.fulfillment_option_id ?? record.fulfillmentOptionId,
       expiresAt: addMilliseconds(nowIso(options), acpSessionTtlMs(options)),
       updatedAt: nowIso(options),
+      version: nextAcpVersion(record.version),
     };
     const reconciled = body.data.items
       ? await reconcileAcpCart(options, request, next, body.data.items)
@@ -1076,7 +1124,17 @@ async function handleAcpUpdate(
 
       return reconciled.response;
     }
-    await options.store.put(reconciled.record);
+    const written = await options.store.putIfUnchanged(reconciled.record, record.version);
+    if (!written) {
+      await releaseAcpIdempotency(options, idempotency.lease);
+
+      return acpError(
+        request,
+        409,
+        "invalid_request",
+        "Checkout session was modified concurrently; refetch and retry the update.",
+      );
+    }
     await commitAcpIdempotency(options, idempotency.lease);
 
     return acpJson(request, await recordToAcpSession(options, request, reconciled.record), 200);
@@ -1100,6 +1158,9 @@ async function handleAcpComplete(
   if (!record) return acpError(request, 404, "invalid_request", "Checkout session was not found.");
   record = await expireAcpRecordIfNeeded(options, record);
   if (acpRecordIsExpired(record, nowIso(options))) return acpExpiredError(request);
+  // Captured now, before any further mutation below, as the CAS baseline for this handler's own
+  // writes — see the putIfUnchanged calls at the end of this function.
+  const expectedVersion = record.version;
   const idempotency = await beginAcpIdempotency(options, request, checkoutSessionId, 200);
   if (!idempotency.ok) return idempotency.response;
   // Second idempotency lease serializes concurrent completion on the same session.
@@ -1203,12 +1264,20 @@ async function handleAcpComplete(
       return acpErrorFromResult(request, checkout);
     }
     if (acpCheckoutStartTerminalStatus(checkout.data.status)) {
-      await options.store.put({
-        ...record,
-        buyer: body.data.buyer ?? record.buyer,
-        status: "not_ready_for_payment",
-        updatedAt: nowIso(options),
-      });
+      // Best-effort compensation: if this loses the CAS race, someone else already moved the
+      // session forward concurrently, and reverting to not_ready_for_payment over their write
+      // would be the wrong outcome anyway — leave it and still report checkout.start's own
+      // terminal status, which is true for this request regardless of what's persisted.
+      await options.store.putIfUnchanged(
+        {
+          ...record,
+          buyer: body.data.buyer ?? record.buyer,
+          status: "not_ready_for_payment",
+          updatedAt: nowIso(options),
+          version: nextAcpVersion(expectedVersion),
+        },
+        expectedVersion,
+      );
 
       return acpError(
         request,
@@ -1245,9 +1314,20 @@ async function handleAcpComplete(
         ? { purgeAt: addMilliseconds(now, acpTerminalRetentionMs(options)) }
         : {}),
       updatedAt: now,
+      version: nextAcpVersion(expectedVersion),
     };
-    await options.store.put(completed);
+    const written = await options.store.putIfUnchanged(completed, expectedVersion);
     commitMainLease = true;
+    if (!written) {
+      // Lost the race: another request (most likely one that reclaimed this session's completion
+      // lock after this handler's lease TTL expired while it was merely slow, not crashed) already
+      // committed a different outcome. checkout.start above already happened and cannot be undone
+      // from here — but we must not report *this* handler's own locally-computed record as if it
+      // were persisted. Report whatever is actually stored instead, same as an idempotency replay.
+      const current = (await options.store.get(checkoutSessionId)) ?? completed;
+
+      return acpJson(request, await recordToAcpSession(options, request, current), 200);
+    }
 
     return acpJson(request, await recordToAcpSession(options, request, completed), 200);
   } catch (error) {
@@ -1307,6 +1387,7 @@ async function handleAcpCancel(
   if (!record) return acpError(request, 404, "invalid_request", "Checkout session was not found.");
   record = await expireAcpRecordIfNeeded(options, record);
   if (acpRecordIsExpired(record, nowIso(options))) return acpExpiredError(request);
+  const expectedVersion = record.version;
   const idempotency = await beginAcpIdempotency(options, request, checkoutSessionId, 200);
   if (!idempotency.ok) return idempotency.response;
   try {
@@ -1339,9 +1420,18 @@ async function handleAcpCancel(
       status: "canceled",
       purgeAt: addMilliseconds(nowIso(options), acpTerminalRetentionMs(options)),
       updatedAt: nowIso(options),
+      version: nextAcpVersion(expectedVersion),
     };
-    await options.store.put(canceled);
+    const written = await options.store.putIfUnchanged(canceled, expectedVersion);
     await commitAcpIdempotency(options, idempotency.lease);
+    if (!written) {
+      // Lost the race — another concurrent request already wrote a newer version (e.g. its own
+      // cancel, or a completion that landed first). Report whatever's actually persisted rather
+      // than this handler's own stale computation, same as handleAcpComplete's CAS-loss path.
+      const current = (await options.store.get(checkoutSessionId)) ?? canceled;
+
+      return acpJson(request, await recordToAcpSession(options, request, current), 200);
+    }
 
     return acpJson(request, await recordToAcpSession(options, request, canceled), 200);
   } catch (error) {
@@ -1511,10 +1601,15 @@ async function expireAcpRecordIfNeeded(
     expiredAt: now,
     purgeAt: addMilliseconds(now, acpTerminalRetentionMs(options)),
     updatedAt: now,
+    version: nextAcpVersion(record.version),
   };
-  await options.store.put(expired);
+  const written = await options.store.putIfUnchanged(expired, record.version);
+  if (written) return expired;
 
-  return expired;
+  // Lost the race — someone else already wrote a newer version (e.g. a genuine completion that
+  // landed first). Return whatever's actually persisted rather than the stale expiry this handler
+  // computed, so callers never act on a version that was never really committed.
+  return (await options.store.get(record.id)) ?? expired;
 }
 
 function acpExpiredError(request: Request): Response {

@@ -1841,6 +1841,151 @@ describe("Mika ACP projection", () => {
     });
   });
 
+  it("rejects a stale putIfUnchanged write once the session record's version has moved on", async () => {
+    const store = createMemoryMikaAcpSessionStore();
+    const record: MikaAcpSessionRecord = {
+      id: "checkout_session_cas",
+      sessionId: "acp_checkout:cas",
+      status: "not_ready_for_payment",
+      items: [{ id: "sellable_1:price_1", quantity: 1 }],
+      createdAt: createISODateTime("2026-01-01T00:00:00.000Z"),
+      updatedAt: createISODateTime("2026-01-01T00:00:00.000Z"),
+      version: 1,
+    };
+    await store.put(record);
+
+    // A write matching the current version lands, and moves the version forward.
+    await expect(
+      store.putIfUnchanged({ ...record, status: "ready_for_payment", version: 2 }, 1),
+    ).resolves.toBe(true);
+    await expect(store.get(record.id)).resolves.toMatchObject({
+      status: "ready_for_payment",
+      version: 2,
+    });
+
+    // A second write still using the now-stale version 1 is rejected, not silently applied over
+    // the write above.
+    await expect(
+      store.putIfUnchanged({ ...record, status: "canceled", version: 2 }, 1),
+    ).resolves.toBe(false);
+    await expect(store.get(record.id)).resolves.toMatchObject({
+      status: "ready_for_payment",
+      version: 2,
+    });
+
+    // A record with no version yet (persisted before the field existed) has nothing to compare —
+    // the write is allowed rather than permanently rejected.
+    const legacyId = "checkout_session_cas_legacy";
+    await store.put({ ...record, id: legacyId, version: undefined });
+    await expect(
+      store.putIfUnchanged(
+        { ...record, id: legacyId, status: "ready_for_payment", version: 1 },
+        undefined,
+      ),
+    ).resolves.toBe(true);
+  });
+
+  it("keeps a slow ACP complete from silently overwriting a session a reclaiming retry already committed", async () => {
+    // Reproduces the race a stuck-lease reclaim opens up: handler A claims the completion lock,
+    // is genuinely still running (not crashed) when its lease TTL expires, and a retry (handler B)
+    // reclaims the same lock and completes the session first. Handler A then finishes and must not
+    // blindly overwrite B's already-persisted, already-charged completion with its own stale
+    // computation — the fencing tokens on the lock bookkeeping alone don't protect this; only a
+    // CAS on the session record write itself does.
+    let cart = createCart([]);
+    let currentTime = new Date("2026-01-01T00:00:00.000Z");
+    let checkoutStartCount = 0;
+    let releaseFirstStart: () => void = () => {};
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirstStart = resolve;
+    });
+    let signalFirstStarted: () => void = () => {};
+    const firstStarted = new Promise<void>((resolve) => {
+      signalFirstStarted = resolve;
+    });
+    const baseStore = createMemoryMikaAcpSessionStore();
+    const writeLog: { readonly expectedVersion: number | undefined; readonly written: boolean }[] =
+      [];
+    const store: typeof baseStore = {
+      ...baseStore,
+      putIfUnchanged: async (record, expectedVersion) => {
+        const written = await baseStore.putIfUnchanged(record, expectedVersion);
+        writeLog.push({ expectedVersion, written });
+
+        return written;
+      },
+    };
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+        onCheckoutStart: async () => {
+          checkoutStartCount += 1;
+          if (checkoutStartCount === 1) {
+            signalFirstStarted();
+            await firstGate;
+          }
+        },
+        checkoutSessionStatus: "completed",
+      }),
+      store,
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      now: () => currentTime,
+      idempotencyClaimTtlMs: 2_000,
+      createSessionId: () => "checkout_session_acp_reclaim_overwrite",
+    });
+
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_reclaim", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+      }),
+    );
+
+    const complete = (key: string) =>
+      handlers.complete(
+        acpRequest(
+          "https://shop.example.test/checkout_sessions/checkout_session_acp_reclaim_overwrite/complete",
+          key,
+          { payment_data: { provider: "stripe", token: "spt_test_123" } },
+        ),
+        "checkout_session_acp_reclaim_overwrite",
+      );
+
+    // Handler A: claims the completion lock, then blocks inside checkout.start (still running, not
+    // crashed).
+    const firstPromise = complete("idem_reclaim_a");
+    await firstStarted;
+
+    // Handler A's lease TTL (2s) elapses while it's still blocked.
+    currentTime = new Date(currentTime.getTime() + 3_000);
+
+    // Handler B reclaims the now-expired completion lock and runs to completion, unblocked.
+    const secondResponse = await complete("idem_reclaim_b");
+    expect(secondResponse.status).toBe(200);
+    expect(writeLog).toEqual([{ expectedVersion: 1, written: true }]);
+
+    // Handler A finally resumes and tries to persist its own (now stale) completion.
+    releaseFirstStart();
+    const firstResponse = await firstPromise;
+
+    expect(firstResponse.status).toBe(200);
+    expect(writeLog).toEqual([
+      { expectedVersion: 1, written: true },
+      { expectedVersion: 1, written: false },
+    ]);
+    // Exactly one completion is persisted — B's — not a corrupted mix or a silent A-over-B clobber.
+    await expect(store.get("checkout_session_acp_reclaim_overwrite")).resolves.toMatchObject({
+      version: 2,
+      status: "completed",
+    });
+    expect(checkoutStartCount).toBe(2);
+  });
+
   it("validates ACP request body shapes before touching carts or sessions", async () => {
     let cart = createCart([]);
     let cartMutations = 0;
