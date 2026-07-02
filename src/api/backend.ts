@@ -637,6 +637,12 @@ export interface MikaEphemeralRepositoryPort {
    */
   restoreToken(key: string, now: ISODateTime): Promise<boolean>;
   purgeExpired(now: ISODateTime): Promise<number>;
+  /**
+   * Erases every ephemeral record tied to a deleted subject's identity — not just `"token"`
+   * kinds. Any kind that carries a subject-linked `subjectHash` (e.g. `"cache_marker"`, used by
+   * the download-token reuse pointer) must be included, or account-delete erasure leaves a
+   * subject-linked record behind after the token it derived from is gone.
+   */
   deleteTokensBySubjectHashes(subjectHashes: readonly string[]): Promise<number>;
 }
 
