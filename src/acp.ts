@@ -376,10 +376,15 @@ export interface MikaAcpPaymentData {
   readonly billing_address?: MikaAcpAddress;
 }
 
+// ACP agents commonly serialize omitted optionals as explicit JSON null; accept both.
+function acpOptional<TSchema extends z.ZodTypeAny>(schema: TSchema) {
+  return schema.nullish().transform((value) => value ?? undefined);
+}
+
 const acpBuyerSchema = z.object({
-  name: z.string().optional(),
-  email: z.string().optional(),
-  phone_number: z.string().optional(),
+  name: acpOptional(z.string()),
+  email: acpOptional(z.string()),
+  phone_number: acpOptional(z.string()),
 }) satisfies z.ZodType<MikaAcpBuyer>;
 
 const acpItemSchema = z.object({
@@ -390,35 +395,35 @@ const acpItemSchema = z.object({
 const acpAddressSchema = z.object({
   name: z.string(),
   line_one: z.string(),
-  line_two: z.string().optional(),
+  line_two: acpOptional(z.string()),
   city: z.string(),
   state: z.string(),
   country: z.string(),
   postal_code: z.string(),
-  phone_number: z.string().optional(),
+  phone_number: acpOptional(z.string()),
 }) satisfies z.ZodType<MikaAcpAddress>;
 
 const acpPaymentDataSchema = z.object({
   token: z.string().min(1),
   provider: z.enum(["stripe", "adyen", "braintree"]),
-  billing_address: acpAddressSchema.optional(),
+  billing_address: acpOptional(acpAddressSchema),
 }) satisfies z.ZodType<MikaAcpPaymentData>;
 
 const acpCheckoutCreateRequestSchema = z.object({
-  buyer: acpBuyerSchema.optional(),
+  buyer: acpOptional(acpBuyerSchema),
   items: z.array(acpItemSchema).min(1, "items must be a non-empty array."),
-  fulfillment_address: acpAddressSchema.optional(),
+  fulfillment_address: acpOptional(acpAddressSchema),
 }) satisfies z.ZodType<MikaAcpCheckoutCreateRequest>;
 
 const acpCheckoutUpdateRequestSchema = z.object({
-  buyer: acpBuyerSchema.optional(),
-  items: z.array(acpItemSchema).min(1, "items must be a non-empty array.").optional(),
-  fulfillment_address: acpAddressSchema.optional(),
-  fulfillment_option_id: z.string().min(1).optional(),
+  buyer: acpOptional(acpBuyerSchema),
+  items: acpOptional(z.array(acpItemSchema).min(1, "items must be a non-empty array.")),
+  fulfillment_address: acpOptional(acpAddressSchema),
+  fulfillment_option_id: acpOptional(z.string().min(1)),
 }) satisfies z.ZodType<MikaAcpCheckoutUpdateRequest>;
 
 const acpCheckoutCompleteRequestSchema = z.object({
-  buyer: acpBuyerSchema.optional(),
+  buyer: acpOptional(acpBuyerSchema),
   payment_data: acpPaymentDataSchema,
 }) satisfies z.ZodType<MikaAcpCheckoutCompleteRequest>;
 
@@ -1870,7 +1875,14 @@ async function readAcpBody<TSchema extends z.ZodTypeAny>(
   const parsed = schema.safeParse(parsedJson);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
-    const path = issue && issue.path.length > 0 ? `$.${issue.path.join(".")}` : undefined;
+    const path =
+      issue && issue.path.length > 0
+        ? `$${issue.path
+            .map((segment) =>
+              typeof segment === "number" ? `[${segment}]` : `.${String(segment)}`,
+            )
+            .join("")}`
+        : undefined;
 
     return {
       ok: false,

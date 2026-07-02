@@ -1711,8 +1711,9 @@ describe("Mika ACP projection", () => {
     expect(zeroQuantity.status).toBe(400);
     await expect(zeroQuantity.json()).resolves.toMatchObject({
       code: "invalid_request",
-      param: "$.items.0.quantity",
+      param: "$.items[0].quantity",
     });
+
 
     const junkBuyer = await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_junk_buyer", {
@@ -1726,6 +1727,16 @@ describe("Mika ACP projection", () => {
       param: "$.buyer",
     });
     expect(cartMutations).toBe(0);
+
+    // Agents commonly serialize omitted optionals as explicit JSON null.
+    const nullBuyer = await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_null_buyer", {
+        buyer: null,
+        fulfillment_address: null,
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+      }),
+    );
+    expect(nullBuyer.status).toBe(201);
 
     const created = await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_body_validation", {
