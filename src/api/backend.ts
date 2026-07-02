@@ -7321,23 +7321,31 @@ async function abandonMergedSourceCart(
   });
   if (increasedOrNewLines.length === 0 && decreasedOrRemovedLines.length === 0) return target;
 
+  // Decreases must land on target's items *before* increases are validated: mergeCartLines checks
+  // a new/grown line's sibling-quantity demand against target's other same-sellable lines, and
+  // those siblings must already reflect any concurrent decrease — otherwise validation sees a
+  // stale, too-high sibling quantity, can spuriously reject a combination that's actually within
+  // limits, and drops the entire retry (both the legitimate decrease and the legitimate increase)
+  // with no self-correction: a later merge attempt still sees target's stale contribution and
+  // fails the same way forever.
+  const decreasedItems = decreasedOrRemovedLines.reduce(
+    (items, { line, decreaseBy }) => applyCartLineQuantityDelta(items, line, -decreaseBy),
+    target.aggregate.items,
+  );
+
   const retryMerged =
     increasedOrNewLines.length > 0
-      ? await mergeCartLines(input, target, {
-          ...latestSource,
-          aggregate: { ...latestSource.aggregate, items: increasedOrNewLines },
-        })
-      : { ok: true as const, items: target.aggregate.items };
+      ? await mergeCartLines(
+          input,
+          { ...target, aggregate: { ...target.aggregate, items: decreasedItems } },
+          { ...latestSource, aggregate: { ...latestSource.aggregate, items: increasedOrNewLines } },
+        )
+      : { ok: true as const, items: decreasedItems };
   if (!retryMerged.ok) return target;
-
-  const reconciledItems = decreasedOrRemovedLines.reduce(
-    (items, { line, decreaseBy }) => applyCartLineQuantityDelta(items, line, -decreaseBy),
-    retryMerged.items,
-  );
 
   const retryUpdated = updateCartDocument(
     target,
-    reconciledItems,
+    retryMerged.items,
     ctx.now,
     target.aggregate.coupon ?? latestSource.aggregate.coupon,
   );

@@ -16324,6 +16324,144 @@ describe("backend API composition", () => {
     ).resolves.toBeNull();
   });
 
+  it("reconciles a decrease before validating a concurrent increase's sibling quantity limit", async () => {
+    // A concurrent decrease and a concurrent new-sibling-line increase landing on source in the
+    // same race window must be reconciled together, decrease first: mergeCartLines validates a
+    // new/grown line's maxPerOrder demand against target's OTHER same-sellable siblings, and if
+    // those siblings still show a stale (pre-decrease) quantity, a combination that's genuinely
+    // within the limit can be spuriously rejected — dropping the whole retry (both the legitimate
+    // decrease and the legitimate increase) with no self-correction, since a later merge attempt
+    // still sees target's stale contribution and fails the same way forever.
+    const contentRef = createTestContentRef();
+    const priceA = createPriceDefinition({ id: createTestMikaId("price", 1) });
+    const priceB = createPriceDefinition({ id: createTestMikaId("price", 2) });
+    const sellableX = createSellableDefinition({
+      id: createTestMikaId("sellable", 1),
+      prices: [priceA, priceB],
+      maxPerOrder: 6,
+    });
+    const sellableY = createSellableDefinition({ id: createTestMikaId("sellable", 2) });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellableX.id,
+          createStockRecord({ sellableId: sellableX.id, quantityOnHand: 20, quantityReserved: 0 }),
+        ],
+        [
+          sellableY.id,
+          createStockRecord({ sellableId: sellableY.id, quantityOnHand: 20, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellableX, sellableY] }),
+    );
+    const dependencies = createIncrementingBackendDependencies({ repositories });
+    const seedApi = createMikaBackendApi(dependencies);
+    const guestCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_handoff_maxperorder",
+    });
+    const priorCustomerCtx = createTestRequestContext({
+      customerId: "customer_1",
+      userId: "user_1",
+      sessionId: "session_prior_maxperorder",
+    });
+    const callerCtx = createTestRequestContext({
+      customerId: "customer_1",
+      userId: "user_1",
+      sessionId: "session_handoff_maxperorder",
+    });
+    const concurrentCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_handoff_maxperorder",
+    });
+
+    const guestCart = await seedApi.cart.add(guestCtx, {
+      sellableId: sellableX.id,
+      priceId: priceA.id,
+      quantity: 5,
+    });
+    if (!guestCart.ok) throw new Error("Expected seed cart.add to succeed.");
+    const guestLineId = guestCart.data.items[0]?.id;
+    if (!guestLineId) throw new Error("Expected a seeded guest cart line.");
+    // Target starts with an unrelated line only — no prior sellableX of its own, so its only
+    // knowledge of sellableX's demand comes from what this merge itself contributes.
+    const customerCart = await seedApi.cart.add(priorCustomerCtx, {
+      sellableId: sellableY.id,
+      quantity: 1,
+    });
+    if (!customerCart.ok) throw new Error("Expected seed cart.add to succeed.");
+
+    let targetWriteEntered: (() => void) | undefined;
+    const targetWriteEnteredPromise = new Promise<void>((resolve) => {
+      targetWriteEntered = resolve;
+    });
+    let releaseTargetWrite: (() => void) | undefined;
+    const releaseTargetWritePromise = new Promise<void>((resolve) => {
+      releaseTargetWrite = resolve;
+    });
+    let gated = false;
+    const gatedSession = new Proxy(repositories.session, {
+      get(target, property, receiver) {
+        if (property === "putCartIfUnchanged") {
+          return async (cart: CartDocument, expectedVersion: number) => {
+            if (!gated && cart.id === customerCart.data.id) {
+              gated = true;
+              targetWriteEntered?.();
+              await releaseTargetWritePromise;
+            }
+            return target.putCartIfUnchanged(cart, expectedVersion);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const api = createMikaBackendApi({
+      ...dependencies,
+      repositories: { ...repositories, session: gatedSession },
+    });
+
+    const mergePromise = api.cart.merge(callerCtx, {
+      targetCartId: customerCart.data.id,
+      sourceSessionId: "session_handoff_maxperorder",
+    });
+    await targetWriteEnteredPromise;
+    // While merge is paused right before writing the target (having already read the source as
+    // [X/priceA qty 5]), a concurrent update drops priceA to qty 2 and a concurrent add lands a new
+    // sibling line, X/priceB qty 4. True combined demand (2 + 4 = 6) is exactly at the limit.
+    await expect(
+      api.cart.update(concurrentCtx, { lineId: guestLineId, quantity: 2 }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      api.cart.add(concurrentCtx, { sellableId: sellableX.id, priceId: priceB.id, quantity: 4 }),
+    ).resolves.toMatchObject({ ok: true });
+    releaseTargetWrite?.();
+
+    const merged = await mergePromise;
+    expect(merged).toMatchObject({ ok: true, status: 200 });
+    if (!merged.ok) throw new Error("Expected cart.merge to succeed.");
+    // Both sellableX lines survive at their true post-race quantities, alongside target's
+    // unrelated pre-existing line — decrease applied first means the sibling check for priceB's
+    // addition sees demand 2 + 4 = 6, within the limit, not the stale 5 + 4 = 9 that would
+    // spuriously reject the whole retry.
+    expect(merged.data.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ sellableId: sellableY.id, quantity: 1 }),
+        expect.objectContaining({ sellableId: sellableX.id, priceId: priceA.id, quantity: 2 }),
+        expect.objectContaining({ sellableId: sellableX.id, priceId: priceB.id, quantity: 4 }),
+      ]),
+    );
+    expect(merged.data.items).toHaveLength(3);
+    await expect(
+      repositories.session.findOpenCartBySession("session_handoff_maxperorder", TEST_CURRENCY),
+    ).resolves.toBeNull();
+  });
+
   it("does not orphan a checkout_pending cart's reservation when its owner triggers a cart.merge", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();
