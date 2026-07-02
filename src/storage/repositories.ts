@@ -3150,7 +3150,10 @@ export class EphemeralRepository {
 
     const result = await this.db
       .deleteFrom("mika_ephemeral_records")
-      .where("kind", "=", "token")
+      // "cache_marker" covers the download-token reuse pointer (createOrderLineDownloadToken):
+      // it carries the same subjectHash as the "token" record it points to, and must be purged
+      // alongside it — otherwise account-delete erasure leaves a subject-linked pointer behind.
+      .where("kind", "in", ["token", "cache_marker"])
       .where("subject_hash", "in", [...new Set(subjectHashes)])
       .executeTakeFirst();
 

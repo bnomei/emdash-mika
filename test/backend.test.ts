@@ -3853,6 +3853,53 @@ describe("backend test Kysely stock database harness", () => {
   });
 });
 
+describe("backend test ephemeral token repository", () => {
+  it("purges the download-token reuse pointer alongside the token on account-delete erasure", async () => {
+    // createOrderLineDownloadToken's reuse pointer (kind: "cache_marker") carries the same
+    // subjectHash as the "token" record it points to. Account-delete erasure must sweep both, or
+    // a subject-linked pointer survives the customer's own token being purged.
+    const db = createTestMikaDb();
+    const repository = new EphemeralRepository(db);
+    const subjectHash = "customer:customer_1";
+
+    try {
+      await mikaInitialMigration.up(db);
+      await repository.put({
+        key: "download-token:token_1",
+        kind: "token",
+        subjectHash,
+        status: "pending",
+        count: 0,
+        expiresAt: TEST_NOW,
+        version: 1,
+        createdAt: TEST_NOW,
+        updatedAt: TEST_NOW,
+      });
+      await repository.put({
+        key: "download-token-pointer:order_1:order_line_1:download_ref_1",
+        kind: "cache_marker",
+        subjectHash,
+        status: "active",
+        count: 0,
+        expiresAt: TEST_NOW,
+        version: 1,
+        createdAt: TEST_NOW,
+        updatedAt: TEST_NOW,
+        data: { tokenId: "token_1" },
+      });
+
+      await expect(repository.deleteTokensBySubjectHashes([subjectHash])).resolves.toBe(2);
+      await expect(repository.get("download-token:token_1")).resolves.toBeNull();
+      await expect(
+        repository.get("download-token-pointer:order_1:order_line_1:download_ref_1"),
+      ).resolves.toBeNull();
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await db.destroy();
+    }
+  });
+});
+
 describe("backend test provider helpers", () => {
   it("satisfies the provider adapter contract", () => {
     expectTypeOf(createFakeMikaProvider().provider).toEqualTypeOf<MikaProviderAdapter>();
@@ -20856,7 +20903,11 @@ function createTestEphemeralRepository(): MikaEphemeralRepositoryPort {
       const subjects = new Set(subjectHashes);
       let deleted = 0;
       for (const [key, record] of records) {
-        if (record.kind === "token" && record.subjectHash && subjects.has(record.subjectHash)) {
+        if (
+          (record.kind === "token" || record.kind === "cache_marker") &&
+          record.subjectHash &&
+          subjects.has(record.subjectHash)
+        ) {
           records.delete(key);
           deleted += 1;
         }
