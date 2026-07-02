@@ -65,8 +65,26 @@ import type {
   MikaOperationPolicy as MikaServerOperationPolicy,
   MikaOperationDescriptor as MikaServerOperationDescriptor,
   MikaServerClient,
+  MikaAccountRepositoryPort,
+  MikaCatalogRepositoryPort,
+  MikaEphemeralRepositoryPort,
+  MikaLedgerRepositoryPort,
+  MikaOpsRepositoryPort,
+  MikaSessionRepositoryPort,
+  MikaStockRepositoryPort,
 } from "@bnomei/emdash-mika/server";
 import type { createMikaStripeProvider, MikaStripeClient } from "@bnomei/emdash-mika/stripe";
+import type {
+  CartLine,
+  PriceDefinition,
+  SellableDefinition,
+} from "@bnomei/emdash-mika/types/aggregates";
+import type {
+  CartDocument,
+  CatalogItemDocument,
+  OrderDocument,
+} from "@bnomei/emdash-mika/types/documents";
+import type { EphemeralRecord, StockItemRecord } from "@bnomei/emdash-mika/types/operational";
 import type {
   CartDTO,
   CartQuoteDTO,
@@ -163,6 +181,21 @@ export type PackageEntryContract = {
   readonly sellable: SellableDTO;
   readonly order: OrderSummaryDTO;
   readonly download: DownloadDTO;
+  readonly catalogRepositoryPort: MikaCatalogRepositoryPort;
+  readonly sessionRepositoryPort: MikaSessionRepositoryPort;
+  readonly accountRepositoryPort: MikaAccountRepositoryPort;
+  readonly ledgerRepositoryPort: MikaLedgerRepositoryPort;
+  readonly opsRepositoryPort: MikaOpsRepositoryPort;
+  readonly stockRepositoryPort: MikaStockRepositoryPort;
+  readonly ephemeralRepositoryPort: MikaEphemeralRepositoryPort;
+  readonly sellableDefinition: SellableDefinition;
+  readonly priceDefinition: PriceDefinition;
+  readonly cartLine: CartLine;
+  readonly catalogItemDocument: CatalogItemDocument;
+  readonly cartDocument: CartDocument;
+  readonly orderDocument: OrderDocument;
+  readonly stockItemRecord: StockItemRecord;
+  readonly ephemeralRecord: EphemeralRecord;
 };
 
 export type MissingRootMikaApi =

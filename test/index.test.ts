@@ -3942,6 +3942,9 @@ describe("public types", () => {
         "./stripe",
         "./templates/astro/*",
         "./types",
+        "./types/aggregates",
+        "./types/documents",
+        "./types/operational",
       ].sort(),
     );
     expect(exportsMap).not.toHaveProperty("./api");

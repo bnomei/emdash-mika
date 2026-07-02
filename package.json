@@ -86,6 +86,18 @@
     "./types": {
       "types": "./dist/types/index.d.mts",
       "import": "./dist/types/index.mjs"
+    },
+    "./types/aggregates": {
+      "types": "./dist/types/aggregates.d.mts",
+      "import": "./dist/types/aggregates.mjs"
+    },
+    "./types/documents": {
+      "types": "./dist/types/documents.d.mts",
+      "import": "./dist/types/documents.mjs"
+    },
+    "./types/operational": {
+      "types": "./dist/types/operational.d.mts",
+      "import": "./dist/types/operational.mjs"
     }
   },
   "publishConfig": {
@@ -93,7 +105,7 @@
   },
   "scripts": {
     "build": "npm run build:pack -- --clean",
-    "build:pack": "vp pack src/index.ts src/acp.ts src/agent.ts src/admin.ts src/astro.ts src/astro-actions.ts src/api/client.ts src/email.ts src/provider.ts src/react.ts src/server.ts src/stripe.ts src/types/index.ts --format esm --dts --tsconfig tsconfig.json --deps.never-bundle astro/zod --deps.never-bundle react --deps.never-bundle stripe",
+    "build:pack": "vp pack src/index.ts src/acp.ts src/agent.ts src/admin.ts src/astro.ts src/astro-actions.ts src/api/client.ts src/email.ts src/provider.ts src/react.ts src/server.ts src/stripe.ts src/types/index.ts src/types/aggregates.ts src/types/documents.ts src/types/operational.ts --format esm --dts --tsconfig tsconfig.json --deps.never-bundle astro/zod --deps.never-bundle react --deps.never-bundle stripe",
     "check": "vp check .",
     "pack:check": "npm run build:pack -- --clean --publint",
     "prepack": "npm run build",

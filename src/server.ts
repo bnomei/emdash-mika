@@ -18,6 +18,20 @@ export {
   type MikaApi,
   type MikaApiOverrides,
 } from "./api/server";
+/**
+ * Repository port contracts a host persistence layer implements to back
+ * {@link createMikaBackendApi}. Their document/record parameter types live on the
+ * `/types/documents`, `/types/aggregates`, and `/types/operational` subpaths.
+ */
+export type {
+  MikaAccountRepositoryPort,
+  MikaCatalogRepositoryPort,
+  MikaEphemeralRepositoryPort,
+  MikaLedgerRepositoryPort,
+  MikaOpsRepositoryPort,
+  MikaSessionRepositoryPort,
+  MikaStockRepositoryPort,
+} from "./api/backend";
 /** Repository-backed backend implementation injected into {@link createMikaApi}. */
 export {
   createMikaBackendApi,
