@@ -1574,6 +1574,96 @@ describe("Mika ACP projection", () => {
     expect(checkoutStartCount).toBe(0);
   });
 
+  it("validates ACP request body shapes before touching carts or sessions", async () => {
+    let cart = createCart([]);
+    let cartMutations = 0;
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cartMutations += 1;
+          cart = next;
+        },
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      createSessionId: () => "checkout_session_acp_body_validation",
+    });
+
+    const emptyItems = await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_empty_items", {
+        items: [],
+      }),
+    );
+    expect(emptyItems.status).toBe(400);
+    await expect(emptyItems.json()).resolves.toMatchObject({
+      code: "invalid_request",
+      message: expect.stringContaining("non-empty"),
+      param: "$.items",
+    });
+
+    const zeroQuantity = await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_zero_quantity", {
+        items: [{ id: "sellable_1:price_1", quantity: 0 }],
+      }),
+    );
+    expect(zeroQuantity.status).toBe(400);
+    await expect(zeroQuantity.json()).resolves.toMatchObject({
+      code: "invalid_request",
+      param: "$.items.0.quantity",
+    });
+
+    const junkBuyer = await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_junk_buyer", {
+        buyer: "not-an-object",
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+      }),
+    );
+    expect(junkBuyer.status).toBe(400);
+    await expect(junkBuyer.json()).resolves.toMatchObject({
+      code: "invalid_request",
+      param: "$.buyer",
+    });
+    expect(cartMutations).toBe(0);
+
+    const created = await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_body_validation", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+      }),
+    );
+    expect(created.status).toBe(201);
+
+    const badOption = await handlers.update(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_body_validation",
+        "idem_update_bad_option",
+        { fulfillment_option_id: 123 },
+      ),
+      "checkout_session_acp_body_validation",
+    );
+    expect(badOption.status).toBe(400);
+    await expect(badOption.json()).resolves.toMatchObject({
+      code: "invalid_request",
+      param: "$.fulfillment_option_id",
+    });
+
+    const missingPayment = await handlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_body_validation/complete",
+        "idem_complete_missing_payment",
+        { buyer: { email: "ada@example.test" } },
+      ),
+      "checkout_session_acp_body_validation",
+    );
+    expect(missingPayment.status).toBe(400);
+    await expect(missingPayment.json()).resolves.toMatchObject({
+      code: "invalid_request",
+      param: "$.payment_data",
+    });
+  });
+
   it("rejects concurrent ACP idempotency replays while the first request is in progress", async () => {
     let cart = createCart([]);
     let releaseCheckoutStart!: () => void;

@@ -4,6 +4,8 @@
  */
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
+import { z } from "astro/zod";
+
 import {
   createMikaRequestContext,
   type MikaRequestContext,
@@ -351,6 +353,52 @@ export interface MikaAcpPaymentData {
   readonly provider: "stripe" | "adyen" | "braintree";
   readonly billing_address?: MikaAcpAddress;
 }
+
+const acpBuyerSchema = z.object({
+  name: z.string().optional(),
+  email: z.string().optional(),
+  phone_number: z.string().optional(),
+}) satisfies z.ZodType<MikaAcpBuyer>;
+
+const acpItemSchema = z.object({
+  id: z.string().min(1),
+  quantity: z.number().int().positive(),
+}) satisfies z.ZodType<MikaAcpItem>;
+
+const acpAddressSchema = z.object({
+  name: z.string(),
+  line_one: z.string(),
+  line_two: z.string().optional(),
+  city: z.string(),
+  state: z.string(),
+  country: z.string(),
+  postal_code: z.string(),
+  phone_number: z.string().optional(),
+}) satisfies z.ZodType<MikaAcpAddress>;
+
+const acpPaymentDataSchema = z.object({
+  token: z.string().min(1),
+  provider: z.enum(["stripe", "adyen", "braintree"]),
+  billing_address: acpAddressSchema.optional(),
+}) satisfies z.ZodType<MikaAcpPaymentData>;
+
+const acpCheckoutCreateRequestSchema = z.object({
+  buyer: acpBuyerSchema.optional(),
+  items: z.array(acpItemSchema).min(1, "items must be a non-empty array."),
+  fulfillment_address: acpAddressSchema.optional(),
+}) satisfies z.ZodType<MikaAcpCheckoutCreateRequest>;
+
+const acpCheckoutUpdateRequestSchema = z.object({
+  buyer: acpBuyerSchema.optional(),
+  items: z.array(acpItemSchema).min(1, "items must be a non-empty array.").optional(),
+  fulfillment_address: acpAddressSchema.optional(),
+  fulfillment_option_id: z.string().min(1).optional(),
+}) satisfies z.ZodType<MikaAcpCheckoutUpdateRequest>;
+
+const acpCheckoutCompleteRequestSchema = z.object({
+  buyer: acpBuyerSchema.optional(),
+  payment_data: acpPaymentDataSchema,
+}) satisfies z.ZodType<MikaAcpCheckoutCompleteRequest>;
 
 /** ACP checkout session lifecycle state from cart reconciliation through payment. */
 export type MikaAcpCheckoutSessionStatus =
@@ -833,11 +881,8 @@ async function handleAcpCreate(
   const preflight = await verifyAcpRequest(options, request, true);
   if (preflight) return preflight;
 
-  const body = await readJson<MikaAcpCheckoutCreateRequest>(request);
-  if (!body.ok) return acpError(request, 400, "invalid_request", body.message);
-  if (!Array.isArray(body.data.items) || body.data.items.length === 0) {
-    return acpError(request, 400, "invalid_request", "items must be a non-empty array.", "$.items");
-  }
+  const body = await readAcpBody(request, acpCheckoutCreateRequestSchema);
+  if (!body.ok) return acpError(request, 400, "invalid_request", body.message, body.path);
 
   const now = nowIso(options);
   // id = ACP URL session; sessionId = isolated Mika cart/checkout session.
@@ -896,11 +941,11 @@ async function handleAcpUpdate(
       return acpTerminalError(request, terminalStatus, "updated");
     }
 
-    const body = await readJson<MikaAcpCheckoutUpdateRequest>(request);
+    const body = await readAcpBody(request, acpCheckoutUpdateRequestSchema);
     if (!body.ok) {
       await releaseAcpIdempotency(options, idempotency.lease);
 
-      return acpError(request, 400, "invalid_request", body.message);
+      return acpError(request, 400, "invalid_request", body.message, body.path);
     }
 
     // Item mutations are blocked once checkout.start has bound a checkoutId.
@@ -1016,22 +1061,11 @@ async function handleAcpComplete(
       );
     }
 
-    const body = await readJson<MikaAcpCheckoutCompleteRequest>(request);
+    const body = await readAcpBody(request, acpCheckoutCompleteRequestSchema);
     if (!body.ok) {
       await releaseLeases();
 
-      return acpError(request, 400, "invalid_request", body.message);
-    }
-    if (!body.data.payment_data?.token || !body.data.payment_data.provider) {
-      await releaseLeases();
-
-      return acpError(
-        request,
-        400,
-        "invalid_request",
-        "payment_data.token and provider are required.",
-        "$.payment_data",
-      );
+      return acpError(request, 400, "invalid_request", body.message, body.path);
     }
     const expectedProvider = providerToAcp(record.provider);
     if (body.data.payment_data.provider !== expectedProvider) {
@@ -1798,16 +1832,37 @@ async function verifyAcpRequest(
   return undefined;
 }
 
-async function readJson<T>(
+async function readAcpBody<TSchema extends z.ZodTypeAny>(
   request: Request,
+  schema: TSchema,
 ): Promise<
-  { readonly ok: true; readonly data: T } | { readonly ok: false; readonly message: string }
+  | { readonly ok: true; readonly data: z.infer<TSchema> }
+  | { readonly ok: false; readonly message: string; readonly path?: string }
 > {
+  let parsedJson: unknown;
   try {
-    return { ok: true, data: (await request.json()) as T };
+    parsedJson = await request.json();
   } catch {
     return { ok: false, message: "Request body must be valid JSON." };
   }
+
+  const parsed = schema.safeParse(parsedJson);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const path = issue && issue.path.length > 0 ? `$.${issue.path.join(".")}` : undefined;
+
+    return {
+      ok: false,
+      message: issue
+        ? path
+          ? `Request body is invalid at '${path}': ${issue.message}`
+          : `Request body is invalid: ${issue.message}`
+        : "Request body is invalid.",
+      ...(path ? { path } : {}),
+    };
+  }
+
+  return { ok: true, data: parsed.data as z.infer<TSchema> };
 }
 
 async function previewAcpCheckout(
