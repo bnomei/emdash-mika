@@ -1759,6 +1759,22 @@ describe("Mika ACP projection", () => {
       param: "$.fulfillment_option_id",
     });
 
+    // Empty items on update used to wipe the cart with a 200; cancel is the way to abandon.
+    const emptyUpdate = await handlers.update(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_body_validation",
+        "idem_update_empty_items",
+        { items: [] },
+      ),
+      "checkout_session_acp_body_validation",
+    );
+    expect(emptyUpdate.status).toBe(400);
+    await expect(emptyUpdate.json()).resolves.toMatchObject({
+      code: "invalid_request",
+      message: expect.stringContaining("non-empty"),
+      param: "$.items",
+    });
+
     const missingPayment = await handlers.complete(
       acpRequest(
         "https://shop.example.test/checkout_sessions/checkout_session_acp_body_validation/complete",
