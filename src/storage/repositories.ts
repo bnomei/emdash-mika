@@ -771,6 +771,22 @@ export class SessionRepository {
     return documentOfType(updated, "cart");
   }
 
+  async putCartIfUnchanged(
+    cart: CartDocument,
+    expectedUpdatedAt: ISODateTime,
+  ): Promise<CartDocument | null> {
+    const updated = await this.documents.update(cart.id, (current) => {
+      const existing = documentOfType(current, "cart");
+      if (!existing || existing.status !== "open" || existing.updatedAt !== expectedUpdatedAt) {
+        return null;
+      }
+
+      return cart;
+    });
+
+    return documentOfType(updated, "cart");
+  }
+
   async findWishlistBySession(sessionId: string): Promise<WishlistDocument | null> {
     return this.documents.findOneByType("wishlist", {
       sessionId,

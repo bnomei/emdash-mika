@@ -331,6 +331,19 @@ export interface MikaSessionRepositoryPort {
     readonly checkoutId: MikaId;
     readonly now: ISODateTime;
   }): Promise<CartDocument | null>;
+  /**
+   * Optimistic-concurrency cart write for ordinary line/coupon mutations (add, update, remove,
+   * apply/remove coupon): persists `cart` only when the stored cart is still `open` and its
+   * `updatedAt` still equals `expectedUpdatedAt`. Returns null when another writer already
+   * changed the cart since it was read (concurrent tab, concurrent checkout claim, etc.) — same
+   * CAS pattern as {@link claimCartForCheckout}, so a blind `put` can never silently discard a
+   * concurrent write. Callers surface a conflict rather than merge or retry server-side, so the
+   * client re-fetches the current cart before resubmitting.
+   */
+  putCartIfUnchanged(
+    cart: CartDocument,
+    expectedUpdatedAt: ISODateTime,
+  ): Promise<CartDocument | null>;
   findWishlistBySession(sessionId: string): Promise<WishlistDocument | null>;
   findWishlistByCustomer(customerId: MikaId): Promise<WishlistDocument | null>;
   findCheckoutByProvider(
@@ -1161,6 +1174,13 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
         : [...currentItems, resolved.line];
       const updated = updateCartDocument(document, items, ctx.now);
 
+      if (existing) {
+        const persisted = await putCartOrConflict(input, updated, existing.updatedAt);
+        if (!persisted.ok) return persisted;
+
+        return { ok: true, status: 200, data: await cartDocumentToDTO(input, persisted.cart) };
+      }
+
       await input.repositories.session.put(updated);
 
       return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
@@ -1200,9 +1220,10 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
         ctx.now,
       );
 
-      await input.repositories.session.put(updated);
+      const persisted = await putCartOrConflict(input, updated, document.updatedAt);
+      if (!persisted.ok) return persisted;
 
-      return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
+      return { ok: true, status: 200, data: await cartDocumentToDTO(input, persisted.cart) };
     },
     remove: async (ctx, itemInput) => {
       const document = await findOrCreateOpenCart(input, ctx);
@@ -1218,9 +1239,10 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
         ctx.now,
       );
 
-      await input.repositories.session.put(updated);
+      const persisted = await putCartOrConflict(input, updated, document.updatedAt);
+      if (!persisted.ok) return persisted;
 
-      return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
+      return { ok: true, status: 200, data: await cartDocumentToDTO(input, persisted.cart) };
     },
     merge: async (ctx, mergeInput) => {
       const currency = defaultBackendCurrency(input);
@@ -1310,9 +1332,10 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
         }),
       };
 
-      await input.repositories.session.put(updated);
+      const persisted = await putCartOrConflict(input, updated, cartResult.cart.updatedAt);
+      if (!persisted.ok) return persisted;
 
-      return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
+      return { ok: true, status: 200, data: await cartDocumentToDTO(input, persisted.cart) };
     },
     removeCoupon: async (ctx, couponInput) => {
       const cartResult = couponInput.cartId
@@ -1328,9 +1351,10 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
         aggregate: cartWithoutCoupon({ cart: cartResult.cart.aggregate }),
       };
 
-      await input.repositories.session.put(updated);
+      const persisted = await putCartOrConflict(input, updated, cartResult.cart.updatedAt);
+      if (!persisted.ok) return persisted;
 
-      return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
+      return { ok: true, status: 200, data: await cartDocumentToDTO(input, persisted.cart) };
     },
   } satisfies MikaApi["cart"];
 
@@ -7152,6 +7176,26 @@ function cartWriteBlocked(cart: CartDocument): MikaApiFailure | null {
   return apiFailure(409, "CONFLICT", `Cart '${cart.id}' is locked by an active checkout.`, {
     cartId: "Cart is locked by an active checkout.",
   });
+}
+
+/**
+ * Attempts an optimistic-concurrency cart write and reports a conflict when another writer
+ * (a concurrent tab, or a checkout claim) already changed the cart since it was read, instead of
+ * blindly overwriting — and silently discarding — that concurrent write.
+ */
+async function putCartOrConflict(
+  input: MikaCartWishlistBackendInput,
+  cart: CartDocument,
+  expectedUpdatedAt: ISODateTime,
+): Promise<{ readonly ok: true; readonly cart: CartDocument } | MikaApiFailure> {
+  const persisted = await input.repositories.session.putCartIfUnchanged(cart, expectedUpdatedAt);
+  if (!persisted) {
+    return apiFailure(409, "CONFLICT", `Cart '${cart.id}' was changed by another request.`, {
+      cartId: "Cart was changed by another request. Reload the cart and try again.",
+    });
+  }
+
+  return { ok: true, cart: persisted };
 }
 
 function checkoutIsResumable(checkout: CheckoutDocument, now: ISODateTime): boolean {

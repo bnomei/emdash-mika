@@ -15109,6 +15109,104 @@ describe("backend API composition", () => {
     expect(cart.data.items).toHaveLength(1);
   });
 
+  it("rejects a concurrent cart write instead of silently discarding it (CAS, not blind put)", async () => {
+    const contentRef = createTestContentRef();
+    const sellableA = createSellableDefinition();
+    const sellableB = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellableA.id,
+          createStockRecord({ sellableId: sellableA.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+        [
+          sellableB.id,
+          createStockRecord({ sellableId: sellableB.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellableA, sellableB] }),
+    );
+    const seedApi = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+    // Two tabs are two separate requests, each stamped with its own receipt time. Both must differ
+    // from the seed write's timestamp too — otherwise the first of the two concurrent writes would
+    // (coincidentally) restamp the cart with the exact same updatedAt it already had, and the CAS
+    // check on the second write would vacuously pass regardless of whether it's implemented right.
+    const ctxUpdate = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      now: createTestClock().at(1000),
+    });
+    const ctxAdd = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      now: createTestClock().at(2000),
+    });
+
+    const seeded = await seedApi.cart.add(ctx, { sellableId: sellableA.id, quantity: 1 });
+    if (!seeded.ok) throw new Error("Expected seed cart.add to succeed.");
+    const seededLineId = seeded.data.items[0]!.id;
+
+    // Whichever call's write reaches putCartIfUnchanged first is let through immediately; the
+    // second is held until the first fully commits, so its captured expectedUpdatedAt is
+    // guaranteed stale — deterministically reproducing "two tabs write the same cart" without
+    // relying on incidental Promise scheduling order.
+    let firstWrite: Promise<CartDocument | null> | undefined;
+    const gatedSession = new Proxy(repositories.session, {
+      get(target, property, receiver) {
+        if (property === "putCartIfUnchanged") {
+          return async (cart: CartDocument, expectedUpdatedAt: ISODateTime) => {
+            if (!firstWrite) {
+              firstWrite = target.putCartIfUnchanged(cart, expectedUpdatedAt);
+              return firstWrite;
+            }
+            await firstWrite;
+            return target.putCartIfUnchanged(cart, expectedUpdatedAt);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories: { ...repositories, session: gatedSession },
+      }),
+    );
+
+    const [updateResult, addResult] = await Promise.all([
+      api.cart.update(ctxUpdate, { lineId: seededLineId, quantity: 3 }),
+      api.cart.add(ctxAdd, { sellableId: sellableB.id, quantity: 1 }),
+    ]);
+
+    const results = [updateResult, addResult];
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    const conflicts = results.filter((result) => !result.ok);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]).toMatchObject({ ok: false, status: 409, error: { code: "CONFLICT" } });
+
+    const finalCart = await api.cart.get(ctx);
+    if (!finalCart.ok) throw new Error("Expected cart.get to succeed.");
+    if (updateResult.ok) {
+      // The update won: quantity changed, sellableB was never added — not silently merged in.
+      expect(finalCart.data.items).toEqual([
+        expect.objectContaining({ sellableId: sellableA.id, quantity: 3 }),
+      ]);
+    } else {
+      // The add won: original line untouched, sellableB present — not silently discarded.
+      expect(finalCart.data.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ sellableId: sellableA.id, quantity: 1 }),
+          expect.objectContaining({ sellableId: sellableB.id, quantity: 1 }),
+        ]),
+      );
+      expect(finalCart.data.items).toHaveLength(2);
+    }
+  });
+
   it("returns stable errors for missing cart lines on update and remove", async () => {
     const api = createMikaBackendApi(createIncrementingBackendDependencies());
     const ctx = createTestRequestContext({
