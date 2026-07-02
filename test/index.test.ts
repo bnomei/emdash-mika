@@ -398,6 +398,29 @@ describe("Mika native plugin package", () => {
     expect(() => createPlugin({ assertWired: ["checkout"] })).toThrow(/checkout\.start/);
   });
 
+  it("hints at descriptor serialization when a provided api arrives unwired", () => {
+    // The EmDash host JSON-serializes descriptor options, stripping function values.
+    const serialized = JSON.parse(JSON.stringify({ api: { cart: {} } })) as MikaCreatePluginOptions;
+    expect(() => createPlugin(serialized)).toThrow(/JSON-serializes descriptor options/);
+    expect(() => createPlugin()).not.toThrow(/JSON-serializes descriptor options/);
+  });
+
+  it("rethrows unknown assertWired scopes without the wiring remediation", () => {
+    expect(() => createPlugin({ assertWired: ["chekout"] })).toThrow(
+      /Unknown Mika API wiring scope/,
+    );
+    expect(() => createPlugin({ assertWired: ["chekout"] })).not.toThrow(/assertWired: false/);
+    expect(() => createPlugin({ assertWired: ["chekout"] })).toThrow(/assertWired entries/);
+  });
+
+  it("forwards assertWired through the mikaPlugin descriptor options", () => {
+    expect(mikaPlugin({ assertWired: false }).options).toMatchObject({ assertWired: false });
+    expect(mikaPlugin({ assertWired: ["catalog"] }).options).toMatchObject({
+      assertWired: ["catalog"],
+    });
+    expect(mikaPlugin().options).not.toHaveProperty("assertWired");
+  });
+
   it("scopes the wiring assertion to requested namespaces and methods", () => {
     expect(() =>
       createPlugin({

@@ -102,6 +102,12 @@ otherwise — unwired methods would answer `501` on every route at runtime. Pass
 `assertWired: ["cart", "checkout.start"]` to assert a subset, or
 `assertWired: false` to accept partial wiring.
 
+Note: the EmDash host JSON-serializes descriptor options into a generated
+module, so function-valued options — including a live `api` — cannot cross the
+descriptor boundary. If plugin activation reports missing wired methods,
+register a host entrypoint module that calls `createPlugin({ api })` with the
+live backend and point `mikaPlugin({ entrypoint })` at it.
+
 ## Examples
 
 The package includes copyable Astro templates and stable example docs under:

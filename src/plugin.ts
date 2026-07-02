@@ -131,8 +131,17 @@ export function createPlugin(options: MikaCreatePluginOptions = {}) {
       assertMikaApiWired(api, Array.isArray(assertWired) ? { scope: assertWired } : {});
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (message.startsWith("Unknown Mika API wiring scope")) {
+        throw new Error(
+          `${message} Check the assertWired entries against MikaApi namespace and 'namespace.method' names.`,
+        );
+      }
+      const wiringHint =
+        options.api !== undefined
+          ? "An api option was provided but its methods are missing — if it was passed through mikaPlugin() in astro.config, note the EmDash host JSON-serializes descriptor options, so live functions cannot cross; register a host entrypoint module that calls createPlugin({ api }) with the live backend instead."
+          : "Wire the backend (e.g. createMikaBackendApi()) into the plugin's api option.";
       throw new Error(
-        `${message} Every unwired method answers 501 at runtime. Wire the backend (e.g. createMikaBackendApi()) into the plugin's api option, scope the check with assertWired: ["cart", ...], or pass assertWired: false to accept partial wiring.`,
+        `${message} Every unwired method answers 501 at runtime. ${wiringHint} Scope the check with assertWired: ["cart", ...] or pass assertWired: false to accept partial wiring.`,
       );
     }
   }

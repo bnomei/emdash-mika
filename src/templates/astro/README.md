@@ -176,6 +176,12 @@ export default defineConfig({
 });
 ```
 
+Note: the EmDash host JSON-serializes descriptor options into a generated
+module, so function-valued options — including a live `api` — cannot cross the
+descriptor boundary. If plugin activation reports missing wired methods,
+register a host entrypoint module that calls `createPlugin({ api })` with the
+live backend and point `mikaPlugin({ entrypoint })` at it.
+
 Install and enable Kumo UI in the host app:
 
 ```sh
