@@ -15529,6 +15529,86 @@ describe("backend API composition", () => {
     );
   });
 
+  it("writes a legacy cart persisted before `version` existed, instead of permanently 409ing it", async () => {
+    // A cart written before `version` was introduced has no such field at runtime, despite the
+    // type declaring it required. version + 1 on `undefined` would be NaN, and NaN !== NaN is
+    // always true — so a naive CAS check would reject every subsequent write to this cart
+    // forever. The repository must treat a missing version as "nothing to compare" and allow the
+    // write, and nextCartVersion must recover a real counter (1) rather than propagating NaN.
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const seeded = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    if (!seeded.ok) throw new Error("Expected seed cart.add to succeed.");
+    const cartId = seeded.data.id;
+
+    const stored = await repositories.session.findById(cartId);
+    if (!stored || stored.type !== "cart") throw new Error("Expected a stored cart document.");
+    const { version: _version, ...legacyCart } = stored;
+    await repositories.session.put(legacyCart as unknown as CartDocument);
+    const restored = await repositories.session.findById(cartId);
+    expect(restored && "version" in restored ? restored.version : undefined).toBeUndefined();
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    expect(added).toMatchObject({ ok: true });
+    if (!added.ok) throw new Error("unreachable");
+    expect(added.data.items).toEqual([
+      expect.objectContaining({ sellableId: sellable.id, quantity: 2 }),
+    ]);
+
+    // The write must also recover a real version counter, not carry NaN forward — otherwise this
+    // cart would be writable exactly once more before NaN !== NaN bricks it again.
+    await expect(repositories.session.findById(cartId)).resolves.toMatchObject({ version: 1 });
+  });
+
+  it("starts checkout on a legacy cart whose version was never skipped-and-then-rejected", async () => {
+    // startCheckout used to only call claimCartForCheckout when resolved.cartVersion !== undefined
+    // — for a cart persisted before `version` existed, that skipped the claim entirely (claimedCart
+    // stayed null), which then tripped the very next check (`resolved.cart && !claimedCart` ->
+    // 409), making every pre-existing cart permanently uncheckoutable with zero concurrency
+    // involved. The claim must always be attempted; the repository handles the undefined version.
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const seeded = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    if (!seeded.ok) throw new Error("Expected seed cart.add to succeed.");
+    const cartId = seeded.data.id;
+
+    const stored = await repositories.session.findById(cartId);
+    if (!stored || stored.type !== "cart") throw new Error("Expected a stored cart document.");
+    const { version: _version, ...legacyCart } = stored;
+    await repositories.session.put(legacyCart as unknown as CartDocument);
+
+    const checkout = await api.checkout.start(ctx, { cartId });
+    expect(checkout).toMatchObject({ ok: true });
+  });
+
   it("does not orphan a line into an invisible duplicate cart on concurrent first-adds", async () => {
     // Two simultaneous first-add requests (e.g. a double click before any cart exists yet) both
     // see no existing cart via findOpenCart. Without serializing the create, each would blind-put

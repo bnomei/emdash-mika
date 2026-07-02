@@ -551,6 +551,15 @@ function adminAuditWithId(document: AdminAuditDocument, id: MikaId): AdminAuditD
   };
 }
 
+/**
+ * Increments a cart's optimistic-concurrency version, tolerating a missing `current` (a cart
+ * persisted before this field existed) by treating it as version 0 rather than producing NaN —
+ * which would otherwise permanently 409 every write to that cart from here on (NaN !== NaN).
+ */
+function nextCartVersion(current: number | undefined): number {
+  return (current ?? 0) + 1;
+}
+
 function cartWithCheckoutClaim(
   cart: CartDocument,
   checkoutId: MikaId,
@@ -569,7 +578,7 @@ function cartWithCheckoutClaim(
       },
     },
     updatedAt: now,
-    version: cart.version + 1,
+    version: nextCartVersion(cart.version),
   };
 }
 
@@ -588,7 +597,7 @@ function cartWithoutCheckoutClaim(cart: CartDocument, now: ISODateTime): CartDoc
       metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     },
     updatedAt: now,
-    version: cart.version + 1,
+    version: nextCartVersion(cart.version),
   };
 }
 
@@ -775,15 +784,17 @@ export class SessionRepository {
   async claimCartForCheckout(input: {
     readonly cartId: MikaId;
     readonly checkoutId: MikaId;
-    readonly expectedVersion: number;
+    readonly expectedVersion: number | undefined;
     readonly claimExpiresAt: ISODateTime;
     readonly now: ISODateTime;
   }): Promise<CartDocument | null> {
     const updated = await this.documents.update(input.cartId, (current) => {
       const cart = documentOfType(current, "cart");
-      if (!cart || cart.status !== "open" || cart.version !== input.expectedVersion) {
-        return null;
-      }
+      if (!cart || cart.status !== "open") return null;
+      // A cart with no version (persisted before this field existed) has nothing to compare —
+      // allow the write instead of vacuously matching (undefined !== expectedVersion is always
+      // true, so a strict check would permanently 409 every such cart) or vacuously rejecting it.
+      if (cart.version !== undefined && cart.version !== input.expectedVersion) return null;
 
       return cartWithCheckoutClaim(cart, input.checkoutId, input.claimExpiresAt, input.now);
     });
@@ -813,9 +824,10 @@ export class SessionRepository {
   ): Promise<CartDocument | null> {
     const updated = await this.documents.update(cart.id, (current) => {
       const existing = documentOfType(current, "cart");
-      if (!existing || existing.status !== "open" || existing.version !== expectedVersion) {
-        return null;
-      }
+      if (!existing || existing.status !== "open") return null;
+      // See claimCartForCheckout: a cart with no version (persisted before this field existed)
+      // has nothing to compare — allow the write rather than permanently 409ing every such cart.
+      if (existing.version !== undefined && existing.version !== expectedVersion) return null;
 
       return cart;
     });

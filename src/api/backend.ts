@@ -320,11 +320,14 @@ export interface MikaSessionRepositoryPort {
    * `version` (a monotonic counter) rather than `updatedAt`, since two genuinely concurrent
    * writers can share the same millisecond-resolution wall-clock timestamp — a stale writer's CAS
    * check against `updatedAt` alone can then vacuously pass against a value that never changed.
+   * `expectedVersion` is `undefined` when the caller read a cart persisted before `version`
+   * existed; implementations must allow the claim in that case (nothing to compare against)
+   * rather than always rejecting it.
    */
   claimCartForCheckout(input: {
     readonly cartId: MikaId;
     readonly checkoutId: MikaId;
-    readonly expectedVersion: number;
+    readonly expectedVersion: number | undefined;
     readonly claimExpiresAt: ISODateTime;
     readonly now: ISODateTime;
   }): Promise<CartDocument | null>;
@@ -1317,7 +1320,7 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
       const updated: CartDocument = {
         ...cartResult.cart,
         updatedAt: ctx.now,
-        version: cartResult.cart.version + 1,
+        version: nextCartVersion(cartResult.cart.version),
         aggregate: cartWithCoupon({
           cart: cartResult.cart.aggregate,
           coupon,
@@ -1340,7 +1343,7 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
       const updated: CartDocument = {
         ...cartResult.cart,
         updatedAt: ctx.now,
-        version: cartResult.cart.version + 1,
+        version: nextCartVersion(cartResult.cart.version),
         aggregate: cartWithoutCoupon({ cart: cartResult.cart.aggregate }),
       };
 
@@ -6225,6 +6228,7 @@ async function completeCheckoutForPaymentOrder(
   await input.repositories.session.put({
     ...document,
     status: "converted",
+    version: nextCartVersion(document.version),
     updatedAt: ctx.now,
     aggregate: {
       ...document.aggregate,
@@ -7268,7 +7272,7 @@ async function abandonMergedSourceCart(
     ...source,
     status: "abandoned",
     updatedAt: ctx.now,
-    version: source.version + 1,
+    version: nextCartVersion(source.version),
   };
   const released = await input.repositories.session.putCartIfUnchanged(abandoned, source.version);
   if (released) return target;
@@ -7309,7 +7313,7 @@ async function abandonMergedSourceCart(
     ...latestSource,
     status: "abandoned",
     updatedAt: ctx.now,
-    version: latestSource.version + 1,
+    version: nextCartVersion(latestSource.version),
   };
   await input.repositories.session.putCartIfUnchanged(retryAbandoned, latestSource.version);
 
@@ -7425,6 +7429,7 @@ function reopenCartDocument(cart: CartDocument, now: ISODateTime): CartDocument 
     ...cart,
     status: "open",
     updatedAt: now,
+    version: nextCartVersion(cart.version),
     aggregate: {
       ...cart.aggregate,
       items: cart.aggregate.items.map((item) =>
@@ -7777,16 +7782,17 @@ async function startCheckout(
   const expiresAt = checkoutExpiresAt(input, ctx);
   const statusToken = input.createId("checkout_status_token");
   // Optimistic cart claim serializes concurrent checkout starts; release on any downstream failure.
-  const claimedCart =
-    resolved.cart && resolved.cartVersion !== undefined
-      ? await input.repositories.session.claimCartForCheckout({
-          cartId: resolved.cart.id,
-          checkoutId,
-          expectedVersion: resolved.cartVersion,
-          claimExpiresAt: expiresAt,
-          now: ctx.now,
-        })
-      : null;
+  // expectedVersion may be undefined for a cart persisted before `version` existed — the
+  // repository leniently allows the claim in that case rather than rejecting it outright.
+  const claimedCart = resolved.cart
+    ? await input.repositories.session.claimCartForCheckout({
+        cartId: resolved.cart.id,
+        checkoutId,
+        expectedVersion: resolved.cartVersion,
+        claimExpiresAt: expiresAt,
+        now: ctx.now,
+      })
+    : null;
   if (resolved.cart && !claimedCart) {
     return apiFailure(409, "CONFLICT", "Cart is already being checked out.", {
       cartId: "Cart is already being checked out.",
@@ -9422,6 +9428,15 @@ function createCartDocument(
   };
 }
 
+/**
+ * Increments a cart's optimistic-concurrency version, tolerating a missing `current` (a cart
+ * persisted before this field existed) by treating it as version 0 rather than producing NaN —
+ * which would otherwise permanently 409 every write to that cart from here on (NaN !== NaN).
+ */
+function nextCartVersion(current: number | undefined): number {
+  return (current ?? 0) + 1;
+}
+
 function updateCartDocument(
   cart: CartDocument,
   items: readonly CartLine[],
@@ -9431,7 +9446,7 @@ function updateCartDocument(
   return {
     ...cart,
     updatedAt,
-    version: cart.version + 1,
+    version: nextCartVersion(cart.version),
     aggregate: cartWithItems({ cart: cart.aggregate, items, coupon }),
   };
 }
