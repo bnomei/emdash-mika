@@ -81,6 +81,18 @@ export function stringChild(input: JsonObject, key: string): string | undefined 
   return typeof value === "string" ? value : undefined;
 }
 
+export function metadataString(metadata: JsonObject | undefined, key: string): string | undefined {
+  const value = metadata?.[key];
+
+  return typeof value === "string" ? value : undefined;
+}
+
+export function metadataMikaId(metadata: JsonObject | undefined, key: string): MikaId | undefined {
+  const value = metadataString(metadata, key);
+
+  return value ? createMikaId(value) : undefined;
+}
+
 export function booleanChild(input: JsonObject, key: string): boolean | undefined {
   const value = input[key];
   return typeof value === "boolean" ? value : undefined;

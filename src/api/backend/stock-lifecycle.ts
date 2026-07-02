@@ -147,3 +147,15 @@ export function createMikaStockLifecycleService(
       }),
   };
 }
+
+export async function expireCheckoutReservations(
+  input: MikaStockLifecycleDependencies,
+  reservationIds: readonly MikaId[],
+  now: ISODateTime,
+): Promise<void> {
+  const stock = createMikaStockLifecycleService(input);
+
+  for (const reservationEventId of reservationIds) {
+    await stock.expire({ reservationEventId, now });
+  }
+}
