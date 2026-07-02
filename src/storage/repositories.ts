@@ -37,6 +37,10 @@ import {
   workflowIsDueForLease,
   workflowIsExhausted,
 } from "./repositories/ops/workflow-helpers";
+import {
+  webhookDocumentWithRecord,
+  webhookRawPayloadIsPurgeable,
+} from "./repositories/ops/webhook-helpers";
 
 export type { MikaDb, MikaDbExecutor, MikaTransaction } from "./repositories/db-shared";
 export { EphemeralRepository } from "./repositories/ephemeral";
@@ -1015,23 +1019,6 @@ export class OpsRepository {
   async put(document: OpsDocument): Promise<void> {
     await this.documents.put(document);
   }
-}
-
-function webhookRawPayloadIsPurgeable(webhook: WebhookDocument, cutoff: ISODateTime): boolean {
-  return (
-    webhook.record.receivedAt <= cutoff &&
-    webhook.record.rawPayloadJson !== undefined &&
-    webhook.record.rawPayloadPurgedAt === undefined &&
-    (webhook.status === "processed" || webhook.record.normalizedPayloadJson !== undefined)
-  );
-}
-
-function webhookDocumentWithRecord(
-  webhook: WebhookDocument,
-  now: ISODateTime,
-  patch: Partial<WebhookDocument["record"]>,
-): WebhookDocument {
-  return mirrorRecordFields(webhook, now, patch, ["status", "nextAttemptAt", "receivedAt"]);
 }
 
 function emailIsDueForLease(email: EmailDocument, now: ISODateTime, force = false): boolean {
