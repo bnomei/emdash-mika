@@ -7282,18 +7282,27 @@ async function abandonMergedSourceCart(
     return target;
   }
 
-  // Merge only lines the first pass never saw — re-merging latestSource wholesale would
-  // double-count every line source already had at the original read (mergeCartLines has no way
-  // to tell "already merged" apart from "new" once both sides are full carts).
-  const alreadyMergedLineIds = new Set(source.aggregate.items.map((line) => line.id));
-  const newLines = latestSource.aggregate.items.filter(
-    (line) => !alreadyMergedLineIds.has(line.id),
-  );
-  if (newLines.length === 0) return target;
+  // Merge only what changed since the first pass never saw — re-merging latestSource wholesale
+  // would double-count every line source already had at the original read (mergeCartLines has no
+  // way to tell "already merged" apart from "new" once both sides are full carts). A line entirely
+  // new since the original read is merged at its full quantity; a line that was already merged but
+  // whose quantity grew concurrently (e.g. a racing cart.update bumping it) is merged at only the
+  // increase, since its original quantity is already reflected in target. A quantity decrease (or
+  // no change) has nothing left to recover, and is dropped from this retry.
+  const originalLinesById = new Map(source.aggregate.items.map((line) => [line.id, line]));
+  const deltaLines = latestSource.aggregate.items.flatMap((line) => {
+    const original = originalLinesById.get(line.id);
+    if (!original) return [line];
+    if (line.quantity > original.quantity) {
+      return [{ ...line, quantity: line.quantity - original.quantity }];
+    }
+    return [];
+  });
+  if (deltaLines.length === 0) return target;
 
   const retryMerged = await mergeCartLines(input, target, {
     ...latestSource,
-    aggregate: { ...latestSource.aggregate, items: newLines },
+    aggregate: { ...latestSource.aggregate, items: deltaLines },
   });
   if (!retryMerged.ok) return target;
 

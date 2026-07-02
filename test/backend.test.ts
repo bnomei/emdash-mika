@@ -15993,6 +15993,120 @@ describe("backend API composition", () => {
     ).resolves.toBeNull();
   });
 
+  it("recovers a quantity bump on an already-merged line, instead of dropping it", async () => {
+    // A line present at merge-read time whose quantity is bumped concurrently (e.g. a racing
+    // cart.update) is a different case from a brand-new line: it's already in target's merged
+    // items at its original quantity, so the retry must merge only the *increase*, not the new
+    // total (which would double count) and not nothing (which would silently drop the increase).
+    const contentRef = createTestContentRef();
+    const sellableA = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
+    const sellableB = createSellableDefinition({ id: createTestMikaId("sellable", 2) });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellableB.id,
+          createStockRecord({ sellableId: sellableB.id, quantityOnHand: 10, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellableA, sellableB] }),
+    );
+    // One shared dependencies object (one id-factory counter) for both the seed and gated api
+    // instances below — see the sibling test above for why this matters.
+    const dependencies = createIncrementingBackendDependencies({ repositories });
+    const seedApi = createMikaBackendApi(dependencies);
+    const guestCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_handoff_qty",
+    });
+    const priorCustomerCtx = createTestRequestContext({
+      customerId: "customer_1",
+      userId: "user_1",
+      sessionId: "session_prior_qty",
+    });
+    const callerCtx = createTestRequestContext({
+      customerId: "customer_1",
+      userId: "user_1",
+      sessionId: "session_handoff_qty",
+    });
+    const concurrentUpdateCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_handoff_qty",
+    });
+
+    const guestCart = await seedApi.cart.add(guestCtx, { sellableId: sellableB.id, quantity: 1 });
+    if (!guestCart.ok) throw new Error("Expected seed cart.add to succeed.");
+    const guestLineId = guestCart.data.items[0]?.id;
+    if (!guestLineId) throw new Error("Expected a seeded guest cart line.");
+    const customerCart = await seedApi.cart.add(priorCustomerCtx, {
+      sellableId: sellableA.id,
+      quantity: 1,
+    });
+    if (!customerCart.ok) throw new Error("Expected seed cart.add to succeed.");
+
+    let targetWriteEntered: (() => void) | undefined;
+    const targetWriteEnteredPromise = new Promise<void>((resolve) => {
+      targetWriteEntered = resolve;
+    });
+    let releaseTargetWrite: (() => void) | undefined;
+    const releaseTargetWritePromise = new Promise<void>((resolve) => {
+      releaseTargetWrite = resolve;
+    });
+    let gated = false;
+    const gatedSession = new Proxy(repositories.session, {
+      get(target, property, receiver) {
+        if (property === "putCartIfUnchanged") {
+          return async (cart: CartDocument, expectedVersion: number) => {
+            if (!gated && cart.id === customerCart.data.id) {
+              gated = true;
+              targetWriteEntered?.();
+              await releaseTargetWritePromise;
+            }
+            return target.putCartIfUnchanged(cart, expectedVersion);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const api = createMikaBackendApi({
+      ...dependencies,
+      repositories: { ...repositories, session: gatedSession },
+    });
+
+    const mergePromise = api.cart.merge(callerCtx, {
+      targetCartId: customerCart.data.id,
+      sourceSessionId: "session_handoff_qty",
+    });
+    await targetWriteEnteredPromise;
+    // While merge is paused right before writing the target (having already read the source as
+    // [B qty 1]), a concurrent update bumps B's quantity to 4 on that same source cart.
+    await expect(
+      api.cart.update(concurrentUpdateCtx, { lineId: guestLineId, quantity: 4 }),
+    ).resolves.toMatchObject({ ok: true });
+    releaseTargetWrite?.();
+
+    const merged = await mergePromise;
+    expect(merged).toMatchObject({ ok: true, status: 200 });
+    if (!merged.ok) throw new Error("Expected cart.merge to succeed.");
+    // B's full post-bump quantity (4) survives — the original 1 merged normally, and the retry
+    // recovered the +3 increase rather than double-counting to 5 or dropping it back to 1.
+    expect(merged.data.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ sellableId: sellableA.id, quantity: 1 }),
+        expect.objectContaining({ sellableId: sellableB.id, quantity: 4 }),
+      ]),
+    );
+    expect(merged.data.items).toHaveLength(2);
+    await expect(
+      repositories.session.findOpenCartBySession("session_handoff_qty", TEST_CURRENCY),
+    ).resolves.toBeNull();
+  });
+
   it("does not orphan a checkout_pending cart's reservation when its owner triggers a cart.merge", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();
