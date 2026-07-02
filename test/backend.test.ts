@@ -13,6 +13,7 @@ import { Kysely, sql } from "kysely";
 import {
   createMikaStockLifecycleService,
   createMikaBackendApi,
+  createMikaFixedRateCouponResolver,
   type CreateMikaBackendApiInput,
   type MikaBackendDependencies,
   type MikaBackendRepositories,
@@ -15154,6 +15155,120 @@ describe("backend API composition", () => {
     });
   });
 
+  it("rejects coupon codes when no coupon resolver is configured", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({ repositories, config: {} }),
+    );
+    const ctx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+    });
+
+    await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+
+    await expect(api.cart.applyCoupon(ctx, { code: "save10" })).resolves.toMatchObject({
+      ok: false,
+      status: 422,
+      error: {
+        code: "VALIDATION_FAILED",
+        fieldErrors: { code: "Coupon codes are not supported." },
+      },
+    });
+  });
+
+  it("rejects coupon codes the resolver declines and honors resolved terms", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        config: {
+          coupons: {
+            resolver: ({ code }) =>
+              code === "QUARTER" ? { label: "Quarter Off", rate: 0.25 } : null,
+          },
+        },
+      }),
+    );
+    const ctx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+    });
+
+    await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+
+    await expect(api.cart.applyCoupon(ctx, { code: "save10" })).resolves.toMatchObject({
+      ok: false,
+      status: 422,
+      error: {
+        code: "VALIDATION_FAILED",
+        fieldErrors: { code: "Coupon code 'SAVE10' is not valid." },
+      },
+    });
+    await expect(api.cart.applyCoupon(ctx, { code: " quarter " })).resolves.toMatchObject({
+      ok: true,
+      data: {
+        coupon: {
+          label: "Quarter Off",
+          discount: { amount: 600, currency: TEST_CURRENCY },
+        },
+        subtotal: { amount: 2400, currency: TEST_CURRENCY },
+        total: { amount: 1800, currency: TEST_CURRENCY },
+      },
+    });
+  });
+
+  it("flags unresolvable quote couponCodes without applying a discount", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        config: {
+          coupons: {
+            resolver: ({ code }) => (code === "QUARTER" ? { rate: 0.25 } : null),
+          },
+        },
+      }),
+    );
+    const ctx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+    });
+
+    await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+
+    const quote = await api.cart.quote(ctx, { couponCode: "nope" });
+    expect(quote).toMatchObject({
+      ok: true,
+      data: {
+        discount: undefined,
+        subtotal: { amount: 2400, currency: TEST_CURRENCY },
+        total: { amount: 2400, currency: TEST_CURRENCY },
+        errors: [
+          {
+            code: "VALIDATION_FAILED",
+            fieldErrors: { couponCode: "Coupon code 'NOPE' is not valid." },
+          },
+        ],
+      },
+    });
+  });
+
   it("passes the applied cart coupon discount to the checkout provider", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();
@@ -19613,6 +19728,9 @@ function createTestBackendDependencies(
       checkout: {
         successUrl: "https://shop.example.test/success",
         cancelUrl: "https://shop.example.test/cancel",
+      },
+      coupons: {
+        resolver: createMikaFixedRateCouponResolver(),
       },
     },
     ...overrides,

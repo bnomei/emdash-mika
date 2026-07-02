@@ -638,6 +638,30 @@ export interface MikaBackendDefaults {
   readonly provider?: ProviderName;
 }
 
+/** Discount terms a host coupon resolver grants for an accepted code. */
+export interface MikaCouponResolution {
+  /** Display label stored on the coupon snapshot; defaults to the normalized code. */
+  readonly label?: string;
+  /** Fractional discount rate in [0, 1] applied to the cart subtotal. */
+  readonly rate: number;
+  readonly metadata?: JsonObject;
+}
+
+/** Coupon lookup input; `code` arrives trimmed and uppercased. */
+export interface MikaCouponResolverInput {
+  readonly code: string;
+  readonly subtotalAmount: number;
+  readonly currency: CurrencyCode;
+}
+
+/**
+ * Host hook resolving coupon codes to discount terms. Return `null` to reject the code.
+ * Without a configured resolver every coupon code is rejected — Mika ships no coupon catalog.
+ */
+export type MikaCouponResolver = (
+  input: MikaCouponResolverInput,
+) => Promise<MikaCouponResolution | null> | MikaCouponResolution | null;
+
 /** TTLs, redirect URLs, and metadata knobs for backend-owned resources. */
 export interface MikaBackendConfig {
   readonly accountExport?: {
@@ -650,6 +674,9 @@ export interface MikaBackendConfig {
     readonly cancelUrl?: string;
     readonly successUrl?: string;
     readonly ttlMs?: number;
+  };
+  readonly coupons?: {
+    readonly resolver?: MikaCouponResolver;
   };
   readonly download?: {
     readonly tokenTtlMs?: number;
@@ -1239,12 +1266,17 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
         return validationFailed("code", "Coupon code is required.");
       }
 
+      const coupon = await createCouponSnapshot(input, cartResult.cart, code);
+      if (!coupon) {
+        return validationFailed("code", couponRejectionMessage(input, code.toUpperCase()));
+      }
+
       const updated: CartDocument = {
         ...cartResult.cart,
         updatedAt: ctx.now,
         aggregate: cartWithCoupon({
           cart: cartResult.cart.aggregate,
-          coupon: await createCouponSnapshot(input, cartResult.cart, code),
+          coupon,
         }),
       };
 
@@ -7059,13 +7091,11 @@ async function createCartQuote(
   let unavailable = false;
   let coupon = cartResult.cart?.aggregate.coupon;
   let quotedCouponLabel: string | undefined;
-  let quotedCouponCodeHash: string | undefined;
 
   if (quoteInput.couponCode !== undefined) {
     const normalizedCode = quoteInput.couponCode.trim();
     if (normalizedCode) {
       quotedCouponLabel = normalizedCode.toUpperCase();
-      quotedCouponCodeHash = await input.hash(`coupon:${quotedCouponLabel}`);
       changed = !coupon || coupon.label !== quotedCouponLabel;
     } else if (coupon) {
       changed = true;
@@ -7117,12 +7147,25 @@ async function createCartQuote(
 
   const subtotalAmount = quoteLines.reduce((sum, line) => sum + (line.subtotal?.amount ?? 0), 0);
   if (quotedCouponLabel !== undefined) {
-    coupon = {
-      codeHash: quotedCouponCodeHash ?? "",
-      label: quotedCouponLabel,
-      rate: COUPON_DISCOUNT_RATE,
-      discountAmount: Math.floor(subtotalAmount * COUPON_DISCOUNT_RATE),
-    };
+    const resolved = await couponSnapshotForSubtotal(
+      input,
+      quotedCouponLabel,
+      subtotalAmount,
+      currency,
+    );
+    if (resolved) {
+      coupon = resolved;
+    } else {
+      if (coupon) changed = true;
+      coupon = undefined;
+      const message = couponRejectionMessage(input, quotedCouponLabel);
+      warnings.push(message);
+      errors.push({
+        code: "VALIDATION_FAILED",
+        message,
+        fieldErrors: { couponCode: message },
+      });
+    }
   }
   const discountAmount = couponDiscountAmount(coupon, subtotalAmount);
   const totalAmount = Math.max(0, subtotalAmount - discountAmount);
@@ -7549,13 +7592,20 @@ async function resolveCheckoutStart(
   let coupon = resolvedCart?.aggregate.coupon;
   if (checkoutInput.couponCode !== undefined) {
     const code = checkoutInput.couponCode.trim();
-    coupon = code
-      ? await couponSnapshotForSubtotal(
-          input,
-          code,
-          lines.reduce((sum, line) => sum + line.line.item.unitAmount * line.line.quantity, 0),
-        )
-      : undefined;
+    if (code) {
+      const resolved = await couponSnapshotForSubtotal(
+        input,
+        code,
+        lines.reduce((sum, line) => sum + line.line.item.unitAmount * line.line.quantity, 0),
+        currency,
+      );
+      if (!resolved) {
+        return validationFailed("couponCode", couponRejectionMessage(input, code.toUpperCase()));
+      }
+      coupon = resolved;
+    } else {
+      coupon = undefined;
+    }
     if (resolvedCart) {
       resolvedCart = {
         ...resolvedCart,
@@ -9035,34 +9085,62 @@ async function validateExistingLineQuantity(
   return validateQuantityLimit(sellable, stock, quantity);
 }
 
-const COUPON_DISCOUNT_RATE = 0.1;
+/** Fixed-rate coupon resolver for demos and tests: accepts every code at the given rate. */
+export function createMikaFixedRateCouponResolver(
+  options: { readonly rate?: number; readonly label?: string } = {},
+): MikaCouponResolver {
+  const rate = options.rate ?? 0.1;
+
+  return ({ code }) => ({ label: options.label ?? code, rate });
+}
 
 async function couponSnapshotForSubtotal(
-  input: Pick<CreateMikaBackendApiInput, "hash">,
+  input: Pick<CreateMikaBackendApiInput, "hash" | "config">,
   code: string,
   subtotalAmount: number,
-): Promise<CouponSnapshot> {
+  currency: CurrencyCode,
+): Promise<CouponSnapshot | null> {
+  const resolver = input.config?.coupons?.resolver;
+  if (!resolver) return null;
+
   const normalizedCode = code.toUpperCase();
+  const resolution = await resolver({ code: normalizedCode, subtotalAmount, currency });
+  if (!resolution) return null;
+  if (!Number.isFinite(resolution.rate) || resolution.rate < 0 || resolution.rate > 1) {
+    throw new RangeError(
+      `Coupon resolver returned invalid rate '${resolution.rate}' for code '${normalizedCode}'.`,
+    );
+  }
 
   return {
     codeHash: await input.hash(`coupon:${normalizedCode}`),
-    label: normalizedCode,
-    rate: COUPON_DISCOUNT_RATE,
-    discountAmount: Math.floor(subtotalAmount * COUPON_DISCOUNT_RATE),
+    label: resolution.label ?? normalizedCode,
+    rate: resolution.rate,
+    discountAmount: Math.floor(subtotalAmount * resolution.rate),
+    ...(resolution.metadata !== undefined ? { metadata: resolution.metadata } : {}),
   };
+}
+
+function couponRejectionMessage(
+  input: Pick<CreateMikaBackendApiInput, "config">,
+  label: string,
+): string {
+  return input.config?.coupons?.resolver
+    ? `Coupon code '${label}' is not valid.`
+    : "Coupon codes are not supported.";
 }
 
 async function createCouponSnapshot(
   input: MikaCartWishlistBackendInput,
   cart: CartDocument,
   code: string,
-): Promise<CouponSnapshot> {
+): Promise<CouponSnapshot | null> {
   const subtotalAmount = cart.aggregate.items.reduce(
     (sum, line) => sum + line.item.unitAmount * line.quantity,
     0,
   );
 
-  return couponSnapshotForSubtotal(input, code, subtotalAmount);
+  return couponSnapshotForSubtotal(input, code, subtotalAmount, cart.aggregate.currency);
 }
 
 async function cartDocumentToDTO(

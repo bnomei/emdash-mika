@@ -21,6 +21,7 @@ export {
 /** Repository-backed backend implementation injected into {@link createMikaApi}. */
 export {
   createMikaBackendApi,
+  createMikaFixedRateCouponResolver,
   type CreateMikaBackendApiInput,
   type MikaBackendConfig,
   type MikaBackendDefaults,
@@ -31,6 +32,9 @@ export {
   type MikaBackendIdFactory,
   type MikaBackendNow,
   type MikaBackendRepositories,
+  type MikaCouponResolution,
+  type MikaCouponResolver,
+  type MikaCouponResolverInput,
 } from "./api/backend";
 /** Notification hook context shapes for commerce lifecycle emails and host callbacks. */
 export type {

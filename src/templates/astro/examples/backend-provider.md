@@ -36,6 +36,12 @@ export const api = createMikaBackendApi({
       successUrl: "/checkout/success",
       cancelUrl: "/checkout/cancel",
     },
+    // Coupons fail closed: without a resolver every coupon code is rejected.
+    // Resolve codes against your own catalog, or use the fixed-rate demo
+    // resolver from "@bnomei/emdash-mika/server" while prototyping.
+    coupons: {
+      resolver: async ({ code }) => (code === "SAVE10" ? { rate: 0.1 } : null),
+    },
   },
   createId: (namespace) => createMikaId(`${namespace}_${crypto.randomUUID()}`),
   now: () => new Date(),
