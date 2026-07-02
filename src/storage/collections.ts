@@ -199,10 +199,12 @@ export interface StorageCollection<TDocument> {
   put(id: string, data: TDocument): Promise<void>;
   /**
    * Applies `updater` to the current document (`null` when absent) atomically with respect to
-   * concurrent updates of the same id. Returning `null` from the updater ABORTS the update and
-   * leaves the stored document unchanged — it never deletes; use {@link delete} for removal.
-   * Adapters may re-invoke the updater on write contention (optimistic retry), so updaters must
-   * be pure. Resolves with the committed document, or `null` when the update was aborted.
+   * concurrent writes (put/update/delete) of the same id — no other write may land between the
+   * read and the commit. When the document is absent and the updater returns one, it is created.
+   * Returning `null` from the updater ABORTS the update and leaves the stored document unchanged
+   * — it never deletes; use {@link StorageCollection.delete} for removal. Adapters may re-invoke
+   * the updater on write contention (optimistic retry), so updaters must be pure. Resolves with
+   * the committed document, or `null` when the update was aborted.
    *
    * Mika's lease, claim, and idempotency flows all rely on this abort semantic; an adapter that
    * deletes on `null` corrupts carts and workflow records under ordinary contention.
