@@ -10,26 +10,33 @@ the same commerce state.
 
 ## 1. Register Mika
 
-Register the native plugin and pass the host-owned API implementation:
+Copy `lib/mika-api.ts` and `lib/mika-plugin.ts`, then register the entrypoint
+that merges the host-owned API implementation behind the EmDash descriptor's
+JSON boundary:
 
 ```ts
 // astro.config.mjs
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "astro/config";
 import { emdash } from "emdash/astro";
 import { mikaPlugin } from "@bnomei/emdash-mika";
-import { api } from "./src/lib/mika-api";
 
 export default defineConfig({
   integrations: [
     emdash({
-      plugins: [mikaPlugin({ api })],
+      plugins: [
+        mikaPlugin({
+          entrypoint: fileURLToPath(new URL("./src/lib/mika-plugin.ts", import.meta.url)),
+        }),
+      ],
     }),
   ],
 });
 ```
 
-`api` can be composed with `createMikaBackendApi()` or supplied as explicit
-method overrides. See [backend and provider wiring](./backend-provider.md).
+`api` (merged in `src/lib/mika-plugin.ts`) can be composed with
+`createMikaBackendApi()` or supplied as explicit method overrides. See
+[backend and provider wiring](./backend-provider.md).
 
 ## 2. Copy Actions
 

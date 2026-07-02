@@ -1,7 +1,8 @@
 # Backend And Provider Wiring Example
 
 Mika does not ship payment credentials or storage. A host project wires those
-pieces and passes the resulting API to `mikaPlugin()`.
+pieces and merges the resulting API in the plugin entrypoint module registered
+through `mikaPlugin({ entrypoint })`.
 
 The first real provider path is Stripe because it covers hosted checkout,
 subscriptions, portal sessions, invoices, refunds, signed webhooks, product and
@@ -61,18 +62,39 @@ export const api = createMikaBackendApi({
 catalog, session, account, ledger, ops, stock, and ephemeral repository ports.
 That keeps database choice and deployment ownership outside the package.
 
-Register that API with the plugin:
+Register that API through a host entrypoint module (the EmDash host
+JSON-serializes descriptor options, so a live `api` cannot pass through
+`mikaPlugin()` directly):
 
 ```ts
+// src/lib/mika-plugin.ts — EmDash plugin entrypoint
+// (copyable template: src/templates/astro/lib/mika-plugin.ts)
+import {
+  createPlugin as createMikaPlugin,
+  type MikaCreatePluginOptions,
+} from "@bnomei/emdash-mika";
+import { api } from "./mika-api";
+
+export function createPlugin(options: MikaCreatePluginOptions = {}) {
+  return createMikaPlugin({ ...options, api });
+}
+```
+
+```ts
+// astro.config.mjs
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "astro/config";
 import { emdash } from "emdash/astro";
 import { mikaPlugin } from "@bnomei/emdash-mika";
-import { api } from "./src/lib/mika-api";
 
 export default defineConfig({
   integrations: [
     emdash({
-      plugins: [mikaPlugin({ api })],
+      plugins: [
+        mikaPlugin({
+          entrypoint: fileURLToPath(new URL("./src/lib/mika-plugin.ts", import.meta.url)),
+        }),
+      ],
     }),
   ],
 });
@@ -170,13 +192,18 @@ Configure it only when the default minute schedule is not right:
 
 ```ts
 mikaPlugin({
-  api,
+  entrypoint,
   maintenance: {
     enabled: true,
     schedule: "*/5 * * * *",
   },
 });
 ```
+
+`maintenance.enabled` and `maintenance.schedule` are JSON-safe and cross the
+descriptor boundary. Live maintenance dependencies (`repositories`,
+`emailOutboxRunner`, `acpSessionStore`) do not — merge them in the entrypoint
+wrapper's `maintenance` option instead.
 
 On Cloudflare, the host Worker's `scheduled()` handler should call EmDash
 `runScheduledTasks()` so EmDash can run both scheduled publishing and Mika

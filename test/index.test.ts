@@ -383,6 +383,28 @@ describe("Mika native plugin package", () => {
     });
   });
 
+  it("rejects function-valued descriptor options at config time", () => {
+    expect(() => mikaPlugin({ api: {} })).toThrow(/JSON-serializes descriptor options/);
+    expect(() => mikaPlugin({ api: {} })).toThrow(/entrypoint/);
+    expect(() => mikaPlugin({ operationPolicy: () => true })).toThrow(/operationPolicy/);
+    expect(() => mikaPlugin({ operationPolicy: () => true })).toThrow(/authorization guard/);
+    expect(() => mikaPlugin({ api: undefined })).not.toThrow();
+  });
+
+  it("keeps JSON-safe descriptor options flowing through mikaPlugin", () => {
+    const descriptor = mikaPlugin({
+      entrypoint: "./src/lib/mika-plugin.ts",
+      maintenance: { enabled: true, schedule: "*/5 * * * *" },
+      assertWired: ["catalog"],
+    });
+    expect(descriptor.options).toEqual({
+      maintenance: { enabled: true, schedule: "*/5 * * * *" },
+      assertWired: ["catalog"],
+    });
+    // survives the host's JSON round-trip intact
+    expect(JSON.parse(JSON.stringify(descriptor.options))).toEqual(descriptor.options);
+  });
+
   it("creates a runtime plugin with Mika routes", () => {
     const plugin = createPlugin({ assertWired: false });
 
@@ -4304,6 +4326,28 @@ describe("Mika Astro template contracts", () => {
     expect(source).toContain("Mika.webhook.receive");
     expect(source).toContain("order.invoiceHref");
     expect(source).toContain("protected `order.invoice` route");
+  });
+
+  it("ships a host plugin entrypoint that merges the live api behind the JSON boundary", () => {
+    const entrypoint = readFileSync(
+      new URL("../src/templates/astro/lib/mika-plugin.ts", import.meta.url),
+      "utf8",
+    );
+    const apiStub = readFileSync(
+      new URL("../src/templates/astro/lib/mika-api.ts", import.meta.url),
+      "utf8",
+    );
+    const templateReadme = readFileSync(
+      new URL("../src/templates/astro/README.md", import.meta.url),
+      "utf8",
+    );
+
+    expect(entrypoint).toContain("export function createPlugin");
+    expect(entrypoint).toContain("...options");
+    expect(entrypoint).toContain('from "./mika-api"');
+    expect(apiStub).toContain("MikaApiOverrides");
+    expect(templateReadme).toContain("lib/mika-plugin.ts");
+    expect(templateReadme).toContain("lib/mika-api.ts");
   });
 
   it("ships the Kumo app shell around copied pages", () => {

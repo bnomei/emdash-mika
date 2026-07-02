@@ -63,9 +63,19 @@ export interface MikaMaintenanceRuntimeOptions extends MikaMaintenancePluginOpti
 export interface MikaDescriptorOptions {
   /** npm package name or path used as the plugin entrypoint in the descriptor. */
   readonly entrypoint?: string;
-  /** Default API handler overrides registered at plugin activation. */
+  /**
+   * @deprecated Never worked: the EmDash host JSON-serializes descriptor options, dropping all
+   * function values, so a live api cannot cross this boundary — `mikaPlugin()` now throws when it
+   * is set. Merge `api` in a host entrypoint module's `createPlugin()` wrapper (copyable template:
+   * `src/templates/astro/lib/mika-plugin.ts`) and pass `entrypoint` instead.
+   */
   readonly api?: MikaApiOverrides;
-  /** Default operation policy applied to plugin routes. */
+  /**
+   * @deprecated Never worked: `MikaOperationPolicy` is a function and is dropped by the EmDash
+   * host's JSON descriptor serialization, silently disabling the guard — `mikaPlugin()` now throws
+   * when it is set. Merge `operationPolicy` in the host entrypoint module's `createPlugin()`
+   * wrapper instead.
+   */
   readonly operationPolicy?: MikaOperationPolicy;
   /** Descriptor-level maintenance cron toggles. */
   readonly maintenance?: MikaMaintenancePluginOptions;
@@ -99,10 +109,24 @@ type MikaCronEvent = {
 export function mikaPlugin(
   options: MikaDescriptorOptions = {},
 ): PluginDescriptor<MikaCreatePluginOptions> {
+  const dropped = (["api", "operationPolicy"] as const).filter((key) => options[key] !== undefined);
+  if (dropped.length > 0) {
+    throw new Error(
+      `mikaPlugin() received ${dropped.join(" and ")} in descriptor options, but the EmDash host ` +
+        "JSON-serializes descriptor options into a generated module, so function values are " +
+        "silently dropped before createPlugin() runs" +
+        (dropped.includes("operationPolicy")
+          ? " — a dropped operationPolicy would silently disable the host's authorization guard"
+          : "") +
+        ". Move live wiring into a host entrypoint module that exports createPlugin(options) " +
+        "and merges it (copyable template: src/templates/astro/lib/mika-plugin.ts), then register " +
+        'it with mikaPlugin({ entrypoint: fileURLToPath(new URL("./src/lib/mika-plugin.ts", ' +
+        "import.meta.url)) }). Only JSON-safe options (maintenance.enabled, maintenance.schedule, " +
+        "assertWired) cross the descriptor boundary.",
+    );
+  }
   const entrypoint = options.entrypoint ?? MIKA_PACKAGE_NAME;
   const pluginOptions: MikaCreatePluginOptions = {
-    ...(options.api === undefined ? {} : { api: options.api }),
-    ...(options.operationPolicy === undefined ? {} : { operationPolicy: options.operationPolicy }),
     ...(options.maintenance === undefined ? {} : { maintenance: options.maintenance }),
     ...(options.assertWired === undefined ? {} : { assertWired: options.assertWired }),
   };
@@ -138,7 +162,7 @@ export function createPlugin(options: MikaCreatePluginOptions = {}) {
       }
       const wiringHint =
         options.api !== undefined
-          ? "An api option was provided but its methods are missing — if it was passed through mikaPlugin() in astro.config, note the EmDash host JSON-serializes descriptor options, so live functions cannot cross; register a host entrypoint module that calls createPlugin({ api }) with the live backend instead."
+          ? "An api option was provided but its methods are missing — if it was passed through mikaPlugin() in astro.config, note the EmDash host JSON-serializes descriptor options, so live functions cannot cross; register a host entrypoint module that calls createPlugin({ api }) with the live backend instead. If the entrypoint module imports the mika-api template stub, replace its empty overrides with the host backend (createMikaBackendApi())."
           : "Wire the backend (e.g. createMikaBackendApi()) into the plugin's api option.";
       throw new Error(
         `${message} Every unwired method answers 501 at runtime. ${wiringHint} Scope the check with assertWired: ["cart", ...] or pass assertWired: false to accept partial wiring.`,

@@ -6,7 +6,8 @@ storefronts without turning the package into a full storefront platform.
 
 ## Ship
 
-- Native EmDash plugin registration with `mikaPlugin({ api })`.
+- Native EmDash plugin registration through a host entrypoint module
+  (`mikaPlugin({ entrypoint })`) that merges the live `api`.
 - Host-owned backend API wiring through `createMikaBackendApi()` or explicit
   `MikaApi` method overrides.
 - Provider adapter contract examples for hosted checkout, portal, subscriptions,

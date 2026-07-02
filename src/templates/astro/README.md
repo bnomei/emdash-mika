@@ -55,7 +55,12 @@ components/
   LowStockNotice.astro
   UnavailableNotice.astro
 lib/
+  account.ts
+  cart.ts
+  display.ts
   form.ts
+  mika-api.ts
+  mika-plugin.ts
   routes.ts
 styles/
   kumo.css
@@ -159,28 +164,55 @@ invoice URLs belong behind Mika's protected `order.invoice` route.
 
 ## Wiring
 
-Register the native plugin in `astro.config.mjs`:
+Copy `lib/mika-plugin.ts` and `lib/mika-api.ts` into the host project's
+`src/lib/` folder, replace the `mika-api.ts` stub with the host backend
+(`createMikaBackendApi()` — see `examples/backend-provider.md`), and point
+`mikaPlugin({ entrypoint })` at the copied `mika-plugin.ts`:
 
 ```ts
+// src/lib/mika-plugin.ts — EmDash plugin entrypoint
+// (copyable template: src/templates/astro/lib/mika-plugin.ts)
+import {
+  createPlugin as createMikaPlugin,
+  type MikaCreatePluginOptions,
+} from "@bnomei/emdash-mika";
+import { api } from "./mika-api";
+
+export function createPlugin(options: MikaCreatePluginOptions = {}) {
+  return createMikaPlugin({ ...options, api });
+}
+```
+
+```ts
+// astro.config.mjs
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "astro/config";
 import { emdash } from "emdash/astro";
 import { mikaPlugin } from "@bnomei/emdash-mika";
-import { api } from "./src/lib/mika-api";
 
 export default defineConfig({
   integrations: [
     emdash({
-      plugins: [mikaPlugin({ api })],
+      plugins: [
+        mikaPlugin({
+          entrypoint: fileURLToPath(new URL("./src/lib/mika-plugin.ts", import.meta.url)),
+        }),
+      ],
     }),
   ],
 });
 ```
 
-Note: the EmDash host JSON-serializes descriptor options into a generated
-module, so function-valued options — including a live `api` — cannot cross the
-descriptor boundary. If plugin activation reports missing wired methods,
-register a host entrypoint module that calls `createPlugin({ api })` with the
-live backend and point `mikaPlugin({ entrypoint })` at it.
+The entrypoint module exists because the EmDash host JSON-serializes descriptor
+options into a generated module — function values like a live `api` or
+`operationPolicy` are silently dropped, so `mikaPlugin()` rejects them at
+config time. Only JSON-safe options (`maintenance.enabled`,
+`maintenance.schedule`, `assertWired`) flow through the descriptor and arrive
+in the entrypoint's `options`. Use `fileURLToPath` from `node:url` rather than
+`URL.pathname` — `pathname` produces `/C:/...` paths that fail module
+resolution on Windows. The host imports the entrypoint from a generated
+virtual module, so it must be an absolute path or a bare package specifier,
+not a config-relative `./` path.
 
 Install and enable Kumo UI in the host app:
 
@@ -219,7 +251,8 @@ Copy `actions/index.ts` and `actions/mika.ts` into the host project's
 `@bnomei/emdash-mika/astro-actions`, so the action factory stays versioned with
 Mika.
 
-When a backend API is wired through `mikaPlugin({ api })`, copied pages that
+When a backend API is wired through the plugin entrypoint
+(`createPlugin({ api })`), copied pages that
 call `createMika(Astro)` and action modules that call `createMikaActions()` use
 that same API by default. Pass `{ api }` directly only when a page or action
 module needs different wiring.

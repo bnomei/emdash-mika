@@ -76,18 +76,38 @@ package.
 npm install @bnomei/emdash-mika
 ```
 
-Register the native plugin in `astro.config.mjs`:
+Create a host entrypoint module that merges the live backend api:
 
 ```ts
+// src/lib/mika-plugin.ts — EmDash plugin entrypoint
+// (copyable template: src/templates/astro/lib/mika-plugin.ts)
+import {
+  createPlugin as createMikaPlugin,
+  type MikaCreatePluginOptions,
+} from "@bnomei/emdash-mika";
+import { api } from "./mika-api";
+
+export function createPlugin(options: MikaCreatePluginOptions = {}) {
+  return createMikaPlugin({ ...options, api });
+}
+```
+
+Then register it in `astro.config.mjs`:
+
+```ts
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "astro/config";
 import { emdash } from "emdash/astro";
 import { mikaPlugin } from "@bnomei/emdash-mika";
-import { api } from "./src/lib/mika-api";
 
 export default defineConfig({
   integrations: [
     emdash({
-      plugins: [mikaPlugin({ api })],
+      plugins: [
+        mikaPlugin({
+          entrypoint: fileURLToPath(new URL("./src/lib/mika-plugin.ts", import.meta.url)),
+        }),
+      ],
     }),
   ],
 });
@@ -102,11 +122,16 @@ otherwise — unwired methods would answer `501` on every route at runtime. Pass
 `assertWired: ["cart", "checkout.start"]` to assert a subset, or
 `assertWired: false` to accept partial wiring.
 
-Note: the EmDash host JSON-serializes descriptor options into a generated
-module, so function-valued options — including a live `api` — cannot cross the
-descriptor boundary. If plugin activation reports missing wired methods,
-register a host entrypoint module that calls `createPlugin({ api })` with the
-live backend and point `mikaPlugin({ entrypoint })` at it.
+The entrypoint module exists because the EmDash host JSON-serializes descriptor
+options into a generated module — function values like a live `api` or
+`operationPolicy` are silently dropped, so `mikaPlugin()` rejects them at
+config time. Only JSON-safe options (`maintenance.enabled`,
+`maintenance.schedule`, `assertWired`) flow through the descriptor and arrive
+in the entrypoint's `options`. Use `fileURLToPath` from `node:url` rather than
+`URL.pathname` — `pathname` produces `/C:/...` paths that fail module
+resolution on Windows. The host imports the entrypoint from a generated
+virtual module, so it must be an absolute path or a bare package specifier,
+not a config-relative `./` path.
 
 ## Examples
 
