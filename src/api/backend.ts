@@ -766,7 +766,7 @@ type MikaStockLifecycleDependencies = Pick<
 
 type MikaCartWishlistBackendRepositories = Pick<
   MikaBackendRepositories,
-  "account" | "catalog" | "session" | "stock"
+  "account" | "catalog" | "session" | "stock" | "ephemeral"
 >;
 type MikaCartWishlistBackendInput = Omit<CreateMikaBackendApiInput, "repositories"> & {
   readonly repositories: MikaCartWishlistBackendRepositories;
@@ -1154,36 +1154,25 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
       if (existing) {
         const writeBlocked = cartWriteBlocked(existing);
         if (writeBlocked) return writeBlocked;
-      }
-      const currentItems = existing?.aggregate.items ?? [];
-      const existingLine = currentItems.find((line) => isEquivalentCartLine(line, resolved.line));
-      const nextQuantity = (existingLine?.quantity ?? 0) + resolved.line.quantity;
-      const sellableDemand = nextQuantity + siblingSellableQuantity(currentItems, resolved.line);
-      const quantityError = validateQuantityLimit(
-        resolved.sellable,
-        resolved.stock,
-        sellableDemand,
-      );
-      if (quantityError) return quantityError;
 
-      const document = existing ?? createCartDocument(input, ctx, currency);
-      const items = existingLine
-        ? currentItems.map((line) =>
-            line.id === existingLine.id ? { ...line, quantity: nextQuantity } : line,
-          )
-        : [...currentItems, resolved.line];
-      const updated = updateCartDocument(document, items, ctx.now);
+        const merged = mergeCartAddLine(existing.aggregate.items, resolved.line, resolved);
+        if (!merged.ok) return merged;
 
-      if (existing) {
+        const updated = updateCartDocument(existing, merged.items, ctx.now);
         const persisted = await putCartOrConflict(input, updated, existing.updatedAt);
         if (!persisted.ok) return persisted;
 
         return { ok: true, status: 200, data: await cartDocumentToDTO(input, persisted.cart) };
       }
 
-      await input.repositories.session.put(updated);
+      const quantityError = validateQuantityLimit(
+        resolved.sellable,
+        resolved.stock,
+        resolved.line.quantity,
+      );
+      if (quantityError) return quantityError;
 
-      return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
+      return createCartWithFirstLine(input, ctx, currency, resolved.line, resolved);
     },
     update: async (ctx, itemInput) => {
       if (!Number.isInteger(itemInput.quantity) || itemInput.quantity < 1) {
@@ -1300,10 +1289,14 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
         updatedAt: ctx.now,
       };
 
-      await input.repositories.session.put(updated);
-      await input.repositories.session.put(abandonedSource);
+      const persisted = await putCartOrConflict(input, updated, targetResult.cart.updatedAt);
+      if (!persisted.ok) return persisted;
+      // Best-effort: if the source cart changed since it was read (e.g. a concurrent add landed
+      // on it), leave it open rather than force-abandoning it and silently discarding that write
+      // — the target merge above has already succeeded either way.
+      await input.repositories.session.putCartIfUnchanged(abandonedSource, source.updatedAt);
 
-      return { ok: true, status: 200, data: await cartDocumentToDTO(input, updated) };
+      return { ok: true, status: 200, data: await cartDocumentToDTO(input, persisted.cart) };
     },
     applyCoupon: async (ctx, couponInput) => {
       const cartResult = couponInput.cartId
@@ -7202,6 +7195,93 @@ async function putCartOrConflict(
   }
 
   return { ok: true, cart: persisted };
+}
+
+/** Merges `line` into `currentItems` (combining quantities for an equivalent existing line). */
+function mergeCartAddLine(
+  currentItems: readonly CartLine[],
+  line: CartLine,
+  resolved: { readonly sellable: SellableDefinition; readonly stock: StockItemRecord | null },
+): { readonly ok: true; readonly items: readonly CartLine[] } | MikaApiFailure {
+  const existingLine = currentItems.find((candidate) => isEquivalentCartLine(candidate, line));
+  const nextQuantity = (existingLine?.quantity ?? 0) + line.quantity;
+  const sellableDemand = nextQuantity + siblingSellableQuantity(currentItems, line);
+  const quantityError = validateQuantityLimit(resolved.sellable, resolved.stock, sellableDemand);
+  if (quantityError) return quantityError;
+
+  const items = existingLine
+    ? currentItems.map((candidate) =>
+        candidate.id === existingLine.id ? { ...candidate, quantity: nextQuantity } : candidate,
+      )
+    : [...currentItems, line];
+
+  return { ok: true, items };
+}
+
+/**
+ * Creates a brand-new open cart with `line`, serialized against concurrent creates for the same
+ * identity+currency via a short-lived lock. Without this, two simultaneous first-add requests
+ * (e.g. a double click before any cart exists) would each find no existing cart via `findOpenCart`
+ * and blind-`put` a separate document — the loser's cart becomes invisible to subsequent reads
+ * (which only ever return one open cart per identity+currency), silently discarding its line.
+ */
+async function createCartWithFirstLine(
+  input: MikaCartWishlistBackendInput,
+  ctx: MikaRequestContext,
+  currency: CurrencyCode,
+  line: CartLine,
+  resolved: { readonly sellable: SellableDefinition; readonly stock: StockItemRecord | null },
+): Promise<MikaApiResult<CartDTO>> {
+  const lockIdentity = ctx.customerId ?? ctx.sessionId;
+  if (!lockIdentity) {
+    const document = updateCartDocument(createCartDocument(input, ctx, currency), [line], ctx.now);
+    await input.repositories.session.put(document);
+
+    return { ok: true, status: 200, data: await cartDocumentToDTO(input, document) };
+  }
+
+  const lockKey = `cart-create-lock:${await input.hash(`${lockIdentity}:${currency}`)}`;
+  const owner = input.createId("cart_create_lock_owner");
+  const lock = await input.repositories.ephemeral.tryAcquireLock({
+    key: lockKey,
+    owner,
+    expiresAt: addMilliseconds(ctx.now, 30_000),
+    now: ctx.now,
+  });
+  if (!lock) {
+    // Someone else is creating the first cart for this identity+currency right now — join it
+    // instead of racing a second document into existence.
+    const winner = await findOpenCart(input, ctx, currency);
+    if (!winner) {
+      return apiFailure(409, "CONFLICT", "Cart is being created by another request.", {
+        cartId: "Cart is being created by another request. Reload the cart and try again.",
+      });
+    }
+    const writeBlocked = cartWriteBlocked(winner);
+    if (writeBlocked) return writeBlocked;
+
+    const merged = mergeCartAddLine(winner.aggregate.items, line, resolved);
+    if (!merged.ok) return merged;
+
+    const updated = updateCartDocument(winner, merged.items, ctx.now);
+    const persisted = await putCartOrConflict(input, updated, winner.updatedAt);
+    if (!persisted.ok) return persisted;
+
+    return { ok: true, status: 200, data: await cartDocumentToDTO(input, persisted.cart) };
+  }
+
+  try {
+    const document = updateCartDocument(createCartDocument(input, ctx, currency), [line], ctx.now);
+    await input.repositories.session.put(document);
+
+    return { ok: true, status: 200, data: await cartDocumentToDTO(input, document) };
+  } finally {
+    await input.repositories.ephemeral
+      .releaseLock({ key: lockKey, owner, now: ctx.now })
+      .catch((error: unknown) =>
+        observeBackendError(input, "cart.createLock.release", error, { lockKey }),
+      );
+  }
 }
 
 function checkoutIsResumable(checkout: CheckoutDocument, now: ISODateTime): boolean {

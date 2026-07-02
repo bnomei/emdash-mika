@@ -15207,8 +15207,8 @@ describe("backend API composition", () => {
 
   it("rejects a concurrent cart write instead of silently discarding it (CAS, not blind put)", async () => {
     const contentRef = createTestContentRef();
-    const sellableA = createSellableDefinition();
-    const sellableB = createSellableDefinition();
+    const sellableA = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
+    const sellableB = createSellableDefinition({ id: createTestMikaId("sellable", 2) });
     const repositories = createTestBackendRepositories({
       stockBySellableId: new Map([
         [
@@ -15301,6 +15301,83 @@ describe("backend API composition", () => {
       );
       expect(finalCart.data.items).toHaveLength(2);
     }
+  });
+
+  it("does not orphan a line into an invisible duplicate cart on concurrent first-adds", async () => {
+    // Two simultaneous first-add requests (e.g. a double click before any cart exists yet) both
+    // see no existing cart via findOpenCart. Without serializing the create, each would blind-put
+    // its own new cart document; findOpenCartBySession only ever returns one of them afterward, so
+    // whichever line landed in the other document becomes invisible to the caller.
+    const contentRef = createTestContentRef();
+    const sellableA = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
+    const sellableB = createSellableDefinition({ id: createTestMikaId("sellable", 2) });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellableA.id,
+          createStockRecord({ sellableId: sellableA.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+        [
+          sellableB.id,
+          createStockRecord({ sellableId: sellableB.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellableA, sellableB] }),
+    );
+
+    // Whichever call's lock attempt reaches tryAcquireLock first is let through immediately; the
+    // second is held until the first's real attempt resolves, so it deterministically observes
+    // the lock as already held (rather than hoping incidental Promise scheduling produces that).
+    let firstLockAttempt: Promise<EphemeralRecord | null> | undefined;
+    const gatedEphemeral = new Proxy(repositories.ephemeral, {
+      get(target, property, receiver) {
+        if (property === "tryAcquireLock") {
+          return async (lockInput: {
+            readonly key: string;
+            readonly owner: string;
+            readonly subjectHash?: string;
+            readonly expiresAt: ISODateTime;
+            readonly now: ISODateTime;
+          }) => {
+            if (!firstLockAttempt) {
+              firstLockAttempt = target.tryAcquireLock(lockInput);
+              return firstLockAttempt;
+            }
+            await firstLockAttempt;
+            return target.tryAcquireLock(lockInput);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories: { ...repositories, ephemeral: gatedEphemeral },
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const [resultA, resultB] = await Promise.all([
+      api.cart.add(ctx, { sellableId: sellableA.id, quantity: 1 }),
+      api.cart.add(ctx, { sellableId: sellableB.id, quantity: 1 }),
+    ]);
+
+    expect(resultA).toMatchObject({ ok: true });
+    expect(resultB).toMatchObject({ ok: true });
+
+    const cart = await api.cart.get(ctx);
+    if (!cart.ok) throw new Error("Expected cart.get to succeed.");
+    expect(cart.data.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ sellableId: sellableA.id, quantity: 1 }),
+        expect.objectContaining({ sellableId: sellableB.id, quantity: 1 }),
+      ]),
+    );
+    expect(cart.data.items).toHaveLength(2);
   });
 
   it("returns stable errors for missing cart lines on update and remove", async () => {
@@ -15414,6 +15491,94 @@ describe("backend API composition", () => {
     await expect(
       repositories.session.findOpenCartBySession("session_handoff", TEST_CURRENCY),
     ).resolves.toBeNull();
+  });
+
+  it("rejects a cart.merge that would silently discard a concurrent cart.update on the target", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition({ maxPerOrder: 50 });
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const seedApi = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const guestCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_handoff",
+    });
+    const priorCustomerCtx = createTestRequestContext({
+      customerId: "customer_1",
+      userId: "user_1",
+      sessionId: "session_prior",
+    });
+
+    await seedApi.cart.add(guestCtx, { sellableId: sellable.id, quantity: 1 });
+    const customerCart = await seedApi.cart.add(priorCustomerCtx, {
+      sellableId: sellable.id,
+      quantity: 1,
+    });
+    if (!customerCart.ok) throw new Error("Expected seed cart.add to succeed.");
+    const targetLineId = customerCart.data.items[0]!.id;
+
+    // A concurrent request on the SAME customer (e.g. another tab, or an admin action) updates
+    // the target cart's quantity while a login-handoff merge is also in flight for that cart.
+    const callerCtx = createTestRequestContext({
+      customerId: "customer_1",
+      userId: "user_1",
+      sessionId: "session_handoff",
+      now: createTestClock().at(1000),
+    });
+    const updateCtx = createTestRequestContext({
+      customerId: "customer_1",
+      userId: "user_1",
+      sessionId: "session_prior",
+      now: createTestClock().at(2000),
+    });
+
+    let firstWrite: Promise<CartDocument | null> | undefined;
+    const gatedSession = new Proxy(repositories.session, {
+      get(target, property, receiver) {
+        if (property === "putCartIfUnchanged") {
+          return async (cart: CartDocument, expectedUpdatedAt: ISODateTime) => {
+            if (!firstWrite) {
+              firstWrite = target.putCartIfUnchanged(cart, expectedUpdatedAt);
+              return firstWrite;
+            }
+            await firstWrite;
+            return target.putCartIfUnchanged(cart, expectedUpdatedAt);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories: { ...repositories, session: gatedSession },
+      }),
+    );
+
+    const [mergeResult, updateResult] = await Promise.all([
+      api.cart.merge(callerCtx, {
+        targetCartId: customerCart.data.id,
+        sourceSessionId: "session_handoff",
+      }),
+      api.cart.update(updateCtx, { lineId: targetLineId, quantity: 9 }),
+    ]);
+
+    const results = [mergeResult, updateResult];
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    const conflicts = results.filter((result) => !result.ok);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]).toMatchObject({ ok: false, status: 409, error: { code: "CONFLICT" } });
+
+    if (updateResult.ok) {
+      // The update won: quantity 9 must survive, not get silently reverted by merge's write.
+      const finalCart = await repositories.session.findById(customerCart.data.id);
+      if (!finalCart || finalCart.type !== "cart") throw new Error("Expected a cart document.");
+      expect(finalCart.aggregate.items).toEqual([expect.objectContaining({ quantity: 9 })]);
+    }
   });
 
   it("does not orphan a checkout_pending cart's reservation when its owner triggers a cart.merge", async () => {
