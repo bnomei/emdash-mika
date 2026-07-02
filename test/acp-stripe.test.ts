@@ -524,8 +524,16 @@ describe("Mika ACP projection", () => {
     };
     await store.put(activeExpired);
     await store.put(retainedTerminal);
-    await store.claimIdempotencyKey!("idem_cleanup_terminal", retainedTerminal.id);
-    await store.bindIdempotencyKey!("idem_cleanup_terminal", retainedTerminal.id);
+    const cleanupClaim = await store.claimIdempotencyKey!(
+      "idem_cleanup_terminal",
+      retainedTerminal.id,
+    );
+    if (cleanupClaim.status !== "claimed") throw new Error("Expected the claim to succeed.");
+    await store.bindIdempotencyKey!(
+      "idem_cleanup_terminal",
+      retainedTerminal.id,
+      cleanupClaim.fencingToken,
+    );
 
     await expect(
       store.cleanupExpired!({
@@ -541,7 +549,7 @@ describe("Mika ACP projection", () => {
     await expect(store.get(retainedTerminal.id)).resolves.toBeUndefined();
     await expect(
       store.claimIdempotencyKey("idem_cleanup_terminal", retainedTerminal.id),
-    ).resolves.toEqual({ status: "claimed" });
+    ).resolves.toEqual({ status: "claimed", fencingToken: expect.any(String) });
   });
 
   it("replays the original session on an idempotent ACP create retry instead of returning 409", async () => {
@@ -1671,6 +1679,55 @@ describe("Mika ACP projection", () => {
     expect(checkoutStartCount).toBe(0);
   });
 
+  it("rejects a stale idempotency bind/release from before a reclaim, by fencing token", async () => {
+    // A handler that is merely slow (not crashed) can still be mid-flight when a retry sees its
+    // lease as expired and reclaims the same key. Without a fencing token, the original handler's
+    // eventual bind/release would have no way to tell it no longer holds the key, and could
+    // silently overwrite or release the reclaiming handler's work.
+    const store = createMemoryMikaAcpSessionStore();
+    const key = "acp_complete_lock:checkout_session_fencing";
+    const id = "checkout_session_fencing";
+
+    const original = await store.claimIdempotencyKey(key, id, {
+      now: createISODateTime("2026-01-01T00:00:00.000Z"),
+      expiresAt: createISODateTime("2026-01-01T00:01:00.000Z"),
+    });
+    if (original.status !== "claimed") throw new Error("Expected the first claim to succeed.");
+
+    // The original handler is still running past its lease's expiry; a retry reclaims the key.
+    const reclaimed = await store.claimIdempotencyKey(key, id, {
+      now: createISODateTime("2026-01-01T00:02:00.000Z"),
+      expiresAt: createISODateTime("2026-01-01T00:03:00.000Z"),
+    });
+    if (reclaimed.status !== "claimed") throw new Error("Expected the reclaim to succeed.");
+    expect(reclaimed.fencingToken).not.toBe(original.fencingToken);
+
+    // The original (stale) handler finally finishes and tries to bind using its old token — this
+    // must not touch the reclaiming handler's still-pending claim.
+    await store.bindIdempotencyKey(key, id, original.fencingToken);
+    await expect(
+      store.claimIdempotencyKey(key, id, {
+        now: createISODateTime("2026-01-01T00:02:30.000Z"),
+        expiresAt: createISODateTime("2026-01-01T00:03:30.000Z"),
+      }),
+    ).resolves.toEqual({ status: "in_progress", id });
+
+    // Nor must a stale release free the key out from under the reclaiming handler.
+    await store.releaseIdempotencyKey(key, id, original.fencingToken);
+    await expect(
+      store.claimIdempotencyKey(key, id, {
+        now: createISODateTime("2026-01-01T00:02:45.000Z"),
+        expiresAt: createISODateTime("2026-01-01T00:03:45.000Z"),
+      }),
+    ).resolves.toEqual({ status: "in_progress", id });
+
+    // The reclaiming handler's own bind, using its correct current token, still works normally.
+    await store.bindIdempotencyKey(key, id, reclaimed.fencingToken);
+    await expect(store.claimIdempotencyKey(key, id)).resolves.toMatchObject({
+      status: "in_progress",
+    });
+  });
+
   it("recovers a crashed ACP complete once the stuck idempotency claim expires", async () => {
     let cart = createCart([]);
     const store = createMemoryMikaAcpSessionStore();
@@ -1705,7 +1762,7 @@ describe("Mika ACP projection", () => {
           expiresAt: createISODateTime("2026-01-01T00:01:00.000Z"),
         },
       ),
-    ).resolves.toEqual({ status: "claimed" });
+    ).resolves.toEqual({ status: "claimed", fencingToken: expect.any(String) });
 
     // The stuck claim expired at 00:01; the handler clock is 00:10, so completion recovers.
     const completed = await handlers.complete(
@@ -1753,7 +1810,7 @@ describe("Mika ACP projection", () => {
           expiresAt: createISODateTime("2026-01-01T01:00:00.000Z"),
         },
       ),
-    ).resolves.toEqual({ status: "claimed" });
+    ).resolves.toEqual({ status: "claimed", fencingToken: expect.any(String) });
 
     const blocked = await handlers.complete(
       acpRequest(

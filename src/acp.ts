@@ -266,22 +266,39 @@ export interface MikaAcpSessionStore {
    * `lease.now` as expired and grant the new claim — otherwise a handler crash between claim and
    * bind/release leaves the key `in_progress` forever and, for the completion lock, permanently
    * bricks completion of that session. Bound keys never expire.
+   *
+   * A `"claimed"` result carries a `fencingToken` that must be unique to *this* claim and change
+   * on every reclaim of the same key (a monotonically increasing counter is sufficient — it need
+   * not be unguessable). The claim TTL is a heuristic (`idempotencyClaimTtlMs`): a handler that is
+   * merely slow, not crashed, can still be running when its lease is reclaimed by a retry. Without
+   * a fencing token, that original handler's later `bindIdempotencyKey`/`releaseIdempotencyKey`
+   * call has no way to tell it no longer holds the key, and can silently overwrite or release the
+   * reclaiming handler's in-progress or already-committed work.
    */
   claimIdempotencyKey(
     key: string,
     id: string,
     lease?: MikaAcpIdempotencyLeaseWindow,
   ): Promise<MikaAcpIdempotencyClaim>;
-  /** Bind after successful handler completion so replays return the committed record. */
-  bindIdempotencyKey(key: string, id: string): Promise<void>;
-  /** Release after handler failure so the key can be retried. */
-  releaseIdempotencyKey(key: string, id: string): Promise<void>;
+  /**
+   * Bind after successful handler completion so replays return the committed record. `fencingToken`
+   * must match the token returned by the `"claimed"` claim this bind corresponds to — stores must
+   * reject (no-op) a bind whose token no longer matches the key's current claim, e.g. because the
+   * original claim expired and was reclaimed by another handler in the meantime.
+   */
+  bindIdempotencyKey(key: string, id: string, fencingToken: string): Promise<void>;
+  /**
+   * Release after handler failure so the key can be retried. `fencingToken` must match the token
+   * returned by the `"claimed"` claim this release corresponds to, for the same reclaim-safety
+   * reason as {@link bindIdempotencyKey}.
+   */
+  releaseIdempotencyKey(key: string, id: string, fencingToken: string): Promise<void>;
   cleanupExpired?(input: MikaAcpSessionCleanupInput): Promise<MikaAcpSessionCleanupResult>;
 }
 
 /** Result of claiming an ACP idempotency key before creating or replaying a checkout session. */
 export type MikaAcpIdempotencyClaim =
-  | { readonly status: "claimed" }
+  | { readonly status: "claimed"; readonly fencingToken: string }
   | { readonly status: "replayed"; readonly record: MikaAcpSessionRecord }
   | { readonly status: "conflict"; readonly id: string }
   | { readonly status: "in_progress"; readonly id: string };
@@ -746,8 +763,16 @@ export function createMemoryMikaAcpSessionStore(): MikaAcpSessionStore {
   const sessions = new Map<string, MikaAcpSessionRecord>();
   const idempotencyKeys = new Map<
     string,
-    { readonly id: string; readonly pending: boolean; readonly expiresAt?: ISODateTime }
+    {
+      readonly id: string;
+      readonly pending: boolean;
+      readonly expiresAt?: ISODateTime;
+      readonly fencingToken: string;
+    }
   >();
+  // Monotonically increasing, not required to be unguessable — every (re)claim of a key gets a
+  // fresh token, so a stale claim holder's bind/release can be told apart from the current one.
+  let nextFencingToken = 0;
 
   return {
     async get(id) {
@@ -772,16 +797,23 @@ export function createMemoryMikaAcpSessionStore(): MikaAcpSessionStore {
           : { status: "in_progress", id: existing.id };
       }
 
-      idempotencyKeys.set(key, { id, pending: true, expiresAt: lease?.expiresAt });
+      nextFencingToken += 1;
+      const fencingToken = String(nextFencingToken);
+      idempotencyKeys.set(key, { id, pending: true, expiresAt: lease?.expiresAt, fencingToken });
 
-      return { status: "claimed" };
+      return { status: "claimed", fencingToken };
     },
-    async bindIdempotencyKey(key, id) {
-      idempotencyKeys.set(key, { id, pending: false });
-    },
-    async releaseIdempotencyKey(key, id) {
+    async bindIdempotencyKey(key, id, fencingToken) {
       const binding = idempotencyKeys.get(key);
-      if (binding?.id === id && binding.pending) idempotencyKeys.delete(key);
+      if (binding?.fencingToken !== fencingToken) return;
+
+      idempotencyKeys.set(key, { ...binding, id, pending: false });
+    },
+    async releaseIdempotencyKey(key, id, fencingToken) {
+      const binding = idempotencyKeys.get(key);
+      if (binding?.id === id && binding.pending && binding.fencingToken === fencingToken) {
+        idempotencyKeys.delete(key);
+      }
     },
     async cleanupExpired(input) {
       const limit = input.limit ?? 50;
@@ -1323,6 +1355,7 @@ async function handleAcpCancel(
 interface MikaAcpIdempotencyLease {
   readonly key: string;
   readonly id: string;
+  readonly fencingToken: string;
 }
 
 type MikaAcpIdempotencyBegin =
@@ -1349,7 +1382,7 @@ async function beginAcpIdempotency(
     ),
   });
   if (claim.status === "claimed") {
-    return { ok: true, lease: { key, id: checkoutSessionId } };
+    return { ok: true, lease: { key, id: checkoutSessionId, fencingToken: claim.fencingToken } };
   }
   if (claim.status === "replayed") {
     return {
@@ -1395,14 +1428,14 @@ async function commitAcpIdempotency(
   options: CreateMikaAcpCheckoutHandlersOptions,
   lease: MikaAcpIdempotencyLease | undefined,
 ): Promise<void> {
-  if (lease) await options.store.bindIdempotencyKey(lease.key, lease.id);
+  if (lease) await options.store.bindIdempotencyKey(lease.key, lease.id, lease.fencingToken);
 }
 
 async function releaseAcpIdempotency(
   options: CreateMikaAcpCheckoutHandlersOptions,
   lease: MikaAcpIdempotencyLease | undefined,
 ): Promise<void> {
-  if (lease) await options.store.releaseIdempotencyKey(lease.key, lease.id);
+  if (lease) await options.store.releaseIdempotencyKey(lease.key, lease.id, lease.fencingToken);
 }
 
 async function releaseAcpIdempotencyQuietly(
