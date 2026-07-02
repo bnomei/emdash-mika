@@ -227,9 +227,6 @@ export interface CreateMikaAgentManifestOptions {
   readonly include?: readonly MikaAgentVisibility[];
 }
 
-/** @deprecated Use {@link CreateMikaAgentManifestOptions}. */
-export type MikaAgentManifestOptions = CreateMikaAgentManifestOptions;
-
 /** Projects Mika operation descriptors into an agent manifest for autonomous commerce clients. */
 export function createMikaAgentManifest(
   options: CreateMikaAgentManifestOptions = {},

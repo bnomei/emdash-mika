@@ -50,8 +50,8 @@ Backend flows:
   maintenance cron releases expired stock reservations out of the box; to also
   drain the email outbox, purge expired ephemeral records, and process
   account-delete batches, pass `maintenance.repositories` and
-  `maintenance.emailOutboxRunner` to `createPlugin` (otherwise those tasks
-  report `skipped`).
+  `maintenance.emailOutboxRunner` to `createMikaPlugin` in the host entrypoint
+  module (otherwise those tasks report `skipped`).
 - Admin operation descriptors and runner helpers for EmDash action UIs.
 
 Agent-ready commerce flows:
@@ -81,10 +81,7 @@ Create a host entrypoint module that merges the live backend api:
 ```ts
 // src/lib/mika-plugin.ts — EmDash plugin entrypoint
 // (copyable template: src/templates/astro/lib/mika-plugin.ts)
-import {
-  createPlugin as createMikaPlugin,
-  type MikaCreatePluginOptions,
-} from "@bnomei/emdash-mika";
+import { createMikaPlugin, type MikaCreatePluginOptions } from "@bnomei/emdash-mika";
 import { api } from "./mika-api";
 
 export function createPlugin(options: MikaCreatePluginOptions = {}) {

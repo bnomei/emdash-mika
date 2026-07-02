@@ -11,7 +11,7 @@ import {
   MIKA_MAINTENANCE_CRON_TASK,
   MIKA_PLUGIN_ID,
   MIKA_PLUGIN_VERSION,
-  createPlugin,
+  createMikaPlugin,
   mikaPlugin,
   type MikaCreatePluginOptions,
 } from "../src/index";
@@ -338,7 +338,7 @@ export type MissingPublicCallMikaOperation =
   typeof import("@bnomei/emdash-mika/server").callMikaOperation;
 
 describe("Mika native plugin package", () => {
-  const createPluginCronContext = (cronCalls: unknown[], logCalls: unknown[] = []) =>
+  const createMikaPluginCronContext = (cronCalls: unknown[], logCalls: unknown[] = []) =>
     ({
       cron: {
         schedule: async (...args: unknown[]) => {
@@ -405,7 +405,7 @@ describe("Mika native plugin package", () => {
   });
 
   it("creates a runtime plugin with Mika routes", () => {
-    const plugin = createPlugin({ assertWired: false });
+    const plugin = createMikaPlugin({ assertWired: false });
 
     expect(plugin.id).toBe(MIKA_PLUGIN_ID);
     expect(plugin.version).toBe(MIKA_PLUGIN_VERSION);
@@ -415,24 +415,24 @@ describe("Mika native plugin package", () => {
   });
 
   it("fails loudly at construction when the Mika API is not fully wired", () => {
-    expect(() => createPlugin()).toThrow(/missing wired methods/);
-    expect(() => createPlugin()).toThrow(/assertWired: false/);
-    expect(() => createPlugin({ assertWired: ["checkout"] })).toThrow(/checkout\.start/);
+    expect(() => createMikaPlugin()).toThrow(/missing wired methods/);
+    expect(() => createMikaPlugin()).toThrow(/assertWired: false/);
+    expect(() => createMikaPlugin({ assertWired: ["checkout"] })).toThrow(/checkout\.start/);
   });
 
   it("hints at descriptor serialization when a provided api arrives unwired", () => {
     // The EmDash host JSON-serializes descriptor options, stripping function values.
     const serialized = JSON.parse(JSON.stringify({ api: { cart: {} } })) as MikaCreatePluginOptions;
-    expect(() => createPlugin(serialized)).toThrow(/JSON-serializes descriptor options/);
-    expect(() => createPlugin()).not.toThrow(/JSON-serializes descriptor options/);
+    expect(() => createMikaPlugin(serialized)).toThrow(/JSON-serializes descriptor options/);
+    expect(() => createMikaPlugin()).not.toThrow(/JSON-serializes descriptor options/);
   });
 
   it("rethrows unknown assertWired scopes without the wiring remediation", () => {
-    expect(() => createPlugin({ assertWired: ["chekout"] })).toThrow(
+    expect(() => createMikaPlugin({ assertWired: ["chekout"] })).toThrow(
       /Unknown Mika API wiring scope/,
     );
-    expect(() => createPlugin({ assertWired: ["chekout"] })).not.toThrow(/assertWired: false/);
-    expect(() => createPlugin({ assertWired: ["chekout"] })).toThrow(/assertWired entries/);
+    expect(() => createMikaPlugin({ assertWired: ["chekout"] })).not.toThrow(/assertWired: false/);
+    expect(() => createMikaPlugin({ assertWired: ["chekout"] })).toThrow(/assertWired entries/);
   });
 
   it("forwards assertWired through the mikaPlugin descriptor options", () => {
@@ -445,7 +445,7 @@ describe("Mika native plugin package", () => {
 
   it("scopes the wiring assertion to requested namespaces and methods", () => {
     expect(() =>
-      createPlugin({
+      createMikaPlugin({
         api: {
           catalog: {
             sellables: async () => ({ ok: true, status: 200, data: [] }),
@@ -454,14 +454,14 @@ describe("Mika native plugin package", () => {
         assertWired: ["catalog"],
       }),
     ).not.toThrow();
-    expect(() => createPlugin({ assertWired: false })).not.toThrow();
+    expect(() => createMikaPlugin({ assertWired: false })).not.toThrow();
   });
 
   it("registers the default Mika maintenance cron task", async () => {
-    const plugin = createPlugin({ assertWired: false });
+    const plugin = createMikaPlugin({ assertWired: false });
     const calls: unknown[] = [];
 
-    await plugin.hooks["plugin:install"]?.handler({} as never, createPluginCronContext(calls));
+    await plugin.hooks["plugin:install"]?.handler({} as never, createMikaPluginCronContext(calls));
 
     expect(calls).toEqual([
       [MIKA_MAINTENANCE_CRON_TASK, { schedule: MIKA_MAINTENANCE_CRON_SCHEDULE }],
@@ -469,18 +469,21 @@ describe("Mika native plugin package", () => {
   });
 
   it("supports disabled and custom Mika maintenance schedules", async () => {
-    const disabled = createPlugin({ assertWired: false, maintenance: { enabled: false } });
-    const custom = createPlugin({ assertWired: false, maintenance: { schedule: "*/5 * * * *" } });
+    const disabled = createMikaPlugin({ assertWired: false, maintenance: { enabled: false } });
+    const custom = createMikaPlugin({
+      assertWired: false,
+      maintenance: { schedule: "*/5 * * * *" },
+    });
     const disabledCalls: unknown[] = [];
     const customCalls: unknown[] = [];
 
     await disabled.hooks["plugin:activate"]?.handler(
       {} as never,
-      createPluginCronContext(disabledCalls),
+      createMikaPluginCronContext(disabledCalls),
     );
     await custom.hooks["plugin:activate"]?.handler(
       {} as never,
-      createPluginCronContext(customCalls),
+      createMikaPluginCronContext(customCalls),
     );
 
     expect(disabledCalls).toEqual([["cancel", MIKA_MAINTENANCE_CRON_TASK]]);
@@ -488,9 +491,9 @@ describe("Mika native plugin package", () => {
   });
 
   it("cancels Mika maintenance cron on plugin deactivate and uninstall", async () => {
-    const plugin = createPlugin({ assertWired: false });
+    const plugin = createMikaPlugin({ assertWired: false });
     const calls: unknown[] = [];
-    const ctx = createPluginCronContext(calls);
+    const ctx = createMikaPluginCronContext(calls);
 
     await plugin.hooks["plugin:deactivate"]?.handler({} as never, ctx);
     await plugin.hooks["plugin:uninstall"]?.handler({ deleteData: false } as never, ctx);
@@ -504,7 +507,7 @@ describe("Mika native plugin package", () => {
   it("invokes Mika maintenance from the cron hook", async () => {
     const calls: unknown[] = [];
     const logCalls: unknown[] = [];
-    const plugin = createPlugin({
+    const plugin = createMikaPlugin({
       assertWired: false,
       api: {
         admin: {
@@ -523,11 +526,11 @@ describe("Mika native plugin package", () => {
 
     await plugin.hooks.cron?.handler(
       { name: MIKA_MAINTENANCE_CRON_TASK, scheduledAt: "2026-06-21T10:00:00.000Z" },
-      createPluginCronContext([], logCalls),
+      createMikaPluginCronContext([], logCalls),
     );
     await plugin.hooks.cron?.handler(
       { name: "unrelated", scheduledAt: "2026-06-21T10:01:00.000Z" },
-      createPluginCronContext([], logCalls),
+      createMikaPluginCronContext([], logCalls),
     );
 
     expect(calls).toEqual([{ now: "2026-06-21T10:00:00.000Z" }]);
@@ -558,7 +561,7 @@ describe("Mika native plugin package", () => {
     const logCalls: unknown[] = [];
     const emailRunCalls: unknown[] = [];
     const purgeCalls: unknown[] = [];
-    const plugin = createPlugin({
+    const plugin = createMikaPlugin({
       assertWired: false,
       api: {
         admin: {
@@ -610,7 +613,7 @@ describe("Mika native plugin package", () => {
 
     await plugin.hooks.cron?.handler(
       { name: MIKA_MAINTENANCE_CRON_TASK, scheduledAt: "2026-06-21T10:00:00.000Z" },
-      createPluginCronContext([], logCalls),
+      createMikaPluginCronContext([], logCalls),
     );
 
     expect(emailRunCalls).toEqual([{ now: "2026-06-21T10:00:00.000Z" }]);
@@ -634,7 +637,7 @@ describe("Mika native plugin package", () => {
 
   it("logs Mika maintenance failures before surfacing stock cleanup errors", async () => {
     const logCalls: unknown[] = [];
-    const plugin = createPlugin({
+    const plugin = createMikaPlugin({
       assertWired: false,
       api: {
         admin: {
@@ -650,7 +653,7 @@ describe("Mika native plugin package", () => {
     await expect(
       plugin.hooks.cron?.handler(
         { name: MIKA_MAINTENANCE_CRON_TASK, scheduledAt: "2026-06-21T10:00:00.000Z" },
-        createPluginCronContext([], logCalls),
+        createMikaPluginCronContext([], logCalls),
       ),
     ).rejects.toThrow("release failed");
 
@@ -775,7 +778,7 @@ describe("Mika Astro helpers", () => {
   it("answers not-implemented for direct Astro helpers with no api option", async () => {
     // createMika/createMikaActions have no process-global default api to fall back to — every
     // call site must pass { api } explicitly (the copyable templates import it from
-    // src/lib/mika-api.ts, the same module the host entrypoint's createPlugin() merges).
+    // src/lib/mika-api.ts, the same module the host entrypoint's createMikaPlugin() merges).
     const Mika = createMika({
       request: new Request("https://shop.test/cart"),
       url: new URL("https://shop.test/cart"),
@@ -3600,7 +3603,6 @@ describe("Mika admin and email shell", () => {
       mode: "run",
       provider: "mika",
       providerLabel: "Mika",
-      actionPluginId: "mika",
       manifestRoute: ".well-known/actions",
       runnerRoute: ".well-known/actions/run",
       action: "mika.catalog.syncEntry",
@@ -3621,8 +3623,6 @@ describe("Mika admin and email shell", () => {
     ).toMatchObject({
       provider: "custom",
       providerLabel: "Custom",
-      actionPluginId: "custom",
-      actionPluginLabel: "Custom",
     });
   });
 
@@ -3918,6 +3918,17 @@ describe("public types", () => {
       expect(conditions["types"]).toEqual(expect.stringMatching(/^\.\/dist\/.+\.d\.mts$/));
       expect(conditions["import"]).toEqual(expect.stringMatching(/^\.\/dist\/.+\.mjs$/));
     }
+  });
+
+  it("keeps MIKA_PLUGIN_VERSION synced with the published package version", () => {
+    // The plugin descriptor's version is the plugin's semver as EmDash hosts see it — it must
+    // match package.json exactly, or a host resolving plugin compatibility sees a version the
+    // npm registry never actually published.
+    const packageJson = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ) as { readonly version: string };
+
+    expect(MIKA_PLUGIN_VERSION).toBe(packageJson.version);
   });
 
   it("keeps the source-facing client and action types aligned", () => {

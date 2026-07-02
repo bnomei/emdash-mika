@@ -25,8 +25,11 @@ import type { MikaAcpSessionStore } from "./acp";
 /** Stable EmDash plugin id registered for Mika routes and storage. */
 export { MIKA_PLUGIN_ID } from "./api/routes";
 
-/** Published plugin semver wired into the EmDash descriptor and runtime. */
-export const MIKA_PLUGIN_VERSION = "0.1.0";
+/**
+ * Published plugin semver wired into the EmDash descriptor and runtime — must match the
+ * package.json version exactly (test/index.test.ts asserts this on every publish gate run).
+ */
+export const MIKA_PLUGIN_VERSION = "0.0.0";
 
 /** npm package name used as the default plugin entrypoint. */
 export const MIKA_PACKAGE_NAME = "@bnomei/emdash-mika";
@@ -78,7 +81,7 @@ export interface MikaDescriptorOptions {
   readonly operationPolicy?: MikaOperationPolicy;
   /** Descriptor-level maintenance cron toggles. */
   readonly maintenance?: MikaMaintenancePluginOptions;
-  /** Wiring assertion forwarded to {@link createPlugin}; see {@link MikaCreatePluginOptions}. */
+  /** Wiring assertion forwarded to {@link createMikaPlugin}; see {@link MikaCreatePluginOptions}. */
   readonly assertWired?: boolean | readonly string[];
 }
 
@@ -143,10 +146,15 @@ export function mikaPlugin(
 
 /**
  * Registers the live Mika plugin: HTTP routes, storage schema, cron maintenance, and hooks.
+ * Call this from a host entrypoint module (see {@link MikaDescriptorOptions.entrypoint}) — the
+ * module's own exported function must be named `createPlugin` to match what the EmDash host's
+ * generated virtual module calls, so wrap this as `export function createPlugin(options) {
+ * return createMikaPlugin({ ...options, api }); }` (copyable template:
+ * `src/templates/astro/lib/mika-plugin.ts`).
  *
  * @returns EmDash plugin runtime from `definePlugin`.
  */
-export function createPlugin(options: MikaCreatePluginOptions = {}) {
+export function createMikaPlugin(options: MikaCreatePluginOptions = {}) {
   const api = createMikaApi(options.api);
   const assertWired = options.assertWired ?? true;
   if (assertWired !== false) {
@@ -161,7 +169,7 @@ export function createPlugin(options: MikaCreatePluginOptions = {}) {
       }
       const wiringHint =
         options.api !== undefined
-          ? "An api option was provided but its methods are missing — if it was passed through mikaPlugin() in astro.config, note the EmDash host JSON-serializes descriptor options, so live functions cannot cross; register a host entrypoint module that calls createPlugin({ api }) with the live backend instead. If the entrypoint module imports the mika-api template stub, replace its empty overrides with the host backend (createMikaBackendApi())."
+          ? "An api option was provided but its methods are missing — if it was passed through mikaPlugin() in astro.config, note the EmDash host JSON-serializes descriptor options, so live functions cannot cross; register a host entrypoint module that calls createMikaPlugin({ api }) with the live backend instead. If the entrypoint module imports the mika-api template stub, replace its empty overrides with the host backend (createMikaBackendApi())."
           : "Wire the backend (e.g. createMikaBackendApi()) into the plugin's api option.";
       throw new Error(
         `${message} Every unwired method answers 501 at runtime. ${wiringHint} Scope the check with assertWired: ["cart", ...] or pass assertWired: false to accept partial wiring.`,

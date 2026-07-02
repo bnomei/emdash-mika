@@ -69,10 +69,7 @@ JSON-serializes descriptor options, so a live `api` cannot pass through
 ```ts
 // src/lib/mika-plugin.ts — EmDash plugin entrypoint
 // (copyable template: src/templates/astro/lib/mika-plugin.ts)
-import {
-  createPlugin as createMikaPlugin,
-  type MikaCreatePluginOptions,
-} from "@bnomei/emdash-mika";
+import { createMikaPlugin, type MikaCreatePluginOptions } from "@bnomei/emdash-mika";
 import { api } from "./mika-api";
 
 export function createPlugin(options: MikaCreatePluginOptions = {}) {

@@ -96,8 +96,6 @@ export interface MikaAdminActionDefinition {
   readonly contextValueKey?: string;
   readonly target?: MikaAdminActionTargetRequirement;
   readonly form?: MikaAdminActionFormMetadata;
-  /** @deprecated Use {@link MikaAdminActionFormMetadata} via `form`. */
-  readonly input?: MikaAdminActionInputMetadata;
   readonly disabled?: boolean;
   /** Minimum milliseconds between repeated runs of the same action. */
   readonly cooldownMs?: number;
@@ -108,10 +106,9 @@ export interface MikaAdminActionDefinition {
   readonly pollTimeoutMs?: number;
 }
 
-type MikaAdminActionDescriptorBase = Omit<MikaAdminActionDefinition, "id" | "input" | "target"> & {
+type MikaAdminActionDescriptorBase = Omit<MikaAdminActionDefinition, "id" | "target"> & {
   readonly id: MikaAdminActionId | (string & {});
   readonly target?: MikaAdminActionTargetMetadata;
-  readonly form?: MikaAdminActionFormMetadata;
 };
 
 /** Runner-mode admin action entry in the EmDash actions manifest. */
@@ -141,11 +138,6 @@ export interface MikaActionButtonFieldOptions {
   readonly provider?: string;
   readonly providerLabel?: string;
   readonly runnerRoute?: string;
-  /** @deprecated Use `provider`. */
-  readonly actionPluginId?: string;
-  readonly pluginId?: string;
-  /** @deprecated Use `providerLabel`. */
-  readonly actionPluginLabel?: string;
   readonly action?: MikaAdminActionId | (string & {});
   readonly route?: string;
   readonly method?: MikaAdminActionMethod;
@@ -553,17 +545,14 @@ export function createMikaActionButtonOptions(
   options: Partial<MikaActionButtonFieldOptions> = {},
 ): MikaActionButtonFieldOptions {
   const action: MikaAdminActionDefinition = mikaAdminActionDefinitions[actionId];
-  const provider = options.provider ?? options.actionPluginId ?? MIKA_PLUGIN_ID;
-  const providerLabel = options.providerLabel ?? options.actionPluginLabel ?? "Mika";
+  const provider = options.provider ?? MIKA_PLUGIN_ID;
+  const providerLabel = options.providerLabel ?? "Mika";
 
   return {
     mode: options.mode ?? "run",
     provider,
     providerLabel,
     runnerRoute: options.runnerRoute ?? MIKA_ACTIONS_RUNNER_ROUTE,
-    actionPluginId: options.actionPluginId ?? provider,
-    pluginId: options.pluginId,
-    actionPluginLabel: options.actionPluginLabel ?? providerLabel,
     manifestRoute: options.manifestRoute ?? MIKA_ACTIONS_MANIFEST_ROUTE,
     action: options.action ?? actionId,
     route: options.route,
@@ -618,11 +607,10 @@ function adminActionDescriptor(
 function adminActionDescriptorBase(
   action: MikaAdminActionDefinition,
 ): MikaAdminActionDescriptorBase {
-  const { input: deprecatedInput, target, ...descriptor } = action;
-  const form = descriptor.form ?? deprecatedInput;
+  const { target, ...descriptor } = action;
+
   return {
     ...descriptor,
-    ...(form ? { form } : {}),
     ...(target ? { target: normalizeMikaAdminActionTarget(target) } : {}),
   };
 }

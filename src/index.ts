@@ -13,7 +13,7 @@ export {
   MIKA_MAINTENANCE_CRON_TASK,
   MIKA_PLUGIN_ID,
   MIKA_PLUGIN_VERSION,
-  createPlugin,
+  createMikaPlugin,
   mika,
   mikaPlugin,
   type MikaCreatePluginOptions,
