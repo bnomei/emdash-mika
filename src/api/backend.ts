@@ -981,7 +981,7 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
               ok: false,
               status: 404,
               error: {
-                code: "VALIDATION_FAILED",
+                code: "NOT_FOUND",
                 message: `Stock item '${adjustment.stockItemId}' was not found.`,
                 fieldErrors: { stockItemId: "Stock item was not found." },
               },
@@ -1980,7 +1980,7 @@ async function runSubscriptionAction(
       ok: false,
       status: 404,
       error: {
-        code: "VALIDATION_FAILED",
+        code: "NOT_FOUND",
         message: `Subscription '${actionInput.subscriptionId}' was not found.`,
         fieldErrors: { subscriptionId: "Subscription was not found." },
       },
@@ -1992,7 +1992,7 @@ async function runSubscriptionAction(
       ok: false,
       status: 409,
       error: {
-        code: "VALIDATION_FAILED",
+        code: "CONFLICT",
         message: `Subscription '${actionInput.subscriptionId}' is ${subscription.status} and cannot be modified.`,
         fieldErrors: { subscriptionId: `Subscription is ${subscription.status}.` },
       },
@@ -4291,7 +4291,7 @@ async function replayWebhook(
       ok: false,
       status: 404,
       error: {
-        code: "VALIDATION_FAILED",
+        code: "NOT_FOUND",
         message: `Webhook '${replayInput.webhookId}' was not found.`,
         fieldErrors: { webhookId: "Webhook was not found." },
       },

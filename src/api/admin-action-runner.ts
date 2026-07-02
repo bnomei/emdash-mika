@@ -374,7 +374,7 @@ function parseActionInvocation(input: unknown): MikaApiResult<MikaActionInvocati
     return runnerFailure("VALIDATION_FAILED", "Mika action invocation requires an actionId.", 400);
   }
   if (!isMikaAdminActionId(actionId)) {
-    return runnerFailure("VALIDATION_FAILED", `Mika action '${actionId}' is not defined.`, 404);
+    return runnerFailure("NOT_FOUND", `Mika action '${actionId}' is not defined.`, 404);
   }
 
   const action = mikaAdminActionDefinitions[actionId];

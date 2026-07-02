@@ -7010,7 +7010,7 @@ describe("backend API composition", () => {
         ok: false,
         status: 409,
         error: {
-          code: "VALIDATION_FAILED",
+          code: "CONFLICT",
           message: `Subscription '${subscription.id}' is ${terminal.status} and cannot be modified.`,
         },
       });
