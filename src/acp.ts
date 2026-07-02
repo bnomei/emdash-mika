@@ -1648,7 +1648,10 @@ function acpRecordIsExpired(record: MikaAcpSessionRecord, now: ISODateTime): boo
  * fresh object graph on every `get()` (e.g. `JSON.parse` of a stored row), so two reads of
  * content-identical data are never the same reference even when nothing changed. Object key order
  * is ignored (compares by key set, not insertion order) since a storage round-trip has no
- * obligation to preserve it.
+ * obligation to preserve it. An explicit `key: undefined` is treated as equivalent to `key` being
+ * absent entirely (both read as `undefined` through bracket access) — matching how `JSON.stringify`
+ * itself drops undefined-valued keys, so this stays a faithful "would these serialize the same"
+ * comparison even before either side has actually round-tripped through JSON.
  */
 function acpDeepEqual(left: unknown, right: unknown): boolean {
   if (left === right) return true;
@@ -1663,11 +1666,11 @@ function acpDeepEqual(left: unknown, right: unknown): boolean {
     return left.every((item, index) => acpDeepEqual(item, right[index]));
   }
 
-  const leftEntries = Object.entries(left as Record<string, unknown>);
+  const leftRecord = left as Record<string, unknown>;
   const rightRecord = right as Record<string, unknown>;
-  if (leftEntries.length !== Object.keys(rightRecord).length) return false;
+  const keys = new Set([...Object.keys(leftRecord), ...Object.keys(rightRecord)]);
 
-  return leftEntries.every(([key, value]) => acpDeepEqual(value, rightRecord[key]));
+  return [...keys].every((key) => acpDeepEqual(leftRecord[key], rightRecord[key]));
 }
 
 /**
