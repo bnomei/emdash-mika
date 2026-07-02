@@ -15,7 +15,6 @@ import type { MikaBackendRepositories } from "./api/backend";
 import type { MikaEmailOutboxRunner } from "./api/email-outbox";
 import { createMikaMaintenanceRunner, type MikaMaintenanceRunResult } from "./api/maintenance";
 import { createMikaPluginRoutes } from "./api/route-handlers";
-import { setDefaultMikaApiOverrides, setDefaultMikaOperationPolicy } from "./api/runtime-api";
 import { MIKA_PLUGIN_ID } from "./api/routes";
 import { assertMikaApiWired, createMikaApi, type MikaApiOverrides } from "./api/server";
 import type { MikaOperationPolicy } from "./api/operation-policy";
@@ -169,8 +168,6 @@ export function createPlugin(options: MikaCreatePluginOptions = {}) {
       );
     }
   }
-  setDefaultMikaApiOverrides(options.api);
-  setDefaultMikaOperationPolicy(options.operationPolicy);
   const maintenance = options.maintenance ?? {};
   const maintenanceEnabled = maintenance.enabled !== false;
   const maintenanceSchedule = maintenance.schedule ?? MIKA_MAINTENANCE_CRON_SCHEDULE;

@@ -2,6 +2,7 @@
 import { actions } from "astro:actions";
 import { Link, Text } from "@cloudflare/kumo";
 import { createMika } from "@bnomei/emdash-mika/astro";
+import { api } from "../lib/mika-api";
 import MikaKumoPage from "../components/MikaKumoPage.astro";
 import WishlistList from "../components/WishlistList.astro";
 import { mikaTemplateCurrentCartItemCount } from "../lib/cart";
@@ -9,7 +10,7 @@ import { mikaTemplateRoutes } from "../lib/routes";
 
 export const prerender = false;
 
-const Mika = createMika(Astro);
+const Mika = createMika(Astro, { api });
 
 const removeResult = Astro.getActionResult(actions.mika.wishlist.remove);
 const moveToCartResult = Astro.getActionResult(actions.mika.wishlist.moveToCart);

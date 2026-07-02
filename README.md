@@ -169,13 +169,15 @@ src/actions/index.ts
 src/actions/mika.ts
 ```
 
-Then expose Mika's Astro Actions:
+Then expose Mika's Astro Actions, passing the same `api` the entrypoint
+module merges:
 
 ```ts
 import { createMikaActions } from "./mika";
+import { api } from "../lib/mika-api";
 
 export const server = {
-  mika: createMikaActions(),
+  mika: createMikaActions({ api }),
 };
 ```
 
@@ -184,14 +186,19 @@ Browser forms submit to action names such as `actions.mika.cart.add`,
 can pass a `guard` option to apply rate limits, auth checks, bot checks, or
 feature locks before a Mika action reaches the request-bound backend API.
 
-Storefront pages use the request-bound Astro helper:
+Storefront pages use the request-bound Astro helper, also wired with `api`:
 
 ```ts
 import { createMika } from "@bnomei/emdash-mika/astro";
+import { api } from "../lib/mika-api";
 
-const Mika = createMika(Astro);
+const Mika = createMika(Astro, { api });
 const sellablesResult = await Mika.catalog.sellables("products", productId);
 ```
+
+Neither helper has a process-global default `api` — every call site imports
+it explicitly. This keeps behavior local to each module and safe for hosts
+that construct more than one Mika-backed integration in the same process.
 
 Product UI is copyable Astro, not a hidden route system. Copy only the pages and
 components the host project needs, then keep localization and product routing in

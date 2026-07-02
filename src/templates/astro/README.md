@@ -251,11 +251,12 @@ Copy `actions/index.ts` and `actions/mika.ts` into the host project's
 `@bnomei/emdash-mika/astro-actions`, so the action factory stays versioned with
 Mika.
 
-When a backend API is wired through the plugin entrypoint
-(`createPlugin({ api })`), copied pages that
-call `createMika(Astro)` and action modules that call `createMikaActions()` use
-that same API by default. Pass `{ api }` directly only when a page or action
-module needs different wiring.
+There is no process-global default API: every `createMika(Astro, { api })` and
+`createMikaActions({ api })` call site imports `api` explicitly from
+`src/lib/mika-api.ts` (the same module the plugin entrypoint merges), as the
+copied pages and `actions/index.ts` already do. Pass a different `api` value
+only when a page or action module needs different wiring than the rest of the
+storefront.
 
 ## Imports
 
@@ -277,7 +278,9 @@ Use the small public subpaths in copied code:
 The page examples intentionally use an uppercase request-bound server helper:
 
 ```ts
-const Mika = createMika(Astro);
+import { api } from "../lib/mika-api";
+
+const Mika = createMika(Astro, { api });
 const cartResult = await Mika.cart.get();
 ```
 

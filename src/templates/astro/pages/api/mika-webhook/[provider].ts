@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { createMika } from "@bnomei/emdash-mika/astro";
 import { createProviderName } from "@bnomei/emdash-mika/types";
 import type { APIRoute } from "astro";
+import { api } from "../../../lib/mika-api";
 
 /** Webhook ingest must read the live request body and provider route param. */
 export const prerender = false;
@@ -15,7 +16,7 @@ export const POST: APIRoute = async ({ params, request, url }) => {
   const provider = params["provider"];
   if (!provider) return new Response("Missing provider.", { status: 400 });
 
-  const Mika = createMika({ request, url }, { includeWebhook: true });
+  const Mika = createMika({ request, url }, { api, includeWebhook: true });
   const rawBody = await request.clone().arrayBuffer();
   const payloadHash = "sha256:" + createHash("sha256").update(Buffer.from(rawBody)).digest("hex");
   // Presence-only metadata; cryptographic verification happens inside webhook.receive.

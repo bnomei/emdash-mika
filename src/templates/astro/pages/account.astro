@@ -2,6 +2,7 @@
 import { actions, isInputError } from "astro:actions";
 import { Button, Text } from "@cloudflare/kumo";
 import { createMika, mikaReturnToInput } from "@bnomei/emdash-mika/astro";
+import { api } from "../lib/mika-api";
 import AccountSignInPanel from "../components/AccountSignInPanel.astro";
 import MikaKumoPage from "../components/MikaKumoPage.astro";
 import { mikaTemplateCurrentCartItemCount } from "../lib/cart";
@@ -9,7 +10,7 @@ import { mikaTemplateRoutes } from "../lib/routes";
 
 export const prerender = false;
 
-const Mika = createMika(Astro);
+const Mika = createMika(Astro, { api });
 
 const portalResult = Astro.getActionResult(actions.mika.account.portal);
 if (portalResult?.data?.redirectUrl) {

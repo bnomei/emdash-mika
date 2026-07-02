@@ -112,12 +112,13 @@ actions, and purchase components.
 ---
 import { actions } from "astro:actions";
 import { createMika } from "@bnomei/emdash-mika/astro";
+import { api } from "../lib/mika-api";
 import ProductPurchase from "../components/ProductPurchase.astro";
 import ProductStructuredData from "../components/ProductStructuredData.astro";
 
 export const prerender = false;
 
-const Mika = createMika(Astro);
+const Mika = createMika(Astro, { api });
 const checkoutResult = Astro.getActionResult(actions.mika.checkout.start);
 if (checkoutResult?.data?.redirectUrl) {
   return Astro.redirect(checkoutResult.data.redirectUrl);

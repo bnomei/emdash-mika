@@ -24,7 +24,6 @@ import { mikaActionTreeSpec, type MikaActionTreeSpec } from "./api/action-tree";
 import { runMikaOperation } from "./api/operation-runner";
 import type { MikaOperationPolicy } from "./api/operation-policy";
 import { mikaOperationInputWithIdempotencyContext } from "./api/route-handlers";
-import { resolveMikaApiOverrides, resolveMikaOperationPolicy } from "./api/runtime-api";
 import { createMikaApi, type MikaApi, type MikaApiOverrides } from "./api/server";
 import { z } from "./api/validation";
 import type { MikaRequestContext } from "./api/context";
@@ -155,10 +154,8 @@ export function createMikaActions(options: MikaActionsOptions = {}): MikaActions
   ): Promise<T> => {
     const requestContext = actionRequestContext(ctx);
     await options.guard?.(ctx, definition.name, input);
-    const api = createMikaApi(resolveMikaApiOverrides(options.api));
-    return unwrap(
-      await request(api, requestContext, resolveMikaOperationPolicy(options.operationPolicy)),
-    );
+    const api = createMikaApi(options.api);
+    return unwrap(await request(api, requestContext, options.operationPolicy));
   };
 
   const createActionClient = <
@@ -210,9 +207,6 @@ export function createMikaActions(options: MikaActionsOptions = {}): MikaActions
 
   return buildMikaActionTree(mikaActionTreeSpec) as MikaActions;
 }
-
-/** Default Mika Astro Actions instance with library defaults. */
-export const mika: MikaActions = createMikaActions();
 
 function actionRequestContext(ctx: ActionAPIContext): MikaRequestContext {
   return createMikaRequestContext({

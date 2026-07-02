@@ -6,7 +6,6 @@ import type { APIContext } from "astro";
 
 import { createMikaRequestContext } from "./api/context";
 import { type MikaClientRoute } from "./api/client";
-import { resolveMikaApiOverrides, resolveMikaOperationPolicy } from "./api/runtime-api";
 import { runMikaOperation } from "./api/operation-runner";
 import { mikaOperationDefinitions, type MikaApiOperationData } from "./api/operations";
 import {
@@ -104,7 +103,7 @@ export function createMikaAstroClient<
   const TOptions extends MikaAstroClientOptions | undefined = undefined,
 >(ctx: MikaAstroContext, options?: TOptions): MikaAstroClient<TOptions> {
   const resolvedOptions: MikaAstroClientOptions = options ?? {};
-  const api = createMikaApi(resolveMikaApiOverrides(resolvedOptions.api));
+  const api = createMikaApi(resolvedOptions.api);
   const requestContext = createMikaRequestContext({
     request: ctx.request,
     url: ctx.url,
@@ -123,7 +122,7 @@ export function createMikaAstroClient<
       api,
       ctx: requestContext,
       input,
-      operationPolicy: resolveMikaOperationPolicy(resolvedOptions.operationPolicy),
+      operationPolicy: resolvedOptions.operationPolicy,
     });
   };
   const facade = createMikaOperationFacade(requestOperation, {

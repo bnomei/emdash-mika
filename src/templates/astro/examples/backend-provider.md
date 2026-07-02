@@ -100,8 +100,9 @@ export default defineConfig({
 });
 ```
 
-`createMikaActions()` and `createMika(Astro)` use the same plugin API by
-default after plugin registration.
+There is no process-global default: `createMikaActions({ api })` and
+`createMika(Astro, { api })` each import `api` from `src/lib/mika-api.ts`
+explicitly, the same module the plugin entrypoint merges.
 
 ## Fulfillment
 

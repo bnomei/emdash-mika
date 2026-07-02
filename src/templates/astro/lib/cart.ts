@@ -3,6 +3,7 @@
  * Reads the session cart and returns a safe item count for layout shells.
  */
 import { createMika } from "@bnomei/emdash-mika/astro";
+import { api } from "./mika-api";
 import { mikaTemplateCartItemCount } from "./display";
 
 /**
@@ -12,7 +13,7 @@ export async function mikaTemplateCurrentCartItemCount(
   ctx: Parameters<typeof createMika>[0],
 ): Promise<number> {
   try {
-    const Mika = createMika(ctx);
+    const Mika = createMika(ctx, { api });
     const cartResult = await Mika.cart.get();
     return cartResult.ok ? mikaTemplateCartItemCount(cartResult.data) : 0;
   } catch {

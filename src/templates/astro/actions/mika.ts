@@ -4,7 +4,6 @@
  */
 export {
   createMikaActions,
-  mika,
   type MikaActionName,
   type MikaActions,
   type MikaActionsOptions,

@@ -176,7 +176,6 @@ import {
 } from "../src/api/admin-action-runner";
 import { mikaActionTreeDefinitionKeys, validateMikaActionTreeSpec } from "../src/api/action-tree";
 import { mikaOperationFacadeSpec } from "../src/api/operation-facade";
-import { resolveMikaOperationPolicy, setDefaultMikaOperationPolicy } from "../src/api/runtime-api";
 import {
   mikaEmailTemplates,
   renderMikaEmail,
@@ -773,86 +772,10 @@ describe("Mika Astro helpers", () => {
     expect(redirectInputs.returnTo).toEqual({ name: "returnTo", value: "/" });
   });
 
-  it("uses native plugin API overrides for direct Astro helpers by default", async () => {
-    const api = {
-      cart: {
-        get: async () => ({
-          ok: true,
-          status: 200,
-          data: { id: "cart_1" } as CartDTO,
-        }),
-      },
-    } satisfies MikaApiOverrides;
-
-    try {
-      createPlugin({ api, assertWired: false });
-      const Mika = createMika({
-        request: new Request("https://shop.test/cart"),
-        url: new URL("https://shop.test/cart"),
-      });
-
-      await expect(Mika.cart.get()).resolves.toMatchObject({
-        ok: true,
-        data: { id: "cart_1" },
-      });
-    } finally {
-      createPlugin({ assertWired: false });
-    }
-  });
-
-  it("lets explicit Astro helper API overrides win over native plugin defaults", async () => {
-    const defaultApi = {
-      cart: {
-        get: async () => ({
-          ok: true,
-          status: 200,
-          data: { id: "cart_default" } as CartDTO,
-        }),
-      },
-    } satisfies MikaApiOverrides;
-    const explicitApi = {
-      cart: {
-        get: async () => ({
-          ok: true,
-          status: 200,
-          data: { id: "cart_explicit" } as CartDTO,
-        }),
-      },
-    } satisfies MikaApiOverrides;
-
-    try {
-      createPlugin({ api: defaultApi, assertWired: false });
-      const Mika = createMika(
-        {
-          request: new Request("https://shop.test/cart"),
-          url: new URL("https://shop.test/cart"),
-        },
-        { api: explicitApi },
-      );
-
-      await expect(Mika.cart.get()).resolves.toMatchObject({
-        ok: true,
-        data: { id: "cart_explicit" },
-      });
-    } finally {
-      createPlugin({ assertWired: false });
-    }
-  });
-
-  it("clears native plugin API defaults when a plugin is created without overrides", async () => {
-    const api = {
-      cart: {
-        get: async () => ({
-          ok: true,
-          status: 200,
-          data: { id: "cart_default" } as CartDTO,
-        }),
-      },
-    } satisfies MikaApiOverrides;
-
-    createPlugin({ api, assertWired: false });
-    createPlugin({ assertWired: false });
-
+  it("answers not-implemented for direct Astro helpers with no api option", async () => {
+    // createMika/createMikaActions have no process-global default api to fall back to — every
+    // call site must pass { api } explicitly (the copyable templates import it from
+    // src/lib/mika-api.ts, the same module the host entrypoint's createPlugin() merges).
     const Mika = createMika({
       request: new Request("https://shop.test/cart"),
       url: new URL("https://shop.test/cart"),
@@ -2239,10 +2162,12 @@ describe("Mika client", () => {
     expect(astroActionsSource).toContain("runMikaOperation({");
     expect(astroActionsSource).not.toContain("callMikaOperation(definition.operation");
     expect(astroActionsSource).not.toContain("runMikaOperationPolicy");
-    expect(astroActionsSource).toContain("resolveMikaOperationPolicy(options.operationPolicy)");
-    expect(astroActionsSource).not.toContain(
-      "const operationPolicy = resolveMikaOperationPolicy(options.operationPolicy)",
+    // No process-global default: each action run reads options.operationPolicy directly.
+    expect(astroActionsSource).toContain(
+      "return unwrap(await request(api, requestContext, options.operationPolicy));",
     );
+    expect(astroActionsSource).not.toContain("resolveMikaOperationPolicy");
+    expect(astroActionsSource).not.toContain("resolveMikaApiOverrides");
     expect(astroActionsSource).not.toContain("as never");
   });
 
@@ -3290,26 +3215,6 @@ describe("Mika client", () => {
       },
     });
     expect(called).toBe(false);
-  });
-
-  it("resolves default operation policy at dispatch time", () => {
-    const firstPolicy: MikaOperationPolicy = () => true;
-    const secondPolicy: MikaOperationPolicy = () => false;
-
-    try {
-      setDefaultMikaOperationPolicy(undefined);
-      const earlyResolved = resolveMikaOperationPolicy(undefined);
-
-      setDefaultMikaOperationPolicy(firstPolicy);
-      expect(earlyResolved).toBeUndefined();
-      expect(resolveMikaOperationPolicy(undefined)).toBe(firstPolicy);
-      expect(resolveMikaOperationPolicy(secondPolicy)).toBe(secondPolicy);
-
-      setDefaultMikaOperationPolicy(secondPolicy);
-      expect(resolveMikaOperationPolicy(undefined)).toBe(secondPolicy);
-    } finally {
-      setDefaultMikaOperationPolicy(undefined);
-    }
   });
 
   it("validates JSON route query parameters", async () => {

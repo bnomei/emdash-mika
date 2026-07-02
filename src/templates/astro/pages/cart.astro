@@ -2,6 +2,7 @@
 import { actions } from "astro:actions";
 import { Badge, Link, Text } from "@cloudflare/kumo";
 import { createMika } from "@bnomei/emdash-mika/astro";
+import { api } from "../lib/mika-api";
 import CartLines from "../components/CartLines.astro";
 import CartSummary from "../components/CartSummary.astro";
 import CheckoutForm from "../components/CheckoutForm.astro";
@@ -12,7 +13,7 @@ import { mikaTemplateRoutes } from "../lib/routes";
 
 export const prerender = false;
 
-const Mika = createMika(Astro);
+const Mika = createMika(Astro, { api });
 
 const checkoutResult = Astro.getActionResult(actions.mika.checkout.start);
 if (checkoutResult?.data?.redirectUrl) {
