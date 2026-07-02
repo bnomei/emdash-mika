@@ -3535,10 +3535,6 @@ async function accountDTOForCustomer(
       ? input.repositories.account.listEntitlementsByEmailHash(emailHash, limit)
       : Promise.resolve({ items: [], nextCursor: undefined }),
   ]);
-  await Promise.all([
-    input.repositories.account.listProviderAccountsByCustomer(customer.customerId),
-    input.repositories.account.listLicensesByCustomer(customer.customerId),
-  ]);
 
   const orders = uniqueDocumentsById([...customerOrders.items, ...emailHashOrders.items]);
   const entitlements = uniqueDocumentsById([

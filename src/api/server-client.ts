@@ -2,7 +2,7 @@
  * Server-side HTTP client with full operation facade (including admin and webhook namespaces).
  * Forwards same-origin cookies from the incoming request by default.
  */
-import { createMikaClient, type MikaClientOptions } from "./client";
+import type { MikaClientOptions } from "./client";
 import {
   mikaOperationRequestInit,
   mikaOperationDefinitions,
@@ -52,7 +52,6 @@ export function createMikaServerClient(options: MikaServerClientOptions = {}): M
   });
 
   return {
-    ...createMikaClient(options),
     ...facade,
     routes,
   };
