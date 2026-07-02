@@ -553,11 +553,12 @@ describe("backend test storage helpers", () => {
     await ops.put(fresh);
     await ops.put(alreadyPurged);
 
-    await expect(ops.purgeWebhookRawPayloads(clock.isoAt(-14 * 24 * 60 * 60 * 1000), TEST_NOW))
-      .resolves.toEqual({
-        scanned: 2,
-        purged: 2,
-      });
+    await expect(
+      ops.purgeWebhookRawPayloads(clock.isoAt(-14 * 24 * 60 * 60 * 1000), TEST_NOW),
+    ).resolves.toEqual({
+      scanned: 2,
+      purged: 2,
+    });
     await expect(ops.findWebhookById(staleProcessed.id)).resolves.toMatchObject({
       id: staleProcessed.id,
       status: "processed",
@@ -885,7 +886,9 @@ describe("backend test storage helpers", () => {
 
     await expect(runner.runOnce()).resolves.toMatchObject({ sent: 1, failed: 1 });
     expect(sent.map((message) => message.emailId)).toEqual([healthy.id]);
-    await expect(repositories.ops.findEmail(throwing.id)).resolves.toMatchObject({ status: "failed" });
+    await expect(repositories.ops.findEmail(throwing.id)).resolves.toMatchObject({
+      status: "failed",
+    });
     await expect(repositories.ops.findEmail(healthy.id)).resolves.toMatchObject({ status: "sent" });
   });
 
@@ -2749,10 +2752,7 @@ describe("backend test Kysely stock database harness", () => {
             expiresAt: clock.isoAt(15 * 60_000),
             idempotencyKey: `${repositoryKind}_expired_consume_2`,
           });
-          if (
-            expiredReservation.status !== "reserved" ||
-            otherReservation.status !== "reserved"
-          ) {
+          if (expiredReservation.status !== "reserved" || otherReservation.status !== "reserved") {
             throw new Error("Expected reservations to be created.");
           }
 
@@ -5533,18 +5533,18 @@ describe("backend API composition", () => {
       await harness.repositories.account.put(createCustomerDocument());
       await harness.repositories.account.put(createSubscriptionDocument({ status: "active" }));
 
-      await expect(harness.api.account.delete(createTestRequestContext(), {})).resolves.toMatchObject(
-        {
-          ok: false,
-          status: 409,
-          error: {
-            code: "CONFLICT",
-            fieldErrors: {
-              subscriptionId: "Active subscriptions must be cancelled before account deletion.",
-            },
+      await expect(
+        harness.api.account.delete(createTestRequestContext(), {}),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 409,
+        error: {
+          code: "CONFLICT",
+          fieldErrors: {
+            subscriptionId: "Active subscriptions must be cancelled before account deletion.",
           },
         },
-      );
+      });
       await expect(
         harness.repositories.ops.listAccountDeleteRequestsByCustomer(
           createTestMikaId("customer", 1),
@@ -5572,18 +5572,18 @@ describe("backend API composition", () => {
         }),
       );
 
-      await expect(harness.api.account.delete(createTestRequestContext(), {})).resolves.toMatchObject(
-        {
-          ok: false,
-          status: 409,
-          error: {
-            code: "CONFLICT",
-            fieldErrors: {
-              cartId: "Complete or cancel the active checkout before account deletion.",
-            },
+      await expect(
+        harness.api.account.delete(createTestRequestContext(), {}),
+      ).resolves.toMatchObject({
+        ok: false,
+        status: 409,
+        error: {
+          code: "CONFLICT",
+          fieldErrors: {
+            cartId: "Complete or cancel the active checkout before account deletion.",
           },
         },
-      );
+      });
       await expect(
         harness.repositories.ops.listAccountDeleteRequestsByCustomer(
           createTestMikaId("customer", 1),
@@ -5884,8 +5884,13 @@ describe("backend API composition", () => {
       });
       const userCtx = createTestRequestContext({ customerId: false, userId: "user_only" });
 
-      expect((await repositories.account.listEntitlementsByUser("user_only")).items).toHaveLength(1);
-      await expect(api.account.delete(userCtx, {})).resolves.toMatchObject({ ok: true, status: 202 });
+      expect((await repositories.account.listEntitlementsByUser("user_only")).items).toHaveLength(
+        1,
+      );
+      await expect(api.account.delete(userCtx, {})).resolves.toMatchObject({
+        ok: true,
+        status: 202,
+      });
 
       await expect(
         createMikaMaintenanceRunner({ repositories }).runOnce({ now: clock.isoAt(60_000) }),
@@ -5896,7 +5901,9 @@ describe("backend API composition", () => {
         },
       });
 
-      expect((await repositories.account.listEntitlementsByUser("user_only")).items).toHaveLength(0);
+      expect((await repositories.account.listEntitlementsByUser("user_only")).items).toHaveLength(
+        0,
+      );
       expect((await repositories.account.listEntitlementsByUser(sentinel)).items).toHaveLength(1);
       await expect(
         api.account.get(createTestRequestContext({ customerId: false, userId: "user_only" })),
@@ -5934,7 +5941,10 @@ describe("backend API composition", () => {
 
       await expect(
         repositories.account.findCustomerByEmailHash(originalEmailHash),
-      ).resolves.toMatchObject({ customerId: customer.customerId, aggregate: { name: "Subscriber One" } });
+      ).resolves.toMatchObject({
+        customerId: customer.customerId,
+        aggregate: { name: "Subscriber One" },
+      });
 
       await expect(api.account.delete(createTestRequestContext(), {})).resolves.toMatchObject({
         ok: true,
@@ -6028,9 +6038,9 @@ describe("backend API composition", () => {
       await repositories.account.put(entitlement);
       await repositories.ledger.put(order);
 
-      expect((await repositories.ledger.listOrdersByEmailHash(originalEmailHash)).items).toHaveLength(
-        1,
-      );
+      expect(
+        (await repositories.ledger.listOrdersByEmailHash(originalEmailHash)).items,
+      ).toHaveLength(1);
       expect(
         (await repositories.account.listEntitlementsByEmailHash(originalEmailHash)).items,
       ).toHaveLength(1);
@@ -6060,9 +6070,9 @@ describe("backend API composition", () => {
         },
       });
 
-      expect((await repositories.ledger.listOrdersByEmailHash(originalEmailHash)).items).toHaveLength(
-        0,
-      );
+      expect(
+        (await repositories.ledger.listOrdersByEmailHash(originalEmailHash)).items,
+      ).toHaveLength(0);
       expect(
         (await repositories.account.listEntitlementsByEmailHash(originalEmailHash)).items,
       ).toHaveLength(0);
@@ -6081,9 +6091,9 @@ describe("backend API composition", () => {
 
       const originalUserId = customer.userId as string;
       await expect(repositories.account.findCustomerByUserId(originalUserId)).resolves.toBeNull();
-      expect((await repositories.account.listEntitlementsByUser(originalUserId)).items).toHaveLength(
-        0,
-      );
+      expect(
+        (await repositories.account.listEntitlementsByUser(originalUserId)).items,
+      ).toHaveLength(0);
 
       const guestCtx = createTestRequestContext({ customerId: false, userId: false });
       await expect(
@@ -6106,9 +6116,9 @@ describe("backend API composition", () => {
         error: { code: "AUTH_REQUIRED" },
       });
 
-      await expect(repositories.account.findCustomerById(customer.customerId)).resolves.toMatchObject(
-        { customerId: customer.customerId, emailHash: sentinel },
-      );
+      await expect(
+        repositories.account.findCustomerById(customer.customerId),
+      ).resolves.toMatchObject({ customerId: customer.customerId, emailHash: sentinel });
     } finally {
       await rollbackMikaInitialMigration(db);
       await database.destroy();
@@ -6233,9 +6243,9 @@ describe("backend API composition", () => {
         (await repositories.account.listEntitlementsByEmailHash(guestHash)).items,
       ).toHaveLength(0);
       expect((await repositories.ledger.listOrdersByEmailHash(sentinel)).items).toHaveLength(1);
-      expect(
-        (await repositories.account.listEntitlementsByEmailHash(sentinel)).items,
-      ).toHaveLength(1);
+      expect((await repositories.account.listEntitlementsByEmailHash(sentinel)).items).toHaveLength(
+        1,
+      );
       await expect(
         api.download.confirm({ token: preDeleteDownloadToken ?? "" }),
       ).resolves.toMatchObject({
@@ -6252,9 +6262,9 @@ describe("backend API composition", () => {
       });
 
       const freshCtx = createTestRequestContext({ customerId: false, userId: false });
-      await expect(
-        api.magicLink.request(freshCtx, { email: guestEmail }),
-      ).resolves.toMatchObject({ ok: true });
+      await expect(api.magicLink.request(freshCtx, { email: guestEmail })).resolves.toMatchObject({
+        ok: true,
+      });
       await expect(
         api.magicLink.verify(freshCtx, { token: "magic_link_token_1" }),
       ).resolves.toMatchObject({ ok: true });
@@ -6290,8 +6300,7 @@ describe("backend API composition", () => {
     const originalUserId = customer.userId as string;
     const order = createOrderDocument();
     const entitlement = createEntitlementDocument();
-    const userIdCtx = () =>
-      createTestRequestContext({ customerId: false, userId: originalUserId });
+    const userIdCtx = () => createTestRequestContext({ customerId: false, userId: originalUserId });
 
     try {
       await mikaInitialMigration.up(db);
@@ -6481,8 +6490,9 @@ describe("backend API composition", () => {
       customer: 0,
       complete: 0,
     };
-    const deleteTokensBySubjectHashes =
-      repositories.ephemeral.deleteTokensBySubjectHashes.bind(repositories.ephemeral);
+    const deleteTokensBySubjectHashes = repositories.ephemeral.deleteTokensBySubjectHashes.bind(
+      repositories.ephemeral,
+    );
     repositories.ephemeral.deleteTokensBySubjectHashes = async (subjectHashes) => {
       calls.tokens += 1;
 
@@ -6530,8 +6540,9 @@ describe("backend API composition", () => {
 
       return anonymizeCustomerForAccountDelete(anonymizeInput);
     };
-    const completeAccountDeleteRequest =
-      repositories.ops.completeAccountDeleteRequest.bind(repositories.ops);
+    const completeAccountDeleteRequest = repositories.ops.completeAccountDeleteRequest.bind(
+      repositories.ops,
+    );
     repositories.ops.completeAccountDeleteRequest = async (completeInput) => {
       calls.complete += 1;
       if (calls.complete === 1) return null;
@@ -6582,8 +6593,7 @@ describe("backend API composition", () => {
               {
                 requestId: "account_delete_request_1",
                 status: "failed",
-                error:
-                  "Account delete request 'account_delete_request_1' could not be completed.",
+                error: "Account delete request 'account_delete_request_1' could not be completed.",
               },
             ],
           },
@@ -6948,10 +6958,26 @@ describe("backend API composition", () => {
 
   it("rejects cancel/change/renew on a terminal (cancelled/expired) subscription without reviving it", async () => {
     const terminalCases = [
-      { status: "cancelled" as const, action: "renew" as const, method: "renewSubscription" as const },
-      { status: "cancelled" as const, action: "cancel" as const, method: "cancelSubscription" as const },
-      { status: "expired" as const, action: "renew" as const, method: "renewSubscription" as const },
-      { status: "expired" as const, action: "change" as const, method: "changeSubscription" as const },
+      {
+        status: "cancelled" as const,
+        action: "renew" as const,
+        method: "renewSubscription" as const,
+      },
+      {
+        status: "cancelled" as const,
+        action: "cancel" as const,
+        method: "cancelSubscription" as const,
+      },
+      {
+        status: "expired" as const,
+        action: "renew" as const,
+        method: "renewSubscription" as const,
+      },
+      {
+        status: "expired" as const,
+        action: "change" as const,
+        method: "changeSubscription" as const,
+      },
     ];
 
     for (const terminal of terminalCases) {
@@ -8538,17 +8564,17 @@ describe("backend API composition", () => {
     );
     await repositories.ledger.put(order);
 
-    await expect(api.admin.orderRefund({ orderId: order.id, amount: 700 })).resolves.toMatchObject(
-      { ok: true },
-    );
+    await expect(api.admin.orderRefund({ orderId: order.id, amount: 700 })).resolves.toMatchObject({
+      ok: true,
+    });
     await expect(repositories.ledger.findOrderById(order.id)).resolves.toMatchObject({
       status: "partially_refunded",
       aggregate: { metadata: { refundAmount: 700 } },
     });
 
-    await expect(api.admin.orderRefund({ orderId: order.id, amount: 500 })).resolves.toMatchObject(
-      { ok: true },
-    );
+    await expect(api.admin.orderRefund({ orderId: order.id, amount: 500 })).resolves.toMatchObject({
+      ok: true,
+    });
     await expect(repositories.ledger.findOrderById(order.id)).resolves.toMatchObject({
       status: "refunded",
       paymentStatus: "refunded",
@@ -8580,7 +8606,9 @@ describe("backend API composition", () => {
       status: 422,
       error: {
         code: "VALIDATION_FAILED",
-        fieldErrors: { amount: `Refund amount exceeds the remaining refundable amount for order '${order.id}'.` },
+        fieldErrors: {
+          amount: `Refund amount exceeds the remaining refundable amount for order '${order.id}'.`,
+        },
       },
     });
 
@@ -8693,9 +8721,10 @@ describe("backend API composition", () => {
     await repositories.account.put(entitlement);
     await repositories.account.put(license);
 
-    await expect(
-      api.admin.orderRefund({ orderId: order.id, amount: 500 }),
-    ).resolves.toMatchObject({ ok: true, data: { status: "completed" } });
+    await expect(api.admin.orderRefund({ orderId: order.id, amount: 500 })).resolves.toMatchObject({
+      ok: true,
+      data: { status: "completed" },
+    });
 
     await expect(repositories.ledger.findOrderById(order.id)).resolves.toMatchObject({
       status: "partially_refunded",
@@ -8801,15 +8830,17 @@ describe("backend API composition", () => {
       providerStatus: "expired",
       customerId: "customer_1",
     });
-    await expect(repositories.stock.findEventById(createTestMikaId("stock_event", 1))).resolves.toMatchObject(
-      {
-        status: "expired",
-      },
-    );
+    await expect(
+      repositories.stock.findEventById(createTestMikaId("stock_event", 1)),
+    ).resolves.toMatchObject({
+      status: "expired",
+    });
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
       quantityReserved: 0,
     });
-    await expect(repositories.ops.findWebhookById(createTestMikaId("webhook", 1))).resolves.toMatchObject({
+    await expect(
+      repositories.ops.findWebhookById(createTestMikaId("webhook", 1)),
+    ).resolves.toMatchObject({
       status: "processed",
       record: {
         providerEventId: "event_checkout_session_expired",
@@ -9107,16 +9138,16 @@ describe("backend API composition", () => {
     await repositories.account.put(entitlement);
     await repositories.account.put(license);
 
-    await expect(receiveWebhook(api, "charge-partial-refund-missing-totals")).resolves.toMatchObject(
-      {
-        ok: false,
-        status: 502,
-        error: {
-          code: "PROVIDER_FAILED",
-          message: "Partial refund webhook is missing cumulative refund totals.",
-        },
+    await expect(
+      receiveWebhook(api, "charge-partial-refund-missing-totals"),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 502,
+      error: {
+        code: "PROVIDER_FAILED",
+        message: "Partial refund webhook is missing cumulative refund totals.",
       },
-    );
+    });
 
     await expect(repositories.ledger.findOrderById(order.id)).resolves.toMatchObject({
       status: "paid",
@@ -9125,12 +9156,12 @@ describe("backend API composition", () => {
     await expect(
       repositories.account.findEntitlementById(createMikaId("entitlement_order_1_order_line_1")),
     ).resolves.toMatchObject({ status: "active" });
-    await expect(repositories.ops.findWebhookById(createTestMikaId("webhook", 1))).resolves.toMatchObject(
-      {
-        status: "failed",
-        record: { lastError: "Partial refund webhook is missing cumulative refund totals." },
-      },
-    );
+    await expect(
+      repositories.ops.findWebhookById(createTestMikaId("webhook", 1)),
+    ).resolves.toMatchObject({
+      status: "failed",
+      record: { lastError: "Partial refund webhook is missing cumulative refund totals." },
+    });
   });
 
   it("allows download tokens after a partial refund while fulfillment access remains active", async () => {
@@ -10511,7 +10542,9 @@ describe("backend API composition", () => {
         },
       },
     });
-    expect(notificationIntents.filter((intent) => intent.kind === "checkout.payment_failed")).toEqual([
+    expect(
+      notificationIntents.filter((intent) => intent.kind === "checkout.payment_failed"),
+    ).toEqual([
       expect.objectContaining({
         kind: "checkout.payment_failed",
         context: expect.objectContaining({
@@ -10829,7 +10862,8 @@ describe("backend API composition", () => {
       status: 409,
       error: {
         code: "CONFLICT",
-        message: "Webhook 'webhook_2' is awaiting fulfillment and was not processed; retry delivery.",
+        message:
+          "Webhook 'webhook_2' is awaiting fulfillment and was not processed; retry delivery.",
       },
     });
     await expect(receiveWebhook(api, "payment-handled-replay", stripe)).resolves.toMatchObject({
@@ -10854,7 +10888,9 @@ describe("backend API composition", () => {
     });
     await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(1);
     await expect(opsCollection.count({ type: "email" })).resolves.toBe(0);
-    await expect(opsCollection.get("workflow_order_1_notification_order_confirmed")).resolves.toMatchObject({
+    await expect(
+      opsCollection.get("workflow_order_1_notification_order_confirmed"),
+    ).resolves.toMatchObject({
       type: "workflow",
       kind: "notification.order.confirmed",
       status: "completed",
@@ -10943,9 +10979,7 @@ describe("backend API composition", () => {
       email: "Subscriber@Example.test",
       emailHash: createTestHash("email:subscriber@example.test"),
     });
-    const confirmationEmail = await opsCollection.get(
-      "email_order_1_order_confirmation",
-    );
+    const confirmationEmail = await opsCollection.get("email_order_1_order_confirmation");
     expect(confirmationEmail).toMatchObject({
       record: { toEmail: "Subscriber@Example.test" },
     });
@@ -11867,7 +11901,10 @@ describe("backend API composition", () => {
     if (!firstCart.ok) throw new Error("Expected first cart.add to succeed.");
     const cart = await api.cart.add(shopperCtx, { sellableId: secondSellable.id, quantity: 1 });
     if (!cart.ok) throw new Error("Expected second cart.add to succeed.");
-    const checkout = await api.checkout.start(shopperCtx, { cartId: cart.data.id, provider: stripe });
+    const checkout = await api.checkout.start(shopperCtx, {
+      cartId: cart.data.id,
+      provider: stripe,
+    });
     if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
 
     await receiveWebhook(api, "partial-fulfillment", stripe).catch(() => undefined);
@@ -11881,9 +11918,10 @@ describe("backend API composition", () => {
     expect(line2?.entitlementId).toBeUndefined();
     expect(persistedOrder.aggregate.metadata?.["fulfilledAt"]).toBeUndefined();
     expect(persistedOrder.status).toBe("paid");
-    await expect(
-      accountCollection.get("entitlement_order_1_order_line_1"),
-    ).resolves.toMatchObject({ type: "entitlement", status: "active" });
+    await expect(accountCollection.get("entitlement_order_1_order_line_1")).resolves.toMatchObject({
+      type: "entitlement",
+      status: "active",
+    });
   });
 
   it("persists line progress before a final fulfilled-order ledger write failure", async () => {
@@ -11987,9 +12025,10 @@ describe("backend API composition", () => {
     expect(line?.entitlementId).toBe("entitlement_order_1_order_line_1");
     expect(persistedOrder.aggregate.metadata?.["fulfilledAt"]).toBeUndefined();
     await expect(opsCollection.count({ type: "email" })).resolves.toBe(0);
-    await expect(
-      accountCollection.get("entitlement_order_1_order_line_1"),
-    ).resolves.toMatchObject({ type: "entitlement", status: "active" });
+    await expect(accountCollection.get("entitlement_order_1_order_line_1")).resolves.toMatchObject({
+      type: "entitlement",
+      status: "active",
+    });
   });
 
   it("retries download-ready notifications after an order was already marked fulfilled", async () => {
@@ -12106,7 +12145,9 @@ describe("backend API composition", () => {
       data: { id: "webhook_1", status: "duplicate" },
     });
 
-    expect(notificationIntents.filter((intent) => intent.kind === "download.ready")).toHaveLength(1);
+    expect(notificationIntents.filter((intent) => intent.kind === "download.ready")).toHaveLength(
+      1,
+    );
     await expect(
       opsCollection.get("workflow_download_order_1_order_line_1_notification_download_ready"),
     ).resolves.toMatchObject({
@@ -12122,7 +12163,9 @@ describe("backend API composition", () => {
       status: 200,
       data: { id: "webhook_1", status: "duplicate" },
     });
-    expect(notificationIntents.filter((intent) => intent.kind === "download.ready")).toHaveLength(1);
+    expect(notificationIntents.filter((intent) => intent.kind === "download.ready")).toHaveLength(
+      1,
+    );
   });
 
   it("creates fulfillment side effects once from replayed payment webhook events", async () => {
@@ -12575,7 +12618,9 @@ describe("backend API composition", () => {
       type: "license",
       status: "active",
     });
-    expect(notificationIntents.filter((intent) => intent.kind === "license.issued")).toHaveLength(1);
+    expect(notificationIntents.filter((intent) => intent.kind === "license.issued")).toHaveLength(
+      1,
+    );
     await expect(
       opsCollection.get("workflow_order_1_order_line_1_notification_license_issued"),
     ).resolves.toMatchObject({
@@ -12584,7 +12629,9 @@ describe("backend API composition", () => {
       kind: "notification.license.issued",
       idempotencyKey: "license.issued:order_1:order_line_1",
     });
-    expect(notificationIntents.filter((intent) => intent.kind === "download.ready")).toHaveLength(1);
+    expect(notificationIntents.filter((intent) => intent.kind === "download.ready")).toHaveLength(
+      1,
+    );
     await expect(
       opsCollection.get("workflow_download_order_1_order_line_2_notification_download_ready"),
     ).resolves.toMatchObject({
@@ -12827,7 +12874,8 @@ describe("backend API composition", () => {
       status: 409,
       error: {
         code: "CONFLICT",
-        message: "Webhook 'webhook_2' is awaiting fulfillment and was not processed; retry delivery.",
+        message:
+          "Webhook 'webhook_2' is awaiting fulfillment and was not processed; retry delivery.",
       },
     });
     await expect(opsCollection.get("webhook_2")).resolves.toMatchObject({
@@ -13151,7 +13199,8 @@ describe("backend API composition", () => {
       status: 409,
       error: {
         code: "CONFLICT",
-        message: "Webhook 'webhook_2' is awaiting fulfillment and was not processed; retry delivery.",
+        message:
+          "Webhook 'webhook_2' is awaiting fulfillment and was not processed; retry delivery.",
       },
     });
     await expect(opsCollection.get("webhook_2")).resolves.toMatchObject({
@@ -13698,11 +13747,13 @@ describe("backend API composition", () => {
       }),
     );
 
-    await expect(receiveWebhook(api, "subscription-renewal-failed", stripe)).resolves.toMatchObject({
-      ok: true,
-      status: 200,
-      data: { id: "webhook_1", status: "received" },
-    });
+    await expect(receiveWebhook(api, "subscription-renewal-failed", stripe)).resolves.toMatchObject(
+      {
+        ok: true,
+        status: 200,
+        data: { id: "webhook_1", status: "received" },
+      },
+    );
 
     await expect(accountCollection.get("subscription_1")).resolves.toMatchObject({
       status: "past_due",
@@ -13849,13 +13900,13 @@ describe("backend API composition", () => {
       }),
     );
 
-    await expect(receiveWebhook(api, "subscription-deleted-customer", stripe)).resolves.toMatchObject(
-      {
-        ok: true,
-        status: 200,
-        data: { status: "received" },
-      },
-    );
+    await expect(
+      receiveWebhook(api, "subscription-deleted-customer", stripe),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { status: "received" },
+    });
 
     await expect(accountCollection.count({ type: "entitlement" })).resolves.toBe(0);
     await expect(accountCollection.get("subscription_1")).resolves.toEqual(subscription);
@@ -13925,21 +13976,21 @@ describe("backend API composition", () => {
       }),
     );
 
-    await expect(receiveWebhook(api, "subscription-revoked-entitlement", stripe)).resolves.toMatchObject(
-      {
-        ok: true,
-        status: 200,
-        data: { status: "received" },
-      },
-    );
+    await expect(
+      receiveWebhook(api, "subscription-revoked-entitlement", stripe),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: 200,
+      data: { status: "received" },
+    });
 
-    await expect(accountCollection.get("entitlement_subscription_1_subscription")).resolves.toMatchObject(
-      {
-        type: "entitlement",
-        status: "revoked",
-        record: { status: "revoked", sourceStatus: "active" },
-      },
-    );
+    await expect(
+      accountCollection.get("entitlement_subscription_1_subscription"),
+    ).resolves.toMatchObject({
+      type: "entitlement",
+      status: "revoked",
+      record: { status: "revoked", sourceStatus: "active" },
+    });
   });
 
   it("replays failed webhooks through the idempotent processing path", async () => {
@@ -15442,9 +15493,9 @@ describe("backend API composition", () => {
       0,
     );
     expect(lineSubtotal - (call?.discount?.amount ?? 0)).toBe(2160);
-    await expect(
-      repositories.session.findCheckoutById(checkout.data.id),
-    ).resolves.toMatchObject({ aggregate: { coupon: { label: "SAVE10" } } });
+    await expect(repositories.session.findCheckoutById(checkout.data.id)).resolves.toMatchObject({
+      aggregate: { coupon: { label: "SAVE10" } },
+    });
   });
 
   it("does not persist checkout.start couponCode when checkout creation fails", async () => {
@@ -15541,7 +15592,9 @@ describe("backend API composition", () => {
       type: "cart",
       status: "open",
     });
-    await expect(repositories.session.findCheckoutById(createTestMikaId("checkout", 1))).resolves.toBeNull();
+    await expect(
+      repositories.session.findCheckoutById(createTestMikaId("checkout", 1)),
+    ).resolves.toBeNull();
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
       quantityReserved: 0,
     });
@@ -15584,9 +15637,9 @@ describe("backend API composition", () => {
     });
     if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
 
-    await expect(
-      repositories.session.findCheckoutById(checkout.data.id),
-    ).resolves.toMatchObject({ aggregate: { coupon: { label: "SAVE20" } } });
+    await expect(repositories.session.findCheckoutById(checkout.data.id)).resolves.toMatchObject({
+      aggregate: { coupon: { label: "SAVE20" } },
+    });
     await expect(
       repositories.session.findCheckoutPendingCartBySession("session_1", TEST_CURRENCY),
     ).resolves.toMatchObject({ aggregate: { coupon: { label: "SAVE20" } } });
@@ -15773,9 +15826,9 @@ describe("backend API composition", () => {
     await expect(
       api.cart.removeCoupon(unboundCtx, { cartId: cart.data.id }),
     ).resolves.toMatchObject({ ok: false, status: 404 });
-    await expect(
-      api.cart.merge(unboundCtx, { targetCartId: cart.data.id }),
-    ).resolves.toMatchObject({ ok: false, status: 404 });
+    await expect(api.cart.merge(unboundCtx, { targetCartId: cart.data.id })).resolves.toMatchObject(
+      { ok: false, status: 404 },
+    );
     await expect(
       api.wishlist.merge(unboundCtx, { targetWishlistId: wishlist.data.id }),
     ).resolves.toMatchObject({ ok: false, status: 404 });
@@ -15895,9 +15948,9 @@ describe("backend API composition", () => {
     const checkout = await api.checkout.start(ctx, { cartId: added.data.id });
     if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
 
-    await expect(
-      repositories.session.findCheckoutById(checkout.data.id),
-    ).resolves.toMatchObject({ customerId });
+    await expect(repositories.session.findCheckoutById(checkout.data.id)).resolves.toMatchObject({
+      customerId,
+    });
   });
 
   it("returns a valid cart quote without provider or stock mutations", async () => {
@@ -16670,15 +16723,11 @@ describe("backend API composition", () => {
     const checkout = await api.checkout.start(ctx, { cartId: added.data.id });
     if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
 
-    const checkoutDocument = await repositories.session.findById(
-      createTestMikaId("checkout", 1),
-    );
+    const checkoutDocument = await repositories.session.findById(createTestMikaId("checkout", 1));
     expect(checkoutDocument).toMatchObject({
       expiresAt: createISODateTime("2026-01-01T01:00:00.000Z"),
     });
-    const reservation = await repositories.stock.findEventById(
-      createTestMikaId("stock_event", 1),
-    );
+    const reservation = await repositories.stock.findEventById(createTestMikaId("stock_event", 1));
     expect(reservation).toMatchObject({
       kind: "reservation",
       status: "active",
@@ -16739,12 +16788,12 @@ describe("backend API composition", () => {
       providerStatus: "expired",
       updatedAt: "2026-01-01T02:00:00.000Z",
     });
-    await expect(repositories.stock.findEventById(createTestMikaId("stock_event", 1))).resolves.toMatchObject(
-      {
-        status: "expired",
-        updatedAt: "2026-01-01T02:00:00.000Z",
-      },
-    );
+    await expect(
+      repositories.stock.findEventById(createTestMikaId("stock_event", 1)),
+    ).resolves.toMatchObject({
+      status: "expired",
+      updatedAt: "2026-01-01T02:00:00.000Z",
+    });
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
       quantityReserved: 0,
     });
@@ -17588,17 +17637,17 @@ describe("backend API composition", () => {
       return completed;
     };
 
-    await expect(
-      api.checkout.cancel(ctx, { checkoutId: checkout.data.id }),
-    ).resolves.toMatchObject({
-      ok: true,
-      status: 200,
-      data: {
-        id: checkout.data.id,
-        status: "completed",
-        orderId: "order_1",
+    await expect(api.checkout.cancel(ctx, { checkoutId: checkout.data.id })).resolves.toMatchObject(
+      {
+        ok: true,
+        status: 200,
+        data: {
+          id: checkout.data.id,
+          status: "completed",
+          orderId: "order_1",
+        },
       },
-    });
+    );
     await expect(repositories.session.findCheckoutById(checkout.data.id)).resolves.toMatchObject({
       status: "completed",
       orderId: "order_1",
@@ -17870,15 +17919,17 @@ describe("backend API composition", () => {
     });
 
     expect(fake.getCalls().createCheckoutSession).toHaveLength(1);
-    await expect(repositories.session.findCheckoutById(createTestMikaId("checkout", 1))).resolves.toMatchObject({
+    await expect(
+      repositories.session.findCheckoutById(createTestMikaId("checkout", 1)),
+    ).resolves.toMatchObject({
       status: "expired",
       providerStatus: "expired",
     });
-    await expect(repositories.stock.findEventById(createTestMikaId("stock_event", 1))).resolves.toMatchObject(
-      {
-        status: "expired",
-      },
-    );
+    await expect(
+      repositories.stock.findEventById(createTestMikaId("stock_event", 1)),
+    ).resolves.toMatchObject({
+      status: "expired",
+    });
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
       quantityReserved: 0,
     });
@@ -18172,9 +18223,7 @@ describe("backend API composition", () => {
     expect(persisted.aggregate.metadata).not.toHaveProperty("acpPaymentProvider");
     expect(persisted.aggregate.metadata).not.toHaveProperty("acpPaymentAuthorizationId");
     expect(persisted.aggregate.metadata).not.toHaveProperty("acpCheckoutSessionId");
-    expect(persisted.aggregate.metadata).not.toHaveProperty(
-      "acpPaymentAuthorizationInputHash",
-    );
+    expect(persisted.aggregate.metadata).not.toHaveProperty("acpPaymentAuthorizationInputHash");
   });
 
   it("allows delegated checkout with a couponCode authorized by checkout preview", async () => {
@@ -19652,8 +19701,7 @@ function createWebhookDocument(
   const recordOverrides = overrides.record ?? {};
   const id = recordOverrides.id ?? overrides.id ?? createTestMikaId("webhook", 1);
   const provider = recordOverrides.provider ?? overrides.provider ?? TEST_PROVIDER;
-  const providerEventId =
-    recordOverrides.providerEventId ?? overrides.providerEventId ?? "event_1";
+  const providerEventId = recordOverrides.providerEventId ?? overrides.providerEventId ?? "event_1";
   const eventType = recordOverrides.eventType ?? overrides.eventType ?? "payment.completed";
   const payloadHash = recordOverrides.payloadHash ?? overrides.payloadHash ?? "hash_1";
   const status = recordOverrides.status ?? overrides.status ?? "received";
@@ -19976,9 +20024,7 @@ async function createMagicLinkHarness(
           ...(options.verifyPath ? { verifyPath: options.verifyPath } : {}),
         },
       },
-      ...(options.notificationHook
-        ? { notifications: { handle: options.notificationHook } }
-        : {}),
+      ...(options.notificationHook ? { notifications: { handle: options.notificationHook } } : {}),
     }),
   );
 
@@ -20026,9 +20072,7 @@ async function createAccountServicesHarness(
           ttlMs: options.exportTtlMs,
         },
       },
-      ...(options.notificationHook
-        ? { notifications: { handle: options.notificationHook } }
-        : {}),
+      ...(options.notificationHook ? { notifications: { handle: options.notificationHook } } : {}),
     }),
   );
 
@@ -20686,9 +20730,7 @@ function createSubscriptionDocument(
   };
 }
 
-function createCartDocument(
-  overrides: Partial<CartDocument> = {},
-): CartDocument {
+function createCartDocument(overrides: Partial<CartDocument> = {}): CartDocument {
   const id = overrides.id ?? createTestMikaId("cart", 1);
 
   return {
@@ -21080,7 +21122,9 @@ function createWebhookRequest(
 function webhookMarkerFromRawBody(rawBody: Uint8Array): string {
   const parsed: unknown = JSON.parse(new TextDecoder().decode(rawBody));
 
-  return isJsonObject(parsed) && typeof parsed["marker"] === "string" ? parsed["marker"] : "unknown";
+  return isJsonObject(parsed) && typeof parsed["marker"] === "string"
+    ? parsed["marker"]
+    : "unknown";
 }
 
 function createVerifiedWebhookPayload(

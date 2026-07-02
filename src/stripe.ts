@@ -314,9 +314,12 @@ export function createMikaStripeProvider(
       }
 
       try {
-        const subscription = await options.stripe.subscriptions.update(input.providerSubscriptionId, {
-          cancel_at_period_end: true,
-        });
+        const subscription = await options.stripe.subscriptions.update(
+          input.providerSubscriptionId,
+          {
+            cancel_at_period_end: true,
+          },
+        );
 
         return completedAction(
           "subscription_cancel",
@@ -653,7 +656,10 @@ async function changeStripeSubscription(
       requestOptions(input.metadata ? stringChild(input.metadata, "idempotencyKey") : undefined),
     );
 
-    return completedAction("subscription_change", `Stripe subscription ${subscription.id} updated.`);
+    return completedAction(
+      "subscription_change",
+      `Stripe subscription ${subscription.id} updated.`,
+    );
   } catch (error) {
     return failedAction("subscription_change", stripeActionErrorMessage(error));
   }
@@ -904,10 +910,7 @@ function stripePaymentFailureEvent(
   };
 }
 
-const STRIPE_PAYMENT_REVERSAL_TYPES = new Set([
-  "charge.refunded",
-  "invoice.marked_uncollectible",
-]);
+const STRIPE_PAYMENT_REVERSAL_TYPES = new Set(["charge.refunded", "invoice.marked_uncollectible"]);
 
 function stripePaymentReversalEvent(
   provider: ProviderName,
@@ -924,8 +927,7 @@ function stripePaymentReversalEvent(
     (amountRefunded !== undefined && amount !== undefined && amountRefunded >= amount);
   const paymentStatus = fullyReversed ? "refunded" : "partially_refunded";
 
-  const linkedId =
-    stripeObjectId(object["payment_intent"]) ?? stripeObjectId(object["charge"]);
+  const linkedId = stripeObjectId(object["payment_intent"]) ?? stripeObjectId(object["charge"]);
   const objectId = stringChild(object, "id");
   const providerPaymentId = linkedId ?? objectId;
   const providerOrderId = linkedId ?? objectId;

@@ -63,8 +63,7 @@ type MikaFacadeOperationDefinitionMap = Pick<
   MikaOperationDefinitionMap,
   MikaFacadeOperationDefinitionKey
 >;
-type MikaOperationDefinition =
-  MikaFacadeOperationDefinitionMap[MikaFacadeOperationDefinitionKey];
+type MikaOperationDefinition = MikaFacadeOperationDefinitionMap[MikaFacadeOperationDefinitionKey];
 type MikaOperationKeyFor<TNamespace extends string, TMethod extends string> = {
   readonly [TOperation in MikaFacadeOperationDefinitionKey]: MikaFacadeOperationDefinitionMap[TOperation] extends {
     readonly namespace: TNamespace;

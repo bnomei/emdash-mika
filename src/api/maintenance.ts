@@ -142,9 +142,9 @@ export interface MikaMaintenanceRunner {
   runOnce(options?: MikaMaintenanceRunOptions): Promise<MikaMaintenanceRunResult>;
 }
 
-type MikaMaintenanceReleaseExpiredReservations = (
-  input: { readonly now: ISODateTime },
-) => Promise<MikaMaintenanceStockReservationsResult>;
+type MikaMaintenanceReleaseExpiredReservations = (input: {
+  readonly now: ISODateTime;
+}) => Promise<MikaMaintenanceStockReservationsResult>;
 
 type MikaMaintenancePurgeExpiredEphemeralRecords = (input: {
   readonly now: ISODateTime;
@@ -304,7 +304,10 @@ export function createMikaMaintenanceRunner(
       });
       const stuckWorkflows = await runMaintenanceTask(async () => {
         if (!input.repositories) {
-          return { status: "skipped" as const, reason: "Workflow repositories are not configured." };
+          return {
+            status: "skipped" as const,
+            reason: "Workflow repositories are not configured.",
+          };
         }
         return {
           status: "completed" as const,
@@ -587,9 +590,7 @@ async function recordAccountDeleteRequestFailure(
   });
 }
 
-function hasCompletedAccountDeleteMaintenanceSteps(
-  request: AccountDeleteRequestDocument,
-): boolean {
+function hasCompletedAccountDeleteMaintenanceSteps(request: AccountDeleteRequestDocument): boolean {
   const steps = jsonObjectChild(accountDeleteMaintenanceMetadata(request), "steps");
 
   return steps ? Object.keys(steps).length > 0 : false;

@@ -169,7 +169,7 @@ function zodObjectShape(schema: unknown): Record<string, unknown> | undefined {
   const directShape = schema["shape"];
   const definition = schema["_def"];
   const defShape = isRecord(definition) ? definition["shape"] : undefined;
-  const shape = typeof directShape === "function" ? directShape() : directShape ?? defShape;
+  const shape = typeof directShape === "function" ? directShape() : (directShape ?? defShape);
   const resolved = typeof shape === "function" ? shape() : shape;
 
   return isRecord(resolved) ? resolved : undefined;

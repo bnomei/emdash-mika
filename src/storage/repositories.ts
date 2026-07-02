@@ -296,22 +296,20 @@ export type AdminAuditIdempotencyClaimResult =
 
 const ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY = "idempotencyInputHash";
 
-type ReservationEventMutationRepositoryResult<
-  TStatus extends "released" | "consumed" | "expired",
-> =
-  | {
-      readonly status: TStatus;
-      readonly event: StockEventRecord;
-      readonly stock: StockItemRecord;
-    }
-  | {
-      readonly status: "not_active";
-      readonly event: StockEventRecord;
-      readonly stock: StockItemRecord | null;
-    }
-  | {
-      readonly status: "not_found";
-    };
+type ReservationEventMutationRepositoryResult<TStatus extends "released" | "consumed" | "expired"> =
+    | {
+        readonly status: TStatus;
+        readonly event: StockEventRecord;
+        readonly stock: StockItemRecord;
+      }
+    | {
+        readonly status: "not_active";
+        readonly event: StockEventRecord;
+        readonly stock: StockItemRecord | null;
+      }
+    | {
+        readonly status: "not_found";
+      };
 
 /** Result of releasing an active reservation event. */
 export type ReleaseReservedStockRepositoryResult =
@@ -500,8 +498,7 @@ function adminAuditInputHashMatches(
   current: AdminAuditDocument,
   next: AdminAuditDocument,
 ): boolean {
-  const currentHash =
-    current.record.metadata?.[ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY];
+  const currentHash = current.record.metadata?.[ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY];
   const nextHash = next.record.metadata?.[ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY];
 
   return typeof currentHash === "string" && currentHash === nextHash;
@@ -965,7 +962,7 @@ export class AccountRepository {
         company: undefined,
         vatId: undefined,
         metadata: {
-          ...(customer.aggregate.metadata ?? {}),
+          ...customer.aggregate.metadata,
           anonymizedAt: input.now,
         },
       },
@@ -1000,9 +997,8 @@ export class AccountRepository {
       }
     }
     if (input.userId) {
-      for (const item of (
-        await this.listEntitlementsByUser(input.userId, Number.MAX_SAFE_INTEGER)
-      ).items) {
+      for (const item of (await this.listEntitlementsByUser(input.userId, Number.MAX_SAFE_INTEGER))
+        .items) {
         byId.set(item.data.id, item.data);
       }
     }
@@ -1050,7 +1046,7 @@ export class AccountRepository {
           status: "revoked",
           revokedAt: license.record.revokedAt ?? input.now,
           metadata: {
-            ...(license.record.metadata ?? {}),
+            ...license.record.metadata,
             anonymizedAt: input.now,
           },
         },
@@ -1130,10 +1126,7 @@ export class LedgerRepository {
     });
   }
 
-  async listOrdersByEmailHash(
-    emailHash: string,
-    limit = 50,
-  ): Promise<DocumentList<OrderDocument>> {
+  async listOrdersByEmailHash(emailHash: string, limit = 50): Promise<DocumentList<OrderDocument>> {
     return this.documents.listByType("order", {
       where: { emailHash },
       orderBy: { createdAt: "desc" },
@@ -2598,9 +2591,7 @@ export class StockRepository {
       .where("id", "in", [...input.reservationEventIds])
       .where("kind", "=", "reservation")
       .where("status", "=", "active")
-      .where((eb) =>
-        eb.or([eb("expires_at", "is", null), eb("expires_at", "<", input.expiresAt)]),
-      )
+      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", "<", input.expiresAt)]))
       .execute();
   }
 
@@ -2816,7 +2807,9 @@ async function transitionActiveReservation<TStatus extends "released" | "expired
   });
 }
 
-async function mutateActiveReservationEvent<TStatus extends "released" | "consumed" | "expired">(input: {
+async function mutateActiveReservationEvent<
+  TStatus extends "released" | "consumed" | "expired",
+>(input: {
   readonly executor: MikaDbExecutor;
   readonly reservationEventId: MikaId;
   readonly now: ISODateTime;

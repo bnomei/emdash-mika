@@ -841,9 +841,7 @@ export function createMikaAcpCheckoutHandlers(
     update: async (request, checkoutSessionId) =>
       safelyHandleAcpRequest(request, () => handleAcpUpdate(options, request, checkoutSessionId)),
     complete: async (request, checkoutSessionId) =>
-      safelyHandleAcpRequest(request, () =>
-        handleAcpComplete(options, request, checkoutSessionId),
-      ),
+      safelyHandleAcpRequest(request, () => handleAcpComplete(options, request, checkoutSessionId)),
     get: async (request, checkoutSessionId) =>
       safelyHandleAcpRequest(request, () => handleAcpGet(options, request, checkoutSessionId)),
     cancel: async (request, checkoutSessionId) =>
@@ -1035,12 +1033,7 @@ async function handleAcpComplete(
   if (!record) return acpError(request, 404, "invalid_request", "Checkout session was not found.");
   record = await expireAcpRecordIfNeeded(options, record);
   if (acpRecordIsExpired(record, nowIso(options))) return acpExpiredError(request);
-  const idempotency = await beginAcpIdempotency(
-    options,
-    request,
-    checkoutSessionId,
-    200,
-  );
+  const idempotency = await beginAcpIdempotency(options, request, checkoutSessionId, 200);
   if (!idempotency.ok) return idempotency.response;
   // Second idempotency lease serializes concurrent completion on the same session.
   let completion: MikaAcpIdempotencyBegin;
@@ -1321,7 +1314,11 @@ async function beginAcpIdempotency(
   if (claim.status === "replayed") {
     return {
       ok: false,
-      response: acpJson(request, await recordToAcpSession(options, request, claim.record), replayStatus),
+      response: acpJson(
+        request,
+        await recordToAcpSession(options, request, claim.record),
+        replayStatus,
+      ),
     };
   }
 
@@ -1839,18 +1836,21 @@ async function verifyAcpRequest(
     return acpError(request, 401, "signature_invalid", "Signature header is required.");
   const timestamp = request.headers.get("Signature-Timestamp");
   if (!timestamp) {
+    return acpError(request, 401, "signature_invalid", "Signature-Timestamp header is required.");
+  }
+  if (!acpSignatureTimestampIsFresh(timestamp, options.now?.() ?? new Date())) {
     return acpError(
       request,
       401,
       "signature_invalid",
-      "Signature-Timestamp header is required.",
+      "ACP request signature timestamp is invalid.",
     );
   }
-  if (!acpSignatureTimestampIsFresh(timestamp, options.now?.() ?? new Date())) {
-    return acpError(request, 401, "signature_invalid", "ACP request signature timestamp is invalid.");
-  }
   const payload = await request.clone().text();
-  const expected = await hmacBase64(options.signatureSecret, acpCanonicalSignaturePayload(request, payload, timestamp));
+  const expected = await hmacBase64(
+    options.signatureSecret,
+    acpCanonicalSignaturePayload(request, payload, timestamp),
+  );
   if (!safeStringEqual(signature, expected)) {
     return acpError(request, 401, "signature_invalid", "ACP request signature is invalid.");
   }
@@ -2184,7 +2184,11 @@ async function hmacBase64(secret: string, payload: string): Promise<string> {
   return createHmac("sha256", secret).update(payload).digest("base64");
 }
 
-function acpCanonicalSignaturePayload(request: Request, rawBody: string, timestamp: string): string {
+function acpCanonicalSignaturePayload(
+  request: Request,
+  rawBody: string,
+  timestamp: string,
+): string {
   const url = new URL(request.url);
 
   return [

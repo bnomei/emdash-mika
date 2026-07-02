@@ -96,8 +96,7 @@ export function cartToDTO(input: {
   readonly checkoutSessionId?: MikaId;
 }): CartDTO {
   const totals =
-    input.cart.totals ??
-    calculateTotals(input.cart.currency, input.cart.items, input.cart.coupon);
+    input.cart.totals ?? calculateTotals(input.cart.currency, input.cart.items, input.cart.coupon);
 
   return {
     id: input.id,

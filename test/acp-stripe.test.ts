@@ -434,9 +434,13 @@ describe("Mika ACP projection", () => {
 
     now = new Date("2026-01-01T00:00:02.000Z");
     const updated = await handlers.update(
-      acpRequest("https://shop.example.test/checkout_sessions/checkout_session_acp_expiring", "idem_expiring_update", {
-        buyer: { name: "Ada Buyer", email: "ada@example.test" },
-      }),
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_expiring",
+        "idem_expiring_update",
+        {
+          buyer: { name: "Ada Buyer", email: "ada@example.test" },
+        },
+      ),
       "checkout_session_acp_expiring",
     );
 
@@ -836,10 +840,7 @@ describe("Mika ACP projection", () => {
         { payment_data: { provider: "stripe", token: "spt_test_123" } },
       );
 
-    const failed = await handlers.complete(
-      completeRequest(),
-      "checkout_session_acp_lock_failure",
-    );
+    const failed = await handlers.complete(completeRequest(), "checkout_session_acp_lock_failure");
     expect(failed.status).toBe(500);
 
     const retry = await handlers.complete(completeRequest(), "checkout_session_acp_lock_failure");
@@ -1713,7 +1714,6 @@ describe("Mika ACP projection", () => {
       code: "invalid_request",
       param: "$.items[0].quantity",
     });
-
 
     const junkBuyer = await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_junk_buyer", {
@@ -3144,10 +3144,7 @@ function createAcpTestApi(input: {
         return ok<CheckoutSessionDTO>(checkoutSession());
       },
       status: async () => ok<CheckoutSessionDTO>(checkoutSession()),
-      cancel: async (
-        ctx: MikaRequestContext,
-        cancelInput: { readonly checkoutId: MikaIdLike },
-      ) => {
+      cancel: async (ctx: MikaRequestContext, cancelInput: { readonly checkoutId: MikaIdLike }) => {
         const override = input.onCheckoutCancel?.(cancelInput, ctx);
         if (override) return override;
 

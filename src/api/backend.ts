@@ -557,9 +557,7 @@ export interface MikaStockRepositoryPort {
   release(
     input: ReleaseReservedStockRepositoryInput,
   ): Promise<ReleaseReservedStockRepositoryResult>;
-  expire(
-    input: ReleaseReservedStockRepositoryInput,
-  ): Promise<ExpireReservedStockRepositoryResult>;
+  expire(input: ReleaseReservedStockRepositoryInput): Promise<ExpireReservedStockRepositoryResult>;
   consume(
     input: ConsumeReservedStockRepositoryInput,
   ): Promise<ConsumeReservedStockRepositoryResult>;
@@ -1538,7 +1536,10 @@ function customerIsCompatibleWithContext(
   customer: CustomerDocument,
   ctx: MikaRequestContext,
 ): boolean {
-  return !isAnonymizedCustomer(customer) && !(ctx.userId && customer.userId && customer.userId !== ctx.userId);
+  return (
+    !isAnonymizedCustomer(customer) &&
+    !(ctx.userId && customer.userId && customer.userId !== ctx.userId)
+  );
 }
 
 function customerEmailHash(customer: CustomerDocument): string | undefined {
@@ -1575,8 +1576,7 @@ async function resolveAccountIdentity(
 
   if (customerId) {
     const customer = await input.repositories.account.findCustomerById(customerId);
-    if (!customer || !customerIsCompatibleWithContext(customer, { ...ctx, userId }))
-      return null;
+    if (!customer || !customerIsCompatibleWithContext(customer, { ...ctx, userId })) return null;
 
     return {
       customer,
@@ -1737,7 +1737,11 @@ async function accountExportStatus(
 async function downloadAccountExport(
   input: CreateMikaBackendApiInput,
   ctx: MikaRequestContext,
-  downloadInput: { readonly exportId: MikaId; readonly token?: string; readonly consumeToken?: boolean },
+  downloadInput: {
+    readonly exportId: MikaId;
+    readonly token?: string;
+    readonly consumeToken?: boolean;
+  },
 ): Promise<MikaApiResult<AccountExportDownloadDTO>> {
   const document = await input.repositories.ops.findAccountExport(downloadInput.exportId);
   if (!document) {
@@ -2230,9 +2234,7 @@ async function releaseExpiredReservations(
       action: "stock.releaseExpiredReservations",
       idempotencyKey: releaseInput.idempotencyKey,
       idempotencyInput: releaseInput as unknown as JsonValue,
-      metadata: {
-        ...(releaseInput.now ? { now: releaseInput.now } : {}),
-      },
+      metadata: releaseInput.now ? { now: releaseInput.now } : {},
     },
     release,
     "Expired reservation release failed.",
@@ -2260,10 +2262,7 @@ async function refundOrder(
   if (!providerFeature.ok) return providerFeature;
   const refundableAmount = Math.max(0, order.totalAmount - orderRefundedAmount(order));
   if (refundableAmount <= 0) {
-    return validationFailed(
-      "amount",
-      `Order '${order.id}' has no remaining refundable amount.`,
-    );
+    return validationFailed("amount", `Order '${order.id}' has no remaining refundable amount.`);
   }
   if (refundInput.amount !== undefined && refundInput.amount > refundableAmount) {
     return validationFailed(
@@ -3127,7 +3126,10 @@ async function runAdminProviderAction<TData>(
   return runAdminAction(input, record, action, fallbackMessage, providerFailed);
 }
 
-function assertCompletedProviderAction(result: AdminActionResultDTO, fallbackMessage: string): void {
+function assertCompletedProviderAction(
+  result: AdminActionResultDTO,
+  fallbackMessage: string,
+): void {
   if (result.status === "completed") return;
 
   throw new Error(result.message ?? `${fallbackMessage} (status: ${result.status}).`);
@@ -4234,7 +4236,8 @@ function webhookDuplicateCanReprocess(
   event: MikaProviderWebhookEvent,
   duplicate: WebhookDocument,
 ): boolean {
-  if (event.kind === "payment") return duplicate.status === "failed" || duplicate.status === "received";
+  if (event.kind === "payment")
+    return duplicate.status === "failed" || duplicate.status === "received";
   if (event.kind === "subscription") return duplicate.status === "received";
 
   return false;
@@ -4442,7 +4445,7 @@ function webhookEventToJson(
               discount: event.totals.discount ? moneyToJson(event.totals.discount) : undefined,
               tax: event.totals.tax ? moneyToJson(event.totals.tax) : undefined,
               total: event.totals.total ? moneyToJson(event.totals.total) : undefined,
-          })
+            })
           : undefined,
         invoiceUrl: event.invoiceUrl,
         raw: options.includeRaw ? event.raw : undefined,
@@ -4786,14 +4789,15 @@ async function processStoredWebhook(
 ): Promise<WebhookDocument> {
   switch (event.kind) {
     case "payment":
-      if (
-        event.paymentStatus === "refunded" ||
-        event.paymentStatus === "partially_refunded"
-      ) {
+      if (event.paymentStatus === "refunded" || event.paymentStatus === "partially_refunded") {
         try {
           return (
-            (await withWebhookSubjectLock(input, ctx, webhook, paymentWebhookLockTarget(event), () =>
-              processPaymentReversalWebhook(input, ctx, webhook, event),
+            (await withWebhookSubjectLock(
+              input,
+              ctx,
+              webhook,
+              paymentWebhookLockTarget(event),
+              () => processPaymentReversalWebhook(input, ctx, webhook, event),
             )) ?? webhook
           );
         } catch (error) {
@@ -4812,8 +4816,12 @@ async function processStoredWebhook(
       if (event.paymentStatus !== "paid") {
         if (event.type === "checkout.session.expired") {
           return (
-            (await withWebhookSubjectLock(input, ctx, webhook, paymentWebhookLockTarget(event), () =>
-              processCheckoutExpiredWebhook(input, ctx, webhook, event),
+            (await withWebhookSubjectLock(
+              input,
+              ctx,
+              webhook,
+              paymentWebhookLockTarget(event),
+              () => processCheckoutExpiredWebhook(input, ctx, webhook, event),
             )) ?? webhook
           );
         }
@@ -4850,8 +4858,12 @@ async function processStoredWebhook(
     case "subscription":
       try {
         return (
-          (await withWebhookSubjectLock(input, ctx, webhook, subscriptionWebhookLockTarget(event), () =>
-            processSubscriptionWebhook(input, ctx, webhook, event),
+          (await withWebhookSubjectLock(
+            input,
+            ctx,
+            webhook,
+            subscriptionWebhookLockTarget(event),
+            () => processSubscriptionWebhook(input, ctx, webhook, event),
           )) ?? webhook
         );
       } catch {
@@ -4898,11 +4910,15 @@ async function withWebhookSubjectLock<TResult>(
   try {
     return await run();
   } finally {
-    await input.repositories.ephemeral.releaseLock({ key, owner, now: ctx.now }).catch(() => undefined);
+    await input.repositories.ephemeral
+      .releaseLock({ key, owner, now: ctx.now })
+      .catch(() => undefined);
   }
 }
 
-function paymentWebhookLockTarget(event: MikaProviderPaymentEvent): WebhookSubjectLockTarget | null {
+function paymentWebhookLockTarget(
+  event: MikaProviderPaymentEvent,
+): WebhookSubjectLockTarget | null {
   if (event.providerPaymentId) {
     return { kind: "payment", identity: `${event.provider}:${event.providerPaymentId}` };
   }
@@ -5608,9 +5624,7 @@ async function updateSubscriptionFromEvent(
   const eventStart = event.currentPeriodStart;
   const appliedStart = subscription.aggregate.currentPeriodStart;
   const eventAdvancesPeriod = Boolean(
-    eventStart &&
-      appliedStart &&
-      new Date(eventStart).getTime() > new Date(appliedStart).getTime(),
+    eventStart && appliedStart && new Date(eventStart).getTime() > new Date(appliedStart).getTime(),
   );
   const localStatusIsTerminal =
     subscription.status === "cancelled" || subscription.status === "expired";
@@ -5634,9 +5648,12 @@ async function updateSubscriptionFromEvent(
     ? true
     : preserveRenewedActive
       ? false
-    : (event.cancelAtPeriodEnd ?? subscription.aggregate.cancelAtPeriodEnd ?? false);
+      : (event.cancelAtPeriodEnd ?? subscription.aggregate.cancelAtPeriodEnd ?? false);
   const priceMatch = event.providerPriceId
-    ? await input.repositories.catalog.findItemByProviderPrice(event.provider, event.providerPriceId)
+    ? await input.repositories.catalog.findItemByProviderPrice(
+        event.provider,
+        event.providerPriceId,
+      )
     : null;
   const sellable =
     priceMatch && priceMatch.price.mode === "subscription"
@@ -6085,9 +6102,7 @@ async function paymentCustomerSnapshot(
   const email =
     checkoutCustomer?.aggregate.email ?? event.customer?.email ?? checkoutMetadataCustomer.email;
   const normalizedEmail = email?.trim().toLowerCase();
-  const payerEmailHash = normalizedEmail
-    ? await input.hash(`email:${normalizedEmail}`)
-    : undefined;
+  const payerEmailHash = normalizedEmail ? await input.hash(`email:${normalizedEmail}`) : undefined;
 
   const customer =
     checkoutCustomer ??
@@ -7030,14 +7045,9 @@ async function reopenAbandonedCheckoutCart(
 function cartWriteBlocked(cart: CartDocument): MikaApiFailure | null {
   if (cart.status === "open") return null;
 
-  return apiFailure(
-    409,
-    "CONFLICT",
-    `Cart '${cart.id}' is locked by an active checkout.`,
-    {
-      cartId: "Cart is locked by an active checkout.",
-    },
-  );
+  return apiFailure(409, "CONFLICT", `Cart '${cart.id}' is locked by an active checkout.`, {
+    cartId: "Cart is locked by an active checkout.",
+  });
 }
 
 function checkoutIsResumable(checkout: CheckoutDocument, now: ISODateTime): boolean {
@@ -7266,8 +7276,7 @@ async function requireDelegatedPaymentAuthorization(
   if (!checkoutInput.cartId) {
     return forbidden("Delegated payment requires a previewed cart checkout.");
   }
-  const providedHash =
-    customFields?.[MIKA_DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY];
+  const providedHash = customFields?.[MIKA_DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY];
   if (typeof providedHash !== "string" || providedHash.length === 0) {
     return forbidden("Delegated payment requires a checkout.preview payment authorization.");
   }
@@ -7275,7 +7284,13 @@ async function requireDelegatedPaymentAuthorization(
   const proofInput: StartCheckoutInput = { ...checkoutInput, provider: providerName };
   const quote = await createCartQuote(input, ctx, proofInput);
   const mode = await resolveCheckoutPreviewMode(input, ctx, proofInput);
-  const expectedHash = await delegatedPaymentProofHash(input, proofInput, quote, mode, providerName);
+  const expectedHash = await delegatedPaymentProofHash(
+    input,
+    proofInput,
+    quote,
+    mode,
+    providerName,
+  );
   if (expectedHash !== providedHash) {
     return forbidden("Delegated payment authorization does not match the current checkout.");
   }
@@ -7358,7 +7373,8 @@ async function startCheckout(
   }
   const reserved = await reserveCheckoutLines(input, ctx, checkoutId, resolved, expiresAt);
   if (!reserved.ok) {
-    if (claimedCart) await releaseCartCheckoutClaimQuietly(input, claimedCart.id, checkoutId, ctx.now);
+    if (claimedCart)
+      await releaseCartCheckoutClaimQuietly(input, claimedCart.id, checkoutId, ctx.now);
     return reserved;
   }
 
@@ -7379,10 +7395,7 @@ async function startCheckout(
         ...(checkoutDiscountAmount > 0
           ? { discount: moneyDTO(checkoutDiscountAmount, resolved.currency) }
           : {}),
-        total: moneyDTO(
-          Math.max(0, checkoutSubtotal - checkoutDiscountAmount),
-          resolved.currency,
-        ),
+        total: moneyDTO(Math.max(0, checkoutSubtotal - checkoutDiscountAmount), resolved.currency),
         successUrl: checkoutSuccessUrl(input, ctx, checkoutInput, checkoutId, statusToken),
         cancelUrl: checkoutCancelUrl(input, ctx, checkoutInput, checkoutId, statusToken),
         metadata: checkoutCustomMetadata(checkoutInput.customFields),
@@ -8288,7 +8301,9 @@ function hydratedCheckoutOverrides(
 
   return {
     ...(overrides.start ? { start: withHydratedCustomerHandler(input, overrides.start) } : {}),
-    ...(overrides.preview ? { preview: withHydratedCustomerHandler(input, overrides.preview) } : {}),
+    ...(overrides.preview
+      ? { preview: withHydratedCustomerHandler(input, overrides.preview) }
+      : {}),
     ...(overrides.status ? { status: withHydratedCustomerHandler(input, overrides.status) } : {}),
     ...(overrides.cancel ? { cancel: withHydratedCustomerHandler(input, overrides.cancel) } : {}),
   };
