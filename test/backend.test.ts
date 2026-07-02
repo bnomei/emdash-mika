@@ -15226,6 +15226,17 @@ describe("backend API composition", () => {
         total: { amount: 1800, currency: TEST_CURRENCY },
       },
     });
+
+    // Re-quoting the applied code compares by code hash, so a custom resolver label
+    // ("Quarter Off" vs "QUARTER") must not report the quote as changed.
+    await expect(api.cart.quote(ctx, { couponCode: "quarter" })).resolves.toMatchObject({
+      ok: true,
+      data: {
+        status: "valid",
+        discount: { amount: 600, currency: TEST_CURRENCY },
+        total: { amount: 1800, currency: TEST_CURRENCY },
+      },
+    });
   });
 
   it("flags unresolvable quote couponCodes without applying a discount", async () => {
@@ -15256,6 +15267,7 @@ describe("backend API composition", () => {
     expect(quote).toMatchObject({
       ok: true,
       data: {
+        status: "unavailable",
         discount: undefined,
         subtotal: { amount: 2400, currency: TEST_CURRENCY },
         total: { amount: 2400, currency: TEST_CURRENCY },

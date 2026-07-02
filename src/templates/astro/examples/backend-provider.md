@@ -38,7 +38,10 @@ export const api = createMikaBackendApi({
     },
     // Coupons fail closed: without a resolver every coupon code is rejected.
     // Resolve codes against your own catalog, or use the fixed-rate demo
-    // resolver from "@bnomei/emdash-mika/server" while prototyping.
+    // resolver from "@bnomei/emdash-mika/server" while prototyping. Resolved
+    // terms are snapshotted onto the cart; checkout.start reuses the stored
+    // snapshot without re-running the resolver, so enforce expiry or usage
+    // limits inside the resolver before granting terms.
     coupons: {
       resolver: async ({ code }) => (code === "SAVE10" ? { rate: 0.1 } : null),
     },

@@ -7092,7 +7092,14 @@ async function createCartQuote(
     const normalizedCode = quoteInput.couponCode.trim();
     if (normalizedCode) {
       quotedCouponLabel = normalizedCode.toUpperCase();
-      changed = !coupon || coupon.label !== quotedCouponLabel;
+      // Compare by code hash: resolver labels are host-controlled display text, so a stored
+      // snapshot's label may legitimately differ from the uppercased code.
+      const quotedCouponCodeHash = await input.hash(`coupon:${quotedCouponLabel}`);
+      changed =
+        !coupon ||
+        (coupon.codeHash !== undefined
+          ? coupon.codeHash !== quotedCouponCodeHash
+          : coupon.label !== quotedCouponLabel);
     } else if (coupon) {
       changed = true;
       coupon = undefined;
@@ -7152,6 +7159,9 @@ async function createCartQuote(
     if (resolved) {
       coupon = resolved;
     } else {
+      // checkout.start deterministically rejects this coupon, so the quote must not advertise a
+      // proceedable status either.
+      unavailable = true;
       if (coupon) changed = true;
       coupon = undefined;
       const message = couponRejectionMessage(input, quotedCouponLabel);
@@ -9110,7 +9120,7 @@ async function couponSnapshotForSubtotal(
 
   return {
     codeHash: await input.hash(`coupon:${normalizedCode}`),
-    label: resolution.label ?? normalizedCode,
+    label: resolution.label || normalizedCode,
     rate: resolution.rate,
     discountAmount: Math.floor(subtotalAmount * resolution.rate),
     ...(resolution.metadata !== undefined ? { metadata: resolution.metadata } : {}),
