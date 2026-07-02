@@ -4229,6 +4229,17 @@ describe("createISODateTime canonicalization", () => {
     expect(() => createISODateTime("not-a-date")).toThrow("Invalid ISODateTime");
     expect(() => createISODateTime("2026-06-29")).toThrow("Invalid ISODateTime");
   });
+
+  it("aligns the isISODateTime guard with what createISODateTime actually produces", () => {
+    const canonical = createISODateTime("2026-06-29T12:00:00+02:00");
+    expect(canonical).toBe("2026-06-29T10:00:00.000Z");
+    expect(isISODateTime(canonical)).toBe(true);
+
+    // createISODateTime canonicalizes offsets and non-millisecond forms away; a value that
+    // merely parses but was never actually canonicalized must not pass the brand guard.
+    expect(isISODateTime("2026-06-29T12:00:00+02:00")).toBe(false);
+    expect(isISODateTime("2026-06-29T10:00:00Z")).toBe(false);
+  });
 });
 
 describe("Mika Astro template contracts", () => {

@@ -66,7 +66,12 @@ export function isMikaId(value: unknown): value is MikaId {
   return typeof value === "string" && value.length > 0 && value === value.trim();
 }
 
-/** Type guard for branded ISO datetime strings. */
+/**
+ * Type guard for branded ISO datetime strings. Requires the exact canonical-UTC (`Z`) form
+ * {@link createISODateTime} produces — an offset form like `+02:00` or a non-canonical `Z` form
+ * (missing milliseconds) parses as a valid date but is rejected, so a value that passes this
+ * guard carries the same invariant as one constructed via `createISODateTime`.
+ */
 export function isISODateTime(value: unknown): value is ISODateTime {
   const match = typeof value === "string" ? ISO_DATE_TIME_PATTERN.exec(value) : null;
 
@@ -76,7 +81,8 @@ export function isISODateTime(value: unknown): value is ISODateTime {
     value === value.trim() &&
     match !== null &&
     isValidCalendarDate(match) &&
-    !Number.isNaN(Date.parse(value))
+    !Number.isNaN(Date.parse(value)) &&
+    new Date(value).toISOString() === value
   );
 }
 
