@@ -44,6 +44,7 @@ export {
   type MikaBackendHashInput,
   type MikaBackendISODateTime,
   type MikaBackendIdFactory,
+  type MikaBackendErrorObserver,
   type MikaBackendNow,
   type MikaBackendRepositories,
   type MikaCouponResolution,

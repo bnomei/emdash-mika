@@ -798,6 +798,7 @@ describe("Mika ACP projection", () => {
     let cart = createCart([]);
     let failCompletionLock = true;
     let checkoutStartCount = 0;
+    const observed: string[] = [];
     const baseStore = createMemoryMikaAcpSessionStore();
     const handlers = createMikaAcpCheckoutHandlers({
       api: createAcpTestApi({
@@ -809,6 +810,9 @@ describe("Mika ACP projection", () => {
           checkoutStartCount += 1;
         },
       }),
+      onError: (context) => {
+        observed.push(context.scope);
+      },
       store: {
         ...baseStore,
         claimIdempotencyKey: async (key, id) => {
@@ -842,6 +846,7 @@ describe("Mika ACP projection", () => {
 
     const failed = await handlers.complete(completeRequest(), "checkout_session_acp_lock_failure");
     expect(failed.status).toBe(500);
+    expect(observed).toContain("acp.complete.claimCompletionLock");
 
     const retry = await handlers.complete(completeRequest(), "checkout_session_acp_lock_failure");
     expect(retry.status).toBe(200);

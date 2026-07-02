@@ -15499,6 +15499,65 @@ describe("backend API composition", () => {
     });
   });
 
+  it("reports swallowed compensation failures to the onError observer", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const failingSession = new Proxy(repositories.session, {
+      get(target, property, receiver) {
+        if (property === "releaseCartCheckoutClaim") {
+          return async () => {
+            throw new Error("release unavailable");
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const fake = createFakeMikaProvider({
+      overrides: {
+        createCheckoutSession: async () => {
+          throw new Error("provider unavailable");
+        },
+      },
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    const observed: string[] = [];
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories: { ...repositories, session: failingSession },
+        providers: createMikaProviderRegistry([fake.provider]),
+        onError: (context) => {
+          observed.push(context.scope);
+        },
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const added = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 2 });
+    if (!added.ok) throw new Error("Expected cart.add to succeed.");
+
+    // The provider failure is reported to the caller; the claim-release failure it triggers is
+    // swallowed by design and must surface through the observer instead.
+    await expect(api.checkout.start(ctx, { cartId: added.data.id })).resolves.toMatchObject({
+      ok: false,
+      status: 502,
+      error: { code: "PROVIDER_FAILED" },
+    });
+
+    expect(observed).toContain("checkout.releaseCartClaim");
+  });
+
   it("does not persist checkout.start couponCode when checkout creation fails", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();

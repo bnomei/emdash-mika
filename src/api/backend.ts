@@ -692,6 +692,17 @@ export interface MikaBackendConfig {
   };
 }
 
+/**
+ * Observer for errors the backend swallows on best-effort paths (compensation releases,
+ * webhook status persistence, notification hooks). Without it those failures are invisible;
+ * wire it to the host's logger or error tracker. Observer throws are ignored.
+ */
+export type MikaBackendErrorObserver = (context: {
+  readonly scope: string;
+  readonly error: unknown;
+  readonly metadata?: JsonObject;
+}) => void;
+
 /** Shared dependencies injected into backend services and handlers. */
 export interface MikaBackendDependencies {
   readonly config?: MikaBackendConfig;
@@ -703,6 +714,7 @@ export interface MikaBackendDependencies {
   readonly notifications?: {
     readonly handle?: MikaNotificationHook;
   };
+  readonly onError?: MikaBackendErrorObserver;
   readonly providers: MikaProviderRegistry;
   readonly repositories: MikaBackendRepositories;
 }
@@ -3282,17 +3294,36 @@ function adminActionFailed(message: string): MikaApiFailure {
   };
 }
 
+/** Reports a swallowed best-effort failure to the host observer; never throws. */
+function observeBackendError(
+  input: Pick<MikaBackendDependencies, "onError">,
+  scope: string,
+  error: unknown,
+  metadata?: JsonObject,
+): void {
+  try {
+    input.onError?.({ scope, error, ...(metadata !== undefined ? { metadata } : {}) });
+  } catch {
+    // Observer bugs must not break the compensation path being observed.
+  }
+}
+
 async function emitBackendNotification<TKind extends MikaNotificationKind>(
   input: CreateMikaBackendApiInput,
   kind: TKind,
   occurredAt: ISODateTime,
   context: MikaNotificationContextMap[TKind],
 ): Promise<void> {
-  await emitMikaNotification(input.notifications?.handle, {
-    kind,
-    occurredAt,
-    context,
-  } as MikaNotificationIntent);
+  await emitMikaNotification(
+    input.notifications?.handle,
+    {
+      kind,
+      occurredAt,
+      context,
+    } as MikaNotificationIntent,
+    undefined,
+    (error) => observeBackendError(input, `notification.hook.${kind}`, error),
+  );
 }
 
 function orderNotificationRecipient(order: OrderDocument): MikaNotificationRecipientContext {
@@ -3377,8 +3408,11 @@ async function requestMagicLink(
     },
   };
 
-  await emitMikaNotification(input.notifications?.handle, intent, () =>
-    queueDefaultMagicLinkRequestedEmail(input, intent, tokenHash),
+  await emitMikaNotification(
+    input.notifications?.handle,
+    intent,
+    () => queueDefaultMagicLinkRequestedEmail(input, intent, tokenHash),
+    (error) => observeBackendError(input, "notification.hook.magic_link.requested", error),
   );
 
   return { ok: true, status: 200, data: { sent: true } };
@@ -3493,7 +3527,11 @@ async function verifyMagicLink(
       },
     };
   } catch (error) {
-    await input.repositories.ephemeral.restoreToken(tokenHash, ctx.now).catch(() => undefined);
+    await input.repositories.ephemeral
+      .restoreToken(tokenHash, ctx.now)
+      .catch((restoreError: unknown) =>
+        observeBackendError(input, "magicLink.restoreToken", restoreError),
+      );
     throw error;
   }
 }
@@ -4912,7 +4950,9 @@ async function withWebhookSubjectLock<TResult>(
   } finally {
     await input.repositories.ephemeral
       .releaseLock({ key, owner, now: ctx.now })
-      .catch(() => undefined);
+      .catch((error: unknown) =>
+        observeBackendError(input, "webhook.subjectLock.release", error, { key }),
+      );
   }
 }
 
@@ -6185,7 +6225,11 @@ async function fulfillPaidOrder(
       const progressedLines = [...fulfilledLines, ...originalLines.slice(fulfilledLines.length)];
       await input.repositories.ledger
         .put(orderWithFulfilledLines(order, progressedLines, ctx.now))
-        .catch(() => undefined);
+        .catch((persistError: unknown) =>
+          observeBackendError(input, "fulfillment.persistProgress", persistError, {
+            orderId: order.id,
+          }),
+        );
     }
     throw error;
   }
@@ -6477,8 +6521,11 @@ async function queueOrderConfirmationEmail(
       context,
     };
 
-    await emitMikaNotification(input.notifications?.handle, intent, () =>
-      queueDefaultOrderConfirmedEmail(input, intent, defaultEmailId),
+    await emitMikaNotification(
+      input.notifications?.handle,
+      intent,
+      () => queueDefaultOrderConfirmedEmail(input, intent, defaultEmailId),
+      (error) => observeBackendError(input, "notification.hook.order.confirmed", error),
     );
     await markerLease.runner.complete({
       notificationKind: "order.confirmed",
@@ -6833,9 +6880,10 @@ async function putWebhook(
 ): Promise<WebhookDocument> {
   try {
     await input.repositories.ops.put(webhook);
-  } catch {
+  } catch (error) {
     if (options.strict) throw new Error(`Webhook '${webhook.id}' status could not be persisted.`);
     // The webhook has already been accepted; callers still receive the in-memory state.
+    observeBackendError(input, "webhook.persistStatus", error, { webhookId: webhook.id });
   }
 
   return webhook;
@@ -7926,8 +7974,11 @@ async function markCheckoutPersistenceFailed(
         metadata: checkoutFailedMetadata(checkoutDocument.aggregate.metadata),
       },
     });
-  } catch {
+  } catch (error) {
     // Best effort: if the local store is unavailable, stock release already compensated inventory.
+    observeBackendError(input, "checkout.markPersistenceFailed", error, {
+      checkoutId: checkoutDocument.id,
+    });
   }
 }
 
@@ -7951,8 +8002,9 @@ async function releaseCartCheckoutClaimQuietly(
 ): Promise<void> {
   try {
     await input.repositories.session.releaseCartCheckoutClaim({ cartId, checkoutId, now });
-  } catch {
+  } catch (error) {
     // Best effort: unlock the cart so another checkout attempt can proceed.
+    observeBackendError(input, "checkout.releaseCartClaim", error, { cartId, checkoutId });
   }
 }
 

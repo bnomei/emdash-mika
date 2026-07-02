@@ -13,6 +13,7 @@ import {
   MIKA_PLUGIN_VERSION,
   createPlugin,
   mikaPlugin,
+  type MikaCreatePluginOptions,
 } from "../src/index";
 import type {
   mikaPlugin as PackageMikaPlugin,

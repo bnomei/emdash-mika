@@ -314,6 +314,12 @@ export interface CreateMikaAcpCheckoutHandlersOptions {
     readonly checkoutId?: MikaId;
     readonly sessionId: string;
   }) => string;
+  /**
+   * Observer for errors the handlers swallow (unhandled throws mapped to generic 500s,
+   * best-effort lease releases). Without it those failures are invisible to operators.
+   * Observer throws are ignored.
+   */
+  readonly onError?: (context: { readonly scope: string; readonly error: unknown }) => void;
 }
 
 /** Request handlers for the ACP checkout session lifecycle (create, update, complete, get, cancel). */
@@ -839,26 +845,51 @@ export function createMikaAcpCheckoutHandlers(
 
   return {
     create: async (request) =>
-      safelyHandleAcpRequest(request, () => handleAcpCreate(options, request)),
+      safelyHandleAcpRequest(options, "create", request, () => handleAcpCreate(options, request)),
     update: async (request, checkoutSessionId) =>
-      safelyHandleAcpRequest(request, () => handleAcpUpdate(options, request, checkoutSessionId)),
+      safelyHandleAcpRequest(options, "update", request, () =>
+        handleAcpUpdate(options, request, checkoutSessionId),
+      ),
     complete: async (request, checkoutSessionId) =>
-      safelyHandleAcpRequest(request, () => handleAcpComplete(options, request, checkoutSessionId)),
+      safelyHandleAcpRequest(options, "complete", request, () =>
+        handleAcpComplete(options, request, checkoutSessionId),
+      ),
     get: async (request, checkoutSessionId) =>
-      safelyHandleAcpRequest(request, () => handleAcpGet(options, request, checkoutSessionId)),
+      safelyHandleAcpRequest(options, "get", request, () =>
+        handleAcpGet(options, request, checkoutSessionId),
+      ),
     cancel: async (request, checkoutSessionId) =>
-      safelyHandleAcpRequest(request, () => handleAcpCancel(options, request, checkoutSessionId)),
+      safelyHandleAcpRequest(options, "cancel", request, () =>
+        handleAcpCancel(options, request, checkoutSessionId),
+      ),
   };
+}
+
+/** Reports a swallowed ACP failure to the host observer; never throws. */
+function observeAcpError(
+  options: Pick<CreateMikaAcpCheckoutHandlersOptions, "onError">,
+  scope: string,
+  error: unknown,
+): void {
+  try {
+    options.onError?.({ scope, error });
+  } catch {
+    // Observer bugs must not break the protocol response.
+  }
 }
 
 // Maps unexpected throws to a generic ACP 500 without leaking stack details.
 async function safelyHandleAcpRequest(
+  options: CreateMikaAcpCheckoutHandlersOptions,
+  scope: string,
   request: Request,
   handler: () => Promise<Response>,
 ): Promise<Response> {
   try {
     return await handler();
-  } catch {
+  } catch (error) {
+    observeAcpError(options, `acp.${scope}.unhandled`, error);
+
     return acpUnhandledFailure(request);
   }
 }
@@ -947,7 +978,8 @@ async function handleAcpCreate(
     await commitAcpIdempotency(options, idempotency.lease);
 
     return acpJson(request, await recordToAcpSession(options, request, reconciled.record), 201);
-  } catch {
+  } catch (error) {
+    observeAcpError(options, "acp.create.unhandled", error);
     await releaseAcpIdempotencyQuietly(options, idempotency.lease);
 
     return acpUnhandledFailure(request);
@@ -1016,7 +1048,8 @@ async function handleAcpUpdate(
     await commitAcpIdempotency(options, idempotency.lease);
 
     return acpJson(request, await recordToAcpSession(options, request, reconciled.record), 200);
-  } catch {
+  } catch (error) {
+    observeAcpError(options, "acp.update.unhandled", error);
     await releaseAcpIdempotencyQuietly(options, idempotency.lease);
 
     return acpUnhandledFailure(request);
@@ -1048,7 +1081,8 @@ async function handleAcpComplete(
       false,
       `acp_complete_lock:${checkoutSessionId}`,
     );
-  } catch {
+  } catch (error) {
+    observeAcpError(options, "acp.complete.claimCompletionLock", error);
     await releaseAcpIdempotencyQuietly(options, idempotency.lease);
 
     return acpUnhandledFailure(request);
@@ -1190,9 +1224,10 @@ async function handleAcpComplete(
     if (commitMainLease) {
       try {
         await commitAcpIdempotency(options, idempotency.lease);
-      } catch {
+      } catch (error) {
         // Bind failed after a committed session: release instead, so a replayed request rebuilds
         // the committed response from the stored record rather than staying in_progress.
+        observeAcpError(options, "acp.complete.bindIdempotency", error);
         commitMainLease = false;
       }
     }
@@ -1275,7 +1310,8 @@ async function handleAcpCancel(
     await commitAcpIdempotency(options, idempotency.lease);
 
     return acpJson(request, await recordToAcpSession(options, request, canceled), 200);
-  } catch {
+  } catch (error) {
+    observeAcpError(options, "acp.cancel.unhandled", error);
     await releaseAcpIdempotencyQuietly(options, idempotency.lease);
 
     return acpUnhandledFailure(request);
@@ -1373,8 +1409,9 @@ async function releaseAcpIdempotencyQuietly(
 ): Promise<void> {
   try {
     await releaseAcpIdempotency(options, lease);
-  } catch {
+  } catch (error) {
     // Best-effort cleanup after an ACP storage/API failure; callers still receive a protocol error.
+    observeAcpError(options, "acp.idempotency.release", error);
   }
 }
 

@@ -216,12 +216,18 @@ export async function emitMikaNotification(
   hook: MikaNotificationHook | undefined,
   intent: MikaNotificationIntent,
   defaultHandler?: () => Promise<void> | void,
+  onHookError?: (error: unknown) => void,
 ): Promise<void> {
   let result: MikaNotificationHookResult | void;
   try {
     result = await hook?.(intent);
-  } catch {
+  } catch (error) {
     // Hook throws do not suppress default delivery; only an explicit handled result does.
+    try {
+      onHookError?.(error);
+    } catch {
+      // Observer bugs must not affect delivery.
+    }
     result = undefined;
   }
   if (result?.handled === true) return;
