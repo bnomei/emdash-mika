@@ -317,8 +317,7 @@ function normalizeMikaOperationDefinition(
  */
 function schemaAcceptsIdempotencyKey(schema: z.ZodType | undefined): boolean {
   if (!schema) return false;
-  const shape = (schema as { readonly shape?: unknown }).shape;
-  const resolvedShape = typeof shape === "function" ? shape() : shape;
+  const resolvedShape = (schema as { readonly shape?: unknown }).shape;
 
   return (
     typeof resolvedShape === "object" &&

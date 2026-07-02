@@ -2235,6 +2235,55 @@ describe("backend test Kysely stock database harness", () => {
     }
   });
 
+  it("rolls back a stock mutation composed into an already-open transaction that later fails", async () => {
+    // withTransaction reuses an open transaction scope instead of wrapping it in a nested one
+    // (fixed in 51af9b4). Composing correctly into the caller's transaction means the mutation
+    // must roll back with it, not just avoid a nested-BEGIN error — this proves atomicity, not
+    // just that the call succeeds.
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const clock = createTestClock();
+    const stockItem = createStockRecord({
+      quantityOnHand: 10,
+      quantityReserved: 2,
+    });
+
+    try {
+      await mikaInitialMigration.up(db);
+      await new StockRepository(db).putItem(stockItem);
+
+      await expect(
+        db.transaction().execute(async (transaction) => {
+          const repository = new StockRepository(transaction);
+          const result = await repository.reserve({
+            reservationEventId: createTestMikaId("stock_event", 91),
+            stockItemId: stockItem.id,
+            quantity: 3,
+            expiresAt: clock.isoAt(15 * 60_000),
+            now: TEST_NOW,
+            idempotencyKey: "reserve_inside_transaction_rollback_1",
+          });
+          expect(result).toMatchObject({ status: "reserved" });
+
+          throw new Error("simulated failure after the reservation, inside the same transaction");
+        }),
+      ).rejects.toThrow("simulated failure after the reservation");
+
+      await expect(
+        new StockRepository(db).findBySellableId(stockItem.sellableId),
+      ).resolves.toMatchObject({
+        quantityOnHand: 10,
+        quantityReserved: 2,
+      });
+      await expect(
+        new StockRepository(db).findEventByIdempotencyKey("reserve_inside_transaction_rollback_1"),
+      ).resolves.toBeNull();
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
+    }
+  });
+
   it("rejects insufficient finite stock without increasing reserved quantity", async () => {
     const database = createTransactionTestMikaDb();
     const { db } = database;
