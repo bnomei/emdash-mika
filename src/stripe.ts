@@ -475,7 +475,7 @@ async function createStripeDelegatedPayment(
   // or shipping the lines cannot express, and the charge must match what the buyer confirmed.
   const total = input.total?.amount ?? Math.max(0, subtotal - discountAmount);
   const currency = input.total?.currency ?? input.lines[0]?.currency;
-  if (!currency) {
+  if (input.lines.length === 0 || !currency) {
     throw new Error("Delegated Stripe checkout requires at least one line item.");
   }
 
