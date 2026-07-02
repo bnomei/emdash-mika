@@ -1,3 +1,4 @@
+// mika-template-version: 0.0.0
 /**
  * Server-side cart badge helper for the Astro storefront template.
  * Reads the session cart and returns a safe item count for layout shells.

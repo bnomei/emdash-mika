@@ -1,3 +1,4 @@
+// mika-template-version: 0.0.0
 /**
  * Compatibility shim for older copied Astro templates that imported form helpers locally.
  * Re-exports hidden-input and redirect helpers unchanged; new templates should import

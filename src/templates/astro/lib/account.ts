@@ -1,3 +1,4 @@
+// mika-template-version: 0.0.0
 /**
  * Account view helpers for the copyable Astro storefront template.
  * Extends core {@link AccountDTO} with license rows for downloads and account pages.

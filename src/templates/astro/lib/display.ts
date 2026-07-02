@@ -1,3 +1,4 @@
+// mika-template-version: 0.0.0
 /**
  * Storefront display formatting for the copyable Astro template.
  * Maps Mika status codes to human labels, badge variants, dates, and counts.

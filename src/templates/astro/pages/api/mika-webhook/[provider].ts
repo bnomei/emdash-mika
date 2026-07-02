@@ -1,3 +1,4 @@
+// mika-template-version: 0.0.0
 /**
  * Provider webhook ingest route for the storefront template.
  * Hashes the raw body, records signature metadata, and forwards to `Mika.webhook.receive`.

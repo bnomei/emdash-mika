@@ -1,3 +1,4 @@
+// mika-template-version: 0.0.0
 /**
  * `llms.txt` discovery page for the storefront template.
  * Summarizes public catalog reads, protected flows, and agent manifest links.

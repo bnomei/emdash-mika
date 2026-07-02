@@ -4668,6 +4668,27 @@ describe("Mika Astro template contracts", () => {
     );
     expect(addToCartSource).not.toContain('form.querySelector("[data-mika-variant-groups]")');
   });
+
+  it("keeps every copyable template file's version marker synced with the package version", () => {
+    // Each file under actions/components/lib/styles/pages starts with a `mika-template-version`
+    // marker recording the package version it shipped with, so a host upgrading can diff their
+    // copy against the new version's file starting from that marker to see what changed (see
+    // templates/astro/README.md). A stale or missing marker silently breaks that recipe.
+    const packageJson = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ) as { readonly version: string };
+    const marker = `mika-template-version: ${packageJson.version}`;
+    const templateRoots = ["actions", "components", "lib", "styles", "pages"];
+    const files = templateRoots.flatMap((dir) =>
+      sourceFiles(new URL(`../src/templates/astro/${dir}/`, import.meta.url)),
+    );
+
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      const source = readFileSync(file, "utf8");
+      expect(source.split("\n").slice(0, 2).join("\n")).toContain(marker);
+    }
+  });
 });
 
 function sourceFiles(root: URL): URL[] {

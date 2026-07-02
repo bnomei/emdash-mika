@@ -12,6 +12,28 @@ add carts, wishlists, checkout handoff, accounts, downloads, stock-aware
 variants, and agent-readable commerce metadata without adopting a full commerce
 platform.
 
+## Copying and upgrading
+
+These are copy-only files, not a package import: paste them into the host
+project (`src/actions`, `src/components`, `src/lib`, `src/styles`,
+`src/pages`) and edit freely — there's nothing here that expects to stay
+byte-for-byte identical to the shipped copy. `lib/mika-api.ts` and
+`lib/mika-plugin.ts` are the one pair meant to stay close to the original
+shape, since they're the wiring contract described in
+[Astro storefront](./examples/astro-storefront.md); everything else is a
+starting point.
+
+Every file under `actions/`, `components/`, `lib/`, `styles/`, and `pages/`
+starts with a `mika-template-version: X.Y.Z` marker recording the package
+version it was copied from (a `//`, `/* */`, or `<!-- -->` comment as the
+file's syntax allows). When upgrading `@bnomei/emdash-mika`, diff your copy
+against the new version's file starting from that marker — everything below
+it is what actually changed since you copied it, so the diff stays small and
+readable even if you've since edited the file yourself. The marker isn't
+meant to be preserved: once you've reconciled a diff, update it (or leave it
+stale, it's informational, not enforced against your copy) — it only has to
+be accurate in this repo's own copies, not in what a host does with them.
+
 ## Examples
 
 Use the focused examples for setup detail:
