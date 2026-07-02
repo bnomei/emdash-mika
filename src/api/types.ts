@@ -3,7 +3,10 @@
  * DTOs are stable JSON shapes; inputs mirror Zod schemas in {@link ./validation}.
  */
 import type {
+  CartStatus,
+  CheckoutStatus,
   CurrencyCode,
+  EntitlementStatus,
   FulfillmentKind,
   ISODateTime,
   JsonObject,
@@ -25,6 +28,7 @@ export const MIKA_ERROR_CODES = [
   "RATE_LIMITED",
   "AUTH_REQUIRED",
   "FORBIDDEN",
+  "NOT_FOUND",
   "SELLABLE_NOT_FOUND",
   "SELLABLE_INACTIVE",
   "PRICE_INACTIVE",
@@ -43,6 +47,7 @@ export const MIKA_ERROR_CODES = [
   "DOWNLOAD_REVOKED",
   "WEBHOOK_INVALID",
   "CONFLICT",
+  "INTERNAL",
   "NOT_IMPLEMENTED",
 ] as const;
 
@@ -176,7 +181,7 @@ export interface CartLineDTO {
 /** Session- or customer-bound cart with priced lines and checkout linkage. */
 export interface CartDTO {
   readonly id: MikaId;
-  readonly status: "open" | "checkout_pending" | "converted" | "abandoned" | "expired";
+  readonly status: CartStatus;
   readonly currency: CurrencyCode;
   readonly items: readonly CartLineDTO[];
   readonly coupon?: AppliedCouponDTO;
@@ -215,16 +220,12 @@ export interface WishlistDTO {
   readonly items: readonly WishlistItemDTO[];
 }
 
-/** Lifecycle state of a provider-hosted checkout session. */
-export type CheckoutStatusDTO =
-  | "created"
-  | "redirected"
-  | "pending"
-  | "completed"
-  | "cancelled"
-  | "expired"
-  | "failed"
-  | "binding_mismatch";
+/**
+ * Lifecycle state of a provider-hosted checkout session: the persisted {@link CheckoutStatus}
+ * plus the transport-only `pending` (awaiting provider confirmation) and `binding_mismatch`
+ * (delegated-payment proof failed verification) states.
+ */
+export type CheckoutStatusDTO = CheckoutStatus | "pending" | "binding_mismatch";
 
 /** Provider checkout session created from cart handoff. */
 export interface CheckoutSessionDTO {
@@ -363,7 +364,7 @@ export interface SubscriptionDTO {
 /** Access grant from orders, subscriptions, or manual admin issuance. */
 export interface EntitlementDTO {
   readonly key: string;
-  readonly status: "active" | "inactive" | "revoked" | "expired";
+  readonly status: EntitlementStatus;
   readonly source: "order" | "subscription" | "manual";
   readonly expiresAt?: ISODateTime;
 }

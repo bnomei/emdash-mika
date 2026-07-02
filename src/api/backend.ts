@@ -3233,7 +3233,7 @@ function missingTarget(targetType: string, field: string, value: string): MikaAp
     ok: false,
     status: 404,
     error: {
-      code: "VALIDATION_FAILED",
+      code: "NOT_FOUND",
       message: `${label} '${value}' was not found.`,
       fieldErrors: { [field]: `${label} was not found.` },
     },
@@ -3276,7 +3276,7 @@ function adminActionFailed(message: string): MikaApiFailure {
     ok: false,
     status: 500,
     error: {
-      code: "CONFLICT",
+      code: "INTERNAL",
       message,
     },
   };
@@ -9592,7 +9592,7 @@ function providerFailed(message: string): MikaApiFailure {
 }
 
 function orderNotFound(orderId: MikaId): MikaApiFailure {
-  return apiFailure(404, "VALIDATION_FAILED", `Order '${orderId}' was not found.`, {
+  return apiFailure(404, "NOT_FOUND", `Order '${orderId}' was not found.`, {
     orderId: "Order was not found.",
   });
 }
@@ -9653,31 +9653,31 @@ function sellableNotFound(sellableId: MikaId): MikaApiFailure {
 }
 
 function cartLineNotFound(lineId: MikaId): MikaApiFailure {
-  return apiFailure(404, "VALIDATION_FAILED", `Cart line '${lineId}' was not found.`, {
+  return apiFailure(404, "NOT_FOUND", `Cart line '${lineId}' was not found.`, {
     lineId: "Cart line was not found.",
   });
 }
 
 function wishlistItemNotFound(itemId: MikaId): MikaApiFailure {
-  return apiFailure(404, "VALIDATION_FAILED", `Wishlist item '${itemId}' was not found.`, {
+  return apiFailure(404, "NOT_FOUND", `Wishlist item '${itemId}' was not found.`, {
     itemId: "Wishlist item was not found.",
   });
 }
 
 function invalidCart(field: string, cartId: MikaId): MikaApiFailure {
-  return apiFailure(404, "VALIDATION_FAILED", `Cart '${cartId}' was not found.`, {
+  return apiFailure(404, "NOT_FOUND", `Cart '${cartId}' was not found.`, {
     [field]: "Open cart was not found.",
   });
 }
 
 function invalidCheckout(field: string, checkoutId: MikaId): MikaApiFailure {
-  return apiFailure(404, "VALIDATION_FAILED", `Checkout '${checkoutId}' was not found.`, {
+  return apiFailure(404, "NOT_FOUND", `Checkout '${checkoutId}' was not found.`, {
     [field]: "Checkout was not found.",
   });
 }
 
 function invalidWishlist(field: string, wishlistId: MikaId): MikaApiFailure {
-  return apiFailure(404, "VALIDATION_FAILED", `Wishlist '${wishlistId}' was not found.`, {
+  return apiFailure(404, "NOT_FOUND", `Wishlist '${wishlistId}' was not found.`, {
     [field]: "Active wishlist was not found.",
   });
 }

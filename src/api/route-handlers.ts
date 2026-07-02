@@ -115,7 +115,7 @@ async function handleActionRunner(
     ok: false as const,
     status: 500,
     error: {
-      code: "PROVIDER_FAILED" as const,
+      code: "INTERNAL" as const,
       message: "Mika operation failed.",
     },
   }));

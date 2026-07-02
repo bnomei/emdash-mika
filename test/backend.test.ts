@@ -8165,7 +8165,7 @@ describe("backend API composition", () => {
       ok: false,
       status: 404,
       error: {
-        code: "VALIDATION_FAILED",
+        code: "NOT_FOUND",
         fieldErrors: { orderId: "Order was not found." },
       },
     });
@@ -8175,7 +8175,7 @@ describe("backend API composition", () => {
       ok: false,
       status: 404,
       error: {
-        code: "VALIDATION_FAILED",
+        code: "NOT_FOUND",
         fieldErrors: { orderId: "Order was not found." },
       },
     });
@@ -8185,7 +8185,7 @@ describe("backend API composition", () => {
       ok: false,
       status: 404,
       error: {
-        code: "VALIDATION_FAILED",
+        code: "NOT_FOUND",
         fieldErrors: { orderId: "Order was not found." },
       },
     });
@@ -9981,7 +9981,7 @@ describe("backend API composition", () => {
       ok: false,
       status: 404,
       error: {
-        code: "VALIDATION_FAILED",
+        code: "NOT_FOUND",
         fieldErrors: { entitlementId: "Entitlement was not found." },
       },
     });
@@ -9991,7 +9991,7 @@ describe("backend API composition", () => {
       ok: false,
       status: 404,
       error: {
-        code: "VALIDATION_FAILED",
+        code: "NOT_FOUND",
         fieldErrors: { emailId: "Email was not found." },
       },
     });
@@ -10001,7 +10001,7 @@ describe("backend API composition", () => {
       ok: false,
       status: 404,
       error: {
-        code: "VALIDATION_FAILED",
+        code: "NOT_FOUND",
         fieldErrors: { licenseId: "License was not found." },
       },
     });
@@ -10011,7 +10011,7 @@ describe("backend API composition", () => {
       ok: false,
       status: 404,
       error: {
-        code: "VALIDATION_FAILED",
+        code: "NOT_FOUND",
         fieldErrors: { orderId: "Download was not found." },
       },
     });
@@ -14945,7 +14945,7 @@ describe("backend API composition", () => {
       ok: false,
       status: 404,
       error: {
-        code: "VALIDATION_FAILED",
+        code: "NOT_FOUND",
         fieldErrors: { lineId: "Cart line was not found." },
       },
     });
@@ -14955,7 +14955,7 @@ describe("backend API composition", () => {
       ok: false,
       status: 404,
       error: {
-        code: "VALIDATION_FAILED",
+        code: "NOT_FOUND",
         fieldErrors: { lineId: "Cart line was not found." },
       },
     });
@@ -15434,9 +15434,10 @@ describe("backend API composition", () => {
 
     const first = api.checkout.start(ctx, { cartId: added.data.id });
     await providerStartedPromise;
+    // The claimed cart is no longer an open cart, so the concurrent start sees NOT_FOUND.
     await expect(api.checkout.start(ctx, { cartId: added.data.id })).resolves.toMatchObject({
       ok: false,
-      error: { code: "VALIDATION_FAILED" },
+      error: { code: "NOT_FOUND" },
     });
     expect(fake.getCalls().createCheckoutSession).toHaveLength(1);
 
@@ -18491,7 +18492,7 @@ describe("backend API composition", () => {
       ok: false,
       status: 404,
       error: {
-        code: "VALIDATION_FAILED",
+        code: "NOT_FOUND",
         fieldErrors: { checkoutId: "Checkout was not found." },
       },
     });
@@ -18770,7 +18771,7 @@ describe("backend API composition", () => {
       ok: false,
       status: 404,
       error: {
-        code: "VALIDATION_FAILED",
+        code: "NOT_FOUND",
         fieldErrors: { targetCartId: "Open cart was not found." },
       },
     });
@@ -19314,7 +19315,7 @@ describe("backend API composition", () => {
       ok: false,
       status: 404,
       error: {
-        code: "VALIDATION_FAILED",
+        code: "NOT_FOUND",
         fieldErrors: { itemId: "Wishlist item was not found." },
       },
     });
