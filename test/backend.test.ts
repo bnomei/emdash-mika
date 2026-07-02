@@ -461,6 +461,63 @@ describe("backend test storage helpers", () => {
     expect(emailPage.cursor).toBeUndefined();
   });
 
+  it("anonymizes every matching record for an account-delete sweep beyond one internal page", async () => {
+    // Account-delete sweeps used to request Number.MAX_SAFE_INTEGER in one query; they now
+    // paginate internally in bounded pages. Seed more entitlements/orders than one page to prove
+    // the sweep still reaches every record, not just the first page's worth.
+    const customerId = createTestMikaId("customer", 1);
+    const account = new AccountRepository(createStorageCollection("account"));
+    const entitlementCount = 55;
+    for (let index = 1; index <= entitlementCount; index += 1) {
+      await account.put(
+        createEntitlementDocument({
+          id: createTestMikaId("entitlement", index),
+          record: { id: createTestMikaId("entitlement", index), customerId },
+        }),
+      );
+    }
+
+    const result = await account.anonymizeEntitlementsForAccountDelete({
+      customerId,
+      sentinel: `account-deleted:${customerId}`,
+      now: TEST_NOW,
+    });
+
+    expect(result).toEqual({ anonymized: entitlementCount });
+    const page = await account.listEntitlementsByCustomer(customerId, entitlementCount);
+    expect(page.items).toHaveLength(entitlementCount);
+    expect(page.items.every((item) => item.data.userId === `account-deleted:${customerId}`)).toBe(
+      true,
+    );
+
+    const ledger = new LedgerRepository(createStorageCollection("ledger"));
+    const orderCount = 55;
+    for (let index = 1; index <= orderCount; index += 1) {
+      await ledger.put(
+        createOrderDocument({
+          id: createTestMikaId("order", index),
+          customerId,
+          orderNumber: `M-${1000 + index}`,
+          providerPaymentId: `payment_${index}`,
+          providerOrderId: `provider_order_${index}`,
+        }),
+      );
+    }
+
+    const orderResult = await ledger.anonymizeOrdersForAccountDelete({
+      customerId,
+      sentinel: `account-deleted:${customerId}`,
+      now: TEST_NOW,
+    });
+
+    expect(orderResult).toEqual({ anonymized: orderCount });
+    const orderPage = await ledger.listOrdersByCustomer(customerId, orderCount);
+    expect(orderPage.items).toHaveLength(orderCount);
+    expect(
+      orderPage.items.every((item) => item.data.emailHash === `account-deleted:${customerId}`),
+    ).toBe(true);
+  });
+
   it("allows expired workflow leases to be reclaimed", async () => {
     const clock = createTestClock();
     const ops = new OpsRepository(createStorageCollection("ops"));
@@ -4727,6 +4784,41 @@ describe("backend API composition", () => {
       ok: true,
       status: 200,
       data: { redirectUrl: "download:order_1:order_line_1" },
+    });
+  });
+
+  it("reuses a still-valid download token across repeated account.get views instead of re-minting", async () => {
+    // account.get can be called far more often than a download link is actually clicked (every
+    // page view/refresh) — repeated views within the token's TTL must not each persist a new
+    // ephemeral token record.
+    const accountCollection = createStorageCollection("account");
+    const ledgerCollection = createStorageCollection("ledger");
+    const repositories = {
+      ...createTestBackendRepositories(),
+      account: new AccountRepository(accountCollection),
+      ledger: new LedgerRepository(ledgerCollection),
+    } satisfies MikaBackendRepositories;
+    const customer = createCustomerDocument();
+    await repositories.account.put(customer);
+    await repositories.ledger.put(createOrderDocument());
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: customer.customerId });
+
+    const first = await api.account.get(ctx);
+    const second = await api.account.get(ctx);
+    if (!first.ok || !second.ok) throw new Error("Expected account.get to succeed.");
+
+    const firstDownload = first.data.downloads[0];
+    const secondDownload = second.data.downloads[0];
+    if (!firstDownload || !secondDownload) throw new Error("Expected an account download.");
+    // With an incrementing id factory, a second real mint would produce download_token_2 — an
+    // identical href across both views proves the second view reused the first's token.
+    expect(secondDownload.href).toBe(firstDownload.href);
+    expect(secondDownload.expiresAt).toBe(firstDownload.expiresAt);
+
+    await expect(api.download.confirm({ token: "download_token_1" })).resolves.toMatchObject({
+      ok: true,
+      status: 200,
     });
   });
 

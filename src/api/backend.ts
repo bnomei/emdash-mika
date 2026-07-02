@@ -3769,6 +3769,10 @@ async function createOrderLineDownloadToken(
   line: OrderLine,
   downloadRef: string,
 ): Promise<{ token: string; expiresAt: ISODateTime }> {
+  const pointerKey = await downloadTokenPointerKey(input, order.id, line.id, downloadRef);
+  const reused = await reusableDownloadToken(input, pointerKey, ctx.now);
+  if (reused) return reused;
+
   const token = input.createId("download_token");
   const expiresAt = addMilliseconds(ctx.now, input.config?.download?.tokenTtlMs ?? 15 * 60_000);
   const subjectHash = orderDownloadSubjectHash(order);
@@ -3793,7 +3797,54 @@ async function createOrderLineDownloadToken(
       redirectUrl: downloadRef,
     },
   });
+  // account.get can be called far more often than a download link is actually clicked (every
+  // page view/refresh, vs. once per redemption); without this pointer, each view would mint and
+  // persist a brand-new ephemeral token record even though the previous one is still valid.
+  await input.repositories.ephemeral.put({
+    key: pointerKey,
+    kind: "cache_marker",
+    ...(subjectHash ? { subjectHash } : {}),
+    status: "active",
+    count: 0,
+    expiresAt,
+    version: 1,
+    createdAt: ctx.now,
+    updatedAt: ctx.now,
+    data: { tokenId: token },
+  });
+
   return { token, expiresAt };
+}
+
+async function downloadTokenPointerKey(
+  input: CreateMikaBackendApiInput,
+  orderId: MikaId,
+  orderLineId: MikaId,
+  downloadRef: string,
+): Promise<string> {
+  return input.hash(`download-token-pointer:${orderId}:${orderLineId}:${downloadRef}`);
+}
+
+/** Reuses a still-valid, not-yet-consumed download token minted for the same line, if any. */
+async function reusableDownloadToken(
+  input: CreateMikaBackendApiInput,
+  pointerKey: string,
+  now: ISODateTime,
+): Promise<{ token: string; expiresAt: ISODateTime } | null> {
+  const pointer = await input.repositories.ephemeral.get(pointerKey);
+  if (!pointer || pointer.kind !== "cache_marker" || pointer.expiresAt <= now) return null;
+
+  const tokenId = stringChild(pointer.data ?? {}, "tokenId");
+  if (!tokenId) return null;
+
+  // The pointer's TTL mirrors the token's at mint time, but consumption (or revocation) can
+  // invalidate the token earlier — confirm it's still live before handing it out again.
+  const tokenRecord = await input.repositories.ephemeral.get(
+    await hashDownloadToken(input, tokenId),
+  );
+  if (!tokenRecord || tokenRecord.status !== "pending" || tokenRecord.expiresAt <= now) return null;
+
+  return { token: tokenId, expiresAt: pointer.expiresAt };
 }
 
 function orderDownloadSubjectHash(order: OrderDocument): string | undefined {

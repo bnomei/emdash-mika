@@ -439,6 +439,40 @@ async function findFirstByTypeCandidate<
   return null;
 }
 
+/** Page size for {@link listAllByType} sweeps — bounded per request, not per sweep. */
+const ACCOUNT_DELETE_SWEEP_PAGE_SIZE = 50;
+
+/**
+ * Collects every document matching `options.where`, fetched in bounded pages instead of one
+ * `limit: Number.MAX_SAFE_INTEGER` request. Used by the account-delete anonymization sweeps below,
+ * where a customer with an unusually large number of entitlements, licenses, or orders would
+ * otherwise force a single query to materialize their entire history into memory at once.
+ */
+async function listAllByType<
+  TDocument extends TypedDocument & { readonly id: string },
+  TType extends DocumentType<TDocument>,
+>(
+  documents: TypedCollectionFacade<TDocument>,
+  type: TType,
+  options: TypeScopedQueryOptions<DocumentOfType<TDocument, TType>>,
+): Promise<StorageResultItem<DocumentOfType<TDocument, TType>>[]> {
+  const items: StorageResultItem<DocumentOfType<TDocument, TType>>[] = [];
+  let cursor = options.cursor;
+
+  do {
+    const page = await documents.listByType(type, {
+      ...options,
+      cursor,
+      limit: ACCOUNT_DELETE_SWEEP_PAGE_SIZE,
+    });
+
+    items.push(...page.items);
+    cursor = page.cursor;
+  } while (cursor);
+
+  return items;
+}
+
 async function listByTypeCandidates<
   TDocument extends TypedDocument & { readonly id: string },
   TType extends DocumentType<TDocument>,
@@ -997,22 +1031,26 @@ export class AccountRepository {
   }): Promise<{ readonly anonymized: number }> {
     const byId = new Map<MikaId, EntitlementDocument>();
     if (input.customerId) {
-      for (const item of (
-        await this.listEntitlementsByCustomer(input.customerId, Number.MAX_SAFE_INTEGER)
-      ).items) {
+      for (const item of await listAllByType(this.documents, "entitlement", {
+        where: { customerId: input.customerId },
+        orderBy: { updatedAt: "desc" },
+      })) {
         byId.set(item.data.id, item.data);
       }
     }
     if (input.emailHash) {
-      for (const item of (
-        await this.listEntitlementsByEmailHash(input.emailHash, Number.MAX_SAFE_INTEGER)
-      ).items) {
+      for (const item of await listAllByType(this.documents, "entitlement", {
+        where: { emailHash: input.emailHash },
+        orderBy: { updatedAt: "desc" },
+      })) {
         byId.set(item.data.id, item.data);
       }
     }
     if (input.userId) {
-      for (const item of (await this.listEntitlementsByUser(input.userId, Number.MAX_SAFE_INTEGER))
-        .items) {
+      for (const item of await listAllByType(this.documents, "entitlement", {
+        where: { userId: input.userId },
+        orderBy: { updatedAt: "desc" },
+      })) {
         byId.set(item.data.id, item.data);
       }
     }
@@ -1043,11 +1081,14 @@ export class AccountRepository {
     readonly now: ISODateTime;
   }): Promise<{ readonly anonymized: number }> {
     const licenses = input.customerId
-      ? await this.listLicensesByCustomer(input.customerId, Number.MAX_SAFE_INTEGER)
-      : { items: [] };
+      ? await listAllByType(this.documents, "license", {
+          where: { customerId: input.customerId },
+          orderBy: { updatedAt: "desc" },
+        })
+      : [];
 
     let anonymized = 0;
-    for (const item of licenses.items) {
+    for (const item of licenses) {
       const license = item.data;
       const redacted: LicenseDocument = {
         ...license,
@@ -1156,16 +1197,18 @@ export class LedgerRepository {
   }): Promise<{ readonly anonymized: number }> {
     const byId = new Map<MikaId, OrderDocument>();
     if (input.customerId) {
-      for (const item of (
-        await this.listOrdersByCustomer(input.customerId, Number.MAX_SAFE_INTEGER)
-      ).items) {
+      for (const item of await listAllByType(this.documents, "order", {
+        where: { customerId: input.customerId },
+        orderBy: { createdAt: "desc" },
+      })) {
         byId.set(item.data.id, item.data);
       }
     }
     if (input.emailHash) {
-      for (const item of (
-        await this.listOrdersByEmailHash(input.emailHash, Number.MAX_SAFE_INTEGER)
-      ).items) {
+      for (const item of await listAllByType(this.documents, "order", {
+        where: { emailHash: input.emailHash },
+        orderBy: { createdAt: "desc" },
+      })) {
         byId.set(item.data.id, item.data);
       }
     }
