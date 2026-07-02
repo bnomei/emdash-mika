@@ -418,6 +418,49 @@ describe("backend test storage helpers", () => {
     });
   });
 
+  it("does not fabricate an unusable cursor when more due work exists than fits one page", async () => {
+    // listDueWorkflows merges two independently-cursored sub-queries and re-sorts them, so there
+    // is no real resumable cursor for the merged page — and its own signature has no cursor
+    // parameter to resume with anyway. hasMore alone must carry the "more than fits" signal.
+    const clock = createTestClock();
+    const ops = new OpsRepository(createStorageCollection("ops"));
+    for (let index = 1; index <= 3; index += 1) {
+      await ops.put(
+        createWorkflowDocument({
+          id: createTestMikaId("workflow", index),
+          subjectId: createTestMikaId("webhook", index),
+          idempotencyKey: `event_${index}`,
+          nextAttemptAt: clock.isoAt(-60_000 + index),
+        }),
+      );
+    }
+
+    const page = await ops.listDueWorkflows(TEST_NOW, 1);
+    expect(page).toMatchObject({ hasMore: true });
+    expect(page.cursor).toBeUndefined();
+
+    const emails = new OpsRepository(createStorageCollection("ops"));
+    for (let index = 1; index <= 3; index += 1) {
+      await emails.put(
+        createEmailDocument({
+          id: createTestMikaId("email", index),
+          record: {
+            id: createTestMikaId("email", index),
+            kind: "magic_link",
+            templateKey: "magic_link",
+            attemptCount: 0,
+            nextAttemptAt: clock.isoAt(-60_000 + index),
+            metadata: { link: `https://shop.example.test/sign-in/${index}` },
+          },
+        }),
+      );
+    }
+
+    const emailPage = await emails.listDueEmails(TEST_NOW, 1);
+    expect(emailPage).toMatchObject({ hasMore: true });
+    expect(emailPage.cursor).toBeUndefined();
+  });
+
   it("allows expired workflow leases to be reclaimed", async () => {
     const clock = createTestClock();
     const ops = new OpsRepository(createStorageCollection("ops"));
@@ -5354,6 +5397,59 @@ describe("backend API composition", () => {
       await expect(
         harness.repositories.ephemeral.get(createTestHash("download-token:download_token_1")),
       ).resolves.toMatchObject({ status: "pending" });
+    } finally {
+      await harness.destroy();
+    }
+  });
+
+  it("resolves a download by the token's order id instead of scanning the ledger", async () => {
+    const harness = await createAccountServicesHarness();
+
+    try {
+      await harness.repositories.ledger.put(createOrderDocument());
+      await harness.repositories.account.put(createEntitlementDocument());
+      await harness.repositories.account.put(createLicenseDocument());
+      await issueDownloadToken(harness.repositories, {
+        token: "download_token_indexed",
+        expiresAt: createTestClock().isoAt(60_000),
+        data: {
+          downloadRef: "download:order_1:order_line_1",
+          orderId: createTestMikaId("order", 1),
+          orderLineId: createTestMikaId("order_line", 1),
+          entitlementId: createTestMikaId("entitlement", 1),
+          licenseId: createTestMikaId("license", 1),
+          redirectUrl: "https://files.example.test/downloads/order_1/order_line_1",
+          title: "Private download",
+        },
+      });
+
+      const scanGuardedLedger = new Proxy(harness.repositories.ledger, {
+        get(target, property, receiver) {
+          if (property === "findOrderByDownloadRef") {
+            return async () => {
+              throw new Error(
+                "findOrderByDownloadRef should not be called when the token already carries an order id.",
+              );
+            };
+          }
+          const value = Reflect.get(target, property, receiver);
+
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const api = createMikaBackendApi(
+        createIncrementingBackendDependencies({
+          repositories: { ...harness.repositories, ledger: scanGuardedLedger },
+        }),
+      );
+
+      await expect(
+        api.download.resolve({ token: "download_token_indexed" }),
+      ).resolves.toMatchObject({
+        ok: true,
+        status: 200,
+        data: { redirectUrl: "https://files.example.test/downloads/order_1/order_line_1" },
+      });
     } finally {
       await harness.destroy();
     }

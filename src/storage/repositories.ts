@@ -1387,9 +1387,13 @@ export class OpsRepository {
     const items = workflows.slice(0, limit);
     const hasMore = ready.hasMore || expiredRunning.hasMore || workflows.length > limit;
 
+    // No real cursor exists for this page: it's a merge-sort of two independently-cursored
+    // sub-queries (ready, expiredRunning) re-ordered by a third key, and listDueWorkflows's own
+    // signature has no cursor parameter to resume with anyway. hasMore still tells the caller
+    // there's more than `limit` due work; a due workflow stays due, so a later call (or a larger
+    // limit) picks up what this page dropped rather than losing it.
     return {
       items,
-      cursor: hasMore ? String(items.length) : undefined,
       hasMore,
     };
   }
@@ -1764,9 +1768,13 @@ export class OpsRepository {
     const items = result.items.slice(0, limit);
     const hasMore = result.hasMore || result.items.length > limit;
 
+    // result.cursor (from listByTypeCandidates) resumes after the last raw page fetched, not
+    // after the `limit`-th due candidate — when a single raw page yields more due candidates than
+    // `limit`, it would skip the held-back ones. listDueEmails's own signature has no cursor
+    // parameter to resume with anyway; hasMore tells the caller there's more than `limit` due
+    // work, and a due email stays due, so a later call (or a larger limit) picks it up.
     return {
       items,
-      cursor: hasMore ? String(items.length) : undefined,
       hasMore,
     };
   }

@@ -3902,7 +3902,14 @@ async function resolveDownload(
     return tokenResult("TOKEN_INVALID", "Download token is invalid.");
   }
 
-  const order = await input.repositories.ledger.findOrderByDownloadRef(downloadRef);
+  // createOrderLineDownloadToken always stamps the order id it minted the token for onto the
+  // token record, so the common case resolves via a direct indexed lookup instead of scanning
+  // every order for a matching downloadRef. Only a token missing that field (predating it, or
+  // host-authored without it) falls back to the full-ledger scan.
+  const tokenOrderId = stringChild(data, "orderId");
+  const order = tokenOrderId
+    ? await input.repositories.ledger.findOrderById(createMikaId(tokenOrderId))
+    : await input.repositories.ledger.findOrderByDownloadRef(downloadRef);
   const line = order?.aggregate.lines.find((candidate) =>
     candidate.downloadRefs?.includes(downloadRef),
   );
@@ -3913,9 +3920,8 @@ async function resolveDownload(
     return tokenResult("DOWNLOAD_REVOKED", "Download access has been revoked.");
   }
 
-  const orderId = stringChild(data, "orderId");
   const orderLineId = stringChild(data, "orderLineId");
-  if ((orderId && order.id !== orderId) || (orderLineId && line.id !== orderLineId)) {
+  if (orderLineId && line.id !== orderLineId) {
     return tokenResult("TOKEN_INVALID", "Download token is invalid.");
   }
 
