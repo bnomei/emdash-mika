@@ -7,5 +7,6 @@
     "moduleResolution": "Bundler",
     "noEmit": true
   },
-  "include": ["./**/*.ts"]
+  "include": ["./**/*.ts"],
+  "exclude": ["./fixtures/astro-template-check/**"]
 }
