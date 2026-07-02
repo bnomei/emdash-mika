@@ -110,12 +110,15 @@
     "pack:check": "npm run build:pack -- --clean --publint",
     "prepack": "npm run build",
     "prepublishOnly": "npm run check && npm run typecheck && npm run test && npm run pack:check && npm run types:check",
+    "templates:check": "astro check --root test/fixtures/astro-template-check",
     "test": "vp test run test/*.test.ts && tsc -p test/tsconfig.json",
     "typecheck": "tsc --noEmit",
     "types:check": "attw --pack . --profile esm-only --no-summary && tsc -p test/package-exports.tsconfig.json"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.3",
+    "@astrojs/check": "^0.9.9",
+    "@astrojs/react": "^6.0.0",
     "@cloudflare/kumo": "^2.5.2",
     "@libsql/kysely-libsql": "^0.4.1",
     "@phosphor-icons/react": "^2.1.10",

@@ -1,0 +1,18 @@
+{
+  "extends": "astro/tsconfigs/strict",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
+    "paths": {
+      "@bnomei/emdash-mika": ["../../../src/index.ts"],
+      "@bnomei/emdash-mika/acp": ["../../../src/acp.ts"],
+      "@bnomei/emdash-mika/agent": ["../../../src/agent.ts"],
+      "@bnomei/emdash-mika/astro": ["../../../src/astro.ts"],
+      "@bnomei/emdash-mika/astro-actions": ["../../../src/astro-actions.ts"],
+      "@bnomei/emdash-mika/provider": ["../../../src/provider.ts"],
+      "@bnomei/emdash-mika/server": ["../../../src/server.ts"],
+      "@bnomei/emdash-mika/stripe": ["../../../src/stripe.ts"],
+      "@bnomei/emdash-mika/types": ["../../../src/types/index.ts"]
+    }
+  }
+}
