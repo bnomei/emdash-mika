@@ -7290,15 +7290,21 @@ async function abandonMergedSourceCart(
     return target;
   }
 
-  // Merge only what changed since the first pass never saw — re-merging latestSource wholesale
-  // would double-count every line source already had at the original read (mergeCartLines has no
-  // way to tell "already merged" apart from "new" once both sides are full carts). A line entirely
-  // new since the original read is merged at its full quantity; a line that was already merged but
-  // whose quantity grew concurrently (e.g. a racing cart.update bumping it) is merged at only the
-  // increase, since its original quantity is already reflected in target. A quantity decrease (or
-  // no change) has nothing left to recover, and is dropped from this retry.
+  // Reconcile every line source had against what changed since the first pass never saw —
+  // re-merging latestSource wholesale would double-count every line source already had at the
+  // original read (mergeCartLines has no way to tell "already merged" apart from "new" once both
+  // sides are full carts). A line entirely new since the original read is merged at its full
+  // quantity; a line that was already merged but whose quantity grew concurrently (e.g. a racing
+  // cart.update bumping it) is merged at only the increase, since its original quantity is already
+  // reflected in target. Symmetrically, a line whose quantity shrank (or that was removed
+  // entirely) concurrently must have that decrease applied against target too — leaving target at
+  // the stale, too-high quantity isn't "nothing to recover", it's target silently disagreeing with
+  // what the customer actually asked for, and once this retry succeeds source is marked
+  // "abandoned" (terminal — nothing resurrects it), so the correct lower quantity would be lost for
+  // good rather than just deferred to "merge again later".
   const originalLinesById = new Map(source.aggregate.items.map((line) => [line.id, line]));
-  const deltaLines = latestSource.aggregate.items.flatMap((line) => {
+  const latestLinesById = new Map(latestSource.aggregate.items.map((line) => [line.id, line]));
+  const increasedOrNewLines = latestSource.aggregate.items.flatMap((line) => {
     const original = originalLinesById.get(line.id);
     if (!original) return [line];
     if (line.quantity > original.quantity) {
@@ -7306,17 +7312,32 @@ async function abandonMergedSourceCart(
     }
     return [];
   });
-  if (deltaLines.length === 0) return target;
+  const decreasedOrRemovedLines = source.aggregate.items.flatMap((originalLine) => {
+    const latestQuantity = latestLinesById.get(originalLine.id)?.quantity ?? 0;
 
-  const retryMerged = await mergeCartLines(input, target, {
-    ...latestSource,
-    aggregate: { ...latestSource.aggregate, items: deltaLines },
+    return latestQuantity < originalLine.quantity
+      ? [{ line: originalLine, decreaseBy: originalLine.quantity - latestQuantity }]
+      : [];
   });
+  if (increasedOrNewLines.length === 0 && decreasedOrRemovedLines.length === 0) return target;
+
+  const retryMerged =
+    increasedOrNewLines.length > 0
+      ? await mergeCartLines(input, target, {
+          ...latestSource,
+          aggregate: { ...latestSource.aggregate, items: increasedOrNewLines },
+        })
+      : { ok: true as const, items: target.aggregate.items };
   if (!retryMerged.ok) return target;
+
+  const reconciledItems = decreasedOrRemovedLines.reduce(
+    (items, { line, decreaseBy }) => applyCartLineQuantityDelta(items, line, -decreaseBy),
+    retryMerged.items,
+  );
 
   const retryUpdated = updateCartDocument(
     target,
-    retryMerged.items,
+    reconciledItems,
     ctx.now,
     target.aggregate.coupon ?? latestSource.aggregate.coupon,
   );
@@ -7335,6 +7356,29 @@ async function abandonMergedSourceCart(
   await input.repositories.session.putCartIfUnchanged(retryAbandoned, latestSource.version);
 
   return retryPersisted;
+}
+
+/**
+ * Applies `quantityDelta` (negative to decrease) to the item in `items` equivalent to `line`,
+ * removing it entirely if the result drops to zero or below. A no-op if no equivalent line exists
+ * (nothing to decrease).
+ */
+function applyCartLineQuantityDelta(
+  items: readonly CartLine[],
+  line: CartLine,
+  quantityDelta: number,
+): readonly CartLine[] {
+  const existingIndex = items.findIndex((candidate) => isEquivalentCartLine(candidate, line));
+  if (existingIndex === -1) return items;
+
+  const nextQuantity = items[existingIndex]!.quantity + quantityDelta;
+  if (nextQuantity <= 0) {
+    return items.filter((_, index) => index !== existingIndex);
+  }
+
+  return items.map((candidate, index) =>
+    index === existingIndex ? { ...candidate, quantity: nextQuantity } : candidate,
+  );
 }
 
 /** Merges `line` into `currentItems` (combining quantities for an equivalent existing line). */
