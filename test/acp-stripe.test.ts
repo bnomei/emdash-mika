@@ -1687,6 +1687,18 @@ describe("Mika ACP projection", () => {
     const store = createMemoryMikaAcpSessionStore();
     const key = "acp_complete_lock:checkout_session_fencing";
     const id = "checkout_session_fencing";
+    // Seeded so the post-bind claimIdempotencyKey calls below can actually distinguish "replayed"
+    // (bind wrongly succeeded, pending flipped to false) from "in_progress" (bind correctly
+    // no-op'd) — without a stored record, claimIdempotencyKey's replay branch can never trigger
+    // regardless of `pending`, which would make the bind assertions below pass vacuously.
+    await store.put({
+      id,
+      sessionId: "acp_checkout:fencing",
+      status: "not_ready_for_payment",
+      items: [{ id: "sellable_1:price_1", quantity: 1 }],
+      createdAt: createISODateTime("2026-01-01T00:00:00.000Z"),
+      updatedAt: createISODateTime("2026-01-01T00:00:00.000Z"),
+    });
 
     const original = await store.claimIdempotencyKey(key, id, {
       now: createISODateTime("2026-01-01T00:00:00.000Z"),
@@ -1721,10 +1733,12 @@ describe("Mika ACP projection", () => {
       }),
     ).resolves.toEqual({ status: "in_progress", id });
 
-    // The reclaiming handler's own bind, using its correct current token, still works normally.
+    // The reclaiming handler's own bind, using its correct current token, still works normally —
+    // once bound, a fresh claim replays the stored record instead of finding it in_progress.
     await store.bindIdempotencyKey(key, id, reclaimed.fencingToken);
     await expect(store.claimIdempotencyKey(key, id)).resolves.toMatchObject({
-      status: "in_progress",
+      status: "replayed",
+      record: { id },
     });
   });
 
