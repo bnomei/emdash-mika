@@ -11,7 +11,7 @@ import type {
   WebhookDocument,
   WorkflowDocument,
 } from "../types/documents";
-import { isJsonObject, type ISODateTime, type JsonObject, type MikaId } from "../types/primitives";
+import type { ISODateTime, JsonObject, MikaId } from "../types/primitives";
 import type { MikaStorageCollections, StorageCollection } from "./collections";
 import {
   documentOfType,
@@ -47,11 +47,26 @@ import {
   adminAuditWithId,
   type AdminAuditIdempotencyClaimResult,
 } from "./repositories/ops/admin-audit-helpers";
+import {
+  accountDeleteMaintenanceStepMetadata,
+  accountDeleteRequestDocumentWithRecord,
+  accountExportMatchesAccountDeleteIdentity,
+  type AccountDeleteEmailRedactionRepositoryInput,
+  type AccountDeleteMaintenanceStepRepositoryInput,
+  type AccountDeleteRequestCompletionRepositoryInput,
+  type AccountDeleteRequestFailureRepositoryInput,
+} from "./repositories/ops/account-delete-helpers";
 
 export type { MikaDb, MikaDbExecutor, MikaTransaction } from "./repositories/db-shared";
 export { EphemeralRepository } from "./repositories/ephemeral";
 export { CatalogRepository, type CatalogProviderPriceMatch } from "./repositories/catalog";
 export type { AdminAuditIdempotencyClaimResult } from "./repositories/ops/admin-audit-helpers";
+export type {
+  AccountDeleteEmailRedactionRepositoryInput,
+  AccountDeleteMaintenanceStepRepositoryInput,
+  AccountDeleteRequestCompletionRepositoryInput,
+  AccountDeleteRequestFailureRepositoryInput,
+} from "./repositories/ops/account-delete-helpers";
 export { LedgerRepository } from "./repositories/ledger";
 export { AccountRepository } from "./repositories/account";
 export {
@@ -143,36 +158,6 @@ export interface EmailSkipRepositoryInput {
   readonly leaseKey: string;
   readonly now: ISODateTime;
   readonly lastError: string;
-}
-
-/** Input for completing a queued account deletion request record. */
-export interface AccountDeleteRequestCompletionRepositoryInput {
-  readonly requestId: MikaId;
-  readonly now: ISODateTime;
-  readonly metadata?: JsonObject;
-}
-
-/** Input for failing a queued account deletion request record. */
-export interface AccountDeleteRequestFailureRepositoryInput {
-  readonly requestId: MikaId;
-  readonly now: ISODateTime;
-  readonly lastError: string;
-}
-
-/** Input for recording one completed account-delete maintenance step. */
-export interface AccountDeleteMaintenanceStepRepositoryInput {
-  readonly requestId: MikaId;
-  readonly now: ISODateTime;
-  readonly stepName: string;
-  readonly result: JsonObject;
-}
-
-/** Identity selectors for redacting queued email records after account deletion. */
-export interface AccountDeleteEmailRedactionRepositoryInput {
-  readonly now: ISODateTime;
-  readonly customerId?: MikaId;
-  readonly userId?: string;
-  readonly emailHash?: string;
 }
 
 /** Document repository for webhooks, emails, workflows, audits, and account ops records. */
@@ -1062,62 +1047,6 @@ function emailMatchesAccountDeleteIdentity(
     (identity.userId && record.metadata?.["userId"] === identity.userId) ||
     (identity.emailHash && record.metadata?.["emailHash"] === identity.emailHash),
   );
-}
-
-function accountExportMatchesAccountDeleteIdentity(
-  document: AccountExportDocument,
-  identity: AccountDeleteEmailRedactionRepositoryInput,
-): boolean {
-  const record = document.record;
-
-  return Boolean(
-    (identity.customerId && record.customerId === identity.customerId) ||
-    (identity.userId && record.userId === identity.userId) ||
-    (identity.emailHash && record.emailHash === identity.emailHash),
-  );
-}
-
-function accountDeleteMaintenanceStepMetadata(
-  metadata: JsonObject | undefined,
-  input: AccountDeleteMaintenanceStepRepositoryInput,
-): JsonObject {
-  const maintenance = jsonObjectChild(metadata, "maintenance");
-  const steps = jsonObjectChild(maintenance, "steps");
-
-  return {
-    ...metadata,
-    maintenance: {
-      ...maintenance,
-      steps: {
-        ...steps,
-        [input.stepName]: {
-          status: "completed",
-          completedAt: input.now,
-          result: input.result,
-        },
-      },
-    },
-  };
-}
-
-function jsonObjectChild(input: JsonObject | undefined, key: string): JsonObject | undefined {
-  const value = input?.[key];
-
-  return isJsonObject(value) ? value : undefined;
-}
-
-function accountDeleteRequestDocumentWithRecord(
-  request: AccountDeleteRequestDocument,
-  now: ISODateTime,
-  patch: Partial<AccountDeleteRequestDocument["record"]>,
-): AccountDeleteRequestDocument {
-  return mirrorRecordFields(request, now, patch, [
-    "customerId",
-    "userId",
-    "emailHash",
-    "status",
-    "expiresAt",
-  ]);
 }
 
 /** Facade wiring document and operational repositories for the commerce storage model. */
