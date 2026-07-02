@@ -569,6 +569,7 @@ function cartWithCheckoutClaim(
       },
     },
     updatedAt: now,
+    version: cart.version + 1,
   };
 }
 
@@ -587,6 +588,7 @@ function cartWithoutCheckoutClaim(cart: CartDocument, now: ISODateTime): CartDoc
       metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     },
     updatedAt: now,
+    version: cart.version + 1,
   };
 }
 
@@ -773,13 +775,13 @@ export class SessionRepository {
   async claimCartForCheckout(input: {
     readonly cartId: MikaId;
     readonly checkoutId: MikaId;
-    readonly expectedUpdatedAt: ISODateTime;
+    readonly expectedVersion: number;
     readonly claimExpiresAt: ISODateTime;
     readonly now: ISODateTime;
   }): Promise<CartDocument | null> {
     const updated = await this.documents.update(input.cartId, (current) => {
       const cart = documentOfType(current, "cart");
-      if (!cart || cart.status !== "open" || cart.updatedAt !== input.expectedUpdatedAt) {
+      if (!cart || cart.status !== "open" || cart.version !== input.expectedVersion) {
         return null;
       }
 
@@ -807,11 +809,11 @@ export class SessionRepository {
 
   async putCartIfUnchanged(
     cart: CartDocument,
-    expectedUpdatedAt: ISODateTime,
+    expectedVersion: number,
   ): Promise<CartDocument | null> {
     const updated = await this.documents.update(cart.id, (current) => {
       const existing = documentOfType(current, "cart");
-      if (!existing || existing.status !== "open" || existing.updatedAt !== expectedUpdatedAt) {
+      if (!existing || existing.status !== "open" || existing.version !== expectedVersion) {
         return null;
       }
 

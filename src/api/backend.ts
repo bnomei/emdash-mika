@@ -315,13 +315,16 @@ export interface MikaSessionRepositoryPort {
     limit?: number,
   ): Promise<MikaDocumentList<CartDocument>>;
   /**
-   * Optimistic checkout claim: succeeds only when `expectedUpdatedAt` matches the cart row.
-   * Serializes concurrent checkout starts against the same open cart.
+   * Optimistic checkout claim: succeeds only when `expectedVersion` matches the cart row's
+   * `version`. Serializes concurrent checkout starts against the same open cart. Compares
+   * `version` (a monotonic counter) rather than `updatedAt`, since two genuinely concurrent
+   * writers can share the same millisecond-resolution wall-clock timestamp — a stale writer's CAS
+   * check against `updatedAt` alone can then vacuously pass against a value that never changed.
    */
   claimCartForCheckout(input: {
     readonly cartId: MikaId;
     readonly checkoutId: MikaId;
-    readonly expectedUpdatedAt: ISODateTime;
+    readonly expectedVersion: number;
     readonly claimExpiresAt: ISODateTime;
     readonly now: ISODateTime;
   }): Promise<CartDocument | null>;
@@ -334,16 +337,13 @@ export interface MikaSessionRepositoryPort {
   /**
    * Optimistic-concurrency cart write for ordinary line/coupon mutations (add, update, remove,
    * apply/remove coupon): persists `cart` only when the stored cart is still `open` and its
-   * `updatedAt` still equals `expectedUpdatedAt`. Returns null when another writer already
-   * changed the cart since it was read (concurrent tab, concurrent checkout claim, etc.) — same
-   * CAS pattern as {@link claimCartForCheckout}, so a blind `put` can never silently discard a
+   * `version` still equals `expectedVersion`. Returns null when another writer already changed
+   * the cart since it was read (concurrent tab, concurrent checkout claim, etc.) — same CAS
+   * pattern as {@link claimCartForCheckout}, so a blind `put` can never silently discard a
    * concurrent write. Callers surface a conflict rather than merge or retry server-side, so the
    * client re-fetches the current cart before resubmitting.
    */
-  putCartIfUnchanged(
-    cart: CartDocument,
-    expectedUpdatedAt: ISODateTime,
-  ): Promise<CartDocument | null>;
+  putCartIfUnchanged(cart: CartDocument, expectedVersion: number): Promise<CartDocument | null>;
   findWishlistBySession(sessionId: string): Promise<WishlistDocument | null>;
   findWishlistByCustomer(customerId: MikaId): Promise<WishlistDocument | null>;
   findCheckoutByProvider(
@@ -1159,7 +1159,7 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
         if (!merged.ok) return merged;
 
         const updated = updateCartDocument(existing, merged.items, ctx.now);
-        const persisted = await putCartOrConflict(input, updated, existing.updatedAt);
+        const persisted = await putCartOrConflict(input, updated, existing.version);
         if (!persisted.ok) return persisted;
 
         return { ok: true, status: 200, data: await cartDocumentToDTO(input, persisted.cart) };
@@ -1209,7 +1209,7 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
         ctx.now,
       );
 
-      const persisted = await putCartOrConflict(input, updated, document.updatedAt);
+      const persisted = await putCartOrConflict(input, updated, document.version);
       if (!persisted.ok) return persisted;
 
       return { ok: true, status: 200, data: await cartDocumentToDTO(input, persisted.cart) };
@@ -1228,7 +1228,7 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
         ctx.now,
       );
 
-      const persisted = await putCartOrConflict(input, updated, document.updatedAt);
+      const persisted = await putCartOrConflict(input, updated, document.version);
       if (!persisted.ok) return persisted;
 
       return { ok: true, status: 200, data: await cartDocumentToDTO(input, persisted.cart) };
@@ -1283,20 +1283,12 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
         ctx.now,
         targetResult.cart.aggregate.coupon ?? source.aggregate.coupon,
       );
-      const abandonedSource: CartDocument = {
-        ...source,
-        status: "abandoned",
-        updatedAt: ctx.now,
-      };
 
-      const persisted = await putCartOrConflict(input, updated, targetResult.cart.updatedAt);
+      const persisted = await putCartOrConflict(input, updated, targetResult.cart.version);
       if (!persisted.ok) return persisted;
-      // Best-effort: if the source cart changed since it was read (e.g. a concurrent add landed
-      // on it), leave it open rather than force-abandoning it and silently discarding that write
-      // — the target merge above has already succeeded either way.
-      await input.repositories.session.putCartIfUnchanged(abandonedSource, source.updatedAt);
+      const finalTarget = await abandonMergedSourceCart(input, ctx, source, persisted.cart);
 
-      return { ok: true, status: 200, data: await cartDocumentToDTO(input, persisted.cart) };
+      return { ok: true, status: 200, data: await cartDocumentToDTO(input, finalTarget) };
     },
     applyCoupon: async (ctx, couponInput) => {
       const cartResult = couponInput.cartId
@@ -1319,13 +1311,14 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
       const updated: CartDocument = {
         ...cartResult.cart,
         updatedAt: ctx.now,
+        version: cartResult.cart.version + 1,
         aggregate: cartWithCoupon({
           cart: cartResult.cart.aggregate,
           coupon,
         }),
       };
 
-      const persisted = await putCartOrConflict(input, updated, cartResult.cart.updatedAt);
+      const persisted = await putCartOrConflict(input, updated, cartResult.cart.version);
       if (!persisted.ok) return persisted;
 
       return { ok: true, status: 200, data: await cartDocumentToDTO(input, persisted.cart) };
@@ -1341,10 +1334,11 @@ function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"]
       const updated: CartDocument = {
         ...cartResult.cart,
         updatedAt: ctx.now,
+        version: cartResult.cart.version + 1,
         aggregate: cartWithoutCoupon({ cart: cartResult.cart.aggregate }),
       };
 
-      const persisted = await putCartOrConflict(input, updated, cartResult.cart.updatedAt);
+      const persisted = await putCartOrConflict(input, updated, cartResult.cart.version);
       if (!persisted.ok) return persisted;
 
       return { ok: true, status: 200, data: await cartDocumentToDTO(input, persisted.cart) };
@@ -7236,9 +7230,9 @@ function cartWriteBlocked(cart: CartDocument): MikaApiFailure | null {
 async function putCartOrConflict(
   input: MikaCartWishlistBackendInput,
   cart: CartDocument,
-  expectedUpdatedAt: ISODateTime,
+  expectedVersion: number,
 ): Promise<{ readonly ok: true; readonly cart: CartDocument } | MikaApiFailure> {
-  const persisted = await input.repositories.session.putCartIfUnchanged(cart, expectedUpdatedAt);
+  const persisted = await input.repositories.session.putCartIfUnchanged(cart, expectedVersion);
   if (!persisted) {
     return apiFailure(409, "CONFLICT", `Cart '${cart.id}' was changed by another request.`, {
       cartId: "Cart was changed by another request. Reload the cart and try again.",
@@ -7246,6 +7240,74 @@ async function putCartOrConflict(
   }
 
   return { ok: true, cart: persisted };
+}
+
+/**
+ * Marks the merge source cart abandoned now that its lines have been merged into `target`.
+ * Retries the merge once against the source's latest state if it changed concurrently (e.g. a
+ * `cart.add` landed on it) after being read for the merge that produced `target` — otherwise that
+ * concurrent write would be silently stranded on a cart the caller may never revisit (e.g. after
+ * login regenerates the session id the guest cart was keyed by). Returns the target cart that
+ * reflects whatever actually got merged, so the caller's response isn't stale after a retry.
+ * Best-effort beyond one retry: if the source keeps changing, it's left open (not force-abandoned,
+ * which would discard whatever it still holds) and the caller can merge it again later.
+ */
+async function abandonMergedSourceCart(
+  input: MikaCartWishlistBackendInput,
+  ctx: MikaRequestContext,
+  source: CartDocument,
+  target: CartDocument,
+): Promise<CartDocument> {
+  const abandoned: CartDocument = {
+    ...source,
+    status: "abandoned",
+    updatedAt: ctx.now,
+    version: source.version + 1,
+  };
+  const released = await input.repositories.session.putCartIfUnchanged(abandoned, source.version);
+  if (released) return target;
+
+  const latestSource = await input.repositories.session.findById(source.id);
+  if (!latestSource || latestSource.type !== "cart" || latestSource.status !== "open") {
+    return target;
+  }
+
+  // Merge only lines the first pass never saw — re-merging latestSource wholesale would
+  // double-count every line source already had at the original read (mergeCartLines has no way
+  // to tell "already merged" apart from "new" once both sides are full carts).
+  const alreadyMergedLineIds = new Set(source.aggregate.items.map((line) => line.id));
+  const newLines = latestSource.aggregate.items.filter(
+    (line) => !alreadyMergedLineIds.has(line.id),
+  );
+  if (newLines.length === 0) return target;
+
+  const retryMerged = await mergeCartLines(input, target, {
+    ...latestSource,
+    aggregate: { ...latestSource.aggregate, items: newLines },
+  });
+  if (!retryMerged.ok) return target;
+
+  const retryUpdated = updateCartDocument(
+    target,
+    retryMerged.items,
+    ctx.now,
+    target.aggregate.coupon ?? latestSource.aggregate.coupon,
+  );
+  const retryPersisted = await input.repositories.session.putCartIfUnchanged(
+    retryUpdated,
+    target.version,
+  );
+  if (!retryPersisted) return target;
+
+  const retryAbandoned: CartDocument = {
+    ...latestSource,
+    status: "abandoned",
+    updatedAt: ctx.now,
+    version: latestSource.version + 1,
+  };
+  await input.repositories.session.putCartIfUnchanged(retryAbandoned, latestSource.version);
+
+  return retryPersisted;
 }
 
 /** Merges `line` into `currentItems` (combining quantities for an equivalent existing line). */
@@ -7315,7 +7377,7 @@ async function createCartWithFirstLine(
     if (!merged.ok) return merged;
 
     const updated = updateCartDocument(winner, merged.items, ctx.now);
-    const persisted = await putCartOrConflict(input, updated, winner.updatedAt);
+    const persisted = await putCartOrConflict(input, updated, winner.version);
     if (!persisted.ok) return persisted;
 
     return { ok: true, status: 200, data: await cartDocumentToDTO(input, persisted.cart) };
@@ -7527,7 +7589,7 @@ type CheckoutStartLineResolution = {
 
 type CheckoutStartResolution = {
   readonly cart: CartDocument | null;
-  readonly cartUpdatedAt?: ISODateTime;
+  readonly cartVersion?: number;
   readonly currency: CurrencyCode;
   readonly mode: PurchaseMode;
   readonly coupon?: CouponSnapshot;
@@ -7710,11 +7772,11 @@ async function startCheckout(
   const statusToken = input.createId("checkout_status_token");
   // Optimistic cart claim serializes concurrent checkout starts; release on any downstream failure.
   const claimedCart =
-    resolved.cart && resolved.cartUpdatedAt
+    resolved.cart && resolved.cartVersion !== undefined
       ? await input.repositories.session.claimCartForCheckout({
           cartId: resolved.cart.id,
           checkoutId,
-          expectedUpdatedAt: resolved.cartUpdatedAt,
+          expectedVersion: resolved.cartVersion,
           claimExpiresAt: expiresAt,
           now: ctx.now,
         })
@@ -8016,7 +8078,7 @@ async function resolveCheckoutStart(
   return {
     ok: true,
     cart: resolvedCart,
-    cartUpdatedAt: cartResult.cart?.updatedAt,
+    cartVersion: cartResult.cart?.version,
     currency,
     mode: modes[0],
     coupon,
@@ -9347,6 +9409,7 @@ function createCartDocument(
     expiresAt: input.config?.cart?.ttlMs
       ? createISODateTime(new Date(new Date(now).getTime() + input.config.cart.ttlMs).toISOString())
       : undefined,
+    version: 1,
     aggregate: createCartAggregate({ currency }),
     createdAt: now,
     updatedAt: now,
@@ -9362,6 +9425,7 @@ function updateCartDocument(
   return {
     ...cart,
     updatedAt,
+    version: cart.version + 1,
     aggregate: cartWithItems({ cart: cart.aggregate, items, coupon }),
   };
 }

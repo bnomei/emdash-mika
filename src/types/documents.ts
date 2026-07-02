@@ -105,6 +105,13 @@ export type CartDocument = AggregateDocument<
     readonly status: CartStatus;
     readonly currency: CurrencyCode;
     readonly expiresAt?: ISODateTime;
+    /**
+     * Monotonically incremented on every write. Optimistic-concurrency checks (cart mutations,
+     * checkout claims) compare this instead of `updatedAt`: two genuinely concurrent writes can
+     * share the same millisecond-resolution wall-clock timestamp, which would let a stale write's
+     * CAS check vacuously pass against a value that never actually changed.
+     */
+    readonly version: number;
   },
   CartAggregate
 >;

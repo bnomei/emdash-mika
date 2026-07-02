@@ -15338,20 +15338,20 @@ describe("backend API composition", () => {
     const seededLineId = seeded.data.items[0]!.id;
 
     // Whichever call's write reaches putCartIfUnchanged first is let through immediately; the
-    // second is held until the first fully commits, so its captured expectedUpdatedAt is
+    // second is held until the first fully commits, so its captured expectedVersion is
     // guaranteed stale — deterministically reproducing "two tabs write the same cart" without
     // relying on incidental Promise scheduling order.
     let firstWrite: Promise<CartDocument | null> | undefined;
     const gatedSession = new Proxy(repositories.session, {
       get(target, property, receiver) {
         if (property === "putCartIfUnchanged") {
-          return async (cart: CartDocument, expectedUpdatedAt: ISODateTime) => {
+          return async (cart: CartDocument, expectedVersion: number) => {
             if (!firstWrite) {
-              firstWrite = target.putCartIfUnchanged(cart, expectedUpdatedAt);
+              firstWrite = target.putCartIfUnchanged(cart, expectedVersion);
               return firstWrite;
             }
             await firstWrite;
-            return target.putCartIfUnchanged(cart, expectedUpdatedAt);
+            return target.putCartIfUnchanged(cart, expectedVersion);
           };
         }
         const value = Reflect.get(target, property, receiver);
@@ -15393,6 +15393,93 @@ describe("backend API composition", () => {
       );
       expect(finalCart.data.items).toHaveLength(2);
     }
+  });
+
+  it("serializes 3-way concurrent cart writes by version, not by timestamp (which can collide)", async () => {
+    // updatedAt is a millisecond-resolution wall-clock string: two writers processed within the
+    // same millisecond legitimately share the same ctx.now. If the CAS check compared updatedAt
+    // alone, a third writer reading the same pre-write state as a second writer could have its
+    // stale check vacuously pass once the second writer commits — its write would still carry the
+    // same timestamp value, so nothing would look "changed". version is a counter incremented on
+    // every write, so it can never collide like this even when writers share a timestamp.
+    const contentRef = createTestContentRef();
+    const sellableA = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
+    const sellableB = createSellableDefinition({ id: createTestMikaId("sellable", 2) });
+    const sellableC = createSellableDefinition({ id: createTestMikaId("sellable", 3) });
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellableA.id,
+          createStockRecord({ sellableId: sellableA.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+        [
+          sellableB.id,
+          createStockRecord({ sellableId: sellableB.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+        [
+          sellableC.id,
+          createStockRecord({ sellableId: sellableC.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellableA, sellableB, sellableC] }),
+    );
+    const seedApi = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    // One shared ctx (and so one shared ctx.now) for the seed and all three concurrent writers —
+    // deliberately the opposite of the staggered-timestamp setup above, to isolate version as the
+    // thing actually preventing the collision rather than incidentally-distinct timestamps.
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const seeded = await seedApi.cart.add(ctx, { sellableId: sellableA.id, quantity: 1 });
+    if (!seeded.ok) throw new Error("Expected seed cart.add to succeed.");
+
+    // All three writers reach putCartIfUnchanged in strict, deterministic order (first through
+    // immediately, each next held until the previous fully commits) — every one of them still
+    // captured its expectedVersion from the same pre-write read, exactly as three genuinely
+    // concurrent requests processed in the same millisecond would.
+    const writeQueue: Promise<CartDocument | null>[] = [];
+    const gatedSession = new Proxy(repositories.session, {
+      get(target, property, receiver) {
+        if (property === "putCartIfUnchanged") {
+          return async (cart: CartDocument, expectedVersion: number) => {
+            const ahead = Promise.all(writeQueue);
+            const write = ahead.then(() => target.putCartIfUnchanged(cart, expectedVersion));
+            writeQueue.push(write);
+
+            return write;
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories: { ...repositories, session: gatedSession },
+      }),
+    );
+
+    const results = await Promise.all([
+      api.cart.add(ctx, { sellableId: sellableB.id, quantity: 1 }),
+      api.cart.add(ctx, { sellableId: sellableC.id, quantity: 1 }),
+    ]);
+
+    // Exactly one of the two concurrent adds must lose to a 409 — none may silently vanish.
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    const conflicts = results.filter((result) => !result.ok);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]).toMatchObject({ ok: false, status: 409, error: { code: "CONFLICT" } });
+
+    const finalCart = await api.cart.get(ctx);
+    if (!finalCart.ok) throw new Error("Expected cart.get to succeed.");
+    // The seed line plus exactly whichever of B/C actually won — never both silently merged in,
+    // and never neither (which would mean the winner's own write vanished too).
+    expect(finalCart.data.items).toHaveLength(2);
+    expect(finalCart.data.items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ sellableId: sellableA.id, quantity: 1 })]),
+    );
   });
 
   it("does not orphan a line into an invisible duplicate cart on concurrent first-adds", async () => {
@@ -15631,13 +15718,13 @@ describe("backend API composition", () => {
     const gatedSession = new Proxy(repositories.session, {
       get(target, property, receiver) {
         if (property === "putCartIfUnchanged") {
-          return async (cart: CartDocument, expectedUpdatedAt: ISODateTime) => {
+          return async (cart: CartDocument, expectedVersion: number) => {
             if (!firstWrite) {
-              firstWrite = target.putCartIfUnchanged(cart, expectedUpdatedAt);
+              firstWrite = target.putCartIfUnchanged(cart, expectedVersion);
               return firstWrite;
             }
             await firstWrite;
-            return target.putCartIfUnchanged(cart, expectedUpdatedAt);
+            return target.putCartIfUnchanged(cart, expectedVersion);
           };
         }
         const value = Reflect.get(target, property, receiver);
@@ -15671,6 +15758,112 @@ describe("backend API composition", () => {
       if (!finalCart || finalCart.type !== "cart") throw new Error("Expected a cart document.");
       expect(finalCart.aggregate.items).toEqual([expect.objectContaining({ quantity: 9 })]);
     }
+  });
+
+  it("recovers a line added to the merge source concurrently, instead of stranding it", async () => {
+    // A line added to the guest cart between cart.merge reading it and abandoning it must not be
+    // silently left behind on a session id the caller may never revisit again (e.g. login
+    // regenerates the session id, so there's no natural "merge again later").
+    const contentRef = createTestContentRef();
+    const sellableA = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
+    const sellableB = createSellableDefinition({ id: createTestMikaId("sellable", 2) });
+    const sellableC = createSellableDefinition({ id: createTestMikaId("sellable", 3) });
+    const repositories = createTestBackendRepositories();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellableA, sellableB, sellableC] }),
+    );
+    // One shared dependencies object (one id-factory counter) for both the seed and gated api
+    // instances below — otherwise two separately-constructed incrementing id factories would each
+    // restart from 1, and a coincidentally-reused line id would defeat the "already merged vs.
+    // new" check this test exists to exercise.
+    const dependencies = createIncrementingBackendDependencies({ repositories });
+    const seedApi = createMikaBackendApi(dependencies);
+    const guestCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_handoff_recover",
+    });
+    const priorCustomerCtx = createTestRequestContext({
+      customerId: "customer_1",
+      userId: "user_1",
+      sessionId: "session_prior_recover",
+    });
+    const callerCtx = createTestRequestContext({
+      customerId: "customer_1",
+      userId: "user_1",
+      sessionId: "session_handoff_recover",
+    });
+    const concurrentAddCtx = createTestRequestContext({
+      customerId: false,
+      userId: false,
+      sessionId: "session_handoff_recover",
+    });
+
+    await seedApi.cart.add(guestCtx, { sellableId: sellableB.id, quantity: 1 });
+    const customerCart = await seedApi.cart.add(priorCustomerCtx, {
+      sellableId: sellableA.id,
+      quantity: 1,
+    });
+    if (!customerCart.ok) throw new Error("Expected seed cart.add to succeed.");
+
+    let targetWriteEntered: (() => void) | undefined;
+    const targetWriteEnteredPromise = new Promise<void>((resolve) => {
+      targetWriteEntered = resolve;
+    });
+    let releaseTargetWrite: (() => void) | undefined;
+    const releaseTargetWritePromise = new Promise<void>((resolve) => {
+      releaseTargetWrite = resolve;
+    });
+    let gated = false;
+    const gatedSession = new Proxy(repositories.session, {
+      get(target, property, receiver) {
+        if (property === "putCartIfUnchanged") {
+          return async (cart: CartDocument, expectedVersion: number) => {
+            if (!gated && cart.id === customerCart.data.id) {
+              gated = true;
+              targetWriteEntered?.();
+              await releaseTargetWritePromise;
+            }
+            return target.putCartIfUnchanged(cart, expectedVersion);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const api = createMikaBackendApi({
+      ...dependencies,
+      repositories: { ...repositories, session: gatedSession },
+    });
+
+    const mergePromise = api.cart.merge(callerCtx, {
+      targetCartId: customerCart.data.id,
+      sourceSessionId: "session_handoff_recover",
+    });
+    await targetWriteEnteredPromise;
+    // While merge is paused right before writing the target (having already read the source as
+    // just [B]), a concurrent add lands sellable C on that same source cart.
+    await expect(
+      api.cart.add(concurrentAddCtx, { sellableId: sellableC.id, quantity: 1 }),
+    ).resolves.toMatchObject({ ok: true });
+    releaseTargetWrite?.();
+
+    const merged = await mergePromise;
+    expect(merged).toMatchObject({ ok: true, status: 200 });
+    if (!merged.ok) throw new Error("Expected cart.merge to succeed.");
+    // All three lines present — C was recovered by the retry, not stranded on the source.
+    expect(merged.data.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ sellableId: sellableA.id, quantity: 1 }),
+        expect.objectContaining({ sellableId: sellableB.id, quantity: 1 }),
+        expect.objectContaining({ sellableId: sellableC.id, quantity: 1 }),
+      ]),
+    );
+    expect(merged.data.items).toHaveLength(3);
+    await expect(
+      repositories.session.findOpenCartBySession("session_handoff_recover", TEST_CURRENCY),
+    ).resolves.toBeNull();
   });
 
   it("does not orphan a checkout_pending cart's reservation when its owner triggers a cart.merge", async () => {
@@ -21436,6 +21629,7 @@ function createCartDocument(overrides: Partial<CartDocument> = {}): CartDocument
     userId: "user_1",
     status: "open",
     currency: TEST_CURRENCY,
+    version: 1,
     aggregate: {
       schemaVersion: 1,
       currency: TEST_CURRENCY,
