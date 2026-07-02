@@ -1875,9 +1875,10 @@ async function verifyAcpRequest(
   const signature = request.headers.get("Signature");
   if (!signature)
     return acpError(request, 401, "signature_invalid", "Signature header is required.");
-  const timestamp = request.headers.get("Signature-Timestamp");
+  // The published ACP spec names this header "Timestamp" (RFC 3339), not "Signature-Timestamp".
+  const timestamp = request.headers.get("Timestamp");
   if (!timestamp) {
-    return acpError(request, 401, "signature_invalid", "Signature-Timestamp header is required.");
+    return acpError(request, 401, "signature_invalid", "Timestamp header is required.");
   }
   if (!acpSignatureTimestampIsFresh(timestamp, options.now?.() ?? new Date())) {
     return acpError(
@@ -1888,7 +1889,7 @@ async function verifyAcpRequest(
     );
   }
   const payload = await request.clone().text();
-  const expected = await hmacBase64(
+  const expected = await hmacBase64Url(
     options.signatureSecret,
     acpCanonicalSignaturePayload(request, payload, timestamp),
   );
@@ -2240,6 +2241,28 @@ async function hmacBase64(secret: string, payload: string): Promise<string> {
   return createHmac("sha256", secret).update(payload).digest("base64");
 }
 
+/**
+ * Base64url-encoded HMAC for incoming request signature verification. The published ACP spec's
+ * Signature header for the checkout session API is documented as a base64url-encoded detached
+ * signature (see the spec's request-signing header table), distinct from the outgoing webhook
+ * signature ({@link signMikaAcpWebhook}), which is not documented to use the same encoding.
+ */
+async function hmacBase64Url(secret: string, payload: string): Promise<string> {
+  return createHmac("sha256", secret).update(payload).digest("base64url");
+}
+
+/**
+ * Canonical string signed for request verification. The published ACP spec documents the
+ * Signature header as covering the request body plus a separate Timestamp header, without
+ * specifying the exact body-serialization scheme (canonical JSON vs. raw bytes) in the parts of
+ * the spec reviewed. Mika deliberately extends the signed payload with the HTTP method and
+ * path+query — binding the signature to the exact request being authorized closes a
+ * cross-endpoint replay gap a body-and-timestamp-only scheme leaves open (a signature valid for
+ * one path/method could otherwise be replayed against another). This is intentional hardening
+ * beyond the spec's documented minimum, not an oversight; a merchant integrating with a
+ * strictly spec-minimal ACP client should verify that client signs the same fields before
+ * enabling `signatureSecret` in production.
+ */
 function acpCanonicalSignaturePayload(
   request: Request,
   rawBody: string,

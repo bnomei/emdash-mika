@@ -969,6 +969,66 @@ describe("Mika ACP projection", () => {
     });
   });
 
+  it("verifies signatures against the spec's Timestamp header name and base64url encoding", async () => {
+    // The published ACP spec names the timestamp header "Timestamp" (not "Signature-Timestamp")
+    // and documents the Signature as base64url-encoded (not standard base64). A request signed
+    // exactly per those two details, sent with headers built independently of the shared test
+    // helper, must verify.
+    let cart = createCart([]);
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      signatureSecret: "acp_signature_secret",
+      provider: createProviderName("stripe"),
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      createSessionId: () => "checkout_session_acp_spec_headers",
+    });
+
+    const url = "https://shop.example.test/checkout_sessions";
+    const timestamp = "2026-01-01T00:00:00.000Z";
+    const body = JSON.stringify({ items: [{ id: "sellable_1:price_1", quantity: 1 }] });
+    const canonical = [
+      "POST",
+      new URL(url).pathname,
+      createHash("sha256").update(body).digest("hex"),
+      timestamp,
+    ].join("\n");
+    const signature = createHmac("sha256", "acp_signature_secret")
+      .update(canonical)
+      .digest("base64url");
+    // Standard base64 would differ from base64url whenever the digest contains +, /, or padding;
+    // assert that's actually exercised so this test cannot pass by coincidence.
+    const standardBase64 = createHmac("sha256", "acp_signature_secret")
+      .update(canonical)
+      .digest("base64");
+    expect(signature).not.toBe(standardBase64);
+
+    const response = await handlers.create(
+      new Request(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": "idem_spec_headers",
+          Signature: signature,
+          Timestamp: timestamp,
+        },
+        body,
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({
+      id: "checkout_session_acp_spec_headers",
+      status: "ready_for_payment",
+    });
+  });
+
   it("rejects a canonical ACP request signature replayed on a different path", async () => {
     let cart = createCart([]);
     const handlers = createMikaAcpCheckoutHandlers({
@@ -3118,7 +3178,7 @@ function signedAcpRequest(
     createHash("sha256").update(rawBody).digest("hex"),
     timestamp,
   ].join("\n");
-  const signature = createHmac("sha256", secret).update(canonical).digest("base64");
+  const signature = createHmac("sha256", secret).update(canonical).digest("base64url");
 
   return new Request(url, {
     method: "POST",
@@ -3128,7 +3188,7 @@ function signedAcpRequest(
       "Request-Id": `req_${idempotencyKey}`,
       "API-Version": "2025-09-12",
       Signature: signature,
-      "Signature-Timestamp": timestamp,
+      Timestamp: timestamp,
     },
     body: rawBody,
   });
