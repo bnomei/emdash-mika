@@ -3932,6 +3932,33 @@ describe("backend API composition", () => {
     });
   });
 
+  it("converts an unhandled host API throw into a 500 envelope on the route dispatch path", async () => {
+    // handleRouteOperation previously let a throwing host MikaApi override propagate raw,
+    // unlike the admin action runner path, which already caught this. A throwing override
+    // (a policy hook bug, an unimplemented edge case) must not escape as an uncaught rejection.
+    const api = createMikaApi({
+      catalog: {
+        sellables: async () => {
+          throw new Error("host override bug");
+        },
+      },
+    });
+    const routes = createMikaPluginRoutes(api);
+
+    await expect(
+      routes[mikaPluginRoutes.catalogSellables].handler({
+        input: {},
+        request: new Request(
+          "https://shop.example.test/_emdash/api/plugins/mika/catalog/sellables?collection=products&id=route-product",
+        ),
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 500,
+      error: { code: "INTERNAL", message: "Mika operation failed." },
+    });
+  });
+
   it("dispatches plugin routes through createMikaBackendApi without route key changes", async () => {
     const contentRef = createTestContentRef({ id: "route-product", locale: "de-AT" });
     const sellable = createSellableDefinition({ maxPerOrder: 4 });

@@ -1998,6 +1998,14 @@ describe("Mika client", () => {
         expect("schema" in operation ? operation.schema : undefined).toBeDefined();
       }
 
+      // acceptsIdempotencyKey is computed once at definition time from the schema's public
+      // Zod shape; cross-check it independently against the schema rather than reusing the
+      // production helper, so a drift between the two would actually fail this test.
+      const schema = "schema" in operation ? operation.schema : undefined;
+      const declaresIdempotencyKeyField =
+        !!schema && Object.prototype.hasOwnProperty.call(schema.shape, "idempotencyKey");
+      expect(operation.acceptsIdempotencyKey).toBe(declaresIdempotencyKeyField);
+
       if (operation.transport === "search") {
         expect(operation.searchKeys?.length).toBeGreaterThan(0);
       }
@@ -2198,7 +2206,11 @@ describe("Mika client", () => {
     expect(operationRunnerSource).toContain("runMikaOperationPolicy(operationPolicy");
     expect(operationRunnerSource).toContain("callMikaOperation(operation, api, ctx, input)");
     expect(operationsSource).not.toContain("input: never");
-    expect(routeHandlersSource).toContain("runMikaOperation({");
+    // Both route dispatch sites funnel through one local wrapper that itself calls
+    // runMikaOperation(input) exactly once, converting unhandled throws to a 500 envelope.
+    expect(routeHandlersSource).toContain("runMikaOperationSafely({");
+    expect(routeHandlersSource.match(/runMikaOperationSafely\(\{/g)).toHaveLength(2);
+    expect(routeHandlersSource).toContain("return runMikaOperation(input)");
     expect(routeHandlersSource).not.toContain("callMikaOperation(operation");
     expect(routeHandlersSource).not.toContain("runMikaOperationPolicy");
     expect(routeHandlersSource).not.toContain("as never");

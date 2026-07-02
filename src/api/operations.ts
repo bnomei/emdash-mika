@@ -143,6 +143,12 @@ type MikaApiOperationBaseInputDefinition = Omit<MikaApiOperationBaseDefinition, 
 
 type MikaApiOperationDefinition = MikaApiOperationBaseDefinition & {
   readonly schema?: z.ZodType;
+  /**
+   * Whether {@link schema} declares an `idempotencyKey` field, computed once at definition time
+   * from Zod's public `shape` accessor (never `_def` internals, which are not stable across Zod
+   * majors). Consumers should read this flag instead of introspecting `schema` themselves.
+   */
+  readonly acceptsIdempotencyKey: boolean;
   readonly action?: MikaOperationActionDefinition;
   readonly call: MikaApiOperationCall<unknown, unknown>;
 };
@@ -206,6 +212,7 @@ function defineMikaOperation<
 ): Omit<TDefinition, "name"> & {
   readonly name: MikaDefinedOperationName<TDefinition>;
   readonly schema: TSchema;
+  readonly acceptsIdempotencyKey: boolean;
   readonly action?: TDefinition extends {
     readonly action: infer TAction extends MikaOperationActionInputDefinition;
   }
@@ -228,6 +235,7 @@ function defineMikaOperation<
 ): Omit<TDefinition, "name"> & {
   readonly name: MikaDefinedOperationName<TDefinition>;
   readonly schema: TSchema;
+  readonly acceptsIdempotencyKey: boolean;
   readonly action?: TDefinition extends {
     readonly action: infer TAction extends MikaOperationActionInputDefinition;
   }
@@ -250,6 +258,7 @@ function defineMikaOperation<TData, const TDefinition extends MikaApiOperationBa
 ): Omit<TDefinition, "name"> & {
   readonly name: MikaDefinedOperationName<TDefinition>;
   readonly schema?: undefined;
+  readonly acceptsIdempotencyKey: false;
   readonly call: MikaApiOperationCall<undefined, TData>;
 };
 function defineMikaOperation<const TDefinition extends MikaApiOperationBaseInputDefinition>(
@@ -261,6 +270,7 @@ function defineMikaOperation<const TDefinition extends MikaApiOperationBaseInput
 ): Omit<TDefinition, "name"> & {
   readonly name: MikaDefinedOperationName<TDefinition>;
   readonly schema?: undefined;
+  readonly acceptsIdempotencyKey: false;
   readonly call: MikaApiOperationCall<
     undefined,
     MikaApiMethodData<TDefinition["namespace"], TDefinition["method"]>
@@ -296,8 +306,25 @@ function normalizeMikaOperationDefinition(
     ...operation,
     name,
     call: call ?? createDefaultMikaOperationCall(operation),
+    acceptsIdempotencyKey: schemaAcceptsIdempotencyKey(definition.schema),
     ...(action ? { action: action as MikaOperationActionDefinition } : {}),
   };
+}
+
+/**
+ * Detects an `idempotencyKey` field via Zod's public `shape` accessor only — never `_def`
+ * internals, whose structure is not part of Zod's stable API and can change across majors.
+ */
+function schemaAcceptsIdempotencyKey(schema: z.ZodType | undefined): boolean {
+  if (!schema) return false;
+  const shape = (schema as { readonly shape?: unknown }).shape;
+  const resolvedShape = typeof shape === "function" ? shape() : shape;
+
+  return (
+    typeof resolvedShape === "object" &&
+    resolvedShape !== null &&
+    Object.prototype.hasOwnProperty.call(resolvedShape, "idempotencyKey")
+  );
 }
 
 function createDefaultMikaOperationCall(

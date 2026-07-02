@@ -100,8 +100,7 @@ async function handleActionRunner(
       },
     });
   }
-  // Unhandled runner exceptions return a generic 500 envelope instead of leaking internals.
-  const result = await runMikaOperation({
+  const result = await runMikaOperationSafely({
     operation: resolved.data.operation,
     api,
     ctx: mikaContext,
@@ -111,7 +110,22 @@ async function handleActionRunner(
       mikaContext.idempotencyKey,
     ),
     operationPolicy: options.operationPolicy,
-  }).catch(() => ({
+  });
+
+  return toMikaAdminActionRunResult(result, resolved.data.resultAdapter);
+}
+
+/**
+ * Runs a Mika operation and converts an unhandled throw into a generic 500 envelope instead of
+ * leaking it to the host framework. Built-in operation handlers already return structured
+ * {@link MikaApiResult} failures for every case they anticipate (including webhook receive, whose
+ * retryable-vs-terminal status codes are decided inside the handler); this only catches genuinely
+ * unexpected throws — a host `MikaApi` override or {@link MikaOperationPolicy} hook that throws.
+ */
+async function runMikaOperationSafely(
+  input: Parameters<typeof runMikaOperation>[0],
+): ReturnType<typeof runMikaOperation> {
+  return runMikaOperation(input).catch(() => ({
     ok: false as const,
     status: 500,
     error: {
@@ -119,8 +133,6 @@ async function handleActionRunner(
       message: "Mika operation failed.",
     },
   }));
-
-  return toMikaAdminActionRunResult(result, resolved.data.resultAdapter);
 }
 
 /**
@@ -136,7 +148,7 @@ export function mikaOperationInputWithIdempotencyContext(
     !idempotencyKey ||
     operation.agent.idempotency !== "required" ||
     !operation.agent.idempotencyKey ||
-    !operationSchemaHasIdempotencyKey(operation) ||
+    !operation.acceptsIdempotencyKey ||
     !isRecord(input) ||
     hasNonEmptyIdempotencyKey(input)
   ) {
@@ -154,25 +166,6 @@ function hasNonEmptyIdempotencyKey(input: Record<string, unknown>): boolean {
   const value = input["idempotencyKey"];
 
   return typeof value === "string" && value.trim().length > 0;
-}
-
-// Only merge context keys into operations whose Zod schema exposes `idempotencyKey`.
-function operationSchemaHasIdempotencyKey(operation: MikaRouteOperation): boolean {
-  const schema = "schema" in operation ? operation.schema : undefined;
-  const shape = schema ? zodObjectShape(schema) : undefined;
-
-  return shape ? Object.prototype.hasOwnProperty.call(shape, "idempotencyKey") : false;
-}
-
-function zodObjectShape(schema: unknown): Record<string, unknown> | undefined {
-  if (!isRecord(schema)) return undefined;
-  const directShape = schema["shape"];
-  const definition = schema["_def"];
-  const defShape = isRecord(definition) ? definition["shape"] : undefined;
-  const shape = typeof directShape === "function" ? directShape() : (directShape ?? defShape);
-  const resolved = typeof shape === "function" ? shape() : shape;
-
-  return isRecord(resolved) ? resolved : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -207,7 +200,7 @@ async function handleRouteOperation(
     } as const;
   }
 
-  return runMikaOperation({
+  return runMikaOperationSafely({
     operation,
     api,
     ctx: mikaContext,
