@@ -281,6 +281,53 @@ describe("backend test storage helpers", () => {
     });
   });
 
+  it("does not report a stale reclaim when an optimistic-retry adapter re-invokes the updater", async () => {
+    // The update() contract allows adapters to re-invoke the updater on write contention. A
+    // first invocation may see a "failed" audit and tentatively decide to reclaim it, but if a
+    // concurrent call already claimed it before this call's write lands, the adapter's retry
+    // sees the already-"started" state and must return it unchanged — the repository must not
+    // report "claimed" (crediting this call for someone else's reclaim) from a stale flag set by
+    // the earlier, uncommitted invocation.
+    const baseCollection = createStorageCollection("ops");
+    const failed = createAdminAuditTestDocument({
+      id: createTestMikaId("admin_audit", 1),
+      status: "failed",
+    });
+    await baseCollection.put(failed.id, failed);
+    const retry = createAdminAuditTestDocument({
+      id: createTestMikaId("admin_audit", 2),
+      status: "started",
+    });
+    const concurrentlyClaimed = createAdminAuditTestDocument({
+      id: failed.id,
+      status: "started",
+    });
+
+    let invocationCount = 0;
+    const retryingCollection: StorageCollection<MikaStorageDocuments["ops"]> = {
+      ...baseCollection,
+      async update(id, updater) {
+        // Simulate an optimistic-retry adapter: invoke the updater against the current state,
+        // then invoke it again against a state a concurrent call already claimed (no longer
+        // "failed"), and only commit the second, later invocation's result.
+        invocationCount += 1;
+        updater(await baseCollection.get(id));
+        const second = updater(concurrentlyClaimed);
+        if (second === null) return null;
+        await baseCollection.put(id, second);
+
+        return second;
+      },
+    };
+    const ops = new OpsRepository(retryingCollection);
+
+    await expect(ops.claimAdminAuditIdempotency(retry)).resolves.toMatchObject({
+      status: "existing",
+      audit: concurrentlyClaimed,
+    });
+    expect(invocationCount).toBe(1);
+  });
+
   it("lists due workflows and leases one worker at a time", async () => {
     const clock = createTestClock();
     const ops = new OpsRepository(createStorageCollection("ops"));

@@ -1709,6 +1709,10 @@ export class OpsRepository {
 
     let reclaimedByThisCall = false;
     const reclaimed = await this.documents.update(existing.id, (current) => {
+      // Reset on every invocation: adapters may retry the updater on write contention, and only
+      // the last (committed) invocation's determination may survive — a stale `true` from an
+      // earlier, uncommitted attempt must not outlive a later attempt that finds nothing to claim.
+      reclaimedByThisCall = false;
       const currentAudit = documentOfType(current, "adminAudit");
       if (
         !currentAudit ||
