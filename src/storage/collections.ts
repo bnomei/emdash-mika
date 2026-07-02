@@ -197,7 +197,16 @@ export type MikaStorageCollections = {
 export interface StorageCollection<TDocument> {
   get(id: string): Promise<TDocument | null>;
   put(id: string, data: TDocument): Promise<void>;
-  /** Returning null from the updater deletes the document. */
+  /**
+   * Applies `updater` to the current document (`null` when absent) atomically with respect to
+   * concurrent updates of the same id. Returning `null` from the updater ABORTS the update and
+   * leaves the stored document unchanged — it never deletes; use {@link delete} for removal.
+   * Adapters may re-invoke the updater on write contention (optimistic retry), so updaters must
+   * be pure. Resolves with the committed document, or `null` when the update was aborted.
+   *
+   * Mika's lease, claim, and idempotency flows all rely on this abort semantic; an adapter that
+   * deletes on `null` corrupts carts and workflow records under ordinary contention.
+   */
   update(
     id: string,
     updater: (current: TDocument | null) => TDocument | null,
