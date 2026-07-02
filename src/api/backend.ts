@@ -2205,7 +2205,7 @@ async function providerSync(
     {
       action: "provider.syncCatalog",
       idempotencyKey: syncInput.idempotencyKey,
-      idempotencyInput: syncInput as unknown as JsonValue,
+      idempotencyInput: toIdempotencyJson(syncInput),
       metadata: syncMetadata,
     },
     () => providerFeature.method.call(providerFeature.provider, providerInput),
@@ -2245,7 +2245,7 @@ async function releaseExpiredReservations(
     {
       action: "stock.releaseExpiredReservations",
       idempotencyKey: releaseInput.idempotencyKey,
-      idempotencyInput: releaseInput as unknown as JsonValue,
+      idempotencyInput: toIdempotencyJson(releaseInput),
       metadata: releaseInput.now ? { now: releaseInput.now } : {},
     },
     release,
@@ -2298,7 +2298,7 @@ async function refundOrder(
       targetType: "order",
       targetId: order.id,
       idempotencyKey: refundInput.idempotencyKey,
-      idempotencyInput: refundInput as unknown as JsonValue,
+      idempotencyInput: toIdempotencyJson(refundInput),
       metadata: {
         provider: order.provider,
         orderId: order.id,
@@ -2429,7 +2429,7 @@ async function cancelOrder(
       targetType: "order",
       targetId: order.id,
       idempotencyKey: cancelInput.idempotencyKey,
-      idempotencyInput: cancelInput as unknown as JsonValue,
+      idempotencyInput: toIdempotencyJson(cancelInput),
       metadata: {
         provider: order.provider,
         orderId: order.id,
@@ -2549,7 +2549,7 @@ async function grantEntitlement(
       targetType: "entitlement",
       targetId: entitlementId,
       idempotencyKey: grantInput.idempotencyKey,
-      idempotencyInput: grantInput as unknown as JsonValue,
+      idempotencyInput: toIdempotencyJson(grantInput),
       metadata: {
         entitlementKey: grantInput.entitlementKey,
         ...(grantInput.customerId ? { customerId: grantInput.customerId } : {}),
@@ -2606,7 +2606,7 @@ async function revokeEntitlement(
       targetType: "entitlement",
       targetId: primaryEntitlement.id,
       idempotencyKey: revokeInput.idempotencyKey,
-      idempotencyInput: revokeInput as unknown as JsonValue,
+      idempotencyInput: toIdempotencyJson(revokeInput),
       metadata: {
         entitlementId: primaryEntitlement.id,
         entitlementIds: entitlements.map((entitlement) => entitlement.id),
@@ -2669,7 +2669,7 @@ async function resendEmail(
       targetType: "email",
       targetId: email.id,
       idempotencyKey: resendInput.idempotencyKey,
-      idempotencyInput: resendInput as unknown as JsonValue,
+      idempotencyInput: toIdempotencyJson(resendInput),
       metadata: {
         emailId: email.id,
         kind: email.kind,
@@ -2733,7 +2733,7 @@ async function revokeLicense(
       targetType: "license",
       targetId: license.id,
       idempotencyKey: revokeInput.idempotencyKey,
-      idempotencyInput: revokeInput as unknown as JsonValue,
+      idempotencyInput: toIdempotencyJson(revokeInput),
       metadata: {
         licenseId: license.id,
         ...(license.customerId ? { customerId: license.customerId } : {}),
@@ -2804,7 +2804,7 @@ async function issueDownload(
       targetId: createMikaId(target.downloadRef),
       createdAt: now,
       idempotencyKey: issueInput.idempotencyKey,
-      idempotencyInput: issueInput as unknown as JsonValue,
+      idempotencyInput: toIdempotencyJson(issueInput),
       metadata: {
         orderId: target.order.id,
         orderLineId: target.line.id,
@@ -3013,7 +3013,7 @@ const ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY = "idempotencyInputHash";
 async function completeAdminAudit(
   input: CreateMikaBackendApiInput,
   audit: AdminAuditDocument,
-  result?: JsonValue,
+  result?: unknown,
 ): Promise<void> {
   const resultSnapshot = audit.record.idempotencyKey && isJsonObject(result) ? result : undefined;
 
@@ -3192,7 +3192,7 @@ async function runAdminAction<TData>(
 
   try {
     const data = await action(audit);
-    await completeAdminAudit(input, audit, data as unknown as JsonValue);
+    await completeAdminAudit(input, audit, data);
 
     return {
       ok: true,
@@ -3292,6 +3292,15 @@ function adminActionFailed(message: string): MikaApiFailure {
       message,
     },
   };
+}
+
+/**
+ * Widens a JSON-shaped wire input to JsonValue for idempotency hashing and audit snapshots.
+ * Operation inputs are plain JSON DTOs, but their interfaces lack index signatures so
+ * TypeScript cannot prove the assignment; this is the one sanctioned place for that cast.
+ */
+function toIdempotencyJson(input: object): JsonValue {
+  return input as unknown as JsonValue;
 }
 
 /** Reports a swallowed best-effort failure to the host observer; never throws. */
@@ -4306,7 +4315,7 @@ async function replayWebhook(
         targetType: "webhook",
         targetId: webhook.id,
         idempotencyKey: replayInput.idempotencyKey,
-        idempotencyInput: replayInput as unknown as JsonValue,
+        idempotencyInput: toIdempotencyJson(replayInput),
         metadata: {
           webhookId: webhook.id,
           provider: webhook.provider,

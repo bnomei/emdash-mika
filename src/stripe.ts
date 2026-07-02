@@ -33,6 +33,7 @@ import {
   createISODateTime,
   createMikaId,
   createProviderName,
+  isCurrencyCode,
   type JsonObject,
   type ProviderName,
   type SubscriptionStatus,
@@ -936,8 +937,8 @@ function stripePaymentReversalEvent(
   const reversedAmount = type === "charge.refunded" ? amountRefunded : amount;
   const currency = stringChild(object, "currency")?.toUpperCase();
   const totals =
-    reversedAmount !== undefined && currency
-      ? { total: { amount: reversedAmount, currency: currency as MoneyDTO["currency"] } }
+    reversedAmount !== undefined && isCurrencyCode(currency)
+      ? { total: { amount: reversedAmount, currency } }
       : undefined;
 
   return {
@@ -989,12 +990,12 @@ function moneyTotalsFromStripeAmount(
     numberChild(object, "amount_received") ??
     numberChild(object, "amount");
   const currency = stringChild(object, "currency")?.toUpperCase();
-  if (amount === undefined || !currency) return undefined;
+  if (amount === undefined || !isCurrencyCode(currency)) return undefined;
 
   return {
     total: {
       amount,
-      currency: currency as MoneyDTO["currency"],
+      currency,
     },
   };
 }
