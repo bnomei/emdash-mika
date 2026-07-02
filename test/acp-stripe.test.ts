@@ -2064,6 +2064,88 @@ describe("Mika ACP projection", () => {
     await expect(completed.json()).resolves.toMatchObject({ status: "completed" });
   });
 
+  it("retries past an incidental expiry sweep even when the store deserializes a fresh object graph", async () => {
+    // Same scenario as the sibling "retries a completion write past an incidental expiry sweep"
+    // test, but through a store whose get() returns a fresh object graph every call (as any real,
+    // non-memory MikaAcpSessionStore commonly would — e.g. JSON.parse of a stored row). The
+    // incidental-expiry check must compare by value, not by reference: two independently
+    // deserialized copies of unchanged data are never the same object, even when nothing changed.
+    let cart = createCart([]);
+    let currentTime = new Date("2026-01-01T00:00:00.000Z");
+    let releaseGate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    let signalStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const baseStore = createMemoryMikaAcpSessionStore();
+    const store: typeof baseStore = {
+      ...baseStore,
+      get: async (id) => {
+        const record = await baseStore.get(id);
+
+        return record ? (JSON.parse(JSON.stringify(record)) as MikaAcpSessionRecord) : record;
+      },
+    };
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+        onCheckoutStart: async () => {
+          signalStarted();
+          await gate;
+        },
+        checkoutSessionStatus: "completed",
+      }),
+      store,
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      now: () => currentTime,
+      sessionTtlMs: 2_000,
+      createSessionId: () => "checkout_session_acp_incidental_expiry_deserialized",
+    });
+
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_expiry_deserialized", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+      }),
+    );
+
+    const completePromise = handlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_incidental_expiry_deserialized/complete",
+        "idem_complete_expiry_deserialized",
+        { payment_data: { provider: "stripe", token: "spt_test_123" } },
+      ),
+      "checkout_session_acp_incidental_expiry_deserialized",
+    );
+    await started;
+
+    currentTime = new Date(currentTime.getTime() + 3_000);
+    const polled = await handlers.get(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_incidental_expiry_deserialized",
+        "idem_get_expiry_deserialized",
+        {},
+      ),
+      "checkout_session_acp_incidental_expiry_deserialized",
+    );
+    expect(polled.status).toBe(200);
+    await expect(polled.json()).resolves.toMatchObject({ status: "not_ready_for_payment" });
+
+    releaseGate();
+    const completed = await completePromise;
+
+    expect(completed.status).toBe(200);
+    await expect(completed.json()).resolves.toMatchObject({ status: "completed" });
+  });
+
   it("does not retry a completion write past a genuine concurrent update", async () => {
     // acpRecordIsOnlyIncidentallyExpired must not misclassify a REAL concurrent write (e.g. a
     // legitimate handleAcpUpdate changing the buyer) as "merely incidental" just because it also
@@ -2237,6 +2319,96 @@ describe("Mika ACP projection", () => {
     // must be told that, not a 409 claiming the session failed when it didn't.
     expect(firstResponse.status).toBe(200);
     await expect(firstResponse.json()).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("retries the compensating revert past an incidental expiry sweep instead of losing it", async () => {
+    // Symmetric to the final completion write's incidental-expiry retry: this attempt's own
+    // checkout.start fails terminally, and while its compensating revert write is in flight, an
+    // ordinary concurrent GET ticks the lazy expiry sweep — not a genuine competing decision. The
+    // revert (which carries this attempt's own submitted buyer update) must still land, not be
+    // silently discarded in favor of the bystander sweep's stale state.
+    let cart = createCart([]);
+    let currentTime = new Date("2026-01-01T00:00:00.000Z");
+    let releaseGate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    let signalStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+        // Gated at preview (before checkout.start) so the expiry sweep can land mid-attempt.
+        onCheckoutPreview: async () => {
+          signalStarted();
+          await gate;
+        },
+        checkoutSessionStatus: "failed",
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      now: () => currentTime,
+      sessionTtlMs: 2_000,
+      createSessionId: () => "checkout_session_acp_revert_incidental",
+    });
+
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_revert_incidental", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+      }),
+    );
+
+    const completePromise = handlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_revert_incidental/complete",
+        "idem_complete_revert_incidental",
+        {
+          buyer: { name: "Bea Buyer", email: "bea@example.test" },
+          payment_data: { provider: "stripe", token: "spt_test_123" },
+        },
+      ),
+      "checkout_session_acp_revert_incidental",
+    );
+    await started;
+
+    // The session's TTL (2s) elapses while complete() is still blocked inside preview.
+    currentTime = new Date(currentTime.getTime() + 3_000);
+    // An ordinary, unrelated status poll ticks the lazy expiry sweep — no lock, no bad intent.
+    const polled = await handlers.get(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_revert_incidental",
+        "idem_get_revert_incidental",
+        {},
+      ),
+      "checkout_session_acp_revert_incidental",
+    );
+    await expect(polled.json()).resolves.toMatchObject({ status: "not_ready_for_payment" });
+
+    releaseGate();
+    const completed = await completePromise;
+
+    // checkout.start (mocked to always report "failed") means this attempt's own compensating
+    // revert runs, carrying Bea's buyer update — it must land despite the bystander expiry sweep.
+    expect(completed.status).toBe(409);
+    const following = await handlers.get(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_revert_incidental",
+        "idem_get_revert_incidental_after",
+        {},
+      ),
+      "checkout_session_acp_revert_incidental",
+    );
+    await expect(following.json()).resolves.toMatchObject({
+      buyer: { name: "Bea Buyer", email: "bea@example.test" },
+    });
   });
 
   it("validates ACP request body shapes before touching carts or sessions", async () => {

@@ -1287,21 +1287,29 @@ async function handleAcpComplete(
     }
     if (acpCheckoutStartTerminalStatus(checkout.data.status)) {
       // Compensating write: reflect this attempt's own terminal failure. If it loses the CAS
-      // race, someone else already moved the session forward concurrently (reverting to
-      // not_ready_for_payment over their write would be wrong) — report what's actually
-      // persisted instead of this attempt's now-moot terminal-failure verdict, same as the final
-      // completion write below.
-      const reverted: MikaAcpSessionRecord = {
+      // race to a genuine competing decision, someone else already moved the session forward
+      // concurrently (reverting to not_ready_for_payment over their write would be wrong) —
+      // report what's actually persisted instead of this attempt's now-moot terminal-failure
+      // verdict. A loss to nothing more than a bystander expiry sweep isn't a real conflict and
+      // is retried past, same as the final completion write below — otherwise this attempt's own
+      // legitimate buyer/etc. update would be silently lost to an unrelated concurrent GET.
+      const buildReverted = (version: number | undefined): MikaAcpSessionRecord => ({
         ...record,
         buyer: body.data.buyer ?? record.buyer,
         status: "not_ready_for_payment",
         updatedAt: nowIso(options),
-        version: nextAcpVersion(expectedVersion),
-      };
-      const revertWritten = await options.store.putIfUnchanged(reverted, expectedVersion);
-      if (!revertWritten) {
+        version: nextAcpVersion(version),
+      });
+      const reverted = await putAcpRecordRetryingIncidentalExpiry(
+        options,
+        checkoutSessionId,
+        record,
+        buildReverted,
+      );
+      if (!reverted) {
         commitMainLease = true;
-        const current = (await options.store.get(checkoutSessionId)) ?? reverted;
+        const current =
+          (await options.store.get(checkoutSessionId)) ?? buildReverted(expectedVersion);
 
         return acpJson(request, await recordToAcpSession(options, request, current), 200);
       }
@@ -1350,33 +1358,26 @@ async function handleAcpComplete(
     // sweep ticking on a bystander request (e.g. a plain GET polling this session while this
     // handler was merely slow, not crashed) isn't a real conflict — retry past it a bounded number
     // of times rather than silently discarding a successful payment.
-    let writeVersion = expectedVersion;
-    let persisted: MikaAcpSessionRecord | undefined;
-    for (let attempt = 0; attempt < MIKA_ACP_COMPLETE_WRITE_RETRIES; attempt += 1) {
-      const candidate: MikaAcpSessionRecord = {
-        ...completedBase,
-        version: nextAcpVersion(writeVersion),
-      };
-      if (await options.store.putIfUnchanged(candidate, writeVersion)) {
-        persisted = candidate;
-        break;
-      }
-      const current = await options.store.get(checkoutSessionId);
-      if (!current || !acpRecordIsOnlyIncidentallyExpired(record, current)) break;
-      writeVersion = current.version;
-    }
+    const buildCompleted = (version: number | undefined): MikaAcpSessionRecord => ({
+      ...completedBase,
+      version: nextAcpVersion(version),
+    });
+    const persisted = await putAcpRecordRetryingIncidentalExpiry(
+      options,
+      checkoutSessionId,
+      record,
+      buildCompleted,
+    );
     commitMainLease = true;
     if (!persisted) {
       // Lost to a genuine competing decision — report whatever is actually stored instead of this
-      // attempt's own now-stale computation, same as an idempotency replay. The `?? { ...}`
+      // attempt's own now-stale computation, same as an idempotency replay. The `?? buildCompleted`
       // fallback only matters if the record vanished between the failed write and this read (e.g.
       // a concurrent purge sweep) — far-fetched given purgeAt retention is minutes-to-days by
       // default, but falling back to this attempt's own view is still strictly better than a 500
       // for a payment that, per checkout.start above, already genuinely went through.
-      const current = (await options.store.get(checkoutSessionId)) ?? {
-        ...completedBase,
-        version: nextAcpVersion(writeVersion),
-      };
+      const current =
+        (await options.store.get(checkoutSessionId)) ?? buildCompleted(expectedVersion);
 
       return acpJson(request, await recordToAcpSession(options, request, current), 200);
     }
@@ -1641,6 +1642,35 @@ function acpRecordIsExpired(record: MikaAcpSessionRecord, now: ISODateTime): boo
 }
 
 /**
+ * Structural equality for plain JSON-shaped values (every MikaAcpSessionRecord field is one:
+ * strings, arrays, and nested plain objects — no Dates, Maps, or class instances). Deliberately
+ * not a `===`/reference check: a real (non-memory) MikaAcpSessionStore commonly deserializes a
+ * fresh object graph on every `get()` (e.g. `JSON.parse` of a stored row), so two reads of
+ * content-identical data are never the same reference even when nothing changed. Object key order
+ * is ignored (compares by key set, not insertion order) since a storage round-trip has no
+ * obligation to preserve it.
+ */
+function acpDeepEqual(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (typeof left !== "object" || typeof right !== "object" || left === null || right === null) {
+    return false;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+      return false;
+    }
+
+    return left.every((item, index) => acpDeepEqual(item, right[index]));
+  }
+
+  const leftEntries = Object.entries(left as Record<string, unknown>);
+  const rightRecord = right as Record<string, unknown>;
+  if (leftEntries.length !== Object.keys(rightRecord).length) return false;
+
+  return leftEntries.every(([key, value]) => acpDeepEqual(value, rightRecord[key]));
+}
+
+/**
  * True when `current` is exactly `original` with nothing but expireAcpRecordIfNeeded's lazy
  * expiry sweep applied on top — the only fields that differ are the ones that sweep touches
  * (`status`, `expiredAt`, `purgeAt`, `updatedAt`, `version`), and `status` landed on a
@@ -1648,7 +1678,10 @@ function acpRecordIsExpired(record: MikaAcpSessionRecord, now: ISODateTime): boo
  * `fulfillmentAddress`/`fulfillmentOptionId`, etc.) must be unchanged — a genuine concurrent write
  * (e.g. handleAcpUpdate legitimately changing `buyer` or `items`) has no `checkoutId` and a
  * non-terminal `status` either, so checking those two fields alone would misclassify a real
- * conflict as "merely incidental" and silently retry past it, discarding the other write.
+ * conflict as "merely incidental" and silently retry past it, discarding the other write. Compares
+ * object/array-typed fields structurally (see acpDeepEqual), not by reference, since a real store
+ * that deserializes on every read would otherwise make every field "different" every time,
+ * defeating the retry this function exists to allow.
  *
  * expireAcpRecordIfNeeded runs unconditionally at the top of every handler, including plain GETs
  * with no locking of their own, so an ordinary concurrent status poll can legitimately tick a
@@ -1667,17 +1700,45 @@ function acpRecordIsOnlyIncidentallyExpired(
     current.status !== "canceled" &&
     current.cartId === original.cartId &&
     current.checkoutId === original.checkoutId &&
-    current.buyer === original.buyer &&
-    current.items === original.items &&
-    current.fulfillmentAddress === original.fulfillmentAddress &&
     current.fulfillmentOptionId === original.fulfillmentOptionId &&
     current.currency === original.currency &&
     current.provider === original.provider &&
     current.paymentAuthorizationId === original.paymentAuthorizationId &&
     current.quoteInputHash === original.quoteInputHash &&
-    current.quoteSnapshot === original.quoteSnapshot &&
-    current.expiresAt === original.expiresAt
+    current.expiresAt === original.expiresAt &&
+    acpDeepEqual(current.buyer, original.buyer) &&
+    acpDeepEqual(current.items, original.items) &&
+    acpDeepEqual(current.fulfillmentAddress, original.fulfillmentAddress) &&
+    acpDeepEqual(current.quoteSnapshot, original.quoteSnapshot)
   );
+}
+
+/**
+ * Persists `buildCandidate(version)` via putIfUnchanged, retrying past a CAS loss that turns out
+ * to be nothing more than expireAcpRecordIfNeeded's lazy expiry sweep (see
+ * acpRecordIsOnlyIncidentallyExpired) rather than a genuine competing decision, up to
+ * MIKA_ACP_COMPLETE_WRITE_RETRIES attempts. Shared by both of handleAcpComplete's writes (the
+ * early compensating revert and the final completion) so a bystander expiry sweep can't cause
+ * either one to silently discard this attempt's own legitimate write — only a real conflict does.
+ * Returns the persisted record, or `undefined` if every attempt lost to a genuine conflict (or the
+ * record vanished); callers should then re-fetch and report whatever's actually stored.
+ */
+async function putAcpRecordRetryingIncidentalExpiry(
+  options: CreateMikaAcpCheckoutHandlersOptions,
+  checkoutSessionId: string,
+  original: MikaAcpSessionRecord,
+  buildCandidate: (version: number | undefined) => MikaAcpSessionRecord,
+): Promise<MikaAcpSessionRecord | undefined> {
+  let writeVersion = original.version;
+  for (let attempt = 0; attempt < MIKA_ACP_COMPLETE_WRITE_RETRIES; attempt += 1) {
+    const candidate = buildCandidate(writeVersion);
+    if (await options.store.putIfUnchanged(candidate, writeVersion)) return candidate;
+    const current = await options.store.get(checkoutSessionId);
+    if (!current || !acpRecordIsOnlyIncidentallyExpired(original, current)) return undefined;
+    writeVersion = current.version;
+  }
+
+  return undefined;
 }
 
 async function expireAcpRecordIfNeeded(
