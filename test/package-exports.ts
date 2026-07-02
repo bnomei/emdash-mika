@@ -67,11 +67,16 @@ import type {
   MikaServerClient,
   MikaAccountRepositoryPort,
   MikaCatalogRepositoryPort,
+  MikaDocumentList,
   MikaEphemeralRepositoryPort,
   MikaLedgerRepositoryPort,
   MikaOpsRepositoryPort,
   MikaSessionRepositoryPort,
   MikaStockRepositoryPort,
+  PaginatedStorageResult,
+  ReserveStockRepositoryInput,
+  ReserveStockRepositoryResult,
+  WorkflowLeaseRepositoryInput,
 } from "@bnomei/emdash-mika/server";
 import type { createMikaStripeProvider, MikaStripeClient } from "@bnomei/emdash-mika/stripe";
 import type {
@@ -196,6 +201,11 @@ export type PackageEntryContract = {
   readonly orderDocument: OrderDocument;
   readonly stockItemRecord: StockItemRecord;
   readonly ephemeralRecord: EphemeralRecord;
+  readonly documentList: MikaDocumentList<CartDocument>;
+  readonly paginatedResult: PaginatedStorageResult<{ id: string }>;
+  readonly reserveStockInput: ReserveStockRepositoryInput;
+  readonly reserveStockResult: ReserveStockRepositoryResult;
+  readonly workflowLeaseInput: WorkflowLeaseRepositoryInput;
 };
 
 export type MissingRootMikaApi =

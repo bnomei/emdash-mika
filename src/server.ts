@@ -26,12 +26,45 @@ export {
 export type {
   MikaAccountRepositoryPort,
   MikaCatalogRepositoryPort,
+  MikaDocumentList,
   MikaEphemeralRepositoryPort,
   MikaLedgerRepositoryPort,
   MikaOpsRepositoryPort,
   MikaSessionRepositoryPort,
   MikaStockRepositoryPort,
 } from "./api/backend";
+/** Input and result shapes named by the repository port method signatures. */
+export type {
+  AccountDeleteEmailRedactionRepositoryInput,
+  AccountDeleteMaintenanceStepRepositoryInput,
+  AccountDeleteRequestCompletionRepositoryInput,
+  AccountDeleteRequestFailureRepositoryInput,
+  AdjustStockRepositoryInput,
+  AdjustStockRepositoryResult,
+  AdminAuditIdempotencyClaimResult,
+  CatalogProviderPriceMatch,
+  ConsumeReservedStockRepositoryInput,
+  ConsumeReservedStockRepositoryResult,
+  EmailCompleteRepositoryInput,
+  EmailDeliveredRepositoryInput,
+  EmailFailureRepositoryInput,
+  EmailLeaseRepositoryInput,
+  EmailSkipRepositoryInput,
+  ExpireReservedStockRepositoryResult,
+  ExtendReservationsRepositoryInput,
+  ReleaseActiveReservationsByCustomerRepositoryInput,
+  ReleaseExpiredReservationsRepositoryInput,
+  ReleaseExpiredReservationsRepositoryResult,
+  ReleaseReservedStockRepositoryInput,
+  ReleaseReservedStockRepositoryResult,
+  ReserveStockRepositoryInput,
+  ReserveStockRepositoryResult,
+  WorkflowFailureRepositoryInput,
+  WorkflowLeaseRepositoryInput,
+  WorkflowStepRepositoryInput,
+} from "./storage/repositories";
+/** Paginated result envelope underlying {@link MikaDocumentList}. */
+export type { PaginatedStorageResult } from "./storage/collections";
 /** Repository-backed backend implementation injected into {@link createMikaApi}. */
 export {
   createMikaBackendApi,

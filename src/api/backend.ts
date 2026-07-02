@@ -275,7 +275,8 @@ function defaultBackendCurrency(input: { readonly defaults?: MikaBackendDefaults
   return input.defaults?.currency ?? DEFAULT_BACKEND_CURRENCY;
 }
 
-type MikaDocumentList<TDocument> = PaginatedStorageResult<{
+/** Paginated id/data page returned by repository-port list methods. */
+export type MikaDocumentList<TDocument> = PaginatedStorageResult<{
   readonly id: string;
   readonly data: TDocument;
 }>;
