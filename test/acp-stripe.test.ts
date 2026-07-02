@@ -1884,6 +1884,31 @@ describe("Mika Stripe provider", () => {
     expect(await refundActionStatus(null)).toBe("running");
   });
 
+  it("returns a failedAction result instead of throwing when Stripe refunds.create rejects", async () => {
+    // refundPayment previously let SDK errors propagate raw, unlike its sibling admin actions
+    // (cancelSubscription, changeSubscription, renewSubscription, cancelOrder), which all catch
+    // and return failedAction(...).
+    const stripe: MikaStripeClient = {
+      refunds: {
+        create: async () => {
+          throw new Error("stripe: card_declined");
+        },
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe });
+
+    await expect(
+      provider.refundPayment?.({
+        orderId: createMikaId("order_1"),
+        providerPaymentId: "pi_test_1",
+      }),
+    ).resolves.toMatchObject({
+      id: "refund",
+      status: "failed",
+      message: expect.stringContaining("card_declined"),
+    });
+  });
+
   it("forwards the admin idempotency key to Stripe refunds.create so retries dedupe", async () => {
     let capturedIdempotencyKey: string | undefined;
     const stripe: MikaStripeClient = {
@@ -2125,7 +2150,14 @@ describe("Mika Stripe provider", () => {
     });
 
     expect(couponCalls[0]).toMatchObject({
-      params: { amount_off: 240, currency: "eur", duration: "once" },
+      params: {
+        amount_off: 240,
+        currency: "eur",
+        duration: "once",
+        // Tags the coupon so a host-side cleanup job can prune abandoned-checkout coupons
+        // (Stripe never deletes them automatically) by idempotency key.
+        metadata: { mikaCheckoutIdempotencyKey: "idem_disc_1" },
+      },
       options: { idempotencyKey: "idem_disc_1_coupon" },
     });
     expect(sessionCalls[0]).toMatchObject({

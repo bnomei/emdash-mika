@@ -175,6 +175,7 @@ export interface MikaStripeCouponCreateParams {
   readonly duration: "once";
   readonly name?: string;
   readonly max_redemptions?: number;
+  readonly metadata?: Record<string, string>;
 }
 
 /** Stripe Checkout Session resource shape used by the adapter for status and redirect mapping. */
@@ -427,6 +428,13 @@ async function createStripeCheckoutSession(
   return stripeCheckoutSessionToMika(provider, session);
 }
 
+/**
+ * Creates a one-time Stripe coupon for a checkout discount. Each discounted hosted checkout
+ * creates a new Stripe Coupon resource (`max_redemptions: 1`); Stripe never deletes coupon
+ * objects automatically, so a checkout the buyer abandons leaves an unredeemed coupon in the
+ * account indefinitely. The coupon carries `mikaCheckoutIdempotencyKey` metadata so a host-side
+ * cleanup job can list and prune coupons older than the checkout TTL by that tag.
+ */
 async function stripeCheckoutDiscounts(
   options: CreateMikaStripeProviderOptions,
   input: MikaProviderCheckoutInput,
@@ -450,6 +458,9 @@ async function stripeCheckoutDiscounts(
       duration: "once",
       name: "Mika checkout discount",
       max_redemptions: 1,
+      ...(input.idempotencyKey
+        ? { metadata: { mikaCheckoutIdempotencyKey: input.idempotencyKey } }
+        : {}),
     },
     requestOptions(input.idempotencyKey ? `${input.idempotencyKey}_coupon` : undefined),
   );
@@ -695,19 +706,23 @@ async function refundStripePayment(
     return unsupportedAction("refund", "Stripe payment intent id is required.");
   }
 
-  const refund = await options.stripe.refunds.create(
-    {
-      payment_intent: input.providerPaymentId,
-      ...(input.amount !== undefined ? { amount: input.amount } : {}),
-      ...(input.reason ? { reason: input.reason } : {}),
-    },
-    requestOptions(input.idempotencyKey ? `${input.idempotencyKey}_refund` : undefined),
-  );
+  try {
+    const refund = await options.stripe.refunds.create(
+      {
+        payment_intent: input.providerPaymentId,
+        ...(input.amount !== undefined ? { amount: input.amount } : {}),
+        ...(input.reason ? { reason: input.reason } : {}),
+      },
+      requestOptions(input.idempotencyKey ? `${input.idempotencyKey}_refund` : undefined),
+    );
 
-  return {
-    id: createMikaId(refund.id),
-    status: stripeRefundActionStatus(refund.status),
-  };
+    return {
+      id: createMikaId(refund.id),
+      status: stripeRefundActionStatus(refund.status),
+    };
+  } catch (error) {
+    return failedAction("refund", stripeActionErrorMessage(error));
+  }
 }
 
 async function cancelStripeOrder(
