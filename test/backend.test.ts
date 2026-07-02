@@ -15510,6 +15510,9 @@ describe("backend API composition", () => {
         ],
       ]),
     });
+    // Note: the proxy is not identity-equal to the SessionRepository instance, so WeakMap-keyed
+    // internals (findSessionRepositoryOpenCartBySessionAnyCurrency) silently miss through it —
+    // fine here because this flow never reaches cart.merge; don't reuse this pattern for merges.
     const failingSession = new Proxy(repositories.session, {
       get(target, property, receiver) {
         if (property === "releaseCartCheckoutClaim") {

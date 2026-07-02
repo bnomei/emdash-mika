@@ -6891,7 +6891,9 @@ async function putWebhook(
   try {
     await input.repositories.ops.put(webhook);
   } catch (error) {
-    if (options.strict) throw new Error(`Webhook '${webhook.id}' status could not be persisted.`);
+    if (options.strict) {
+      throw new Error(`Webhook '${webhook.id}' status could not be persisted.`, { cause: error });
+    }
     // The webhook has already been accepted; callers still receive the in-memory state.
     observeBackendError(input, "webhook.persistStatus", error, { webhookId: webhook.id });
   }

@@ -1218,7 +1218,9 @@ async function handleAcpComplete(
     commitMainLease = true;
 
     return acpJson(request, await recordToAcpSession(options, request, completed), 200);
-  } catch {
+  } catch (error) {
+    observeAcpError(options, "acp.complete.unhandled", error);
+
     return acpUnhandledFailure(request);
   } finally {
     if (commitMainLease) {
