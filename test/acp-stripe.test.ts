@@ -332,6 +332,37 @@ describe("Mika ACP projection", () => {
     expect(checkoutStartCount).toBe(1);
   });
 
+  it("fails loudly instead of misreporting an unsupported provider as stripe on the ACP wire", async () => {
+    // providerToAcp previously silently reported "stripe" for any provider outside ACP's
+    // {stripe, adyen, braintree} union — an agent would generate a Stripe-shaped shared payment
+    // token for a session actually configured with a different, unsupported provider, a payment
+    // routing failure worse than a loud error.
+    let cart = createCart([]);
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("paddle"),
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      createSessionId: () => "checkout_session_acp_unsupported_provider",
+    });
+
+    const created = await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_unsupported", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+      }),
+    );
+
+    expect(created.status).toBe(500);
+    await expect(created.json()).resolves.toMatchObject({ code: "provider_failed" });
+  });
+
   it("freezes completed ACP quote totals instead of drifting with later cart changes", async () => {
     let cart = createCart([]);
     const store = createMemoryMikaAcpSessionStore();

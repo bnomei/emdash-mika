@@ -2113,10 +2113,25 @@ function acpCheckoutLink(link: MikaAcpLink): readonly MikaAcpCheckoutLink[] {
   return [];
 }
 
+const MIKA_ACP_PAYMENT_PROVIDERS = ["stripe", "adyen", "braintree"] as const;
+
+/**
+ * Maps a Mika provider to the ACP wire protocol's closed payment-provider union. Throws for any
+ * provider outside that set instead of silently reporting "stripe" — the wrong provider name on
+ * `payment_provider` would make an agent generate a shared payment token shaped for a provider
+ * that isn't actually handling the charge, a payment-routing failure worse than a loud error.
+ * All call sites run inside a handler that converts an unhandled throw to a generic ACP 500.
+ */
 function providerToAcp(provider: ProviderName | undefined): MikaAcpPaymentProvider["provider"] {
   const value = provider as string | undefined;
+  const match = MIKA_ACP_PAYMENT_PROVIDERS.find((candidate) => candidate === value);
+  if (!match) {
+    throw new Error(
+      `ACP does not support payment provider '${value ?? "(none)"}'; expected one of ${MIKA_ACP_PAYMENT_PROVIDERS.join(", ")}.`,
+    );
+  }
 
-  return value === "adyen" || value === "braintree" ? value : "stripe";
+  return match;
 }
 
 function buyerToCustomer(buyer: MikaAcpBuyer | undefined): CheckoutCustomerInput | undefined {
