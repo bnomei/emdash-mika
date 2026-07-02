@@ -57,6 +57,10 @@ const MIKA_ACP_DEFAULT_TERMINAL_RETENTION_MS = 24 * 60 * 60_000;
 // some Stripe operations); an expired-but-live claim reopens the key to concurrent execution.
 const MIKA_ACP_DEFAULT_IDEMPOTENCY_CLAIM_TTL_MS = 120_000;
 const MIKA_ACP_SIGNATURE_TOLERANCE_MS = 5 * 60_000;
+// Bounds handleAcpComplete's retry past an incidental expiry write (see
+// acpRecordIsOnlyIncidentallyExpired) — a handful of attempts absorbs a few bystander GETs ticking
+// the lazy expiry sweep during a slow payment attempt without looping unboundedly.
+const MIKA_ACP_COMPLETE_WRITE_RETRIES = 3;
 
 /** Seller identity and policy links attached to ACP catalog products. */
 export interface MikaAcpSeller {
@@ -280,6 +284,13 @@ export interface MikaAcpSessionStore {
    * whoever reclaimed it. `expectedVersion` is `undefined` when the caller read a record persisted
    * before `version` existed, or when writing brand-new state with nothing to compare against —
    * implementations must allow the write in that case rather than always rejecting it.
+   *
+   * This protects the *record* from a reclaimed handler's stale write; it does not and cannot
+   * prevent the reclaimed handler's own upstream side effects (e.g. handleAcpComplete's
+   * checkout.start call) from having already run before it lost this race — a reclaim scenario
+   * still means checkout.start executes once per handler attempt. Hosts wiring a real payment
+   * provider should size `idempotencyClaimTtlMs` well above realistic handler latency to make
+   * reclaims rare, and treat them as a known, bounded risk rather than one this method eliminates.
    */
   putIfUnchanged(
     record: MikaAcpSessionRecord,
@@ -318,6 +329,17 @@ export interface MikaAcpSessionStore {
    * reason as {@link bindIdempotencyKey}.
    */
   releaseIdempotencyKey(key: string, id: string, fencingToken: string): Promise<void>;
+  /**
+   * Bulk-expires stale sessions and purges retained terminal ones. Implementations must apply the
+   * same optimistic-concurrency discipline as {@link putIfUnchanged} to each record they mutate —
+   * the in-memory reference implementation gets this for free because its whole scan-and-mutate
+   * loop runs synchronously with no `await` in between, so nothing can interleave with a
+   * concurrent `putIfUnchanged`, but that's an artifact of that specific implementation, not a
+   * guarantee this interface provides. A host store (database-backed, possibly multi-process) that
+   * bulk-updates records here without a per-record CAS reintroduces exactly the class of bug
+   * `putIfUnchanged` exists to close — e.g. clobbering a session a concurrent handleAcpComplete is
+   * mid-write on.
+   */
   cleanupExpired?(input: MikaAcpSessionCleanupInput): Promise<MikaAcpSessionCleanupResult>;
 }
 
@@ -1264,20 +1286,25 @@ async function handleAcpComplete(
       return acpErrorFromResult(request, checkout);
     }
     if (acpCheckoutStartTerminalStatus(checkout.data.status)) {
-      // Best-effort compensation: if this loses the CAS race, someone else already moved the
-      // session forward concurrently, and reverting to not_ready_for_payment over their write
-      // would be the wrong outcome anyway — leave it and still report checkout.start's own
-      // terminal status, which is true for this request regardless of what's persisted.
-      await options.store.putIfUnchanged(
-        {
-          ...record,
-          buyer: body.data.buyer ?? record.buyer,
-          status: "not_ready_for_payment",
-          updatedAt: nowIso(options),
-          version: nextAcpVersion(expectedVersion),
-        },
-        expectedVersion,
-      );
+      // Compensating write: reflect this attempt's own terminal failure. If it loses the CAS
+      // race, someone else already moved the session forward concurrently (reverting to
+      // not_ready_for_payment over their write would be wrong) — report what's actually
+      // persisted instead of this attempt's now-moot terminal-failure verdict, same as the final
+      // completion write below.
+      const reverted: MikaAcpSessionRecord = {
+        ...record,
+        buyer: body.data.buyer ?? record.buyer,
+        status: "not_ready_for_payment",
+        updatedAt: nowIso(options),
+        version: nextAcpVersion(expectedVersion),
+      };
+      const revertWritten = await options.store.putIfUnchanged(reverted, expectedVersion);
+      if (!revertWritten) {
+        commitMainLease = true;
+        const current = (await options.store.get(checkoutSessionId)) ?? reverted;
+
+        return acpJson(request, await recordToAcpSession(options, request, current), 200);
+      }
 
       return acpError(
         request,
@@ -1297,7 +1324,7 @@ async function handleAcpComplete(
 
     const now = nowIso(options);
 
-    const completed: MikaAcpSessionRecord = {
+    const completedBase: Omit<MikaAcpSessionRecord, "version"> = {
       ...record,
       buyer: body.data.buyer ?? record.buyer,
       checkoutId: checkout.data.id,
@@ -1314,22 +1341,47 @@ async function handleAcpComplete(
         ? { purgeAt: addMilliseconds(now, acpTerminalRetentionMs(options)) }
         : {}),
       updatedAt: now,
-      version: nextAcpVersion(expectedVersion),
     };
-    const written = await options.store.putIfUnchanged(completed, expectedVersion);
+
+    // checkout.start above already happened and cannot be undone from here, so the write below
+    // must land somewhere sound. A CAS loss against a genuine competing decision (another
+    // completion, cancellation, or checkout attempt) means this attempt truly lost and must defer
+    // to what's persisted. A CAS loss against nothing more than expireAcpRecordIfNeeded's lazy
+    // sweep ticking on a bystander request (e.g. a plain GET polling this session while this
+    // handler was merely slow, not crashed) isn't a real conflict — retry past it a bounded number
+    // of times rather than silently discarding a successful payment.
+    let writeVersion = expectedVersion;
+    let persisted: MikaAcpSessionRecord | undefined;
+    for (let attempt = 0; attempt < MIKA_ACP_COMPLETE_WRITE_RETRIES; attempt += 1) {
+      const candidate: MikaAcpSessionRecord = {
+        ...completedBase,
+        version: nextAcpVersion(writeVersion),
+      };
+      if (await options.store.putIfUnchanged(candidate, writeVersion)) {
+        persisted = candidate;
+        break;
+      }
+      const current = await options.store.get(checkoutSessionId);
+      if (!current || !acpRecordIsOnlyIncidentallyExpired(current)) break;
+      writeVersion = current.version;
+    }
     commitMainLease = true;
-    if (!written) {
-      // Lost the race: another request (most likely one that reclaimed this session's completion
-      // lock after this handler's lease TTL expired while it was merely slow, not crashed) already
-      // committed a different outcome. checkout.start above already happened and cannot be undone
-      // from here — but we must not report *this* handler's own locally-computed record as if it
-      // were persisted. Report whatever is actually stored instead, same as an idempotency replay.
-      const current = (await options.store.get(checkoutSessionId)) ?? completed;
+    if (!persisted) {
+      // Lost to a genuine competing decision — report whatever is actually stored instead of this
+      // attempt's own now-stale computation, same as an idempotency replay. The `?? { ...}`
+      // fallback only matters if the record vanished between the failed write and this read (e.g.
+      // a concurrent purge sweep) — far-fetched given purgeAt retention is minutes-to-days by
+      // default, but falling back to this attempt's own view is still strictly better than a 500
+      // for a payment that, per checkout.start above, already genuinely went through.
+      const current = (await options.store.get(checkoutSessionId)) ?? {
+        ...completedBase,
+        version: nextAcpVersion(writeVersion),
+      };
 
       return acpJson(request, await recordToAcpSession(options, request, current), 200);
     }
 
-    return acpJson(request, await recordToAcpSession(options, request, completed), 200);
+    return acpJson(request, await recordToAcpSession(options, request, persisted), 200);
   } catch (error) {
     observeAcpError(options, "acp.complete.unhandled", error);
 
@@ -1586,6 +1638,23 @@ function acpRecordIsExpired(record: MikaAcpSessionRecord, now: ISODateTime): boo
   if (!record.expiresAt) return false;
 
   return new Date(record.expiresAt).getTime() <= new Date(now).getTime();
+}
+
+/**
+ * True when `current` looks like nothing more than expireAcpRecordIfNeeded's lazy expiry sweep
+ * landed on top of the record a completion attempt started from — no checkout attempt bound, no
+ * terminal outcome — rather than a genuine competing decision (another completion, cancellation,
+ * or checkout attempt) that must be deferred to. expireAcpRecordIfNeeded runs unconditionally at
+ * the top of every handler, including plain GETs with no locking of their own, so an ordinary
+ * concurrent status poll can legitimately tick a session's TTL and bump its version while a slow
+ * (not crashed) handleAcpComplete is still mid checkout.start — losing that handler's final CAS
+ * check to a bystander write, not a real conflict. Without distinguishing the two, a genuinely
+ * successful completion would be silently discarded: its own caller would be told the session is
+ * "not_ready_for_payment" while a real payment already went through, and nothing ever revisits
+ * that record afterward to set it right.
+ */
+function acpRecordIsOnlyIncidentallyExpired(current: MikaAcpSessionRecord): boolean {
+  return !current.checkoutId && current.status !== "completed" && current.status !== "canceled";
 }
 
 async function expireAcpRecordIfNeeded(

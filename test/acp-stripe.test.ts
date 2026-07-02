@@ -1986,6 +1986,178 @@ describe("Mika ACP projection", () => {
     expect(checkoutStartCount).toBe(2);
   });
 
+  it("retries a completion write past an incidental expiry sweep instead of discarding it", async () => {
+    // expireAcpRecordIfNeeded runs unconditionally at the top of every handler, including plain
+    // GETs with no locking of their own. If a session's TTL happens to elapse while a genuinely
+    // slow (not crashed) complete() is still mid checkout.start, an ordinary concurrent status
+    // poll can tick that lazy expiry sweep and bump the record's version — losing the completion's
+    // own CAS check to a bystander write, not a real competing decision. Without distinguishing
+    // the two, a successful payment would be silently discarded: the paying caller would be told
+    // "not_ready_for_payment" and nothing would ever revisit the record to correct it.
+    let cart = createCart([]);
+    let currentTime = new Date("2026-01-01T00:00:00.000Z");
+    let releaseGate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    let signalStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+        onCheckoutStart: async () => {
+          signalStarted();
+          await gate;
+        },
+        checkoutSessionStatus: "completed",
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      now: () => currentTime,
+      sessionTtlMs: 2_000,
+      createSessionId: () => "checkout_session_acp_incidental_expiry",
+    });
+
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_expiry", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+      }),
+    );
+
+    const completePromise = handlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_incidental_expiry/complete",
+        "idem_complete_expiry",
+        { payment_data: { provider: "stripe", token: "spt_test_123" } },
+      ),
+      "checkout_session_acp_incidental_expiry",
+    );
+    await started;
+
+    // The session's TTL (2s) elapses while complete() is still blocked inside checkout.start.
+    currentTime = new Date(currentTime.getTime() + 3_000);
+    // An ordinary, unrelated status poll ticks the lazy expiry sweep — no lock, no bad intent.
+    const polled = await handlers.get(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_incidental_expiry",
+        "idem_get_expiry",
+        {},
+      ),
+      "checkout_session_acp_incidental_expiry",
+    );
+    expect(polled.status).toBe(200);
+    await expect(polled.json()).resolves.toMatchObject({ status: "not_ready_for_payment" });
+
+    releaseGate();
+    const completed = await completePromise;
+
+    // The completion must land — not be silently swallowed by the bystander expiry write.
+    expect(completed.status).toBe(200);
+    await expect(completed.json()).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("reports the real persisted outcome when a compensating revert loses its CAS race", async () => {
+    // Handler A's own checkout.start attempt fails terminally (e.g. the provider declines), and
+    // A tries to compensate by reverting the session to not_ready_for_payment. But if a reclaiming
+    // handler B already completed the session first, reverting over B's write would be wrong — and
+    // simply reporting A's own terminal-failure verdict regardless of what actually landed would
+    // mislead A's caller into believing the session failed when it, in fact, succeeded.
+    let cart = createCart([]);
+    let currentTime = new Date("2026-01-01T00:00:00.000Z");
+    let checkoutStartCount = 0;
+    let releaseFirstStart: () => void = () => {};
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirstStart = resolve;
+    });
+    let signalFirstStarted: () => void = () => {};
+    const firstStarted = new Promise<void>((resolve) => {
+      signalFirstStarted = resolve;
+    });
+    const baseApi = createAcpTestApi({
+      getCart: () => cart,
+      setCart: (next) => {
+        cart = next;
+      },
+      checkoutSessionStatus: "completed",
+    });
+    const api: MikaApi = {
+      ...baseApi,
+      checkout: {
+        ...baseApi.checkout,
+        start: async (ctx, checkoutInput) => {
+          checkoutStartCount += 1;
+          if (checkoutStartCount === 1) {
+            // Handler A: blocks, then reports its own attempt failed terminally once unblocked.
+            signalFirstStarted();
+            await firstGate;
+
+            return ok<CheckoutSessionDTO>({
+              id: createMikaId("checkout_a_failed"),
+              status: "failed",
+              mode: "payment",
+              provider: createProviderName("stripe"),
+            });
+          }
+
+          // Handler B: unblocked, succeeds normally.
+          return baseApi.checkout.start(ctx, checkoutInput);
+        },
+      },
+    };
+    const handlers = createMikaAcpCheckoutHandlers({
+      api,
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      now: () => currentTime,
+      idempotencyClaimTtlMs: 2_000,
+      createSessionId: () => "checkout_session_acp_revert_race",
+    });
+
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_revert_race", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+      }),
+    );
+
+    const complete = (key: string) =>
+      handlers.complete(
+        acpRequest(
+          "https://shop.example.test/checkout_sessions/checkout_session_acp_revert_race/complete",
+          key,
+          { payment_data: { provider: "stripe", token: "spt_test_123" } },
+        ),
+        "checkout_session_acp_revert_race",
+      );
+
+    const firstPromise = complete("idem_revert_race_a");
+    await firstStarted;
+
+    currentTime = new Date(currentTime.getTime() + 3_000);
+
+    const secondResponse = await complete("idem_revert_race_b");
+    expect(secondResponse.status).toBe(200);
+    await expect(secondResponse.json()).resolves.toMatchObject({ status: "completed" });
+
+    releaseFirstStart();
+    const firstResponse = await firstPromise;
+
+    // A's own attempt genuinely failed, but B's completion is what's actually true — A's caller
+    // must be told that, not a 409 claiming the session failed when it didn't.
+    expect(firstResponse.status).toBe(200);
+    await expect(firstResponse.json()).resolves.toMatchObject({ status: "completed" });
+  });
+
   it("validates ACP request body shapes before touching carts or sessions", async () => {
     let cart = createCart([]);
     let cartMutations = 0;
