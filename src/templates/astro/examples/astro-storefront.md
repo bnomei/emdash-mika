@@ -51,9 +51,10 @@ The default action module is intentionally small:
 
 ```ts
 import { createMikaActions } from "./mika";
+import { api } from "../lib/mika-api";
 
 export const server = {
-  mika: createMikaActions(),
+  mika: createMikaActions({ api }),
 };
 ```
 
@@ -62,9 +63,11 @@ Add host policy with the `guard` option:
 ```ts
 import { ActionError } from "astro:actions";
 import { createMikaActions } from "./mika";
+import { api } from "../lib/mika-api";
 
 export const server = {
   mika: createMikaActions({
+    api,
     guard: async (ctx, action, input) => {
       const limited = false;
 
