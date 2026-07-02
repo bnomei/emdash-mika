@@ -2142,6 +2142,48 @@ describe("backend test Kysely stock database harness", () => {
     }
   });
 
+  it("composes stock mutations inside an already-open kysely transaction", async () => {
+    const database = createTransactionTestMikaDb();
+    const { db } = database;
+    const clock = createTestClock();
+    const stockItem = createStockRecord({
+      quantityOnHand: 10,
+      quantityReserved: 2,
+    });
+
+    try {
+      await mikaInitialMigration.up(db);
+      await new StockRepository(db).putItem(stockItem);
+
+      const result = await db.transaction().execute(async (transaction) => {
+        const repository = new StockRepository(transaction);
+
+        return repository.reserve({
+          reservationEventId: createTestMikaId("stock_event", 90),
+          stockItemId: stockItem.id,
+          quantity: 3,
+          expiresAt: clock.isoAt(15 * 60_000),
+          now: TEST_NOW,
+          idempotencyKey: "reserve_inside_transaction_1",
+        });
+      });
+
+      expect(result).toMatchObject({
+        status: "reserved",
+        stock: { quantityReserved: 5 },
+      });
+      await expect(
+        new StockRepository(db).findBySellableId(stockItem.sellableId),
+      ).resolves.toMatchObject({
+        quantityOnHand: 10,
+        quantityReserved: 5,
+      });
+    } finally {
+      await rollbackMikaInitialMigration(db);
+      await database.destroy();
+    }
+  });
+
   it("rejects insufficient finite stock without increasing reserved quantity", async () => {
     const database = createTransactionTestMikaDb();
     const { db } = database;

@@ -3298,15 +3298,12 @@ async function withTransaction<T>(
   executor: MikaDbExecutor,
   operation: (executor: MikaDbExecutor) => Promise<T>,
 ): Promise<T> {
-  if (hasTransaction(executor)) {
-    return executor.transaction().execute(operation);
+  // kysely transactions cannot nest; reuse an already-open transaction scope directly.
+  if (executor.isTransaction) {
+    return operation(executor);
   }
 
-  return operation(executor);
-}
-
-function hasTransaction(executor: MikaDbExecutor): executor is MikaDb {
-  return typeof (executor as { readonly transaction?: unknown }).transaction === "function";
+  return executor.transaction().execute(operation);
 }
 
 function mutationAffected(result: StockMutationResult): boolean {
