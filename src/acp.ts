@@ -53,6 +53,7 @@ export const MIKA_ACP_DEFAULT_SESSION_PREFIX = "acp_checkout";
 
 const MIKA_ACP_DEFAULT_SESSION_TTL_MS = 15 * 60_000;
 const MIKA_ACP_DEFAULT_TERMINAL_RETENTION_MS = 24 * 60 * 60_000;
+const MIKA_ACP_DEFAULT_IDEMPOTENCY_CLAIM_TTL_MS = 60_000;
 const MIKA_ACP_SIGNATURE_TOLERANCE_MS = 5 * 60_000;
 
 /** Seller identity and policy links attached to ACP catalog products. */
@@ -247,12 +248,28 @@ export interface MikaAcpSessionCleanupResult {
   readonly hasMore: boolean;
 }
 
+/** Expiry window handed to {@link MikaAcpSessionStore.claimIdempotencyKey} for crash recovery. */
+export interface MikaAcpIdempotencyLeaseWindow {
+  readonly now: ISODateTime;
+  readonly expiresAt: ISODateTime;
+}
+
 /** Pluggable store for ACP session records with atomic idempotency-key coordination. */
 export interface MikaAcpSessionStore {
   get(id: string): Promise<MikaAcpSessionRecord | undefined>;
   put(record: MikaAcpSessionRecord): Promise<void>;
-  /** Claim before mutating; replay returns the stored record, conflict returns the other session id. */
-  claimIdempotencyKey(key: string, id: string): Promise<MikaAcpIdempotencyClaim>;
+  /**
+   * Claim before mutating; replay returns the stored record, conflict returns the other session
+   * id. Stores must treat a PENDING (unbound) claim whose `expiresAt` lies at or before
+   * `lease.now` as expired and grant the new claim — otherwise a handler crash between claim and
+   * bind/release leaves the key `in_progress` forever and, for the completion lock, permanently
+   * bricks completion of that session. Bound keys never expire.
+   */
+  claimIdempotencyKey(
+    key: string,
+    id: string,
+    lease?: MikaAcpIdempotencyLeaseWindow,
+  ): Promise<MikaAcpIdempotencyClaim>;
   /** Bind after successful handler completion so replays return the committed record. */
   bindIdempotencyKey(key: string, id: string): Promise<void>;
   /** Release after handler failure so the key can be retried. */
@@ -284,6 +301,11 @@ export interface CreateMikaAcpCheckoutHandlersOptions {
   readonly sessionTtlMs?: number;
   /** Retention window for completed or canceled sessions before purge. */
   readonly terminalRetentionMs?: number;
+  /**
+   * TTL for pending idempotency claims; must exceed the slowest expected handler run. After a
+   * crash mid-handler, a retry with the same Idempotency-Key can re-execute once this elapses.
+   */
+  readonly idempotencyClaimTtlMs?: number;
   /** Generator for ACP checkout session ids; defaults to a crypto-safe id. */
   readonly createSessionId?: () => string;
   readonly orderUrl?: (input: {
@@ -709,7 +731,10 @@ export function serializeMikaAcpProductFeed(feed: MikaAcpProductFeed): string {
 /** In-memory `MikaAcpSessionStore` for development and tests. */
 export function createMemoryMikaAcpSessionStore(): MikaAcpSessionStore {
   const sessions = new Map<string, MikaAcpSessionRecord>();
-  const idempotencyKeys = new Map<string, { readonly id: string; readonly pending: boolean }>();
+  const idempotencyKeys = new Map<
+    string,
+    { readonly id: string; readonly pending: boolean; readonly expiresAt?: ISODateTime }
+  >();
 
   return {
     async get(id) {
@@ -718,9 +743,14 @@ export function createMemoryMikaAcpSessionStore(): MikaAcpSessionStore {
     async put(record) {
       sessions.set(record.id, record);
     },
-    async claimIdempotencyKey(key, id) {
+    async claimIdempotencyKey(key, id, lease) {
       const existing = idempotencyKeys.get(key);
-      if (existing) {
+      const existingExpired =
+        existing?.pending === true &&
+        existing.expiresAt !== undefined &&
+        lease !== undefined &&
+        new Date(existing.expiresAt).getTime() <= new Date(lease.now).getTime();
+      if (existing && !existingExpired) {
         if (existing.id !== id) return { status: "conflict", id: existing.id };
         const record = sessions.get(existing.id);
 
@@ -729,7 +759,7 @@ export function createMemoryMikaAcpSessionStore(): MikaAcpSessionStore {
           : { status: "in_progress", id: existing.id };
       }
 
-      idempotencyKeys.set(key, { id, pending: true });
+      idempotencyKeys.set(key, { id, pending: true, expiresAt: lease?.expiresAt });
 
       return { status: "claimed" };
     },
@@ -1028,31 +1058,21 @@ async function handleAcpComplete(
 
     return completion.response;
   }
-  const releaseLeases = async () => {
-    await releaseAcpIdempotency(options, idempotency.lease);
-    await releaseAcpIdempotency(options, completion.lease);
-  };
-  const releaseLeasesQuietly = async () => {
-    await releaseAcpIdempotencyQuietly(options, idempotency.lease);
-    await releaseAcpIdempotencyQuietly(options, completion.lease);
-  };
+  // Every exit funnels through `finally`: success paths flag the main lease for commit (so
+  // Idempotency-Key replays return the committed record); all other exits release both leases.
+  let commitMainLease = false;
   try {
     const terminalStatus = await acpTerminalStatus(options, record);
     if (terminalStatus === "completed") {
-      await commitAcpIdempotency(options, idempotency.lease);
-      await releaseAcpIdempotency(options, completion.lease);
+      commitMainLease = true;
 
       return acpJson(request, await recordToAcpSession(options, request, record), 200);
     }
     if (terminalStatus === "canceled") {
-      await releaseLeases();
-
       return acpTerminalError(request, terminalStatus, "completed");
     }
 
     if (record.checkoutId) {
-      await releaseLeases();
-
       return acpError(
         request,
         409,
@@ -1063,14 +1083,10 @@ async function handleAcpComplete(
 
     const body = await readAcpBody(request, acpCheckoutCompleteRequestSchema);
     if (!body.ok) {
-      await releaseLeases();
-
       return acpError(request, 400, "invalid_request", body.message, body.path);
     }
     const expectedProvider = providerToAcp(record.provider);
     if (body.data.payment_data.provider !== expectedProvider) {
-      await releaseLeases();
-
       return acpError(
         request,
         400,
@@ -1080,8 +1096,6 @@ async function handleAcpComplete(
       );
     }
     if (body.data.payment_data.provider !== "stripe") {
-      await releaseLeases();
-
       return acpError(
         request,
         400,
@@ -1094,13 +1108,9 @@ async function handleAcpComplete(
     const customer = buyerToCustomer(body.data.buyer ?? record.buyer);
     const preview = await previewAcpCheckout(options, request, record, customer);
     if (!preview.ok) {
-      await releaseLeases();
-
       return acpErrorFromResult(request, preview);
     }
     if (!preview.data.inputHash || preview.data.status !== "requires_payment_authorization") {
-      await releaseLeases();
-
       return acpError(
         request,
         409,
@@ -1124,8 +1134,6 @@ async function handleAcpComplete(
       },
     });
     if (!checkout.ok) {
-      await releaseLeases();
-
       return acpErrorFromResult(request, checkout);
     }
     if (acpCheckoutStartTerminalStatus(checkout.data.status)) {
@@ -1135,7 +1143,6 @@ async function handleAcpComplete(
         status: "not_ready_for_payment",
         updatedAt: nowIso(options),
       });
-      await releaseLeases();
 
       return acpError(
         request,
@@ -1145,8 +1152,6 @@ async function handleAcpComplete(
       );
     }
     if (!preview.data.quote) {
-      await releaseLeases();
-
       return acpError(
         request,
         409,
@@ -1176,14 +1181,23 @@ async function handleAcpComplete(
       updatedAt: now,
     };
     await options.store.put(completed);
-    await commitAcpIdempotency(options, idempotency.lease);
-    await releaseAcpIdempotency(options, completion.lease);
+    commitMainLease = true;
 
     return acpJson(request, await recordToAcpSession(options, request, completed), 200);
   } catch {
-    await releaseLeasesQuietly();
-
     return acpUnhandledFailure(request);
+  } finally {
+    if (commitMainLease) {
+      try {
+        await commitAcpIdempotency(options, idempotency.lease);
+      } catch {
+        // Bind failed after a committed session: release instead, so a replayed request rebuilds
+        // the committed response from the stored record rather than staying in_progress.
+        commitMainLease = false;
+      }
+    }
+    if (!commitMainLease) await releaseAcpIdempotencyQuietly(options, idempotency.lease);
+    await releaseAcpIdempotencyQuietly(options, completion.lease);
   }
 }
 
@@ -1288,7 +1302,14 @@ async function beginAcpIdempotency(
   const key = storeKeyOverride ?? acpIdempotencyStoreKey(request);
   if (!key) return { ok: true };
 
-  const claim = await options.store.claimIdempotencyKey(key, checkoutSessionId);
+  const now = nowIso(options);
+  const claim = await options.store.claimIdempotencyKey(key, checkoutSessionId, {
+    now,
+    expiresAt: addMilliseconds(
+      now,
+      options.idempotencyClaimTtlMs ?? MIKA_ACP_DEFAULT_IDEMPOTENCY_CLAIM_TTL_MS,
+    ),
+  });
   if (claim.status === "claimed") {
     return { ok: true, lease: { key, id: checkoutSessionId } };
   }

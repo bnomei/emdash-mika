@@ -1574,6 +1574,105 @@ describe("Mika ACP projection", () => {
     expect(checkoutStartCount).toBe(0);
   });
 
+  it("recovers a crashed ACP complete once the stuck idempotency claim expires", async () => {
+    let cart = createCart([]);
+    const store = createMemoryMikaAcpSessionStore();
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+      }),
+      store,
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      now: () => new Date("2026-01-01T00:10:00.000Z"),
+      createSessionId: () => "checkout_session_acp_lease_expiry",
+    });
+
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_lease_expiry", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+      }),
+    );
+
+    // Simulate a crashed complete: its completion lock was claimed but never released.
+    await expect(
+      store.claimIdempotencyKey(
+        "acp_complete_lock:checkout_session_acp_lease_expiry",
+        "checkout_session_acp_lease_expiry",
+        {
+          now: createISODateTime("2026-01-01T00:00:00.000Z"),
+          expiresAt: createISODateTime("2026-01-01T00:01:00.000Z"),
+        },
+      ),
+    ).resolves.toEqual({ status: "claimed" });
+
+    // The stuck claim expired at 00:01; the handler clock is 00:10, so completion recovers.
+    const completed = await handlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_lease_expiry/complete",
+        "idem_complete_lease_expiry",
+        { payment_data: { provider: "stripe", token: "spt_test_123" } },
+      ),
+      "checkout_session_acp_lease_expiry",
+    );
+    expect(completed.status).toBe(200);
+    await expect(completed.json()).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("keeps blocking ACP complete while a live completion claim has not expired", async () => {
+    let cart = createCart([]);
+    const store = createMemoryMikaAcpSessionStore();
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+      }),
+      store,
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      now: () => new Date("2026-01-01T00:10:00.000Z"),
+      createSessionId: () => "checkout_session_acp_live_lease",
+    });
+
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_live_lease", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+      }),
+    );
+
+    await expect(
+      store.claimIdempotencyKey(
+        "acp_complete_lock:checkout_session_acp_live_lease",
+        "checkout_session_acp_live_lease",
+        {
+          now: createISODateTime("2026-01-01T00:09:00.000Z"),
+          expiresAt: createISODateTime("2026-01-01T01:00:00.000Z"),
+        },
+      ),
+    ).resolves.toEqual({ status: "claimed" });
+
+    const blocked = await handlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_acp_live_lease/complete",
+        "idem_complete_live_lease",
+        { payment_data: { provider: "stripe", token: "spt_test_123" } },
+      ),
+      "checkout_session_acp_live_lease",
+    );
+    expect(blocked.status).toBe(409);
+    await expect(blocked.json()).resolves.toMatchObject({
+      code: "request_not_idempotent",
+      message: "Idempotency-Key replay is already in progress.",
+    });
+  });
+
   it("validates ACP request body shapes before touching carts or sessions", async () => {
     let cart = createCart([]);
     let cartMutations = 0;
