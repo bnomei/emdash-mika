@@ -49,7 +49,10 @@ import type {
   WorkflowLeaseRepositoryInput,
   WorkflowStepRepositoryInput,
 } from "../storage/repositories";
-import { findSessionRepositoryOpenCartBySessionAnyCurrency } from "../storage/repositories";
+import {
+  findSessionRepositoryOpenCartBySessionAnyCurrency,
+  nextCartVersion,
+} from "../storage/repositories";
 import type { PaginatedStorageResult } from "../storage/collections";
 import {
   cartToDTO,
@@ -344,9 +347,14 @@ export interface MikaSessionRepositoryPort {
    * the cart since it was read (concurrent tab, concurrent checkout claim, etc.) — same CAS
    * pattern as {@link claimCartForCheckout}, so a blind `put` can never silently discard a
    * concurrent write. Callers surface a conflict rather than merge or retry server-side, so the
-   * client re-fetches the current cart before resubmitting.
+   * client re-fetches the current cart before resubmitting. `expectedVersion` is `undefined` when
+   * the caller read a cart persisted before `version` existed; implementations must allow the
+   * write in that case (nothing to compare against) rather than always rejecting it.
    */
-  putCartIfUnchanged(cart: CartDocument, expectedVersion: number): Promise<CartDocument | null>;
+  putCartIfUnchanged(
+    cart: CartDocument,
+    expectedVersion: number | undefined,
+  ): Promise<CartDocument | null>;
   findWishlistBySession(sessionId: string): Promise<WishlistDocument | null>;
   findWishlistByCustomer(customerId: MikaId): Promise<WishlistDocument | null>;
   findCheckoutByProvider(
@@ -7240,7 +7248,7 @@ function cartWriteBlocked(cart: CartDocument): MikaApiFailure | null {
 async function putCartOrConflict(
   input: MikaCartWishlistBackendInput,
   cart: CartDocument,
-  expectedVersion: number,
+  expectedVersion: number | undefined,
 ): Promise<{ readonly ok: true; readonly cart: CartDocument } | MikaApiFailure> {
   const persisted = await input.repositories.session.putCartIfUnchanged(cart, expectedVersion);
   if (!persisted) {
@@ -9435,15 +9443,6 @@ function createCartDocument(
     createdAt: now,
     updatedAt: now,
   };
-}
-
-/**
- * Increments a cart's optimistic-concurrency version, tolerating a missing `current` (a cart
- * persisted before this field existed) by treating it as version 0 rather than producing NaN —
- * which would otherwise permanently 409 every write to that cart from here on (NaN !== NaN).
- */
-function nextCartVersion(current: number | undefined): number {
-  return (current ?? 0) + 1;
 }
 
 function updateCartDocument(

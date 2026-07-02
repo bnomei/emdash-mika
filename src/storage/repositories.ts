@@ -556,7 +556,7 @@ function adminAuditWithId(document: AdminAuditDocument, id: MikaId): AdminAuditD
  * persisted before this field existed) by treating it as version 0 rather than producing NaN —
  * which would otherwise permanently 409 every write to that cart from here on (NaN !== NaN).
  */
-function nextCartVersion(current: number | undefined): number {
+export function nextCartVersion(current: number | undefined): number {
   return (current ?? 0) + 1;
 }
 
@@ -820,7 +820,7 @@ export class SessionRepository {
 
   async putCartIfUnchanged(
     cart: CartDocument,
-    expectedVersion: number,
+    expectedVersion: number | undefined,
   ): Promise<CartDocument | null> {
     const updated = await this.documents.update(cart.id, (current) => {
       const existing = documentOfType(current, "cart");
