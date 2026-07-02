@@ -482,11 +482,12 @@ function calculateCheckoutTotals(
 }
 
 /**
- * Computes coupon discount amount clamped to `[0, subtotalAmount]`. A negative `rate` or
- * `discountAmount` (e.g. from a buggy or malicious host-supplied `CouponResolverPort`) must never
- * pass through as a negative discount, or subtracting it from a checkout total would inflate the
- * charge above what the buyer confirmed — this is now the sole guard, since delegated-payment
- * adapters trust the backend's computed total verbatim rather than recomputing it themselves.
+ * Computes coupon discount amount clamped to `[0, subtotalAmount]`. A negative, `NaN`, or
+ * infinite `rate` or `discountAmount` (e.g. from a `CouponSnapshot` a host's own storage layer
+ * round-trips with a corrupted value, bypassing the resolver's own validation) must never pass
+ * through and poison the checkout total with `NaN` or inflate it above what the buyer confirmed —
+ * this is now the sole guard, since delegated-payment adapters trust the backend's computed total
+ * verbatim rather than recomputing it themselves.
  */
 export function couponDiscountAmount(
   coupon: CouponSnapshot | undefined,
@@ -495,10 +496,13 @@ export function couponDiscountAmount(
   if (!coupon) return 0;
   const cap = Math.max(0, subtotalAmount);
   if (coupon.rate !== undefined) {
+    if (!Number.isFinite(coupon.rate)) return 0;
     return Math.max(0, Math.min(Math.floor(cap * coupon.rate), cap));
   }
 
-  return Math.max(0, Math.min(coupon.discountAmount ?? 0, cap));
+  const discountAmount = coupon.discountAmount ?? 0;
+  if (!Number.isFinite(discountAmount)) return 0;
+  return Math.max(0, Math.min(discountAmount, cap));
 }
 
 function calculateTotals(

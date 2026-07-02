@@ -3516,6 +3516,17 @@ describe("Mika model mappers", () => {
     expect(couponDiscountAmount({ discountAmount: 240 }, 2400)).toBe(240);
     expect(couponDiscountAmount(undefined, 2400)).toBe(0);
   });
+
+  it("never lets a non-finite coupon rate or amount poison a checkout total with NaN", () => {
+    // A CouponSnapshot's rate/discountAmount only goes through the resolver's finiteness check
+    // when built from a coupon code; one round-tripped through a host's own storage layer isn't
+    // re-validated, so this function is the only remaining guard against NaN/Infinity reaching
+    // Math.max(0, checkoutSubtotal - checkoutDiscountAmount) and producing a NaN charge amount.
+    expect(couponDiscountAmount({ rate: Number.NaN }, 2400)).toBe(0);
+    expect(couponDiscountAmount({ rate: Number.POSITIVE_INFINITY }, 2400)).toBe(0);
+    expect(couponDiscountAmount({ discountAmount: Number.NaN }, 2400)).toBe(0);
+    expect(couponDiscountAmount({ discountAmount: Number.POSITIVE_INFINITY }, 2400)).toBe(0);
+  });
 });
 
 describe("Mika storage boundaries", () => {
