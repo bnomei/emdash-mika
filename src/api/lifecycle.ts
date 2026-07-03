@@ -4,13 +4,36 @@
  */
 import type { MikaProviderPaymentEvent } from "../provider";
 import type { OrderRefundInput, OrderCancelInput } from "./types";
-import type { OrderDocument } from "../types/documents";
+import type { CheckoutDocument, OrderDocument } from "../types/documents";
 import type {
+  CheckoutStatus,
   ISODateTime,
   OrderStatus,
   PaymentStatus,
   SubscriptionStatus,
 } from "../types/primitives";
+
+/**
+ * Terminal checkout statuses — no further lifecycle transition is possible. Kept here (a neutral
+ * module both checkout.ts and quote.ts import) so the scattered status string checks share one
+ * source; the complementary non-terminal set is `created | redirected`.
+ */
+export function checkoutStatusIsTerminal(status: CheckoutStatus): boolean {
+  return (
+    status === "completed" ||
+    status === "cancelled" ||
+    status === "expired" ||
+    status === "failed"
+  );
+}
+
+/**
+ * A checkout that has completed or already produced an order. Cancel/expire are no-ops on it, and
+ * the payment webhook may set completed+orderId concurrently, so this is checked before mutating.
+ */
+export function checkoutIsSettled(document: CheckoutDocument): boolean {
+  return document.status === "completed" || Boolean(document.orderId);
+}
 
 const PAYMENT_TERMINAL_ORDER_STATUSES = new Set<OrderStatus>([
   "refunded",

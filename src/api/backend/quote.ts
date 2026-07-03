@@ -44,6 +44,7 @@ import {
   moneyDTO,
 } from "./shared";
 import { expireCheckoutReservations } from "./stock-lifecycle";
+import { checkoutStatusIsTerminal } from "../lifecycle";
 import type {
   MikaBackendDependencies,
   MikaBackendRepositories,
@@ -109,7 +110,8 @@ export async function reopenAbandonedCheckoutCart(
 }
 
 export function checkoutIsResumable(checkout: CheckoutDocument, now: ISODateTime): boolean {
-  if (checkout.status !== "created" && checkout.status !== "redirected") return false;
+  // Only the non-terminal statuses (created/redirected) are resumable.
+  if (checkoutStatusIsTerminal(checkout.status)) return false;
   if (!checkout.expiresAt) return true;
 
   return new Date(checkout.expiresAt).getTime() > new Date(now).getTime();

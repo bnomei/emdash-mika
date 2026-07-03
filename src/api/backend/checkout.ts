@@ -80,6 +80,7 @@ import {
   updateCartDocument,
   validateQuantityLimit,
 } from "./quote";
+import { checkoutIsSettled, checkoutStatusIsTerminal } from "../lifecycle";
 import { defaultBackendCurrency, metadataMikaId, metadataString, moneyDTO } from "./shared";
 import { createMikaStockLifecycleService, expireCheckoutReservations } from "./stock-lifecycle";
 import type { MikaStockLifecycleDependencies } from "./stock-lifecycle";
@@ -1038,11 +1039,7 @@ export async function expireCheckoutDocument(
   document: CheckoutDocument,
   now: ISODateTime,
 ): Promise<CheckoutDocument> {
-  if (
-    document.status === "completed" ||
-    document.orderId ||
-    !checkoutStatusCanExpire(document.status)
-  ) {
+  if (checkoutIsSettled(document) || checkoutStatusIsTerminal(document.status)) {
     return document;
   }
 
@@ -1078,14 +1075,7 @@ export async function cancelCheckout(
   const accessError = await checkoutCancelAccessError(input, ctx, document, cancelInput.token);
   if (accessError) return accessError;
 
-  if (document.status === "completed" || document.orderId) {
-    return checkoutDocumentSuccessResult(document);
-  }
-  if (
-    document.status === "cancelled" ||
-    document.status === "expired" ||
-    document.status === "failed"
-  ) {
+  if (checkoutIsSettled(document) || checkoutStatusIsTerminal(document.status)) {
     return checkoutDocumentSuccessResult(document);
   }
 
@@ -1098,14 +1088,7 @@ export async function cancelCheckout(
 
   const current = await input.repositories.session.findCheckoutById(checkoutId);
   if (!current) return invalidCheckout("checkoutId", checkoutId);
-  if (current.status === "completed" || current.orderId) {
-    return checkoutDocumentSuccessResult(current);
-  }
-  if (
-    current.status === "cancelled" ||
-    current.status === "expired" ||
-    current.status === "failed"
-  ) {
+  if (checkoutIsSettled(current) || checkoutStatusIsTerminal(current.status)) {
     return checkoutDocumentSuccessResult(current);
   }
 
@@ -1119,7 +1102,7 @@ export async function cancelCheckout(
 
   const stored = await input.repositories.session.findCheckoutById(checkoutId);
   if (!stored) return invalidCheckout("checkoutId", checkoutId);
-  if (stored.status === "completed" || stored.orderId) {
+  if (checkoutIsSettled(stored)) {
     return checkoutDocumentSuccessResult(stored);
   }
 
@@ -1170,11 +1153,9 @@ function checkoutStatusAllowsRedirect(
   documentStatus: CheckoutStatus,
   sessionStatus: CheckoutSessionDTO["status"],
 ): boolean {
-  if (
-    documentStatus === "cancelled" ||
-    documentStatus === "expired" ||
-    documentStatus === "failed"
-  ) {
+  // Terminal-but-not-completed (cancelled/expired/failed) never redirects; a completed checkout
+  // still can, so it falls through to the session-status check.
+  if (checkoutStatusIsTerminal(documentStatus) && documentStatus !== "completed") {
     return false;
   }
 
