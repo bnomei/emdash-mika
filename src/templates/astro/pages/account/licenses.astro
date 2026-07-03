@@ -6,7 +6,7 @@ import { api } from "../../lib/mika-api";
 import AccountLicenses from "../../components/AccountLicenses.astro";
 import AccountSignInPanel from "../../components/AccountSignInPanel.astro";
 import MikaKumoPage from "../../components/MikaKumoPage.astro";
-import type { MikaTemplateAccountLicense } from "../../lib/account";
+import { mikaTemplateAccountLicenses } from "../../lib/account";
 import { mikaTemplateCurrentCartItemCount } from "../../lib/cart";
 import { mikaTemplateRoutes } from "../../lib/routes";
 
@@ -22,7 +22,7 @@ const magicLinkError = isInputError(magicLinkResult?.error)
   : magicLinkResult?.error?.message;
 const accountResult = await Mika.account.get();
 const account = accountResult.ok ? accountResult.data : null;
-const licenses: readonly MikaTemplateAccountLicense[] = [];
+const licenses = account ? await mikaTemplateAccountLicenses(account) : [];
 const accountLoadError =
   !accountResult.ok && accountResult.error.code !== "AUTH_REQUIRED"
     ? accountResult.error.message

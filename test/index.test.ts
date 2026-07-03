@@ -4689,11 +4689,14 @@ describe("Mika Astro template contracts", () => {
     expect(accountLicenses).toContain("mikaTemplateRoutes.accountLicenses");
     expect(accountLicenses).toContain("<AccountLicenses");
     expect(accountLicenses).toContain("const account = accountResult.ok ? accountResult.data : null");
-    expect(accountLicenses).toContain("const licenses: readonly MikaTemplateAccountLicense[] = []");
+    expect(accountLicenses).toContain("await mikaTemplateAccountLicenses(account)");
     expect(accountLicenses).toContain("<AccountLicenses licenses={licenses}");
-    expect(accountLicenses).not.toContain("mikaTemplateAccount");
+    expect(accountLicenses).not.toContain("mikaTemplateAccount(");
     expect(accountLicenses).not.toContain("account.licenses");
+    expect(accountHelper).toContain("mikaTemplateAccountLicenses");
+    expect(accountHelper).toContain("Promise<readonly MikaTemplateAccountLicense[]>");
     expect(accountHelper).not.toContain("MikaTemplateAccountDTO");
+    expect(accountHelper).not.toContain("function mikaTemplateAccount(");
     expect(accountHelper).not.toContain("AccountDTO &");
     expect(accountDownloads).toContain("mikaTemplateRoutes.accountDownloads");
     expect(accountDownloads).toContain("<AccountDownloads");
