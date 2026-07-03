@@ -503,6 +503,23 @@ const MIKA_FIELD_ACTION_IDS = [
   "mika.download.issue",
 ] as const satisfies readonly MikaAdminActionId[];
 
+/**
+ * Zero-runtime coverage guard for the manifest id lists: `satisfies` above only checks that every
+ * listed id is valid, not that every valid id is listed. This asserts MIKA_DASHBOARD_ACTION_IDS and
+ * MIKA_FIELD_ACTION_IDS together cover every MikaAdminActionId, so a new action added to
+ * mikaAdminActionDefinitions but not listed in either array collapses this to `never` and fails the
+ * build instead of silently dropping from the actions manifest. Mirrors astro-actions.ts's
+ * MikaActionsTreeCoverage; relies on MikaAdminActionId being a type alias (a non-distributive
+ * conditional) so whole-union coverage is checked.
+ */
+type MikaAdminManifestActionCoverage = MikaAdminActionId extends
+  | (typeof MIKA_DASHBOARD_ACTION_IDS)[number]
+  | (typeof MIKA_FIELD_ACTION_IDS)[number]
+  ? true
+  : never;
+const _mikaAdminManifestActionCoverage: MikaAdminManifestActionCoverage = true;
+void _mikaAdminManifestActionCoverage;
+
 /** Options for filtering which dashboard and field admin actions appear in a manifest. */
 export interface MikaAdminManifestOptions {
   /** When false, dashboard-surface actions are omitted from the manifest. */
