@@ -6,6 +6,7 @@ import { createMikaId } from "@bnomei/emdash-mika/types";
 import { api } from "../../lib/mika-api";
 import MikaKumoPage from "../../components/MikaKumoPage.astro";
 import { mikaTemplateCurrentCartItemCount } from "../../lib/cart";
+import { mikaTemplateCheckoutStatusMessage } from "../../lib/display";
 import {
   mikaTemplateCheckoutSuccessHref,
   mikaTemplateRoutes
@@ -21,19 +22,11 @@ const result = checkoutId
   : null;
 const checkout = result?.ok ? result.data : null;
 const status = checkout?.status ?? "pending";
-const messageByStatus: Record<string, string> = {
-  pending: "Payment pending.",
-  completed: "Order complete.",
-  cancelled: "Checkout cancelled.",
-  expired: "Checkout expired.",
-  failed: "Checkout failed.",
-  binding_mismatch: "Checkout could not be verified."
-};
 const statusMessage = !checkoutId
   ? "Checkout status link is missing."
   : result && !result.ok
     ? result.error.message
-    : messageByStatus[status] ?? "Checkout received.";
+    : mikaTemplateCheckoutStatusMessage(status);
 const refreshHref =
   status === "pending" && checkoutId && token
     ? mikaTemplateCheckoutSuccessHref(checkoutId, token)

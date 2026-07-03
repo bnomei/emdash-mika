@@ -3,65 +3,180 @@
  * Storefront display formatting for the copyable Astro template.
  * Maps Mika status codes to human labels, badge variants, dates, and counts.
  */
-import type { CartDTO } from "@bnomei/emdash-mika/types";
+import type {
+  AccountExportDTO,
+  AdminActionResultDTO,
+  AvailabilityStatus,
+  CartDTO,
+  CartQuoteStatusDTO,
+  CheckoutPreviewStatusDTO,
+  CheckoutStatusDTO,
+  EntitlementStatus,
+  OrderStatus,
+  PaymentStatus,
+  SubscriptionStatus,
+  WebhookReceiveDTO,
+} from "@bnomei/emdash-mika/types";
 
 /** Kumo badge variant chosen from a Mika entity status. */
-export type MikaTemplateBadgeVariant = "success" | "warning" | "error" | "neutral";
+export type MikaTemplateBadgeVariant = "success" | "warning" | "error" | "neutral" | "secondary";
 
-const statusLabels: Record<string, string> = {
+export type MikaTemplateKnownStatus =
+  | AccountExportDTO["status"]
+  | AdminActionResultDTO["status"]
+  | AvailabilityStatus
+  | CartDTO["status"]
+  | CartQuoteStatusDTO
+  | CheckoutPreviewStatusDTO
+  | CheckoutStatusDTO
+  | EntitlementStatus
+  | OrderStatus
+  | PaymentStatus
+  | SubscriptionStatus
+  | WebhookReceiveDTO["status"];
+
+const statusLabels = {
   active: "Active",
+  abandoned: "Abandoned",
   available: "In stock",
   backorder: "Backorder available",
+  binding_mismatch: "Binding mismatch",
   cancel_at_period_end: "Cancels at period end",
   cancelled: "Cancelled",
+  checkout_pending: "Checkout pending",
+  changed: "Changed",
   completed: "Completed",
+  converted: "Converted",
+  created: "Created",
+  duplicate: "Duplicate",
   expired: "Expired",
   failed: "Failed",
   incomplete: "Incomplete",
   inactive: "Inactive",
   low_stock: "Low stock",
+  manual: "In stock",
   out_of_stock: "Out of stock",
   paid: "Paid",
   partially_refunded: "Partially refunded",
   past_due: "Past due",
   pending: "Pending",
+  queued: "Queued",
   ready: "Ready",
+  received: "Received",
+  redirected: "Redirected",
+  requires_confirmation: "Requires confirmation",
+  requires_payment_authorization: "Requires payment authorization",
   refunded: "Refunded",
   revoked: "Revoked",
   running: "Running",
   trialing: "Trialing",
+  unavailable: "Unavailable",
+  unsupported: "Unsupported",
+  untracked: "In stock",
   unpaid: "Unpaid",
-};
+  valid: "Valid",
+} satisfies Partial<Record<MikaTemplateKnownStatus, string>>;
 
-const successStatuses = new Set(["active", "available", "completed", "paid", "ready", "trialing"]);
-const warningStatuses = new Set([
-  "backorder",
-  "cancel_at_period_end",
-  "incomplete",
-  "low_stock",
-  "past_due",
-  "pending",
-  "running",
-  "unpaid",
-]);
-const errorStatuses = new Set(["cancelled", "expired", "failed", "out_of_stock", "revoked"]);
+const statusVariants = {
+  active: "success",
+  abandoned: "error",
+  available: "success",
+  backorder: "warning",
+  binding_mismatch: "error",
+  cancel_at_period_end: "warning",
+  cancelled: "error",
+  checkout_pending: "warning",
+  changed: "warning",
+  completed: "success",
+  converted: "success",
+  created: "warning",
+  duplicate: "warning",
+  expired: "error",
+  failed: "error",
+  incomplete: "warning",
+  inactive: "neutral",
+  low_stock: "warning",
+  manual: "secondary",
+  out_of_stock: "error",
+  paid: "success",
+  partially_refunded: "warning",
+  past_due: "warning",
+  pending: "warning",
+  queued: "warning",
+  ready: "success",
+  received: "success",
+  redirected: "warning",
+  requires_confirmation: "warning",
+  requires_payment_authorization: "warning",
+  refunded: "success",
+  revoked: "error",
+  running: "warning",
+  trialing: "success",
+  unavailable: "error",
+  unsupported: "neutral",
+  untracked: "secondary",
+  unpaid: "warning",
+  valid: "success",
+} satisfies Partial<Record<MikaTemplateKnownStatus, MikaTemplateBadgeVariant>>;
+
+const statusLabelsByCode: Partial<Record<string, string>> = statusLabels;
+const statusVariantsByCode: Partial<Record<string, MikaTemplateBadgeVariant>> = statusVariants;
+
+const checkoutStatusMessages = {
+  pending: "Payment pending.",
+  completed: "Order complete.",
+  cancelled: "Checkout cancelled.",
+  expired: "Checkout expired.",
+  failed: "Checkout failed.",
+  binding_mismatch: "Checkout could not be verified.",
+} satisfies Partial<Record<CheckoutStatusDTO, string>>;
+
+const checkoutStatusMessagesByCode: Partial<Record<string, string>> = checkoutStatusMessages;
+
+export type MikaTemplateStatusInput = MikaTemplateKnownStatus | (string & {});
+
+/** Label overrides accepted by stock badges for known availability statuses. */
+export type MikaTemplateAvailabilityLabels = Partial<Record<AvailabilityStatus, string>>;
 
 /** Human-readable label for a Mika status code, with underscore fallback formatting. */
-export function mikaTemplateStatusLabel(status: string | undefined): string {
+export function mikaTemplateStatusLabel(status: MikaTemplateStatusInput | undefined): string {
   if (!status) return "Unknown";
   return (
-    statusLabels[status] ??
+    statusLabelsByCode[status] ??
     status.replaceAll("_", " ").replace(/^\w/, (value) => value.toUpperCase())
   );
 }
 
 /** Maps a status code to a {@link MikaTemplateBadgeVariant} for Kumo badge rendering. */
-export function mikaTemplateStatusVariant(status: string | undefined): MikaTemplateBadgeVariant {
+export function mikaTemplateStatusVariant(
+  status: MikaTemplateStatusInput | undefined,
+): MikaTemplateBadgeVariant {
   if (!status) return "neutral";
-  if (successStatuses.has(status)) return "success";
-  if (warningStatuses.has(status)) return "warning";
-  if (errorStatuses.has(status)) return "error";
-  return "neutral";
+  return statusVariantsByCode[status] ?? "neutral";
+}
+
+/** Buyer-facing checkout status message for the checkout return page. */
+export function mikaTemplateCheckoutStatusMessage(
+  status: CheckoutStatusDTO | (string & {}) | undefined,
+): string {
+  if (!status) return "Checkout received.";
+  return checkoutStatusMessagesByCode[status] ?? "Checkout received.";
+}
+
+/** Human-readable stock label for a known availability status. */
+export function mikaTemplateAvailabilityStatusLabel(
+  status: AvailabilityStatus | undefined,
+  labels: MikaTemplateAvailabilityLabels = {},
+): string {
+  const resolvedStatus = status ?? "untracked";
+  return labels[resolvedStatus] ?? mikaTemplateStatusLabel(resolvedStatus);
+}
+
+/** Stock badge variant for a known availability status. */
+export function mikaTemplateAvailabilityStatusVariant(
+  status: AvailabilityStatus | undefined,
+): MikaTemplateBadgeVariant {
+  return mikaTemplateStatusVariant(status ?? "untracked");
 }
 
 /** Locale-aware short date for ISO timestamps, or "Not set" when absent. */

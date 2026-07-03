@@ -7,6 +7,7 @@ import { api } from "../lib/mika-api";
 import AccountSignInPanel from "../components/AccountSignInPanel.astro";
 import MikaKumoPage from "../components/MikaKumoPage.astro";
 import { mikaTemplateCurrentCartItemCount } from "../lib/cart";
+import { mikaTemplateStatusLabel } from "../lib/display";
 import { mikaTemplateRoutes } from "../lib/routes";
 
 export const prerender = false;
@@ -60,7 +61,9 @@ const cartItemCount = await mikaTemplateCurrentCartItemCount(Astro);
       {accountExportError && <Text as="p" variant="error" role="alert">{accountExportError}</Text>}
       {accountDeleteError && <Text as="p" variant="error" role="alert">{accountDeleteError}</Text>}
       {exportResult?.data?.status && (
-        <Text as="p" variant="success" role="status">Export {exportResult.data.status}.</Text>
+        <Text as="p" variant="success" role="status">
+          Export {mikaTemplateStatusLabel(exportResult.data.status)}.
+        </Text>
       )}
       {deleteResult?.data?.requested && (
         <Text as="p" variant="success" role="status">Account deletion requested.</Text>

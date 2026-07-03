@@ -91,6 +91,7 @@ baseline protection.
 For a product-first storefront, start with:
 
 ```txt
+lib/display.ts
 lib/routes.ts
 components/ProductPurchase.astro
 components/ProductPurchaseSync.astro

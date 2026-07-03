@@ -151,6 +151,13 @@ import {
 } from "../src/astro";
 import { mikaRedirectInputs as mikaShimRedirectInputs } from "../src/templates/astro/lib/form";
 import {
+  mikaTemplateAvailabilityStatusLabel,
+  mikaTemplateAvailabilityStatusVariant,
+  mikaTemplateCheckoutStatusMessage,
+  mikaTemplateStatusLabel,
+  mikaTemplateStatusVariant,
+} from "../src/templates/astro/lib/display";
+import {
   createMikaProviderRegistry,
   defineMikaProvider,
   type MikaProviderAdapter,
@@ -4414,6 +4421,21 @@ describe("Mika Astro template contracts", () => {
     expect(source).toContain("Mika.webhook.receive(receiveInput)");
     expect(source).not.toContain("rawBodyLength");
     expect(source).not.toContain("signatureHeaderPresent");
+  });
+
+  it("centralizes typed template status display helpers", () => {
+    expect(mikaTemplateStatusLabel("paid")).toBe("Paid");
+    expect(mikaTemplateStatusVariant("paid")).toBe("success");
+    expect(mikaTemplateStatusLabel("provider_review_needed")).toBe("Provider review needed");
+    expect(mikaTemplateStatusVariant("provider_review_needed")).toBe("neutral");
+    expect(mikaTemplateAvailabilityStatusLabel("low_stock")).toBe("Low stock");
+    expect(
+      mikaTemplateAvailabilityStatusLabel("available", { available: "Ships today" }),
+    ).toBe("Ships today");
+    expect(mikaTemplateAvailabilityStatusVariant("manual")).toBe("secondary");
+    expect(mikaTemplateCheckoutStatusMessage("binding_mismatch")).toBe(
+      "Checkout could not be verified.",
+    );
   });
 
   it("ships a host plugin entrypoint that merges the live api behind the JSON boundary", () => {
