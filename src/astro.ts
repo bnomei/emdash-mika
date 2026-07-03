@@ -7,9 +7,10 @@ import type { APIContext } from "astro";
 import { createMikaRequestContext } from "./api/context";
 import type { MikaClientRoute } from "./api/client";
 import { runMikaOperation } from "./api/operation-runner";
-import { mikaOperationDefinitions, type MikaApiOperationData } from "./api/operations";
+import { mikaOperationDefinitions } from "./api/operations";
 import {
   createMikaOperationFacade,
+  type MikaFacadeInvoke,
   type MikaOperationFacade,
   type MikaOperationWebhookFacade,
 } from "./api/operation-facade";
@@ -23,7 +24,6 @@ import type {
   MoneyDTO,
   PriceDTO,
   SellableDTO,
-  MikaApiResult,
   VariantOptionGroupDTO,
   VariantOptionValueDTO,
 } from "./api/types";
@@ -110,12 +110,7 @@ export function createMikaAstroClient<
     session: ctx.session,
     locale: ctx.currentLocale,
   });
-  const requestOperation = <TOperation extends keyof typeof mikaOperationDefinitions>(
-    operationKey: TOperation,
-    input?: unknown,
-  ): Promise<
-    MikaApiResult<MikaApiOperationData<(typeof mikaOperationDefinitions)[TOperation]>>
-  > => {
+  const requestOperation: MikaFacadeInvoke = (operationKey, input) => {
     const operation = mikaOperationDefinitions[operationKey];
     return runMikaOperation({
       operation,

@@ -81,7 +81,11 @@ type MikaOperationFacadeSpec = {
   };
 };
 
-type MikaFacadeInvoke = <TOperation extends MikaOperationKey>(
+/**
+ * Low-level operation invoker signature shared by every facade transport (plugin-route fetch
+ * client, Astro server runner). Module-internal — not re-exported from any package entry.
+ */
+export type MikaFacadeInvoke = <TOperation extends MikaOperationKey>(
   operationKey: TOperation,
   input?: unknown,
 ) => Promise<MikaApiResult<MikaApiOperationData<(typeof mikaOperationDefinitions)[TOperation]>>>;
@@ -99,7 +103,12 @@ function collectMikaOperationFacadeSpec(): MikaOperationFacadeSpec {
   >) {
     if ("apiMethod" in operation && operation.apiMethod === false) continue;
     const namespaceSpec = (spec[operation.namespace] ??= {});
-    namespaceSpec[operation.method] ??= key as MikaFacadeOperationDefinitionKey;
+    if (namespaceSpec[operation.method]) {
+      throw new Error(
+        `Mika operation '${operation.namespace}.${operation.method}' is defined more than once.`,
+      );
+    }
+    namespaceSpec[operation.method] = key as MikaFacadeOperationDefinitionKey;
   }
 
   return spec as MikaOperationFacadeSpec;

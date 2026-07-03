@@ -13,7 +13,7 @@ import { mikaOperationInputWithIdempotencyContext } from "./operation-idempotenc
 import {
   parseMikaOperationInput,
   mikaRouteOperationsByPath,
-  type MikaRouteOperation,
+  type MikaApiOperation,
 } from "./operations";
 import { runMikaOperation } from "./operation-runner";
 import type { MikaOperationPolicy } from "./operation-policy";
@@ -171,7 +171,7 @@ function observeRouteError(options: MikaPluginRoutesOptions, scope: string, erro
 async function handleRouteOperation(
   api: MikaApi,
   ctx: MikaRouteContext,
-  operations: readonly MikaRouteOperation[],
+  operations: readonly MikaApiOperation[],
   options: MikaPluginRoutesOptions,
 ): Promise<unknown> {
   const operation = selectRouteOperation(ctx.request, operations);
@@ -209,13 +209,13 @@ async function handleRouteOperation(
 
 function selectRouteOperation(
   request: Request,
-  operations: readonly MikaRouteOperation[],
-): MikaRouteOperation | undefined {
+  operations: readonly MikaApiOperation[],
+): MikaApiOperation | undefined {
   const method = request.method.toUpperCase();
   return operations.find((candidate) => candidate.httpMethod === method);
 }
 
-function methodNotAllowed(request: Request, operations: readonly MikaRouteOperation[]) {
+function methodNotAllowed(request: Request, operations: readonly MikaApiOperation[]) {
   const allowed = [...new Set(operations.map((operation) => operation.httpMethod))].sort();
 
   return {

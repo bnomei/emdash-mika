@@ -2,14 +2,14 @@
  * Idempotency-key injection for operation inputs. A pure leaf so consumers such as
  * astro-actions.ts can use it without pulling in the full plugin route-handler table.
  */
-import type { MikaRouteOperation } from "./operations";
+import type { MikaApiOperation } from "./operations";
 
 /**
  * Injects `idempotencyKey` from {@link MikaRequestContext} when the operation requires agent
  * idempotency, the input schema accepts the field, and the caller did not supply a non-empty key.
  */
 export function mikaOperationInputWithIdempotencyContext(
-  operation: MikaRouteOperation,
+  operation: MikaApiOperation,
   input: unknown,
   idempotencyKey: string | undefined,
 ): unknown {
