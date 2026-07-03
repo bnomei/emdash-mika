@@ -2,12 +2,7 @@
  * Compile-time package export contract checks.
  * Ensures subpath barrels expose expected types and block accidental internals.
  */
-import type {
-  mikaPlugin,
-  MikaMaintenanceRuntimeOptions,
-  MikaOperationDescriptor,
-  MikaOperationPolicy,
-} from "@bnomei/emdash-mika";
+import type { mikaPlugin } from "@bnomei/emdash-mika";
 import type {
   createMikaAcpCheckoutHandlers,
   createMikaAcpProductFeed,
@@ -49,12 +44,15 @@ import type {
   createMikaBackendApi,
   createMikaEmailOutboxRunner,
   createMikaMaintenanceRunner,
+  createMikaPlugin,
   createMikaServerClient,
   MikaApi,
   MikaBackendDependencies,
+  MikaCreatePluginOptions,
   MikaEmailDeliveryMessage,
   MikaEmailOutboxRunner,
   MikaMaintenanceRunner,
+  MikaMaintenanceRuntimeOptions,
   MikaMaintenanceRunnerInput,
   MikaApiOverrides,
   MikaAccountDeleteRequestedNotificationContext,
@@ -123,6 +121,8 @@ import type {
 
 export type PackageEntryContract = {
   readonly root: typeof mikaPlugin;
+  readonly runtimePlugin: typeof createMikaPlugin;
+  readonly createPluginOptions: MikaCreatePluginOptions;
   readonly acpFeed: typeof createMikaAcpProductFeed;
   readonly acpCheckoutHandlers: typeof createMikaAcpCheckoutHandlers;
   readonly acpCheckoutSession: MikaAcpCheckoutSession;
@@ -142,8 +142,6 @@ export type PackageEntryContract = {
   readonly actions: typeof createMikaActions;
   readonly actionsClient: MikaActions;
   readonly actionName: MikaActionName;
-  readonly operationPolicy: MikaOperationPolicy;
-  readonly operationDescriptor: MikaOperationDescriptor;
   readonly actionsOperationPolicy: MikaActionsOperationPolicy;
   readonly client: typeof createMikaClient;
   readonly clientFacade: MikaClient;
@@ -238,9 +236,37 @@ export type MissingRootCreateMikaBackendApi =
   // @ts-expect-error Backend API composition is intentionally exported from the server subpath.
   typeof import("@bnomei/emdash-mika").createMikaBackendApi;
 
+export type MissingRootCreateMikaPlugin =
+  // @ts-expect-error Runtime plugin activation is intentionally exported from the server subpath.
+  typeof import("@bnomei/emdash-mika").createMikaPlugin;
+
+export type MissingRootMikaCreatePluginOptions =
+  // @ts-expect-error Runtime plugin options are intentionally exported from the server subpath.
+  import("@bnomei/emdash-mika").MikaCreatePluginOptions;
+
+export type MissingRootMikaMaintenanceRuntimeOptions =
+  // @ts-expect-error Maintenance runtime dependencies are intentionally exported from the server subpath.
+  import("@bnomei/emdash-mika").MikaMaintenanceRuntimeOptions;
+
+export type MissingRootMikaOperationDescriptor =
+  // @ts-expect-error Operation descriptors are intentionally exported from the server subpath.
+  import("@bnomei/emdash-mika").MikaOperationDescriptor;
+
+export type MissingRootMikaOperationPolicy =
+  // @ts-expect-error Operation policy is intentionally exported from the server subpath.
+  import("@bnomei/emdash-mika").MikaOperationPolicy;
+
 export type MissingApiSubpath =
   // @ts-expect-error The API internals are intentionally not a package subpath.
   typeof import("@bnomei/emdash-mika/api");
+
+export type MissingModelSubpath =
+  // @ts-expect-error Model internals are intentionally not a package subpath.
+  typeof import("@bnomei/emdash-mika/model");
+
+export type MissingStorageSubpath =
+  // @ts-expect-error Storage internals are intentionally not a package subpath.
+  typeof import("@bnomei/emdash-mika/storage");
 
 export type MissingOperationRegistry =
   // @ts-expect-error Operation metadata is intentionally internal to the source package.

@@ -141,6 +141,12 @@ export {
   type MikaMaintenanceRunOptions,
   type MikaMaintenanceRunResult,
 } from "./api/maintenance";
+/** Runtime EmDash plugin activation for host entrypoint modules with live backend wiring. */
+export {
+  createMikaPlugin,
+  type MikaCreatePluginOptions,
+  type MikaMaintenanceRuntimeOptions,
+} from "./plugin";
 /** Host policy toggles applied when constructing plugin routes and operation runners. */
 export type { MikaOperationPolicy } from "./api/operation-policy";
 /** Published commerce operation descriptor surfaced to hosts and agent manifests. */

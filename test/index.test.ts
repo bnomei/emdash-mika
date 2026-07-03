@@ -11,19 +11,11 @@ import {
   MIKA_MAINTENANCE_CRON_TASK,
   MIKA_PLUGIN_ID,
   MIKA_PLUGIN_VERSION,
-  createMikaPlugin,
   mikaPlugin,
-  type MikaCreatePluginOptions,
   type MikaDescriptorOptions,
   type MikaDescriptorPluginOptions,
-  type MikaMaintenanceRuntimeOptions,
 } from "../src/index";
-import type {
-  mikaPlugin as PackageMikaPlugin,
-  MikaMaintenanceRuntimeOptions as PackageRootMikaMaintenanceRuntimeOptions,
-  MikaOperationDescriptor as PackageRootMikaOperationDescriptor,
-  MikaOperationPolicy as PackageRootMikaOperationPolicy,
-} from "@bnomei/emdash-mika";
+import type { mikaPlugin as PackageMikaPlugin } from "@bnomei/emdash-mika";
 import type {
   createMikaAcpCheckoutHandlers as PackageCreateMikaAcpCheckoutHandlers,
   createMikaAcpProductFeed as PackageCreateMikaAcpProductFeed,
@@ -54,10 +46,13 @@ import type {
   createEmDashMikaEmailSender as PackageCreateEmDashMikaEmailSender,
   createMikaBackendApi as PackageCreateMikaBackendApi,
   createMikaEmailOutboxRunner as PackageCreateMikaEmailOutboxRunner,
+  createMikaPlugin as PackageCreateMikaPlugin,
   createMikaMaintenanceRunner as PackageCreateMikaMaintenanceRunner,
   createMikaServerClient as PackageCreateMikaServerClient,
   mikaApiMethodNames as PackageMikaApiMethodNames,
   MikaBackendDependencies as PackageMikaBackendDependencies,
+  MikaCreatePluginOptions as PackageMikaCreatePluginOptions,
+  MikaMaintenanceRuntimeOptions as PackageMikaMaintenanceRuntimeOptions,
   MikaNotificationHook as PackageMikaNotificationHook,
   MikaNotificationIntent as PackageMikaNotificationIntent,
   MikaNotificationKind as PackageMikaNotificationKind,
@@ -114,6 +109,7 @@ import {
   assertMikaApiWired,
   createMikaBackendApi,
   createEmDashMikaEmailSender,
+  createMikaPlugin,
   createMikaRequestContext,
   createMikaApi,
   createMikaEmailOutboxRunner,
@@ -123,6 +119,8 @@ import {
   type MikaBackendDependencies,
   type MikaApi,
   type MikaApiOverrides,
+  type MikaCreatePluginOptions,
+  type MikaMaintenanceRuntimeOptions,
   type MikaNotificationHook,
   type MikaNotificationIntent,
   type MikaNotificationKind,
@@ -325,6 +323,21 @@ export type MissingRootMikaApiOverrides =
 export type MissingRootCreateMikaBackendApi =
   // @ts-expect-error Backend API composition is intentionally exported from the server subpath.
   typeof import("@bnomei/emdash-mika").createMikaBackendApi;
+export type MissingRootCreateMikaPlugin =
+  // @ts-expect-error Runtime plugin activation is intentionally exported from the server subpath.
+  typeof import("@bnomei/emdash-mika").createMikaPlugin;
+export type MissingRootMikaCreatePluginOptions =
+  // @ts-expect-error Runtime plugin options are intentionally exported from the server subpath.
+  import("@bnomei/emdash-mika").MikaCreatePluginOptions;
+export type MissingRootMikaMaintenanceRuntimeOptions =
+  // @ts-expect-error Maintenance runtime dependencies are intentionally exported from the server subpath.
+  import("@bnomei/emdash-mika").MikaMaintenanceRuntimeOptions;
+export type MissingRootMikaOperationDescriptor =
+  // @ts-expect-error Operation descriptors are intentionally exported from the server subpath.
+  import("@bnomei/emdash-mika").MikaOperationDescriptor;
+export type MissingRootMikaOperationPolicy =
+  // @ts-expect-error Operation policy is intentionally exported from the server subpath.
+  import("@bnomei/emdash-mika").MikaOperationPolicy;
 export type MissingMikaCartAddActionInput =
   // @ts-expect-error Form input helper aliases are intentionally not public exports.
   import("@bnomei/emdash-mika/astro-actions").MikaCartAddActionInput;
@@ -4251,13 +4264,11 @@ describe("public types", () => {
     expectTypeOf<PackageMikaNotificationHook>().toEqualTypeOf<MikaNotificationHook>();
     expectTypeOf<typeof PackageMikaApiMethodNames>().toEqualTypeOf<typeof mikaApiMethodNames>();
     expectTypeOf<PackageMikaAstroClientOptions>().toEqualTypeOf<MikaAstroClientOptions>();
-    expectTypeOf<PackageRootMikaOperationDescriptor>().toEqualTypeOf<MikaOperationDescriptor>();
     expectTypeOf<PackageServerMikaOperationDescriptor>().toEqualTypeOf<MikaOperationDescriptor>();
-    expectTypeOf<PackageRootMikaOperationPolicy>().toEqualTypeOf<MikaOperationPolicy>();
     expectTypeOf<PackageServerMikaOperationPolicy>().toEqualTypeOf<MikaOperationPolicy>();
-    expectTypeOf<PackageRootMikaMaintenanceRuntimeOptions>().toEqualTypeOf<
-      MikaMaintenanceRuntimeOptions
-    >();
+    expectTypeOf<typeof PackageCreateMikaPlugin>().toEqualTypeOf<typeof createMikaPlugin>();
+    expectTypeOf<PackageMikaCreatePluginOptions>().toEqualTypeOf<MikaCreatePluginOptions>();
+    expectTypeOf<PackageMikaMaintenanceRuntimeOptions>().toEqualTypeOf<MikaMaintenanceRuntimeOptions>();
     expectTypeOf<PackageMikaMaintenanceRunnerInput>().toEqualTypeOf<MikaMaintenanceRunnerInput>();
     expectTypeOf<typeof PACKAGE_MIKA_ERROR_CODES>().toEqualTypeOf<typeof MIKA_ERROR_CODES>();
     expectTypeOf<typeof PackageCreateMikaId>().toEqualTypeOf<typeof createMikaId>();

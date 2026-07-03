@@ -6,7 +6,7 @@
  * host side of that boundary. Register with
  * `mikaPlugin({ entrypoint: fileURLToPath(new URL("./src/lib/mika-plugin.ts", import.meta.url)) })`.
  */
-import { createMikaPlugin, type MikaCreatePluginOptions } from "@bnomei/emdash-mika";
+import { createMikaPlugin, type MikaCreatePluginOptions } from "@bnomei/emdash-mika/server";
 
 import { api } from "./mika-api";
 

@@ -202,7 +202,7 @@ Copy `lib/mika-plugin.ts` and `lib/mika-api.ts` into the host project's
 ```ts
 // src/lib/mika-plugin.ts — EmDash plugin entrypoint
 // (copyable template: src/templates/astro/lib/mika-plugin.ts)
-import { createMikaPlugin, type MikaCreatePluginOptions } from "@bnomei/emdash-mika";
+import { createMikaPlugin, type MikaCreatePluginOptions } from "@bnomei/emdash-mika/server";
 import { api } from "./mika-api";
 
 export function createPlugin(options: MikaCreatePluginOptions = {}) {
