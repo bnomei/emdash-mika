@@ -140,19 +140,19 @@ export type AdjustStockRepositoryResult =
 export type ReservationEventMutationRepositoryResult<
   TStatus extends "released" | "consumed" | "expired",
 > =
-    | {
-        readonly status: TStatus;
-        readonly event: StockEventRecord;
-        readonly stock: StockItemRecord;
-      }
-    | {
-        readonly status: "not_active";
-        readonly event: StockEventRecord;
-        readonly stock: StockItemRecord | null;
-      }
-    | {
-        readonly status: "not_found";
-      };
+  | {
+      readonly status: TStatus;
+      readonly event: StockEventRecord;
+      readonly stock: StockItemRecord;
+    }
+  | {
+      readonly status: "not_active";
+      readonly event: StockEventRecord;
+      readonly stock: StockItemRecord | null;
+    }
+  | {
+      readonly status: "not_found";
+    };
 
 /** Result of releasing an active reservation event. */
 export type ReleaseReservedStockRepositoryResult =

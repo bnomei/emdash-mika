@@ -1010,4 +1010,3 @@ function fulfillmentIdPart(value: string): string {
   const sanitized = value.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   return sanitized || "value";
 }
-

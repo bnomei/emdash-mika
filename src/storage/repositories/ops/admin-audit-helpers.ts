@@ -1,7 +1,6 @@
 import type { AdminAuditDocument } from "../../../types/documents";
 import type { MikaId } from "../../../types/primitives";
 
-
 const ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY = "idempotencyInputHash";
 
 export function adminAuditInputHashMatches(

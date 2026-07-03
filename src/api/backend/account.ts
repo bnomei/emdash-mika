@@ -677,4 +677,3 @@ function accountPortalReturnUrl(ctx: MikaRequestContext, returnTo?: string): str
 
   return new URL(safeRequestReturnPath(ctx, returnTo), ctx.url.origin).toString();
 }
-

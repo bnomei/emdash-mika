@@ -78,9 +78,7 @@ export function adminAuditReplayResult<TData extends JsonObject>(
   return isJsonObject(snapshot) ? (snapshot as TData) : null;
 }
 
-function adminAuditStoredIdempotencyInputHash(
-  audit: AdminAuditDocument,
-): string | undefined {
+function adminAuditStoredIdempotencyInputHash(audit: AdminAuditDocument): string | undefined {
   const value = audit.record.metadata?.[ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY];
 
   return typeof value === "string" ? value : undefined;

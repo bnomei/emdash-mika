@@ -304,10 +304,7 @@ export const mergeWishlistInputSchema = z.object({
 }) satisfies z.ZodType<MergeWishlistInput>;
 
 /** Optional email address; empty form values become undefined, malformed ones fail field validation. */
-const optionalEmailSchema = z.preprocess(
-  emptyToUndefined,
-  z.string().trim().email().optional(),
-);
+const optionalEmailSchema = z.preprocess(emptyToUndefined, z.string().trim().email().optional());
 
 /** Flattened checkout customer fields shared by the nested and HTML-form transports. */
 const checkoutCustomerShape = {

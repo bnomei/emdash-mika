@@ -69,9 +69,7 @@ export function findSessionRepositoryOpenCartBySessionAnyCurrency(
 ): Promise<CartDocument | null> {
   if (typeof repository !== "object" || repository === null) return Promise.resolve(null);
   const candidate = repository as {
-    readonly findOpenCartBySessionAnyCurrency?: (
-      sessionId: string,
-    ) => Promise<CartDocument | null>;
+    readonly findOpenCartBySessionAnyCurrency?: (sessionId: string) => Promise<CartDocument | null>;
   };
   if (typeof candidate.findOpenCartBySessionAnyCurrency !== "function") {
     return Promise.resolve(null);

@@ -28,7 +28,6 @@ import type {
   ReserveStockRepositoryResult,
 } from "./contracts";
 
-
 type StockMutationResult = {
   readonly numAffectedRows?: bigint | number;
   readonly numUpdatedRows?: bigint | number;

@@ -103,20 +103,14 @@ import {
 } from "../src/api/validation";
 
 /** Resolves to `true` only when the schema's parsed keys and the contract's keys match exactly. */
-type AssertExactKeys<TSchema, TContract> = [Exclude<keyof TContract, keyof TSchema>] extends [
-  never,
-]
+type AssertExactKeys<TSchema, TContract> = [Exclude<keyof TContract, keyof TSchema>] extends [never]
   ? [Exclude<keyof TSchema, keyof TContract>] extends [never]
     ? true
     : { schemaParsesUndeclaredKeys: Exclude<keyof TSchema, keyof TContract> }
   : { schemaMissingContractKeys: Exclude<keyof TContract, keyof TSchema> };
 
 /** Resolves to `true` only when the two union types are mutually assignable. */
-type AssertMutuallyAssignable<A, B> = [A] extends [B]
-  ? [B] extends [A]
-    ? true
-    : never
-  : never;
+type AssertMutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 
 export const contentRefInputSchemaContract: AssertExactKeys<
   z.infer<typeof contentRefInputSchema>,

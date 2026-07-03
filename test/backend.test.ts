@@ -2036,9 +2036,7 @@ describe("backend repository characterization", () => {
 
     // Simulate a payment webhook settling the checkout (completed + orderId) in the race window.
     const orderId = createTestMikaId("order", 501);
-    await repository.put(
-      createCheckoutDocument({ id: checkoutId, status: "completed", orderId }),
-    );
+    await repository.put(createCheckoutDocument({ id: checkoutId, status: "completed", orderId }));
 
     // A stale cancel must be rejected, not clobber the settled checkout.
     await expect(

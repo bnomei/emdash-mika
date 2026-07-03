@@ -1050,9 +1050,7 @@ function checkoutStoredIdempotencyInputHash(document: CheckoutDocument): string 
   );
 }
 
-function checkoutDocumentResult(
-  document: CheckoutDocument,
-): MikaApiResult<CheckoutSessionDTO> {
+function checkoutDocumentResult(document: CheckoutDocument): MikaApiResult<CheckoutSessionDTO> {
   if (document.status === "failed") {
     return checkoutFailedReplay(document.id);
   }
@@ -1107,7 +1105,11 @@ export async function expireCheckoutDocument(
     providerStatus: "expired",
     updatedAt: now,
   };
-  const stored = await putCheckoutIfNotSettled(input, expired, ["created", "redirected", "expired"]);
+  const stored = await putCheckoutIfNotSettled(input, expired, [
+    "created",
+    "redirected",
+    "expired",
+  ]);
   if (stored) return stored;
 
   // Settled concurrently (a payment webhook completed it) — return the current stored state.
@@ -1258,10 +1260,7 @@ function checkoutBindingError(document: CheckoutDocument): MikaApiFailure | null
   };
 }
 
-function checkoutIsExpired(
-  input: MikaBackendDependencies,
-  document: CheckoutDocument,
-): boolean {
+function checkoutIsExpired(input: MikaBackendDependencies, document: CheckoutDocument): boolean {
   if (document.status === "expired") return true;
   if (!checkoutStatusCanExpire(document.status)) return false;
   if (!document.expiresAt) return false;
@@ -1426,10 +1425,7 @@ function checkoutCancelTarget(
     : safeRequestReturnPath(ctx, checkoutInput.cancelPath, "/checkout/cancel");
 }
 
-function checkoutExpiresAt(
-  input: MikaBackendDependencies,
-  ctx: MikaRequestContext,
-): ISODateTime {
+function checkoutExpiresAt(input: MikaBackendDependencies, ctx: MikaRequestContext): ISODateTime {
   const ttlMs = input.config?.checkout?.ttlMs ?? 15 * 60_000;
 
   return createISODateTime(new Date(new Date(ctx.now).getTime() + ttlMs).toISOString());

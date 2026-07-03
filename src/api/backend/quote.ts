@@ -45,11 +45,7 @@ import {
 } from "./shared";
 import { expireCheckoutReservations } from "./stock-lifecycle";
 import { checkoutStatusIsTerminal } from "../lifecycle";
-import type {
-  MikaBackendDependencies,
-  MikaBackendRepositories,
-  MikaCouponResolver,
-} from "./ports";
+import type { MikaBackendDependencies, MikaBackendRepositories, MikaCouponResolver } from "./ports";
 
 export type MikaCartWishlistBackendRepositories = Pick<
   MikaBackendRepositories,

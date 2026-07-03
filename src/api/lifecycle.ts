@@ -20,10 +20,7 @@ import type {
  */
 export function checkoutStatusIsTerminal(status: CheckoutStatus): boolean {
   return (
-    status === "completed" ||
-    status === "cancelled" ||
-    status === "expired" ||
-    status === "failed"
+    status === "completed" || status === "cancelled" || status === "expired" || status === "failed"
   );
 }
 

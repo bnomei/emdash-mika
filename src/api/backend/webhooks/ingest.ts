@@ -435,9 +435,7 @@ function storedWebhookEvent(webhook: WebhookDocument): MikaProviderWebhookEvent 
   }
 }
 
-function webhookDuplicateResult(
-  duplicate: WebhookDocument,
-): MikaApiResult<WebhookReceiveDTO> {
+function webhookDuplicateResult(duplicate: WebhookDocument): MikaApiResult<WebhookReceiveDTO> {
   return {
     ok: true,
     status: 200,
