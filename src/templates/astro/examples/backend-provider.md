@@ -182,9 +182,12 @@ and compliance rules in the host application.
 
 ## Maintenance
 
-Mika registers the `mika_maintenance` cron task by default. The task drains the
-email outbox, releases expired stock reservations, purges expired ephemeral
-rows, and processes queued account-delete requests.
+Mika registers the `mika_maintenance` cron task by default. With the plugin
+`api` wired, the cron can release expired stock reservations through Mika's
+admin operation. Email outbox draining, stuck email recovery, raw webhook
+payload retention, ACP session cleanup, expired ephemeral purge, queued
+account-delete processing, stuck workflow recovery, and webhook retries report
+`skipped` until the entrypoint supplies the required runtime dependencies.
 
 Configure it only when the default minute schedule is not right:
 
@@ -201,7 +204,7 @@ mikaPlugin({
 `maintenance.enabled` and `maintenance.schedule` are JSON-safe and cross the
 descriptor boundary. Live maintenance dependencies (`repositories`,
 `emailOutboxRunner`, `acpSessionStore`) do not — merge them in the entrypoint
-wrapper's `maintenance` option instead.
+wrapper's `maintenance` option instead when those processors should run.
 
 On Cloudflare, the host Worker's `scheduled()` handler should call EmDash
 `runScheduledTasks()` so EmDash can run both scheduled publishing and Mika

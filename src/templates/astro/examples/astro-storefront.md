@@ -91,8 +91,11 @@ baseline protection.
 For a product-first storefront, start with:
 
 ```txt
+styles/kumo.css
 lib/display.ts
 lib/routes.ts
+components/MikaKumoAppFrame.tsx
+components/MikaKumoPage.astro
 components/ProductPurchase.astro
 components/ProductPurchaseSync.astro
 components/AddToCartForm.astro
@@ -165,14 +168,32 @@ while Mika resolves sellables and form contracts for that content reference.
 
 ## 5. Add Cart, Wishlist, Checkout, Account, And Downloads
 
-Copy these pages when the storefront needs the full customer path:
+After the core product flow, copy these additional files when the storefront
+needs the full customer path:
 
 ```txt
+lib/account.ts
+lib/cart.ts
+components/CartLines.astro
+components/CartSummary.astro
+components/CouponForm.astro
+components/CheckoutForm.astro
+components/WishlistList.astro
+components/MagicLinkForm.astro
+components/AccountSignInPanel.astro
+components/AccountOrders.astro
+components/AccountSubscriptions.astro
+components/AccountLicenses.astro
+components/AccountDownloads.astro
 pages/cart.astro
 pages/wishlist.astro
 pages/checkout/success.astro
 pages/checkout/cancel.astro
 pages/account.astro
+pages/account/orders.astro
+pages/account/subscriptions.astro
+pages/account/licenses.astro
+pages/account/downloads.astro
 pages/account/magic-link.astro
 pages/download/[token].astro
 pages/api/mika-webhook/[provider].ts

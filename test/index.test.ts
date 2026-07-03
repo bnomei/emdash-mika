@@ -4371,6 +4371,10 @@ describe("Mika Astro template contracts", () => {
     expect(source).toContain("components/AddToCartForm.astro");
     expect(source).toContain("components/BuyNowForm.astro");
     expect(source).toContain("components/WishlistForm.astro");
+    expect(source).toContain("components/WishlistList.astro");
+    expect(source).toContain("Full storefront flow (add to the core product flow):");
+    expect(source).toContain("lib/account.ts");
+    expect(source).toContain("lib/cart.ts");
     expect(source).toContain("components/AccountSignInPanel.astro");
     expect(source).toContain("Contract examples such as `CouponForm`, `CheckoutForm`");
     expect(source).toContain("account export/delete");
@@ -4390,6 +4394,50 @@ describe("Mika Astro template contracts", () => {
     expect(source).toContain("Mika.webhook.receive");
     expect(source).toContain("order.invoiceHref");
     expect(source).toContain("protected `order.invoice` route");
+    expect(source).toContain("actions.mika.cart.add.queryString");
+    expect(source).toContain('defineAction({ accept: "form", input })');
+    expect(source).toContain('defineAction({ accept: "json", input })');
+    expect(source).toContain("Supported template installs target Astro 6 or 7");
+  });
+
+  it("keeps the root README package and template surfaces aligned", () => {
+    const source = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+
+    expect(source).toContain("src/templates/astro/actions");
+    expect(source).toContain("src/templates/astro/components");
+    expect(source).toContain("src/templates/astro/lib");
+    expect(source).toContain("src/templates/astro/pages");
+    expect(source).toContain("src/templates/astro/styles");
+    expect(source).toContain("@bnomei/emdash-mika/types/aggregates");
+    expect(source).toContain("@bnomei/emdash-mika/types/documents");
+    expect(source).toContain("@bnomei/emdash-mika/types/operational");
+  });
+
+  it("keeps Astro example copy paths and maintenance wording current", () => {
+    const storefront = readFileSync(
+      new URL("../src/templates/astro/examples/astro-storefront.md", import.meta.url),
+      "utf8",
+    );
+    const backendProvider = readFileSync(
+      new URL("../src/templates/astro/examples/backend-provider.md", import.meta.url),
+      "utf8",
+    );
+
+    expect(storefront).toContain("styles/kumo.css");
+    expect(storefront).toContain("components/MikaKumoAppFrame.tsx");
+    expect(storefront).toContain("components/MikaKumoPage.astro");
+    expect(storefront).toContain("lib/account.ts");
+    expect(storefront).toContain("lib/cart.ts");
+    expect(storefront).toContain("components/WishlistList.astro");
+    expect(storefront).toContain("pages/account/orders.astro");
+    expect(storefront).toContain("pages/account/subscriptions.astro");
+    expect(storefront).toContain("pages/account/licenses.astro");
+    expect(storefront).toContain("pages/account/downloads.astro");
+
+    expect(backendProvider).toContain("can release expired stock reservations");
+    expect(backendProvider).toContain("webhook retries report");
+    expect(backendProvider).toContain("`skipped` until the entrypoint supplies");
+    expect(backendProvider).toContain("merge them in the entrypoint");
   });
 
   it("documents every copied product-flow component dependency", () => {
@@ -4921,10 +4969,10 @@ describe("Mika Astro template contracts", () => {
   });
 
   it("keeps every copyable template file's version marker synced with the package version", () => {
-    // Each file under actions/components/lib/styles/pages starts with a `mika-template-version`
-    // marker recording the package version it shipped with, so a host upgrading can diff their
-    // copy against the new version's file starting from that marker to see what changed (see
-    // templates/astro/README.md). A stale or missing marker silently breaks that recipe.
+    // Each file under actions/components/lib/styles/pages has a `mika-template-version` marker in
+    // its opening comment block or frontmatter, so a host upgrading can diff their copy against the
+    // new version's file starting from that marker to see what changed (see templates/astro/README.md).
+    // A stale or missing marker silently breaks that recipe.
     const packageJson = JSON.parse(
       readFileSync(new URL("../package.json", import.meta.url), "utf8"),
     ) as { readonly version: string };

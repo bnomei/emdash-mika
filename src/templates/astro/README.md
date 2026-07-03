@@ -24,15 +24,16 @@ shape, since they're the wiring contract described in
 starting point.
 
 Every file under `actions/`, `components/`, `lib/`, `styles/`, and `pages/`
-starts with a `mika-template-version: X.Y.Z` marker recording the package
-version it was copied from (a `//`, `/* */`, or `<!-- -->` comment as the
-file's syntax allows). When upgrading `@bnomei/emdash-mika`, diff your copy
-against the new version's file starting from that marker — everything below
-it is what actually changed since you copied it, so the diff stays small and
-readable even if you've since edited the file yourself. The marker isn't
-meant to be preserved: once you've reconciled a diff, update it (or leave it
-stale, it's informational, not enforced against your copy) — it only has to
-be accurate in this repo's own copies, not in what a host does with them.
+has a `mika-template-version: X.Y.Z` marker in its opening comment block or
+frontmatter, recording the package version it was copied from (a `//`,
+`/* */`, or `<!-- -->` comment as the file's syntax allows). When upgrading
+`@bnomei/emdash-mika`, diff your copy against the new version's file starting
+from that marker — everything below it is what actually changed since you
+copied it, so the diff stays small and readable even if you've since edited
+the file yourself. The marker isn't meant to be preserved: once you've
+reconciled a diff, update it (or leave it stale, it's informational, not
+enforced against your copy) — it only has to be accurate in this repo's own
+copies, not in what a host does with them.
 
 ## Examples
 
@@ -63,6 +64,7 @@ components/
   AddToCartFormSync.astro
   BuyNowForm.astro
   WishlistForm.astro
+  WishlistList.astro
   VariantOptionGroups.astro
   VariantSelector.astro
   CartLines.astro
@@ -141,9 +143,11 @@ components/UnavailableNotice.astro
 components/ProductStructuredData.astro
 ```
 
-Full storefront flow:
+Full storefront flow (add to the core product flow):
 
 ```txt
+lib/account.ts
+lib/cart.ts
 components/CartLines.astro
 components/CartSummary.astro
 components/CouponForm.astro
@@ -318,10 +322,12 @@ browser-facing plugin JSON mutation routes.
 
 The storefront path is intentionally Astro-native and Kumo-backed:
 
-- HTML forms submit to `action={actions.mika.*}` with `method="post"`.
+- HTML forms submit to `action={actions.mika.cart.add.queryString}`-style
+  action URLs with `method="post"`.
 - `@bnomei/emdash-mika/astro-actions` uses
-  `defineAction({ accept: "form", input })` and Zod schemas, so Astro handles
-  form parsing and field validation.
+  `defineAction({ accept: "form", input })` for browser mutations and
+  `defineAction({ accept: "json", input })` for typed read/status helpers, so
+  Astro handles form parsing, field validation, and JSON input validation.
 - Pages use `Astro.getActionResult()` for action results and redirects.
 - Components use Kumo components and Kumo semantic tokens for visible UI, while
   keeping `data-mika-*` attributes for behavior and testing hooks.
@@ -347,7 +353,10 @@ middleware. Mika keeps sessions optional so the templates still work on sites
 that use durable carts, provider checkouts, or deployments without an Astro
 session driver.
 
-Session examples require Astro 5.7 or newer.
+Supported template installs target Astro 6 or 7, matching Mika's peer
+dependency range. The session examples rely on Astro's server-side Sessions
+API but remain optional for hosts that use durable carts or another session
+driver.
 
 ## Route Shape
 

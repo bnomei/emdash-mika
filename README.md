@@ -138,7 +138,9 @@ The package includes copyable Astro templates and stable example docs under:
 ```txt
 src/templates/astro/actions
 src/templates/astro/components
+src/templates/astro/lib
 src/templates/astro/pages
+src/templates/astro/styles
 src/templates/astro/examples
 src/templates/astro/README.md
 ```
@@ -296,6 +298,10 @@ existing email outbox runner remains compatible with Mika's queued
   `@bnomei/emdash-mika/server`.
 - Optional Stripe provider adapter: `@bnomei/emdash-mika/stripe`.
 - DTO, input/result, and branded primitive types: `@bnomei/emdash-mika/types`.
+- Public aggregate, document, and operational type barrels:
+  `@bnomei/emdash-mika/types/aggregates`,
+  `@bnomei/emdash-mika/types/documents`, and
+  `@bnomei/emdash-mika/types/operational`.
 - Copyable files: `@bnomei/emdash-mika/templates/astro/*`.
 
 The package intentionally does not expose a public `storage` subpath. Storage
