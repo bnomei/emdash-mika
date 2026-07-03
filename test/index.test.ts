@@ -14,6 +14,8 @@ import {
   createMikaPlugin,
   mikaPlugin,
   type MikaCreatePluginOptions,
+  type MikaDescriptorOptions,
+  type MikaDescriptorPluginOptions,
 } from "../src/index";
 import type {
   mikaPlugin as PackageMikaPlugin,
@@ -383,11 +385,42 @@ describe("Mika native plugin package", () => {
   });
 
   it("rejects function-valued descriptor options at config time", () => {
-    expect(() => mikaPlugin({ api: {} })).toThrow(/JSON-serializes descriptor options/);
-    expect(() => mikaPlugin({ api: {} })).toThrow(/entrypoint/);
-    expect(() => mikaPlugin({ operationPolicy: () => true })).toThrow(/operationPolicy/);
-    expect(() => mikaPlugin({ operationPolicy: () => true })).toThrow(/authorization guard/);
-    expect(() => mikaPlugin({ api: undefined })).not.toThrow();
+    const descriptorWithApi = { api: {} } as unknown as MikaDescriptorOptions;
+    const descriptorWithPolicy = {
+      operationPolicy: () => true,
+    } as unknown as MikaDescriptorOptions;
+    const descriptorWithUndefinedApi = {
+      api: undefined,
+    } as unknown as MikaDescriptorOptions;
+
+    expect(() => mikaPlugin(descriptorWithApi)).toThrow(/JSON-serializes descriptor options/);
+    expect(() => mikaPlugin(descriptorWithApi)).toThrow(/entrypoint/);
+    expect(() => mikaPlugin(descriptorWithPolicy)).toThrow(/operationPolicy/);
+    expect(() => mikaPlugin(descriptorWithPolicy)).toThrow(/authorization guard/);
+    expect(() => mikaPlugin(descriptorWithUndefinedApi)).not.toThrow();
+  });
+
+  it("keeps descriptor option types JSON-safe", () => {
+    expectTypeOf<MikaDescriptorOptions>().toHaveProperty("entrypoint").toEqualTypeOf<
+      string | undefined
+    >();
+    expectTypeOf<MikaDescriptorOptions>().toHaveProperty("maintenance").toEqualTypeOf<
+      MikaDescriptorPluginOptions["maintenance"]
+    >();
+    expectTypeOf<MikaDescriptorOptions>().toHaveProperty("assertWired").toEqualTypeOf<
+      boolean | readonly string[] | undefined
+    >();
+    expectTypeOf<MikaDescriptorOptions>().not.toHaveProperty("api");
+    expectTypeOf<MikaDescriptorOptions>().not.toHaveProperty("operationPolicy");
+    expectTypeOf<ReturnType<typeof mikaPlugin>["options"]>().toEqualTypeOf<
+      MikaDescriptorPluginOptions | undefined
+    >();
+    expectTypeOf<NonNullable<ReturnType<typeof mikaPlugin>["options"]>>().not.toHaveProperty(
+      "api",
+    );
+    expectTypeOf<NonNullable<ReturnType<typeof mikaPlugin>["options"]>>().not.toHaveProperty(
+      "operationPolicy",
+    );
   });
 
   it("keeps JSON-safe descriptor options flowing through mikaPlugin", () => {

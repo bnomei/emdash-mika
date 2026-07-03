@@ -69,28 +69,18 @@ export interface MikaMaintenanceRuntimeOptions extends MikaMaintenancePluginOpti
   readonly emailOutboxRunner?: MikaEmailOutboxRunner;
 }
 
-/** Options passed to the static plugin descriptor factory (`mikaPlugin`). */
-export interface MikaDescriptorOptions {
-  /** npm package name or path used as the plugin entrypoint in the descriptor. */
-  readonly entrypoint?: string;
-  /**
-   * @deprecated Never worked: the EmDash host JSON-serializes descriptor options, dropping all
-   * function values, so a live api cannot cross this boundary — `mikaPlugin()` now throws when it
-   * is set. Merge `api` in a host entrypoint module's `createPlugin()` wrapper (copyable template:
-   * `src/templates/astro/lib/mika-plugin.ts`) and pass `entrypoint` instead.
-   */
-  readonly api?: MikaApiOverrides;
-  /**
-   * @deprecated Never worked: `MikaOperationPolicy` is a function and is dropped by the EmDash
-   * host's JSON descriptor serialization, silently disabling the guard — `mikaPlugin()` now throws
-   * when it is set. Merge `operationPolicy` in the host entrypoint module's `createPlugin()`
-   * wrapper instead.
-   */
-  readonly operationPolicy?: MikaOperationPolicy;
+/** JSON-safe options carried by the static plugin descriptor into the host entrypoint module. */
+export interface MikaDescriptorPluginOptions {
   /** Descriptor-level maintenance cron toggles. */
   readonly maintenance?: MikaMaintenancePluginOptions;
   /** Wiring assertion forwarded to {@link createMikaPlugin}; see {@link MikaCreatePluginOptions}. */
   readonly assertWired?: boolean | readonly string[];
+}
+
+/** Options passed to the static plugin descriptor factory (`mikaPlugin`). */
+export interface MikaDescriptorOptions extends MikaDescriptorPluginOptions {
+  /** npm package name or path used as the plugin entrypoint in the descriptor. */
+  readonly entrypoint?: string;
 }
 
 /** Options resolved at plugin activation for API overrides, policy, and maintenance wiring. */
@@ -118,8 +108,12 @@ type MikaCronEvent = {
 /** Builds the EmDash plugin descriptor for Mika with storage, routes, and maintenance defaults. */
 export function mikaPlugin(
   options: MikaDescriptorOptions = {},
-): PluginDescriptor<MikaCreatePluginOptions> {
-  const dropped = (["api", "operationPolicy"] as const).filter((key) => options[key] !== undefined);
+): PluginDescriptor<MikaDescriptorPluginOptions> {
+  const runtimeOptions = options as MikaDescriptorOptions &
+    Partial<Pick<MikaCreatePluginOptions, "api" | "operationPolicy">>;
+  const dropped = (["api", "operationPolicy"] as const).filter(
+    (key) => runtimeOptions[key] !== undefined,
+  );
   if (dropped.length > 0) {
     throw new Error(
       `mikaPlugin() received ${dropped.join(" and ")} in descriptor options, but the EmDash host ` +
@@ -136,7 +130,7 @@ export function mikaPlugin(
     );
   }
   const entrypoint = options.entrypoint ?? MIKA_PACKAGE_NAME;
-  const pluginOptions: MikaCreatePluginOptions = {
+  const pluginOptions: MikaDescriptorPluginOptions = {
     ...(options.maintenance === undefined ? {} : { maintenance: options.maintenance }),
     ...(options.assertWired === undefined ? {} : { assertWired: options.assertWired }),
   };

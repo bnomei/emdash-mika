@@ -18,6 +18,7 @@ export {
   mikaPlugin,
   type MikaCreatePluginOptions,
   type MikaDescriptorOptions,
+  type MikaDescriptorPluginOptions,
   type MikaMaintenancePluginOptions,
 } from "./plugin";
 /** Host policy toggles applied when constructing plugin routes and operation runners. */
