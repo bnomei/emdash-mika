@@ -4630,7 +4630,9 @@ describe("Mika Astro template contracts", () => {
     expect(productPurchaseSyncSource).toContain("[data-mika-variant-groups]");
     expect(productPurchaseSyncSource).not.toContain("JSON.parse");
     expect(productPurchaseSyncSource).not.toContain("data-mika-sellables");
-    expect(productPurchaseSyncSource).toContain("event.detail");
+    expect(productPurchaseSyncSource).toContain(
+      "(event as CustomEvent<MikaVariantChangeDetail>).detail",
+    );
     expect(productPurchaseSyncSource).toContain("groups.dataset.mikaSelectedSellableId");
     expect(productPurchaseSyncSource).toContain("sync(sellableId, priceId, maxQuantity);");
     expect(productPurchaseSyncSource).toContain('groups.addEventListener("mika:variant-change"');

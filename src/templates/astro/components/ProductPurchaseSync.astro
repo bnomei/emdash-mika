@@ -1,5 +1,11 @@
 <!-- mika-template-version: 0.0.0 -->
 <script>
+  interface MikaVariantChangeDetail {
+    readonly sellableId?: string;
+    readonly priceId?: string;
+    readonly maxQuantity?: number;
+  }
+
   if (!customElements.get("mika-product-purchase")) {
     customElements.define(
       "mika-product-purchase",
@@ -8,13 +14,13 @@
           if (this.dataset.mikaProductPurchaseReady === "true") return;
           this.dataset.mikaProductPurchaseReady = "true";
 
-          const sync = (sellableId, priceId, maxQuantity) => {
-            this.querySelectorAll("[data-mika-selected-sellable-id]").forEach(
+          const sync = (sellableId: string, priceId: string, maxQuantity: string) => {
+            this.querySelectorAll<HTMLInputElement>("[data-mika-selected-sellable-id]").forEach(
               (input) => {
                 input.value = sellableId ?? "";
               }
             );
-            this.querySelectorAll("[data-mika-selected-price-id]").forEach((input) => {
+            this.querySelectorAll<HTMLInputElement>("[data-mika-selected-price-id]").forEach((input) => {
               input.value = priceId ?? "";
             });
             syncSubmitButtons(this, sellableId ?? "");
@@ -22,8 +28,8 @@
             syncAvailabilityPanels(this, sellableId ?? "");
           };
 
-          const syncSubmitButtons = (scope, sellableId) => {
-            for (const button of scope.querySelectorAll("[data-mika-purchase-submit]")) {
+          const syncSubmitButtons = (scope: HTMLElement, sellableId: string) => {
+            for (const button of scope.querySelectorAll<HTMLButtonElement>("[data-mika-purchase-submit]")) {
               button.disabled =
                 sellableId === "" || button.dataset.mikaInitialDisabled === "true";
               if (button.dataset.mikaEnabledLabel && button.dataset.mikaDisabledLabel) {
@@ -34,8 +40,8 @@
             }
           };
 
-          const syncQuantityInputs = (scope, sellableId, maxQuantity) => {
-            for (const input of scope.querySelectorAll("[data-mika-purchase-quantity]")) {
+          const syncQuantityInputs = (scope: HTMLElement, sellableId: string, maxQuantity: string) => {
+            for (const input of scope.querySelectorAll<HTMLInputElement>("[data-mika-purchase-quantity]")) {
               input.disabled =
                 sellableId === "" || input.dataset.mikaInitialDisabled === "true";
               if (maxQuantity === "") {
@@ -47,13 +53,16 @@
             }
           };
 
-          const syncAvailabilityPanels = (scope, sellableId) => {
-            for (const panel of scope.querySelectorAll("[data-mika-availability-for]")) {
+          const syncAvailabilityPanels = (scope: HTMLElement, sellableId: string) => {
+            for (const panel of scope.querySelectorAll<HTMLElement>("[data-mika-availability-for]")) {
               panel.hidden = panel.dataset.mikaAvailabilityFor !== sellableId;
             }
           };
 
-          const updateFromVariantGroups = (groups, detail = {}) => {
+          const updateFromVariantGroups = (
+            groups: HTMLFieldSetElement,
+            detail: MikaVariantChangeDetail = {}
+          ) => {
             const sellableId =
               detail.sellableId ?? groups.dataset.mikaSelectedSellableId ?? "";
             const priceId = detail.priceId ?? groups.dataset.mikaSelectedPriceId ?? "";
@@ -66,7 +75,7 @@
           };
 
           const updateFromPurchaseOption = () => {
-            const option = this.querySelector("[data-mika-purchase-option]:checked");
+            const option = this.querySelector<HTMLInputElement>("[data-mika-purchase-option]:checked");
             sync(
               option?.dataset.mikaPurchaseSellableId ?? "",
               option?.dataset.mikaPurchasePriceId ?? "",
@@ -74,15 +83,15 @@
             );
           };
 
-          const options = this.querySelectorAll("[data-mika-purchase-option]");
+          const options = this.querySelectorAll<HTMLInputElement>("[data-mika-purchase-option]");
           for (const option of options) {
             option.addEventListener("change", updateFromPurchaseOption);
           }
           if (options.length > 0) updateFromPurchaseOption();
 
-          for (const groups of this.querySelectorAll("[data-mika-variant-groups]")) {
+          for (const groups of this.querySelectorAll<HTMLFieldSetElement>("[data-mika-variant-groups]")) {
             groups.addEventListener("mika:variant-change", (event) =>
-              updateFromVariantGroups(groups, event.detail)
+              updateFromVariantGroups(groups, (event as CustomEvent<MikaVariantChangeDetail>).detail)
             );
             updateFromVariantGroups(groups);
           }
