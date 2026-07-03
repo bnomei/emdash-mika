@@ -1453,7 +1453,21 @@ function checkoutExpiresAt(input: MikaBackendDependencies, ctx: MikaRequestConte
 }
 
 function checkoutDocumentStatus(status: CheckoutSessionDTO["status"]): CheckoutStatus {
-  return status === "pending" ? "created" : status === "binding_mismatch" ? "failed" : status;
+  // Exhaustive over CheckoutProviderStatus (enforced by noImplicitReturns): a new transport-only
+  // status fails the build instead of silently mis-mapping.
+  switch (status) {
+    case "pending":
+      return "created";
+    case "binding_mismatch":
+      return "failed";
+    case "created":
+    case "redirected":
+    case "completed":
+    case "cancelled":
+    case "expired":
+    case "failed":
+      return status;
+  }
 }
 
 const CHECKOUT_PROVIDER_STATUSES = [

@@ -1858,7 +1858,12 @@ function requiredProductField(value: string | undefined, field: string): string 
   return value;
 }
 
-function acpAvailability(sellable: SellableDTO): MikaAcpAvailability {
+/** The subset of MikaAcpAvailability.status that acpAvailability actually produces. */
+type AcpProducedStatus = "in_stock" | "backorder" | "out_of_stock";
+
+function acpAvailability(
+  sellable: SellableDTO,
+): { readonly available: boolean; readonly status: AcpProducedStatus } {
   const status = sellable.availability?.status;
 
   if (!sellable.active || status === "out_of_stock" || status === "manual") {
@@ -1882,11 +1887,16 @@ function acpAvailability(sellable: SellableDTO): MikaAcpAvailability {
 }
 
 function acpFileAvailability(sellable: SellableDTO): MikaAcpFileUploadProductRow["availability"] {
-  const status = acpAvailability(sellable).status;
-
-  // acpAvailability only ever yields "out_of_stock" | "backorder" | "in_stock", so there is no
-  // "preorder" arm to map here (the row's "pre_order" wire value stays in the type union).
-  return status === "backorder" ? "backorder" : status === "in_stock" ? "in_stock" : "out_of_stock";
+  // Exhaustive over AcpProducedStatus (enforced by noImplicitReturns): a newly produced status fails
+  // the build. The row's "pre_order" wire value stays in the type union but is not produced here.
+  switch (acpAvailability(sellable).status) {
+    case "in_stock":
+      return "in_stock";
+    case "backorder":
+      return "backorder";
+    case "out_of_stock":
+      return "out_of_stock";
+  }
 }
 
 function acpVariantOptions(
