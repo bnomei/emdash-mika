@@ -34,7 +34,7 @@ const cartItemCount = await mikaTemplateCurrentCartItemCount(Astro);
   {verifyResult?.error && <Text as="p" variant="error" role="alert">{verifyResult.error.message}</Text>}
 
   {token ? (
-    <form class="mika-kumo-form" action={actions.mika.magicLink.verify} method="post">
+    <form class="mika-kumo-form" action={actions.mika.magicLink.verify.queryString} method="post">
       <input type="hidden" {...mikaHiddenInput("token", token)} />
       <input type="hidden" {...mikaReturnToInput(mikaTemplateRoutes.account)} />
       <Button type="submit" variant="primary">Continue</Button>

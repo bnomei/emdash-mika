@@ -67,15 +67,15 @@ const cartItemCount = await mikaTemplateCurrentCartItemCount(Astro);
       )}
 
       <div class="mika-kumo-actions">
-      <form class="mika-kumo-form" action={actions.mika.account.portal} method="post">
+      <form class="mika-kumo-form" action={actions.mika.account.portal.queryString} method="post">
         <input type="hidden" {...mikaReturnToInput(mikaTemplateRoutes.account)} />
         <Button type="submit" variant="secondary">Manage billing in portal</Button>
       </form>
-      <form class="mika-kumo-form" action={actions.mika.account["export"]} method="post">
+      <form class="mika-kumo-form" action={actions.mika.account["export"].queryString} method="post">
         <input type="hidden" {...mikaReturnToInput(mikaTemplateRoutes.account)} />
         <Button type="submit" variant="secondary">Export account data</Button>
       </form>
-      <form class="mika-kumo-form" action={actions.mika.account["delete"]} method="post">
+      <form class="mika-kumo-form" action={actions.mika.account["delete"].queryString} method="post">
         <input type="hidden" {...mikaReturnToInput(mikaTemplateRoutes.account)} />
         <Button type="submit" variant="secondary-destructive">Delete account</Button>
       </form>

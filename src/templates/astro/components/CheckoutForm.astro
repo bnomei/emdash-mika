@@ -59,7 +59,7 @@ const redirectInputs = mikaRedirectInputs(
   {...attrs}
   data-mika-checkout
   class:list={["mika-kumo-form", className]}
-  action={actions.mika.checkout.start}
+  action={actions.mika.checkout.start.queryString}
   method="post"
 >
   {cart?.id && <input type="hidden" {...mikaHiddenInput("cartId", cart.id)} />}

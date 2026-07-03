@@ -27,7 +27,7 @@ const {
 ---
 
 <div {...attrs} data-mika-coupon class:list={["mika-kumo-stack", className]}>
-  <form class="mika-kumo-form" action={actions.mika.cart.applyCoupon} method="post">
+  <form class="mika-kumo-form" action={actions.mika.cart.applyCoupon.queryString} method="post">
     {cart?.id && <input type="hidden" {...mikaHiddenInput("cartId", cart.id)} />}
     <input type="hidden" {...mikaReturnToInput(returnTo)} />
     <label class="mika-kumo-field">
@@ -38,7 +38,7 @@ const {
   </form>
 
   {cart?.coupon && (
-    <form class="mika-kumo-form" action={actions.mika.cart.removeCoupon} method="post">
+    <form class="mika-kumo-form" action={actions.mika.cart.removeCoupon.queryString} method="post">
       {cart.id && <input type="hidden" {...mikaHiddenInput("cartId", cart.id)} />}
       <input type="hidden" {...mikaReturnToInput(returnTo)} />
       <Button type="submit" variant="secondary">{removeLabel}</Button>

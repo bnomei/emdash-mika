@@ -57,14 +57,14 @@ const savedCount = wishlist?.items.length ?? 0;
               <Table.Cell><strong>{item.title}</strong></Table.Cell>
               <Table.Cell>
                 <div class="mika-kumo-actions">
-                  <form class="mika-kumo-form" action={actions.mika.wishlist.moveToCart} method="post">
+                  <form class="mika-kumo-form" action={actions.mika.wishlist.moveToCart.queryString} method="post">
                     <input type="hidden" {...mikaHiddenInput("itemId", item.id)} />
                     <input type="hidden" {...mikaReturnToInput(returnTo)} />
                     <Button type="submit" variant="secondary" aria-label={`${moveToCartLabel} ${item.title}`}>
                       {moveToCartLabel}
                     </Button>
                   </form>
-                  <form class="mika-kumo-form" action={actions.mika.wishlist.remove} method="post">
+                  <form class="mika-kumo-form" action={actions.mika.wishlist.remove.queryString} method="post">
                     <input type="hidden" {...mikaHiddenInput("itemId", item.id)} />
                     <input type="hidden" {...mikaReturnToInput(returnTo)} />
                     <Button type="submit" variant="secondary-destructive" aria-label={`${removeLabel} ${item.title}`}>

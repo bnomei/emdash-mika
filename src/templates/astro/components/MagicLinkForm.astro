@@ -41,7 +41,7 @@ const resolvedEmailErrorId = emailError
   id={formId}
   data-mika-magic-link
   class:list={["mika-kumo-form", className]}
-  action={actions.mika.magicLink.request}
+  action={actions.mika.magicLink.request.queryString}
   method="post"
 >
   <input type="hidden" {...mikaReturnToInput(returnTo)} />

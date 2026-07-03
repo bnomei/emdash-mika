@@ -29,7 +29,7 @@ const cartItemCount = await mikaTemplateCurrentCartItemCount(Astro);
     {token ? (
       <>
         <Text as="p">Your download is ready. Select continue to start it.</Text>
-        <form class="mika-kumo-form" action={actions.mika.download.confirm} method="post">
+        <form class="mika-kumo-form" action={actions.mika.download.confirm.queryString} method="post">
           <input type="hidden" {...mikaHiddenInput("token", token)} />
           <Button type="submit" variant="primary">Download</Button>
         </form>

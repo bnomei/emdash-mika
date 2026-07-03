@@ -83,7 +83,7 @@ const hasEmptySlot = Astro.slots.has("empty");
               <Table.Cell>
                 <div class="mika-kumo-actions">
                   {showChangeAction && subscription.providerActions?.includes("change") && changePriceIds[subscription.id] && (
-                    <form class="mika-kumo-form" action={actions.mika.subscription.change} method="post">
+                    <form class="mika-kumo-form" action={actions.mika.subscription.change.queryString} method="post">
                       <input type="hidden" name="subscriptionId" value={subscription.id} />
                       <input type="hidden" name="priceId" value={changePriceIds[subscription.id] ?? ""} />
                       <input type="hidden" {...mikaReturnToInput(returnTo)} />
@@ -93,7 +93,7 @@ const hasEmptySlot = Astro.slots.has("empty");
                     </form>
                   )}
                   {subscription.providerActions?.includes("renew") && (
-                    <form class="mika-kumo-form" action={actions.mika.subscription.renew} method="post">
+                    <form class="mika-kumo-form" action={actions.mika.subscription.renew.queryString} method="post">
                       <input type="hidden" name="subscriptionId" value={subscription.id} />
                       <input type="hidden" {...mikaReturnToInput(returnTo)} />
                       <Button type="submit" variant="secondary" aria-label={`${renewLabel} ${subscription.title}`}>
@@ -102,7 +102,7 @@ const hasEmptySlot = Astro.slots.has("empty");
                     </form>
                   )}
                   {subscription.providerActions?.includes("cancel") && (
-                    <form class="mika-kumo-form" action={actions.mika.subscription.cancel} method="post">
+                    <form class="mika-kumo-form" action={actions.mika.subscription.cancel.queryString} method="post">
                       <input type="hidden" name="subscriptionId" value={subscription.id} />
                       <input type="hidden" {...mikaReturnToInput(returnTo)} />
                       <Button type="submit" variant="secondary-destructive" aria-label={`${cancelLabel} ${subscription.title}`}>
