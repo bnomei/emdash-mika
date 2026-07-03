@@ -9,6 +9,7 @@ import {
 } from "./admin-action-runner";
 import { MIKA_AGENT_IDEMPOTENCY_KEY_HEADER } from "./agent-types";
 import { createMikaRequestContext, type MikaSessionAccess } from "./context";
+import { mikaOperationInputWithIdempotencyContext } from "./operation-idempotency";
 import {
   parseMikaOperationInput,
   mikaRouteOperationsByPath,
@@ -133,43 +134,6 @@ async function runMikaOperationSafely(
       message: "Mika operation failed.",
     },
   }));
-}
-
-/**
- * Injects `idempotencyKey` from {@link MikaRequestContext} when the operation requires agent
- * idempotency, the input schema accepts the field, and the caller did not supply a non-empty key.
- */
-export function mikaOperationInputWithIdempotencyContext(
-  operation: MikaRouteOperation,
-  input: unknown,
-  idempotencyKey: string | undefined,
-): unknown {
-  if (
-    !idempotencyKey ||
-    operation.agent.idempotency !== "required" ||
-    !operation.agent.idempotencyKey ||
-    !operation.acceptsIdempotencyKey ||
-    !isRecord(input) ||
-    hasNonEmptyIdempotencyKey(input)
-  ) {
-    return input;
-  }
-
-  return {
-    ...input,
-    idempotencyKey,
-  };
-}
-
-// Caller-supplied idempotency keys take precedence over the request-context header value.
-function hasNonEmptyIdempotencyKey(input: Record<string, unknown>): boolean {
-  const value = input["idempotencyKey"];
-
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function handleRouteOperation(
