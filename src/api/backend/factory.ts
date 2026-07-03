@@ -27,7 +27,7 @@ import {
 } from "./admin";
 import { createCartBackend } from "./cart";
 import { cancelCheckout, checkoutStatus, createCheckoutPreview, startCheckout } from "./checkout";
-import { validationFailed } from "./errors";
+import { sellableNotFound, validationFailed } from "./errors";
 import { resolveDownload } from "./fulfillment";
 import { hydratedCheckoutOverrides, withHydratedCustomerHandler } from "./identity";
 import { requestMagicLink, verifyMagicLink } from "./magic-link";
@@ -80,41 +80,13 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
         const id = createMikaId(sellableId);
         const catalog = await input.repositories.catalog.findItemBySellableId(id);
         const sellable = catalog?.aggregate.sellables.find((item) => item.id === id);
-        if (!sellable?.active) {
-          return {
-            ok: false,
-            status: 404,
-            error: {
-              code: "SELLABLE_NOT_FOUND",
-              message: `Sellable '${sellableId}' was not found.`,
-            },
-          };
-        }
+        if (!sellable?.active) return sellableNotFound(id);
 
         const stock = await input.repositories.stock.findBySellableId(id);
-        if (!stock) {
-          return {
-            ok: false,
-            status: 404,
-            error: {
-              code: "SELLABLE_NOT_FOUND",
-              message: `Sellable '${sellableId}' was not found.`,
-            },
-          };
-        }
+        if (!stock) return sellableNotFound(id);
 
         const availability = stockAvailabilityToDTO(sellable, stock);
-
-        if (!availability) {
-          return {
-            ok: false,
-            status: 404,
-            error: {
-              code: "SELLABLE_NOT_FOUND",
-              message: `Sellable '${sellableId}' was not found.`,
-            },
-          };
-        }
+        if (!availability) return sellableNotFound(id);
 
         return { ok: true, status: 200, data: availability };
       },
