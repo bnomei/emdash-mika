@@ -2,8 +2,7 @@
  * Repository layer over document collections and operational SQLite tables.
  * This file is a thin barrel; the implementation lives in ./repositories/*.
  */
-export { createMikaRepositories, MikaRepositories } from "./repositories/factory";
-export type { MikaDb, MikaDbExecutor, MikaTransaction } from "./repositories/db-shared";
+export type { MikaDb, MikaDbExecutor } from "./repositories/db-shared";
 export { EphemeralRepository } from "./repositories/ephemeral";
 export { CatalogRepository } from "./repositories/catalog";
 export { LedgerRepository } from "./repositories/ledger";
