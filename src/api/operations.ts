@@ -7,7 +7,13 @@ import type { MikaApi } from "./server";
 import type { MikaApiResult } from "./types";
 import { createMikaId } from "../types/primitives";
 import { normalizeMikaCheckoutCustomer, parseMikaPurchaseField } from "./form-contracts";
-import type { MikaAgentOperationMetadata } from "./agent-types";
+import type {
+  MikaAgentActionAccept,
+  MikaAgentActionDescriptor,
+  MikaAgentOperationHttpMethod,
+  MikaAgentOperationMetadata,
+  MikaAgentOperationTransport,
+} from "./agent-types";
 import { agentOperationMetadata } from "./operation-agent-metadata";
 import {
   accountExportDownloadInputSchema,
@@ -59,33 +65,20 @@ import {
 /** Operation input transport helpers for body, search-param, and form-encoded requests. */
 export { mikaOperationRequestInit, parseMikaOperationInput } from "./operation-transport";
 
-/** HTTP verbs used by plugin route operations. */
-export type MikaOperationHttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
+/** HTTP verbs used by plugin route operations. Single-sourced from the agent manifest vocabulary. */
+export type MikaOperationHttpMethod = MikaAgentOperationHttpMethod;
 /** Where validated input is read on the HTTP request. */
-export type MikaOperationTransport = "body" | "search" | "none";
+export type MikaOperationTransport = MikaAgentOperationTransport;
 /** Accepted encoding for HTML action endpoints. */
-export type MikaActionAccept = "form" | "json";
+export type MikaActionAccept = MikaAgentActionAccept;
 
-/** Serializable view of an operation for manifests, routing, and policy. */
-export interface MikaOperationDescriptor {
-  readonly name: string;
-  readonly namespace: string;
-  readonly method: string;
-  readonly public: boolean;
-  readonly requiresRequestContext: boolean;
-  readonly agent: MikaAgentOperationMetadata;
-  readonly action?: {
-    readonly key: string;
-    readonly name: string;
-    readonly accept: MikaActionAccept;
-  };
-  readonly route: {
-    readonly key: string;
-    readonly path: string;
-    readonly httpMethod: MikaOperationHttpMethod;
-    readonly transport: MikaOperationTransport;
-    readonly searchKeys?: readonly string[];
-  };
+/**
+ * Serializable view of an operation for manifests, routing, and policy. Same shape as
+ * {@link MikaAgentActionDescriptor} but with a guaranteed (non-optional) route — every routed
+ * operation has one.
+ */
+export interface MikaOperationDescriptor extends MikaAgentActionDescriptor {
+  readonly route: NonNullable<MikaAgentActionDescriptor["route"]>;
 }
 
 type MikaApiOperationCall<TInput, TData> = {
@@ -115,8 +108,6 @@ interface MikaOperationActionDefinition<TActionInput = unknown> {
 }
 
 type MikaOperationActionInputDefinition<TActionSchema extends z.ZodType | undefined = z.ZodType> = {
-  readonly key?: string;
-  readonly name?: string;
   readonly accept: MikaActionAccept;
   readonly schema?: TActionSchema;
   readonly normalize?: MikaOperationActionNormalizer;
@@ -137,9 +128,8 @@ interface MikaApiOperationBaseDefinition {
   readonly searchKeys?: readonly string[];
 }
 
-type MikaApiOperationBaseInputDefinition = Omit<MikaApiOperationBaseDefinition, "name"> & {
-  readonly name?: string;
-};
+// The operation name is always derived from `${namespace}.${method}`; it is never supplied on input.
+type MikaApiOperationBaseInputDefinition = Omit<MikaApiOperationBaseDefinition, "name">;
 
 type MikaApiOperationDefinition = MikaApiOperationBaseDefinition & {
   readonly schema?: z.ZodType;
@@ -153,18 +143,13 @@ type MikaApiOperationDefinition = MikaApiOperationBaseDefinition & {
   readonly call: MikaApiOperationCall<unknown, unknown>;
 };
 
+// The operation (and its action) name is always the derived `${namespace}.${method}`.
 type MikaOperationName<TDefinition> = TDefinition extends {
   readonly namespace: infer TNamespace extends string;
   readonly method: infer TMethod extends string;
 }
   ? `${TNamespace}.${TMethod}`
   : string;
-
-type MikaDefinedOperationName<TDefinition> = TDefinition extends {
-  readonly name: infer TName extends string;
-}
-  ? TName
-  : MikaOperationName<TDefinition>;
 
 type MikaDefinedActionSchema<TDefinition, TAction> = TAction extends {
   readonly schema: infer TActionSchema extends z.ZodType;
@@ -178,13 +163,9 @@ type MikaDefinedOperationAction<
   TKey extends string,
   TDefinition,
   TAction extends MikaOperationActionInputDefinition,
-> = Omit<TAction, "key" | "name" | "schema"> & {
-  readonly key: TAction extends { readonly key: infer TActionKey extends string }
-    ? TActionKey
-    : TKey;
-  readonly name: TAction extends { readonly name: infer TActionName extends string }
-    ? TActionName
-    : MikaDefinedOperationName<TDefinition>;
+> = Omit<TAction, "schema"> & {
+  readonly key: TKey;
+  readonly name: MikaOperationName<TDefinition>;
   readonly schema: MikaDefinedActionSchema<TDefinition, TAction>;
 };
 
@@ -192,7 +173,7 @@ type MikaDefinedOperation<TKey extends string, TDefinition> = Omit<
   TDefinition,
   "name" | "action"
 > & {
-  readonly name: MikaDefinedOperationName<TDefinition>;
+  readonly name: MikaOperationName<TDefinition>;
 } & (TDefinition extends {
     readonly action: infer TAction extends MikaOperationActionInputDefinition;
   }
@@ -210,14 +191,14 @@ function defineMikaOperation<
     readonly call: MikaApiOperationCall<z.infer<TSchema>, TData>;
   },
 ): Omit<TDefinition, "name"> & {
-  readonly name: MikaDefinedOperationName<TDefinition>;
+  readonly name: MikaOperationName<TDefinition>;
   readonly schema: TSchema;
   readonly acceptsIdempotencyKey: boolean;
   readonly action?: TDefinition extends {
     readonly action: infer TAction extends MikaOperationActionInputDefinition;
   }
-    ? Omit<TAction, "name" | "schema"> & {
-        readonly name: MikaDefinedOperationName<TDefinition>;
+    ? Omit<TAction, "schema"> & {
+        readonly name: MikaOperationName<TDefinition>;
         readonly schema: MikaDefinedActionSchema<TDefinition, TAction>;
       }
     : never;
@@ -233,14 +214,14 @@ function defineMikaOperation<
     readonly call?: undefined;
   },
 ): Omit<TDefinition, "name"> & {
-  readonly name: MikaDefinedOperationName<TDefinition>;
+  readonly name: MikaOperationName<TDefinition>;
   readonly schema: TSchema;
   readonly acceptsIdempotencyKey: boolean;
   readonly action?: TDefinition extends {
     readonly action: infer TAction extends MikaOperationActionInputDefinition;
   }
-    ? Omit<TAction, "name" | "schema"> & {
-        readonly name: MikaDefinedOperationName<TDefinition>;
+    ? Omit<TAction, "schema"> & {
+        readonly name: MikaOperationName<TDefinition>;
         readonly schema: MikaDefinedActionSchema<TDefinition, TAction>;
       }
     : never;
@@ -256,7 +237,7 @@ function defineMikaOperation<TData, const TDefinition extends MikaApiOperationBa
     readonly call: MikaApiOperationCall<undefined, TData>;
   },
 ): Omit<TDefinition, "name"> & {
-  readonly name: MikaDefinedOperationName<TDefinition>;
+  readonly name: MikaOperationName<TDefinition>;
   readonly schema?: undefined;
   readonly acceptsIdempotencyKey: false;
   readonly call: MikaApiOperationCall<undefined, TData>;
@@ -268,7 +249,7 @@ function defineMikaOperation<const TDefinition extends MikaApiOperationBaseInput
     readonly call?: undefined;
   },
 ): Omit<TDefinition, "name"> & {
-  readonly name: MikaDefinedOperationName<TDefinition>;
+  readonly name: MikaOperationName<TDefinition>;
   readonly schema?: undefined;
   readonly acceptsIdempotencyKey: false;
   readonly call: MikaApiOperationCall<
@@ -287,14 +268,14 @@ function normalizeMikaOperationDefinition(
     readonly call?: MikaApiOperationCall<unknown, unknown>;
   },
 ): MikaApiOperationDefinition {
-  const name = definition.name ?? `${definition.namespace}.${definition.method}`;
+  const name = `${definition.namespace}.${definition.method}`;
   const { action: actionInput, call, ...operation } = definition;
   const action =
     actionInput === undefined
       ? undefined
       : {
           ...actionInput,
-          name: actionInput.name ?? name,
+          name,
           schema: actionInput.schema ?? definition.schema,
         };
 
@@ -373,7 +354,7 @@ function defineMikaOperations<
             ...operation,
             action: {
               ...operation.action,
-              key: operation.action.key ?? key,
+              key,
             },
           }
         : operation,
@@ -400,13 +381,6 @@ export type MikaApiOperationData<TOperation extends { readonly call: (...args: a
   TOperation extends { readonly call: (...args: any) => Promise<MikaApiResult<infer TData>> }
     ? TData
     : never;
-
-/** Validated input type inferred from an operation's Zod schema. */
-export type MikaApiOperationInput<TOperation> = TOperation extends {
-  readonly schema: z.ZodType<infer TInput>;
-}
-  ? TInput
-  : undefined;
 
 /** Thrown when an HTML action payload cannot be normalized to operation input. */
 export class MikaActionInputError extends Error {
@@ -444,8 +418,13 @@ export const mikaRouteOnlyDefinitions = defineMikaRouteOnlyDefinitions({
 
 type CartAddFormInput = z.infer<typeof cartAddFormInputSchema>;
 type CheckoutStartFormInput = z.infer<typeof checkoutStartFormInputSchema>;
+// The normalize seam feeds runMikaOperation, which types the call input as z.infer<operationSchema>.
+// Annotating each normalizer's return with that exact type turns a drift between the form action
+// and the operation it dispatches to (e.g. a renamed or dropped field) into a compile error.
+type CartAddOperationInput = z.infer<typeof addCartItemInputSchema>;
+type CheckoutStartOperationInput = z.infer<typeof startCheckoutInputSchema>;
 
-function normalizeCartAddActionInput(input: CartAddFormInput) {
+function normalizeCartAddActionInput(input: CartAddFormInput): CartAddOperationInput {
   const purchase = parseMikaPurchaseField(input.purchase);
   const purchaseSellableId = parsePurchaseMikaId(purchase.sellableId, "sellableId");
   const purchasePriceId = parsePurchaseMikaId(purchase.priceId, "priceId");
@@ -466,7 +445,9 @@ function normalizeCartAddActionInput(input: CartAddFormInput) {
   };
 }
 
-function normalizeCheckoutStartActionInput(input: CheckoutStartFormInput) {
+function normalizeCheckoutStartActionInput(
+  input: CheckoutStartFormInput,
+): CheckoutStartOperationInput {
   const customer = normalizeMikaCheckoutCustomer(input);
 
   return {
@@ -1117,7 +1098,6 @@ export const mikaOperationDefinitions = defineMikaOperations({
 export type MikaApiOperation =
   (typeof mikaOperationDefinitions)[keyof typeof mikaOperationDefinitions];
 /** Operation definition that maps to an HTTP plugin route. */
-export type MikaRouteOperation = MikaApiOperation;
 /** Route-only entry without a backing API operation (manifest and action runner). */
 export type MikaRouteOnlyDefinition =
   (typeof mikaRouteOnlyDefinitions)[keyof typeof mikaRouteOnlyDefinitions];
@@ -1125,13 +1105,13 @@ export type MikaRouteOnlyDefinition =
 /** All operations exposed as HTTP plugin routes. */
 export const mikaRoutedOperationDefinitions = Object.values(
   mikaOperationDefinitions,
-) as readonly MikaRouteOperation[];
+) as readonly MikaApiOperation[];
 
 /** Operations grouped by plugin route path for method-based dispatch. */
 export const mikaRouteOperationsByPath = collectMikaRouteOperationsByPath();
 
 type MikaOperationPluginRoutes = {
-  readonly [TOperation in MikaRouteOperation as TOperation["routeKey"]]: TOperation["routePath"];
+  readonly [TOperation in MikaApiOperation as TOperation["routeKey"]]: TOperation["routePath"];
 } & {
   readonly [TRoute in MikaRouteOnlyDefinition as TRoute["routeKey"]]: TRoute["routePath"];
 };
@@ -1141,14 +1121,14 @@ export const mikaOperationPluginRoutes = collectMikaPluginRoutes() as MikaOperat
 
 /** Route key union for operations marked `public: true`. */
 export type MikaOperationPublicRouteName = Extract<
-  MikaRouteOperation,
+  MikaApiOperation,
   { readonly public: true }
 >["routeKey"];
 
 /** Route keys marked `public: true` (no session required). */
 export const mikaOperationPublicRouteNames = mikaRoutedOperationDefinitions
   .filter(
-    (operation): operation is Extract<MikaRouteOperation, { readonly public: true }> =>
+    (operation): operation is Extract<MikaApiOperation, { readonly public: true }> =>
       operation.public,
   )
   .map((operation) => operation.routeKey) as readonly MikaOperationPublicRouteName[];
@@ -1296,8 +1276,8 @@ function collectMikaPluginRoutes(): Record<string, string> {
   return routes;
 }
 
-function collectMikaRouteOperationsByPath(): ReadonlyMap<string, readonly MikaRouteOperation[]> {
-  const operationsByPath = new Map<string, MikaRouteOperation[]>();
+function collectMikaRouteOperationsByPath(): ReadonlyMap<string, readonly MikaApiOperation[]> {
+  const operationsByPath = new Map<string, MikaApiOperation[]>();
 
   for (const operation of mikaRoutedOperationDefinitions) {
     const operations = operationsByPath.get(operation.routePath) ?? [];
