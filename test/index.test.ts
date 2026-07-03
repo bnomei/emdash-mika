@@ -11,6 +11,7 @@ import {
   MIKA_MAINTENANCE_CRON_TASK,
   MIKA_PLUGIN_ID,
   MIKA_PLUGIN_VERSION,
+  MIKA_RUNTIME_ENTRYPOINT,
   mikaPlugin,
   type MikaDescriptorOptions,
   type MikaDescriptorPluginOptions,
@@ -43,6 +44,7 @@ import type { createMikaProviderRegistry as PackageCreateMikaProviderRegistry } 
 import type { MikaProvider as PackageMikaProvider } from "@bnomei/emdash-mika/react";
 import type {
   assertMikaApiWired as PackageAssertMikaApiWired,
+  createPlugin as PackageCreatePlugin,
   createEmDashMikaEmailSender as PackageCreateEmDashMikaEmailSender,
   createMikaBackendApi as PackageCreateMikaBackendApi,
   createMikaEmailOutboxRunner as PackageCreateMikaEmailOutboxRunner,
@@ -107,6 +109,7 @@ import {
 } from "../src/admin";
 import {
   assertMikaApiWired,
+  createPlugin,
   createMikaBackendApi,
   createEmDashMikaEmailSender,
   createMikaPlugin,
@@ -396,10 +399,11 @@ describe("Mika native plugin package", () => {
       id: MIKA_PLUGIN_ID,
       version: MIKA_PLUGIN_VERSION,
       format: "native",
-      entrypoint: MIKA_PACKAGE_NAME,
+      entrypoint: MIKA_RUNTIME_ENTRYPOINT,
       options: {},
       capabilities: ["content:read", "email:send"],
     });
+    expect(MIKA_RUNTIME_ENTRYPOINT).toBe(`${MIKA_PACKAGE_NAME}/server`);
   });
 
   it("honors descriptor entrypoint overrides", () => {
@@ -4266,6 +4270,7 @@ describe("public types", () => {
     expectTypeOf<PackageMikaAstroClientOptions>().toEqualTypeOf<MikaAstroClientOptions>();
     expectTypeOf<PackageServerMikaOperationDescriptor>().toEqualTypeOf<MikaOperationDescriptor>();
     expectTypeOf<PackageServerMikaOperationPolicy>().toEqualTypeOf<MikaOperationPolicy>();
+    expectTypeOf<typeof PackageCreatePlugin>().toEqualTypeOf<typeof createPlugin>();
     expectTypeOf<typeof PackageCreateMikaPlugin>().toEqualTypeOf<typeof createMikaPlugin>();
     expectTypeOf<PackageMikaCreatePluginOptions>().toEqualTypeOf<MikaCreatePluginOptions>();
     expectTypeOf<PackageMikaMaintenanceRuntimeOptions>().toEqualTypeOf<MikaMaintenanceRuntimeOptions>();

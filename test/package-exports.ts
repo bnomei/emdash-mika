@@ -40,6 +40,7 @@ import type { MikaProvider } from "@bnomei/emdash-mika/react";
 import type {
   assertMikaApiWired,
   CreateMikaBackendApiInput,
+  createPlugin,
   createEmDashMikaEmailSender,
   createMikaBackendApi,
   createMikaEmailOutboxRunner,
@@ -121,6 +122,7 @@ import type {
 
 export type PackageEntryContract = {
   readonly root: typeof mikaPlugin;
+  readonly nativeRuntimeEntrypoint: typeof createPlugin;
   readonly runtimePlugin: typeof createMikaPlugin;
   readonly createPluginOptions: MikaCreatePluginOptions;
   readonly acpFeed: typeof createMikaAcpProductFeed;

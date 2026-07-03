@@ -143,6 +143,7 @@ export {
 } from "./api/maintenance";
 /** Runtime EmDash plugin activation for host entrypoint modules with live backend wiring. */
 export {
+  createPlugin,
   createMikaPlugin,
   type MikaCreatePluginOptions,
   type MikaMaintenanceRuntimeOptions,

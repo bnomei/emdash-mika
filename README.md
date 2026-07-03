@@ -292,7 +292,8 @@ existing email outbox runner remains compatible with Mika's queued
 - Email helpers: `@bnomei/emdash-mika/email`.
 - Provider contracts: `@bnomei/emdash-mika/provider`.
 - React headless helpers: `@bnomei/emdash-mika/react`.
-- Server contracts and trusted JSON client: `@bnomei/emdash-mika/server`.
+- Server runtime plugin activation, server contracts, and trusted JSON client:
+  `@bnomei/emdash-mika/server`.
 - Optional Stripe provider adapter: `@bnomei/emdash-mika/stripe`.
 - DTO, input/result, and branded primitive types: `@bnomei/emdash-mika/types`.
 - Copyable files: `@bnomei/emdash-mika/templates/astro/*`.

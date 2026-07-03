@@ -42,6 +42,9 @@ export const MIKA_PLUGIN_VERSION = "0.0.0";
 /** npm package name used as the default plugin entrypoint. */
 export const MIKA_PACKAGE_NAME = "@bnomei/emdash-mika";
 
+/** Default runtime entrypoint imported by EmDash hosts for native plugin activation. */
+export const MIKA_RUNTIME_ENTRYPOINT = `${MIKA_PACKAGE_NAME}/server`;
+
 /** Cron task name registered for Mika background maintenance. */
 export const MIKA_MAINTENANCE_CRON_TASK = "mika_maintenance";
 
@@ -130,7 +133,7 @@ export function mikaPlugin(
     );
   }
   assertDescriptorSafeOptions(options);
-  const entrypoint = options.entrypoint ?? MIKA_PACKAGE_NAME;
+  const entrypoint = options.entrypoint ?? MIKA_RUNTIME_ENTRYPOINT;
   const descriptorMaintenance =
     options.maintenance === undefined
       ? undefined
@@ -305,6 +308,11 @@ export function createMikaPlugin(options: MikaCreatePluginOptions = {}) {
       },
     },
   });
+}
+
+/** Native EmDash runtime entrypoint used by descriptors that point at `@bnomei/emdash-mika/server`. */
+export function createPlugin(options: MikaCreatePluginOptions = {}) {
+  return createMikaPlugin(options);
 }
 
 async function cancelMaintenance(_event: unknown, ctx: PluginContext): Promise<void> {
