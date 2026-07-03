@@ -282,7 +282,8 @@ existing email outbox runner remains compatible with Mika's queued
 
 - ESM entry: `@bnomei/emdash-mika` for plugin registration.
 - ACP feed and checkout projection helpers: `@bnomei/emdash-mika/acp`.
-- Agent descriptors: `@bnomei/emdash-mika/agent`.
+- Agent descriptors, proof refs, actor contracts, and agent vocabulary:
+  `@bnomei/emdash-mika/agent`.
 - Admin action helpers: `@bnomei/emdash-mika/admin`.
 - Astro helpers: `@bnomei/emdash-mika/astro`.
 - Astro Actions: `@bnomei/emdash-mika/astro-actions`.
@@ -292,7 +293,7 @@ existing email outbox runner remains compatible with Mika's queued
 - React headless helpers: `@bnomei/emdash-mika/react`.
 - Server contracts and trusted JSON client: `@bnomei/emdash-mika/server`.
 - Optional Stripe provider adapter: `@bnomei/emdash-mika/stripe`.
-- DTO and input/result types: `@bnomei/emdash-mika/types`.
+- DTO, input/result, and branded primitive types: `@bnomei/emdash-mika/types`.
 - Copyable files: `@bnomei/emdash-mika/templates/astro/*`.
 
 The package intentionally does not expose a public `storage` subpath. Storage

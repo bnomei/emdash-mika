@@ -18,8 +18,10 @@ import type {
   mikaAgentManifestJsonSchema,
   MikaAgentActionDescriptor,
   MikaActionRun,
+  MikaActorContext,
   MikaAgentManifest,
   MikaAgentManifestJsonSchema,
+  MikaPaymentAuthorizationRef,
 } from "@bnomei/emdash-mika/agent";
 import type { createMikaAdminActionsManifest } from "@bnomei/emdash-mika/admin";
 import type {
@@ -109,9 +111,7 @@ import type {
   CheckoutPreviewDTO,
   DownloadDTO,
   ISODateTime,
-  MikaActorContext,
   MikaId,
-  MikaPaymentAuthorizationRef,
   MIKA_ERROR_CODES,
   MIKA_PROVIDER_CAPABILITIES,
   MikaApiResult,
@@ -261,3 +261,15 @@ export type MissingRootAssertMikaApiWired =
 export type MissingAccidentalTypes =
   // @ts-expect-error Deprecated aliases should not appear through the published types barrel.
   import("@bnomei/emdash-mika/types").CouponResultDTO;
+
+export type MissingTypesAgentConstant =
+  // @ts-expect-error Agent vocabulary is intentionally exported from the agent subpath.
+  typeof import("@bnomei/emdash-mika/types").MIKA_AGENT_MANIFEST_VERSION;
+
+export type MissingTypesAgentActor =
+  // @ts-expect-error Agent actor contracts are intentionally exported from the agent subpath.
+  import("@bnomei/emdash-mika/types").MikaActorContext;
+
+export type MissingTypesAgentProof =
+  // @ts-expect-error Agent proof contracts are intentionally exported from the agent subpath.
+  import("@bnomei/emdash-mika/types").MikaPaymentAuthorizationRef;

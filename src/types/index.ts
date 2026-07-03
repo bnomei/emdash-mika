@@ -1,63 +1,13 @@
 /**
- * Public type surface for wire DTOs, agent manifest constants, and branded primitives.
+ * Public type surface for wire DTOs, operation inputs/results, and branded primitives.
  *
  * Persisted storage shapes live on sibling subpaths — import them directly when building
  * repositories or custom backends:
  * `@bnomei/emdash-mika/types/documents`, `/types/aggregates`, `/types/operational`.
- * This entry re-exports API DTOs, agent contracts, and primitives only.
+ * Agent-facing vocabulary lives on `@bnomei/emdash-mika/agent`.
  */
 /** Stable API error codes and provider capability flags from the wire DTO layer. */
 export { MIKA_ERROR_CODES, MIKA_PROVIDER_CAPABILITIES } from "../api/types";
-/** Agent manifest constants for capability, risk, and idempotency policy discovery. */
-export {
-  MIKA_ACTION_RUN_STATUSES,
-  MIKA_AGENT_ACTOR_REQUIREMENTS,
-  MIKA_AGENT_APPROVAL_STATUSES,
-  MIKA_AGENT_CAPABILITIES,
-  MIKA_AGENT_CONFIRMATION_POLICIES,
-  MIKA_AGENT_EFFECTS,
-  MIKA_AGENT_IDEMPOTENCY_KEY_HEADER,
-  MIKA_AGENT_IDEMPOTENCY_POLICIES,
-  MIKA_AGENT_IDEMPOTENCY_SCOPES,
-  MIKA_AGENT_MANIFEST_VERSION,
-  MIKA_AGENT_PROOF_KINDS,
-  MIKA_AGENT_RESOURCES,
-  MIKA_AGENT_RISKS,
-  MIKA_AGENT_VISIBILITIES,
-} from "../api/agent-types";
-/** Agent actor, proof, approval, and manifest descriptor types. */
-export type {
-  MikaActorContext,
-  MikaActorKind,
-  MikaActionRun,
-  MikaActionRunError,
-  MikaActionRunStatus,
-  MikaAgentActionAccept,
-  MikaAgentActionDescriptor,
-  MikaAgentActorRequirement,
-  MikaAgentApprovalRef,
-  MikaAgentApprovalStatus,
-  MikaAgentCapability,
-  MikaAgentConfirmationPolicy,
-  MikaAgentEffect,
-  MikaAgentIdempotencyMetadata,
-  MikaAgentIdempotencyPolicy,
-  MikaAgentIdempotencyScope,
-  MikaAgentManifest,
-  MikaAgentOperationHttpMethod,
-  MikaAgentOperationMetadata,
-  MikaAgentOperationTransport,
-  MikaAgentProofKind,
-  MikaAgentProofRef,
-  MikaAgentResource,
-  MikaAgentRisk,
-  MikaAgentVisibility,
-  MikaAuthorizationScope,
-  MikaConsentProofRef,
-  MikaMandateRef,
-  MikaPaymentAuthorizationRef,
-  MikaReceiptRef,
-} from "../api/agent-types";
 /** Wire DTOs and operation input shapes shared by clients, actions, and handlers. */
 export type {
   AccountDTO,
