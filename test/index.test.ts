@@ -4266,6 +4266,39 @@ describe("Mika Astro template contracts", () => {
     expect(source).toContain("protected `order.invoice` route");
   });
 
+  it("documents every copied product-flow component dependency", () => {
+    const readme = readFileSync(
+      new URL("../src/templates/astro/README.md", import.meta.url),
+      "utf8",
+    );
+    const storefrontExample = readFileSync(
+      new URL("../src/templates/astro/examples/astro-storefront.md", import.meta.url),
+      "utf8",
+    );
+    const productFlowEntrypoints = ["ProductPurchase.astro", "AddToCartForm.astro"];
+    const productFlowComponents = new Set(
+      productFlowEntrypoints.map((file) => `components/${file}`),
+    );
+
+    for (const file of productFlowEntrypoints) {
+      const source = readFileSync(
+        new URL(`../src/templates/astro/components/${file}`, import.meta.url),
+        "utf8",
+      );
+      const localComponentImports = source.matchAll(/from\s+["']\.\/([^"']+\.astro)["']/g);
+
+      for (const [, component] of localComponentImports) {
+        if (!component) continue;
+        productFlowComponents.add(`components/${component}`);
+      }
+    }
+
+    for (const component of productFlowComponents) {
+      expect(readme).toContain(component);
+      expect(storefrontExample).toContain(component);
+    }
+  });
+
   it("ships a host plugin entrypoint that merges the live api behind the JSON boundary", () => {
     const entrypoint = readFileSync(
       new URL("../src/templates/astro/lib/mika-plugin.ts", import.meta.url),

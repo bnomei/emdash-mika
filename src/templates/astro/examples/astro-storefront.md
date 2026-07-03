@@ -92,10 +92,13 @@ For a product-first storefront, start with:
 
 ```txt
 components/ProductPurchase.astro
+components/ProductPurchaseSync.astro
 components/AddToCartForm.astro
+components/AddToCartFormSync.astro
 components/BuyNowForm.astro
 components/WishlistForm.astro
 components/VariantOptionGroups.astro
+components/VariantSelector.astro
 components/StockBadge.astro
 components/LowStockNotice.astro
 components/UnavailableNotice.astro

@@ -58,10 +58,13 @@ components/
   MikaKumoAppFrame.tsx
   MikaKumoPage.astro
   ProductPurchase.astro
+  ProductPurchaseSync.astro
   AddToCartForm.astro
+  AddToCartFormSync.astro
   BuyNowForm.astro
   WishlistForm.astro
   VariantOptionGroups.astro
+  VariantSelector.astro
   CartLines.astro
   CartSummary.astro
   CouponForm.astro
@@ -123,10 +126,13 @@ styles/kumo.css
 components/MikaKumoAppFrame.tsx
 components/MikaKumoPage.astro
 components/ProductPurchase.astro
+components/ProductPurchaseSync.astro
 components/AddToCartForm.astro
+components/AddToCartFormSync.astro
 components/BuyNowForm.astro
 components/WishlistForm.astro
 components/VariantOptionGroups.astro
+components/VariantSelector.astro
 components/StockBadge.astro
 components/LowStockNotice.astro
 components/UnavailableNotice.astro
