@@ -91,7 +91,10 @@ export function apiFailure(
   };
 }
 
-export function tokenResult(code: MikaError["code"], message: string): MikaApiFailure {
+export function tokenResult(
+  code: "TOKEN_INVALID" | "TOKEN_EXPIRED" | "TOKEN_USED" | "DOWNLOAD_REVOKED",
+  message: string,
+): MikaApiFailure {
   return apiFailure(code === "TOKEN_INVALID" ? 400 : 410, code, message);
 }
 
