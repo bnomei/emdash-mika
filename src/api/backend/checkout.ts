@@ -1107,9 +1107,31 @@ export async function expireCheckoutDocument(
     providerStatus: "expired",
     updatedAt: now,
   };
-  await input.repositories.session.put(expired);
+  const stored = await putCheckoutIfNotSettled(input, expired, ["created", "redirected", "expired"]);
+  if (stored) return stored;
 
-  return expired;
+  // Settled concurrently (a payment webhook completed it) — return the current stored state.
+  const settled = await input.repositories.session.findCheckoutById(document.id);
+  return settled ?? document;
+}
+
+/**
+ * Persists a not-yet-settled checkout via the session port's optimistic CAS when available, so a
+ * concurrent completion (payment webhook) is never clobbered. A host session port that does not
+ * implement putCheckoutIfStatus falls back to a blind put (the prior behavior).
+ */
+async function putCheckoutIfNotSettled(
+  input: MikaBackendDependencies,
+  checkout: CheckoutDocument,
+  allowedFromStatuses: readonly CheckoutStatus[],
+): Promise<CheckoutDocument | null> {
+  const session = input.repositories.session;
+  if (session.putCheckoutIfStatus) {
+    return session.putCheckoutIfStatus(checkout, allowedFromStatuses);
+  }
+
+  await session.put(checkout);
+  return checkout;
 }
 
 export async function cancelCheckout(
@@ -1147,12 +1169,14 @@ export async function cancelCheckout(
     providerStatus: "cancelled",
     updatedAt: ctx.now,
   };
-  await input.repositories.session.put(cancelled);
-
-  const stored = await input.repositories.session.findCheckoutById(checkoutId);
-  if (!stored) return invalidCheckout("checkoutId", checkoutId);
-  if (checkoutIsSettled(stored)) {
-    return checkoutDocumentSuccessResult(stored);
+  const stored = await putCheckoutIfNotSettled(input, cancelled, ["created", "redirected"]);
+  if (!stored) {
+    // Settled concurrently (a payment webhook completed it) — return the settled checkout instead
+    // of clobbering it with the cancel.
+    const settled = await input.repositories.session.findCheckoutById(checkoutId);
+    return settled
+      ? checkoutDocumentSuccessResult(settled)
+      : invalidCheckout("checkoutId", checkoutId);
   }
 
   const cartDocument = stored.cartId
@@ -1162,7 +1186,7 @@ export async function cancelCheckout(
     await input.repositories.session.put(reopenCartDocument(cartDocument, ctx.now));
   }
 
-  return checkoutDocumentSuccessResult(cancelled);
+  return checkoutDocumentSuccessResult(stored);
 }
 
 export function checkoutDocumentSuccessResult(

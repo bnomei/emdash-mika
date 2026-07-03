@@ -2016,6 +2016,47 @@ describe("backend repository characterization", () => {
     ).resolves.toEqual(target);
   });
 
+  it("putCheckoutIfStatus refuses to overwrite a concurrently-settled checkout", async () => {
+    const collection = createStorageCollection("session");
+    const repository = new SessionRepository(collection);
+    const checkoutId = createTestMikaId("checkout", 501);
+
+    // A live checkout in an allowed status: the optimistic cancel write lands.
+    await repository.put(createCheckoutDocument({ id: checkoutId, status: "created" }));
+    await expect(
+      repository.putCheckoutIfStatus(
+        createCheckoutDocument({
+          id: checkoutId,
+          status: "cancelled",
+          providerStatus: "cancelled",
+        }),
+        ["created", "redirected"],
+      ),
+    ).resolves.toMatchObject({ status: "cancelled" });
+
+    // Simulate a payment webhook settling the checkout (completed + orderId) in the race window.
+    const orderId = createTestMikaId("order", 501);
+    await repository.put(
+      createCheckoutDocument({ id: checkoutId, status: "completed", orderId }),
+    );
+
+    // A stale cancel must be rejected, not clobber the settled checkout.
+    await expect(
+      repository.putCheckoutIfStatus(
+        createCheckoutDocument({
+          id: checkoutId,
+          status: "cancelled",
+          providerStatus: "cancelled",
+        }),
+        ["created", "redirected"],
+      ),
+    ).resolves.toBeNull();
+    await expect(repository.findCheckoutById(checkoutId)).resolves.toMatchObject({
+      status: "completed",
+      orderId,
+    });
+  });
+
   it("finds catalog aggregate refs across cursor-paginated fallbacks", async () => {
     const collection = createStorageCollection("catalog");
     const repository = new CatalogRepository(collection);

@@ -12,7 +12,7 @@ import type {
   SessionDocument,
   WishlistDocument,
 } from "../../types/documents";
-import type { ISODateTime, MikaId } from "../../types/primitives";
+import type { CheckoutStatus, ISODateTime, MikaId } from "../../types/primitives";
 import { nextCartVersion } from "../../model/cart-version";
 
 function cartWithCheckoutClaim(
@@ -255,6 +255,29 @@ export class SessionRepository {
         ? item.data
         : null,
     );
+  }
+
+  /**
+   * Optimistic conditional write for a checkout that has not settled: persists `checkout` only when
+   * the stored checkout is still un-settled (not completed, no orderId) and its current status is in
+   * `allowedFromStatuses`. Returns the persisted document, or null when a concurrent writer already
+   * moved it — so a stale cancel/expire cannot overwrite a checkout a payment webhook just completed.
+   */
+  async putCheckoutIfStatus(
+    checkout: CheckoutDocument,
+    allowedFromStatuses: readonly CheckoutStatus[],
+  ): Promise<CheckoutDocument | null> {
+    const updated = await this.documents.update(checkout.id, (current) => {
+      const existing = documentOfType(current, "checkout");
+      if (!existing) return null;
+      // Never overwrite a checkout that settled concurrently (completed or already has an order).
+      if (existing.status === "completed" || existing.orderId) return null;
+      if (!allowedFromStatuses.includes(existing.status)) return null;
+
+      return checkout;
+    });
+
+    return documentOfType(updated, "checkout");
   }
 
   async put(document: SessionDocument): Promise<void> {

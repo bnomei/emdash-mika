@@ -57,6 +57,7 @@ import type {
   WorkflowDocument,
 } from "../../types/documents";
 import type {
+  CheckoutStatus,
   ContentRef,
   CurrencyCode,
   ISODateTime,
@@ -153,6 +154,19 @@ export interface MikaSessionRepositoryPort {
     providerCheckoutId: string,
   ): Promise<CheckoutDocument | null>;
   findCheckoutByIdempotencyKey(idempotencyKey: string): Promise<CheckoutDocument | null>;
+  /**
+   * Optimistic conditional write for a not-yet-settled checkout: persists `checkout` only when the
+   * stored checkout is still un-settled (not `completed`, no `orderId`) and its current status is
+   * in `allowedFromStatuses`, returning the persisted document — or `null` when a concurrent writer
+   * (typically a payment webhook completing the checkout) already moved it. cancelCheckout and
+   * expireCheckoutDocument use this so a stale cancel/expire cannot clobber a checkout that just
+   * completed. Optional: a host session port that omits it gets a blind `put` fallback with the
+   * pre-existing narrow-the-race-with-re-reads behavior.
+   */
+  putCheckoutIfStatus?(
+    checkout: CheckoutDocument,
+    allowedFromStatuses: readonly CheckoutStatus[],
+  ): Promise<CheckoutDocument | null>;
   put(document: SessionDocument): Promise<void>;
 }
 
