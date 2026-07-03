@@ -27,7 +27,7 @@ import {
   subscriptionCancelAtPeriodEndAfterAction,
   subscriptionStatusAfterAction,
 } from "../lifecycle";
-import type { CreateMikaBackendApiInput, MikaBackendRepositories } from "./ports";
+import type { MikaBackendDependencies, MikaBackendRepositories } from "./ports";
 
 export type SubscriptionActionKind = "cancel" | "change" | "renew";
 
@@ -38,7 +38,7 @@ export const subscriptionActionMethods = {
 } as const;
 
 export async function runSubscriptionAction(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   actionInput: { readonly subscriptionId: MikaId; readonly priceId?: MikaId },
   action: SubscriptionActionKind,
@@ -161,7 +161,7 @@ export async function runSubscriptionAction(
 }
 
 export async function updateSubscriptionAfterAction(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   subscription: SubscriptionDocument,
   action: SubscriptionActionKind,
@@ -214,7 +214,7 @@ export async function updateSubscriptionAfterAction(
 }
 
 export async function updateSubscriptionEntitlement(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   subscription: SubscriptionDocument,
 ): Promise<SubscriptionDocument> {
@@ -284,7 +284,7 @@ export async function updateSubscriptionEntitlement(
 }
 
 export async function emitSubscriptionLifecycleNotification(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   now: ISODateTime,
   subscription: SubscriptionDocument,
   options: {

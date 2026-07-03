@@ -20,6 +20,7 @@ import {
 import type { MikaApiFailure } from "./errors";
 import { hydratedWishlistOverrides, withHydratedCustomerHandler } from "./identity";
 import type { MikaCartWishlistBackendInput } from "./quote";
+import type { CreateMikaBackendApiInput } from "./ports";
 import {
   callerOwnsMergeSource,
   cartDocumentToDTO,
@@ -31,7 +32,9 @@ import {
 } from "./quote";
 import { defaultBackendCurrency } from "./shared";
 
-export function createWishlistBackend(input: MikaCartWishlistBackendInput): MikaApi["wishlist"] {
+export function createWishlistBackend(
+  input: MikaCartWishlistBackendInput & Pick<CreateMikaBackendApiInput, "overrides">,
+): MikaApi["wishlist"] {
   const wishlist = {
     get: async (ctx) => {
       const document = await findOrCreateActiveWishlist(input, ctx);

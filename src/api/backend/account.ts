@@ -48,7 +48,7 @@ import {
   customerEmailHash,
   resolveAccountIdentity,
 } from "./identity";
-import type { CreateMikaBackendApiInput } from "./ports";
+import type { MikaBackendDependencies } from "./ports";
 import { addMilliseconds } from "./shared";
 import {
   accountExportArtifactRef,
@@ -60,7 +60,7 @@ import {
 } from "./tokens";
 
 export async function getAccount(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
 ): Promise<MikaApiResult<AccountDTO>> {
   const identity = await resolveAccountIdentity(input, ctx);
@@ -98,7 +98,7 @@ export async function getAccount(
 }
 
 export async function requestAccountExport(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
 ): Promise<MikaApiResult<AccountExportDTO>> {
   const identity = await resolveAccountIdentity(input, ctx);
@@ -183,7 +183,7 @@ export async function requestAccountExport(
 }
 
 export async function accountExportStatus(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   statusInput: { readonly exportId: MikaId },
 ): Promise<MikaApiResult<AccountExportDTO>> {
@@ -201,7 +201,7 @@ export async function accountExportStatus(
 }
 
 export async function downloadAccountExport(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   downloadInput: {
     readonly exportId: MikaId;
@@ -252,7 +252,7 @@ export async function downloadAccountExport(
 }
 
 export async function requestAccountDelete(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
 ): Promise<MikaApiResult<{ requested: boolean }>> {
   const identity = await resolveAccountIdentity(input, ctx);
@@ -301,7 +301,7 @@ export async function requestAccountDelete(
 }
 
 export async function accountDeleteBlocked(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   identity: { readonly customerId?: MikaId; readonly sessionId?: string },
 ): Promise<MikaApiFailure | null> {
   if (identity.customerId) {
@@ -358,7 +358,7 @@ export function subscriptionBlocksAccountDelete(subscription: SubscriptionDocume
 }
 
 export async function createAccountPortalSession(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   portalInput: { readonly returnTo?: string },
 ): Promise<MikaApiResult<{ redirectUrl: string }>> {
@@ -410,7 +410,7 @@ export async function createAccountPortalSession(
 }
 
 export async function getOrderInvoice(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   invoiceInput: OrderInvoiceInput,
 ): Promise<MikaApiResult<OrderInvoiceDTO>> {
@@ -465,7 +465,7 @@ export async function getOrderInvoice(
 const ACCOUNT_EXPORT_LIMIT = Number.MAX_SAFE_INTEGER;
 
 export async function accountDTOForCustomer(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   customer: CustomerDocument,
   limit?: number,
@@ -539,7 +539,7 @@ export function uniqueDocumentsById<TDocument extends { readonly id: string }>(
 }
 
 export async function orderSummaryDTO(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
 ): Promise<OrderSummaryDTO> {
@@ -579,7 +579,7 @@ export function entitlementDTO(entitlement: EntitlementDocument): EntitlementDTO
 }
 
 export async function orderDownloadDTOs(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
 ): Promise<readonly DownloadDTO[]> {

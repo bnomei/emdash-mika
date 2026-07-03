@@ -23,7 +23,7 @@ import {
 } from "./errors";
 import type { MikaApiFailure } from "./errors";
 import { currentBackendISODateTime } from "./shared";
-import type { CreateMikaBackendApiInput } from "./ports";
+import type { MikaBackendDependencies } from "./ports";
 
 export type MikaProviderMethodName = Extract<
   {
@@ -83,7 +83,7 @@ const ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY = "idempotencyInputHash";
 const ADMIN_AUDIT_RESULT_SCHEMA_VERSION = 1;
 
 export async function completeAdminAudit(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   audit: AdminAuditDocument,
   result?: unknown,
 ): Promise<void> {
@@ -129,7 +129,7 @@ export function adminAuditStoredIdempotencyInputHash(
 }
 
 export async function adminActionIdempotencyInputHash(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   idempotencyInput: JsonValue | undefined,
   record: Pick<MikaAdminAuditStartRecord, "action" | "targetType" | "targetId" | "metadata">,
 ): Promise<string> {
@@ -147,7 +147,7 @@ export async function adminActionIdempotencyInputHash(
 }
 
 export async function failAdminAudit(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   audit: AdminAuditDocument,
   message: string,
 ): Promise<void> {
@@ -167,7 +167,7 @@ export async function failAdminAudit(
 }
 
 export async function requireProviderFeature<TMethod extends MikaProviderMethodName>(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   options: MikaProviderFeatureOptions<TMethod>,
 ): Promise<MikaProviderFeature<TMethod>> {
   const providerName = options.providerName ?? input.defaults?.provider;
@@ -210,7 +210,7 @@ export async function requireProviderFeature<TMethod extends MikaProviderMethodN
 }
 
 export async function runAdminProviderAction<TData>(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   record: MikaAdminAuditStartRecord,
   action: (audit: AdminAuditDocument) => Promise<TData>,
   fallbackMessage: string,
@@ -229,7 +229,7 @@ export function assertCompletedProviderAction(
 }
 
 export async function runAdminRepositoryAction<TData>(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   record: MikaAdminAuditStartRecord,
   action: (audit: AdminAuditDocument) => Promise<TData>,
   fallbackMessage: string,
@@ -240,7 +240,7 @@ export async function runAdminRepositoryAction<TData>(
 }
 
 export async function runAdminAction<TData>(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   record: MikaAdminAuditStartRecord,
   action: (audit: AdminAuditDocument) => Promise<TData>,
   fallbackMessage: string,
@@ -352,7 +352,7 @@ export function missingTarget(targetType: string, field: string, value: string):
 }
 
 export async function missingTargetWithAudit(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   missing: {
     readonly action: string;
     readonly targetType: string;
@@ -423,7 +423,7 @@ export function stableJsonValue(value: unknown): unknown {
 }
 
 export function createAdminAuditDocument(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   record: Omit<AdminAuditDocument["record"], "id">,
 ): AdminAuditDocument {
   const id = input.createId("admin_audit");

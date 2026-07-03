@@ -42,7 +42,7 @@ import {
   orderBlocksFulfillment,
   orderRefundedAmount,
 } from "../../lifecycle";
-import type { CreateMikaBackendApiInput } from "../ports";
+import type { MikaBackendDependencies } from "../ports";
 import { addMilliseconds, currentBackendISODateTime, emailHashKey } from "../shared";
 import {
   emitSubscriptionLifecycleNotification,
@@ -52,7 +52,7 @@ import { WorkflowRunner, WorkflowRunnerLeaseLostError } from "../workflow-runner
 import { isReplayableWebhookStatus } from "./status";
 
 export async function processStoredWebhook(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   webhook: WebhookDocument,
   event: MikaProviderWebhookEvent,
@@ -156,7 +156,7 @@ interface WebhookSubjectLockTarget {
 }
 
 async function withWebhookSubjectLock<TResult>(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   webhook: WebhookDocument,
   target: WebhookSubjectLockTarget | null,
@@ -229,7 +229,7 @@ function subscriptionWebhookLockTarget(
  * uncorrelated reversals are acknowledged so non-Mika provider noise is not retried forever.
  */
 async function processPaymentReversalWebhook(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   webhook: WebhookDocument,
   event: MikaProviderPaymentEvent,
@@ -288,7 +288,7 @@ async function processPaymentReversalWebhook(
 }
 
 async function processCheckoutExpiredWebhook(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   webhook: WebhookDocument,
   event: MikaProviderPaymentEvent,
@@ -320,7 +320,7 @@ type PaymentFailureWebhookEvent = Omit<MikaProviderPaymentEvent, "paymentStatus"
 };
 
 async function emitCheckoutPaymentFailedNotification(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   now: ISODateTime,
   webhook: WebhookDocument,
   event: PaymentFailureWebhookEvent,
@@ -346,7 +346,7 @@ async function emitCheckoutPaymentFailedNotification(
 }
 
 async function processPaymentWebhook(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   webhook: WebhookDocument,
   event: MikaProviderPaymentEvent,
@@ -427,7 +427,7 @@ async function processPaymentWebhook(
 }
 
 async function runPaymentWebhookWorkflow(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   webhook: WebhookDocument,
   event: MikaProviderPaymentEvent,
@@ -479,7 +479,7 @@ const PAYMENT_WEBHOOK_WORKFLOW_STEPS = [
 ] as const satisfies readonly PaymentWebhookWorkflowStep[];
 
 async function startPaymentWebhookWorkflow(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   webhook: WebhookDocument,
   event: MikaProviderPaymentEvent,
@@ -553,7 +553,7 @@ function shouldForcePaymentWebhookWorkflowLease(webhook: WebhookDocument): boole
 }
 
 function leasePaymentWebhookWorkflow(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   workflowId: MikaId,
   webhook: WebhookDocument,
@@ -602,7 +602,7 @@ function nextWorkflowAttemptAt(now: ISODateTime, workflow: WorkflowDocument): IS
 }
 
 export async function processSubscriptionWebhook(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   webhook: WebhookDocument,
   event: MikaProviderSubscriptionEvent,
@@ -648,7 +648,7 @@ type SubscriptionFromEventResult =
     };
 
 async function findOrCreateSubscriptionFromEvent(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   event: MikaProviderSubscriptionEvent,
 ): Promise<SubscriptionFromEventResult | null> {
@@ -750,7 +750,7 @@ function subscriptionEventIsStale(
 }
 
 async function updateSubscriptionFromEvent(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   subscription: SubscriptionDocument,
   event: MikaProviderSubscriptionEvent,
@@ -850,7 +850,7 @@ function subscriptionEventMetadata(event: MikaProviderSubscriptionEvent): JsonOb
 }
 
 async function findExistingPaymentOrder(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   event: MikaProviderPaymentEvent,
   checkoutSessionId?: MikaId,
 ): Promise<OrderDocument | null> {
@@ -887,7 +887,7 @@ async function findExistingPaymentOrder(
 }
 
 async function persistNewPaymentOrder(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
   event: MikaProviderPaymentEvent,
@@ -906,7 +906,7 @@ async function persistNewPaymentOrder(
 }
 
 async function findPaymentEventCheckout(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   event: Pick<MikaProviderPaymentEvent, "provider" | "providerCheckoutId">,
 ): Promise<CheckoutDocument | null> {
   if (!event.providerCheckoutId) return null;
@@ -918,7 +918,7 @@ async function findPaymentEventCheckout(
 }
 
 async function createPaymentOrderDocument(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   checkout: CheckoutDocument,
   event: MikaProviderPaymentEvent,
@@ -969,7 +969,7 @@ async function createPaymentOrderDocument(
 }
 
 async function updatePaymentOrderFromEvent(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
   event: MikaProviderPaymentEvent,
@@ -1015,7 +1015,7 @@ function mergePaymentProviderRefs(
 }
 
 async function paymentCustomerSnapshot(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   checkout: CheckoutDocument,
   event: MikaProviderPaymentEvent,
 ): Promise<CustomerSnapshot> {
@@ -1074,7 +1074,7 @@ function paymentOrderLineMetadata(line: CheckoutLine, event: MikaProviderPayment
 }
 
 export async function markWebhookProcessedForOrder(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   webhook: WebhookDocument,
   now: ISODateTime,
   order: OrderDocument,
@@ -1092,7 +1092,7 @@ export async function markWebhookProcessedForOrder(
 }
 
 export async function markWebhookProcessedForSubscription(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   webhook: WebhookDocument,
   now: ISODateTime,
   subscription: SubscriptionDocument,
@@ -1104,7 +1104,7 @@ export async function markWebhookProcessedForSubscription(
 }
 
 export async function markWebhookProcessed(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   webhook: WebhookDocument,
   now: ISODateTime,
   related: Pick<
@@ -1130,7 +1130,7 @@ export async function markWebhookProcessed(
 }
 
 export async function markWebhookFailed(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   webhook: WebhookDocument,
   now: ISODateTime,
   lastError: string,
@@ -1170,7 +1170,7 @@ export async function markWebhookFailed(
 }
 
 export async function putWebhook(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   webhook: WebhookDocument,
   options: { readonly strict?: boolean },
 ): Promise<WebhookDocument> {

@@ -13,7 +13,7 @@ import type {
 import type { OrderDocument, SubscriptionDocument } from "../../types/documents";
 import type { ISODateTime, JsonObject, MikaId } from "../../types/primitives";
 import type { MikaApiResult, MikaError } from "../types";
-import type { CreateMikaBackendApiInput, MikaBackendDependencies } from "./ports";
+import type { MikaBackendDependencies } from "./ports";
 
 export type MikaApiFailure = Extract<MikaApiResult<never>, { readonly ok: false }>;
 
@@ -31,7 +31,7 @@ export function observeBackendError(
 }
 
 export async function emitBackendNotification<TKind extends MikaNotificationKind>(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   kind: TKind,
   occurredAt: ISODateTime,
   context: MikaNotificationContextMap[TKind],

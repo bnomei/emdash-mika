@@ -67,7 +67,7 @@ import {
 } from "./errors";
 import type { MikaApiFailure } from "./errors";
 import { checkoutBelongsToContext } from "./identity";
-import type { CreateMikaBackendApiInput } from "./ports";
+import type { MikaBackendDependencies } from "./ports";
 import {
   cartPriceUnavailable,
   couponRejectionMessage,
@@ -146,7 +146,7 @@ type CheckoutStartResolution = {
  * payment to a current, previewed quote.
  */
 async function requireDelegatedPaymentAuthorization(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   checkoutInput: StartCheckoutInput,
   providerName: ProviderName | undefined,
@@ -207,7 +207,7 @@ type CheckoutProviderDispatch =
  * token, or `createCheckoutSession` for the ordinary hosted-checkout redirect flow.
  */
 async function resolveCheckoutProviderDispatch(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   providerName: ProviderName,
   checkoutInput: StartCheckoutInput,
 ): Promise<CheckoutProviderDispatch> {
@@ -252,7 +252,7 @@ async function resolveCheckoutProviderDispatch(
 }
 
 export async function startCheckout(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   checkoutInput: StartCheckoutInput,
 ): Promise<MikaApiResult<CheckoutSessionDTO>> {
@@ -534,7 +534,7 @@ export async function startCheckout(
 }
 
 async function resolveCheckoutStart(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   checkoutInput: StartCheckoutInput,
 ): Promise<({ readonly ok: true } & CheckoutStartResolution) | MikaApiFailure> {
@@ -631,7 +631,7 @@ async function resolveCheckoutStart(
 }
 
 async function findCheckoutStartCart(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   cartId: MikaId | undefined,
   currency: CurrencyCode,
@@ -649,7 +649,7 @@ async function findCheckoutStartCart(
 }
 
 async function resolveCheckoutStartLine(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   lineInput: {
     readonly sellableId: MikaId;
     readonly priceId?: MikaId;
@@ -723,7 +723,7 @@ async function resolveCheckoutStartLine(
 }
 
 async function reserveCheckoutLines(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   checkoutId: MikaId,
   checkout: CheckoutStartResolution,
@@ -789,7 +789,7 @@ async function reserveCheckoutLines(
 }
 
 async function persistCheckoutStart(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   checkoutDocument: CheckoutDocument,
   statusToken: string,
@@ -846,7 +846,7 @@ function checkoutStartCartForPersistence(
 }
 
 async function markCheckoutPersistenceFailed(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   checkoutDocument: CheckoutDocument,
   now: ISODateTime,
 ): Promise<void> {
@@ -884,7 +884,7 @@ async function releaseCheckoutReservations(
 }
 
 async function releaseCartCheckoutClaimQuietly(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   cartId: MikaId,
   checkoutId: MikaId,
   now: ISODateTime,
@@ -977,7 +977,7 @@ function filterJsonObject(
 }
 
 export async function checkoutIdempotencyInputHash(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   checkoutInput: StartCheckoutInput,
 ): Promise<string> {
@@ -1011,7 +1011,7 @@ export function checkoutDocumentResult(
 }
 
 export async function checkoutStatus(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   statusInput: CheckoutStatusInput,
 ): Promise<MikaApiResult<CheckoutSessionDTO>> {
@@ -1034,7 +1034,7 @@ export async function checkoutStatus(
 }
 
 export async function expireCheckoutDocument(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   document: CheckoutDocument,
   now: ISODateTime,
 ): Promise<CheckoutDocument> {
@@ -1067,7 +1067,7 @@ export async function expireCheckoutDocument(
 }
 
 export async function cancelCheckout(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   cancelInput: CheckoutCancelInput,
 ): Promise<MikaApiResult<CheckoutSessionDTO>> {
@@ -1205,7 +1205,7 @@ function checkoutBindingError(document: CheckoutDocument): MikaApiFailure | null
 }
 
 export function checkoutIsExpired(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   document: CheckoutDocument,
 ): boolean {
   if (document.status === "expired") return true;
@@ -1325,7 +1325,7 @@ function checkoutLineToProviderLine(
 }
 
 function checkoutSuccessUrl(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   checkoutInput: StartCheckoutInput,
   checkoutId: MikaId,
@@ -1339,7 +1339,7 @@ function checkoutSuccessUrl(
 }
 
 function checkoutCancelUrl(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   checkoutInput: StartCheckoutInput,
   checkoutId: MikaId,
@@ -1353,7 +1353,7 @@ function checkoutCancelUrl(
 }
 
 function checkoutSuccessTarget(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   checkoutInput: StartCheckoutInput,
 ): string {
@@ -1363,7 +1363,7 @@ function checkoutSuccessTarget(
 }
 
 function checkoutCancelTarget(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   checkoutInput: StartCheckoutInput,
 ): string {
@@ -1373,7 +1373,7 @@ function checkoutCancelTarget(
 }
 
 export function checkoutExpiresAt(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
 ): ISODateTime {
   const ttlMs = input.config?.checkout?.ttlMs ?? 15 * 60_000;
@@ -1399,7 +1399,7 @@ export function checkoutSessionStatus(status: string): CheckoutSessionDTO["statu
 }
 
 export async function createCheckoutPreview(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   previewInput: CheckoutPreviewInput,
 ): Promise<CheckoutPreviewDTO> {
@@ -1450,7 +1450,7 @@ export async function createCheckoutPreview(
 }
 
 async function delegatedPaymentProofHash(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   checkoutInput: StartCheckoutInput,
   quote: CartQuoteDTO,
   mode: PurchaseMode | undefined,
@@ -1511,7 +1511,7 @@ function delegatedPaymentProofCustomFields(
 }
 
 export async function resolveCheckoutPreviewMode(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   previewInput: CheckoutPreviewInput,
 ): Promise<PurchaseMode | undefined> {

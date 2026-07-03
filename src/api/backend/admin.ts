@@ -49,13 +49,13 @@ import {
   updateOrderAfterRefund,
 } from "./fulfillment";
 import { orderIsPaymentTerminal, orderRefundedAmount } from "../lifecycle";
-import type { CreateMikaBackendApiInput } from "./ports";
+import type { MikaBackendDependencies } from "./ports";
 import { addMilliseconds, currentBackendISODateTime, emailHashKey } from "./shared";
 import { createMikaStockLifecycleService } from "./stock-lifecycle";
 import { hashDownloadToken, orderDownloadSubjectHash } from "./tokens";
 
 export async function providerHealth(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   healthInput: ProviderHealthInput,
 ): Promise<MikaApiResult<ProviderHealthDTO>> {
   const providerName = healthInput.provider ?? input.defaults?.provider;
@@ -84,7 +84,7 @@ export async function providerHealth(
 }
 
 export async function providerSync(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   syncInput: ProviderSyncInput,
 ): Promise<MikaApiResult<AdminActionResultDTO>> {
   if (syncInput.scope === "entry" && !syncInput.contentRef) {
@@ -133,7 +133,7 @@ export async function providerSync(
 }
 
 export async function releaseExpiredReservations(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   releaseInput: { readonly now?: ISODateTime; readonly idempotencyKey?: string } = {},
 ): Promise<MikaApiResult<AdminActionResultDTO>> {
   const release = async (): Promise<AdminActionResultDTO> => {
@@ -173,7 +173,7 @@ export async function releaseExpiredReservations(
 }
 
 export async function refundOrder(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   refundInput: OrderRefundInput,
 ): Promise<MikaApiResult<AdminActionResultDTO>> {
   const order = await input.repositories.ledger.findOrderById(refundInput.orderId);
@@ -248,7 +248,7 @@ export async function refundOrder(
 }
 
 export async function cancelOrder(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   cancelInput: OrderCancelInput,
 ): Promise<MikaApiResult<AdminActionResultDTO>> {
   const order = await input.repositories.ledger.findOrderById(cancelInput.orderId);
@@ -313,7 +313,7 @@ export async function cancelOrder(
 }
 
 export async function grantEntitlement(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   grantInput: EntitlementGrantInput,
 ): Promise<MikaApiResult<AdminActionResultDTO>> {
   const email = grantInput.email?.trim();
@@ -358,7 +358,7 @@ export async function grantEntitlement(
 }
 
 export async function revokeEntitlement(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   revokeInput: EntitlementRevokeInput,
 ): Promise<MikaApiResult<AdminActionResultDTO>> {
   const entitlements = await findEntitlementsForRevoke(input, revokeInput);
@@ -426,7 +426,7 @@ export async function revokeEntitlement(
 }
 
 export async function resendEmail(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   resendInput: EmailResendInput,
 ): Promise<MikaApiResult<AdminActionResultDTO>> {
   const email = await input.repositories.ops.findEmail(resendInput.emailId);
@@ -490,7 +490,7 @@ export async function resendEmail(
 }
 
 export async function revokeLicense(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   revokeInput: LicenseRevokeInput,
 ): Promise<MikaApiResult<AdminActionResultDTO>> {
   const license = await input.repositories.account.findLicenseById(revokeInput.licenseId);
@@ -551,7 +551,7 @@ export async function revokeLicense(
 }
 
 export async function issueDownload(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   issueInput: DownloadIssueInput,
 ): Promise<MikaApiResult<AdminActionResultDTO>> {
   const target = await resolveDownloadIssueTarget(input, issueInput);

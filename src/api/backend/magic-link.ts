@@ -8,13 +8,13 @@ import { emitMikaNotification, type MikaNotificationIntent } from "../notificati
 import type { AccountDTO, MikaApiResult } from "../types";
 import { accountDTOForCustomer, safeRequestReturnPath } from "./account";
 import { authRequired, observeBackendError, tokenResult } from "./errors";
-import type { CreateMikaBackendApiInput } from "./ports";
+import type { MikaBackendDependencies } from "./ports";
 import { addMilliseconds, emailHashKey, stringChild } from "./shared";
 import { hashMagicLinkToken, magicLinkTokenError } from "./tokens";
 
 /** Reports a swallowed best-effort failure to the host observer; never throws. */
 export async function requestMagicLink(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   requestInput: { readonly email: string; readonly returnTo?: string },
 ): Promise<MikaApiResult<{ sent: boolean }>> {
@@ -79,7 +79,7 @@ export async function requestMagicLink(
 }
 
 export async function queueDefaultMagicLinkRequestedEmail(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   intent: MikaNotificationIntent<"magic_link.requested">,
   tokenHash: string,
 ): Promise<void> {
@@ -132,7 +132,7 @@ export async function queueDefaultMagicLinkRequestedEmail(
 }
 
 export async function verifyMagicLink(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   verifyInput: { readonly token: string; readonly returnTo?: string },
 ): Promise<MikaApiResult<AccountDTO>> {
@@ -212,7 +212,7 @@ async function clearSessionKeys(
 const DEFAULT_MAGIC_LINK_VERIFY_PATH = "/account/magic-link";
 
 export function magicLinkUrl(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   token: string,
   returnTo?: string,

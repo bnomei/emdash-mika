@@ -13,7 +13,7 @@ import type {
 } from "../../types/documents";
 import type { MikaId } from "../../types/primitives";
 import type { MikaApiOverrides } from "../server";
-import type { CreateMikaBackendApiInput, MikaBackendRepositories } from "./ports";
+import type { MikaBackendDependencies, MikaBackendRepositories } from "./ports";
 
 type MikaCustomerHydrationInput = {
   readonly repositories: Pick<MikaBackendRepositories, "account">;
@@ -39,7 +39,7 @@ export function customerEmailHash(customer: CustomerDocument): string | undefine
 }
 
 export async function resolveAccountIdentity(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
 ): Promise<
   | {

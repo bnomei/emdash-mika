@@ -22,7 +22,7 @@ import {
   webhookInvalid,
   webhookProcessingDeferred,
 } from "../errors";
-import type { CreateMikaBackendApiInput } from "../ports";
+import type { MikaBackendDependencies } from "../ports";
 import {
   booleanChild,
   currentBackendISODateTime,
@@ -41,7 +41,7 @@ import { markWebhookFailed, processStoredWebhook } from "./payment";
 import { isReplayableWebhookStatus } from "./status";
 
 export async function receiveWebhook(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   webhookInput: WebhookReceiveInput,
 ): Promise<MikaApiResult<WebhookReceiveDTO>> {
@@ -136,7 +136,7 @@ function webhookDuplicateCanReprocess(
 }
 
 export async function replayWebhook(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   replayInput: WebhookReplayInput,
 ): Promise<MikaApiResult<AdminActionResultDTO>> {
   const webhook = await input.repositories.ops.findWebhookById(replayInput.webhookId);
@@ -181,7 +181,7 @@ export async function replayWebhook(
 }
 
 async function replayStoredWebhook(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   webhook: WebhookDocument,
 ): Promise<AdminActionResultDTO> {
   if (!isReplayableWebhookStatus(webhook.status)) {
@@ -256,7 +256,7 @@ async function readWebhookRawBody(request: Request): Promise<Uint8Array | null> 
 }
 
 function createWebhookDocument(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   verified: MikaVerifiedWebhookPayload,
   event: MikaProviderWebhookEvent,

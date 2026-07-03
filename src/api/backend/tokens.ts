@@ -17,10 +17,10 @@ import {
   orderBelongsToIdentity,
   resolveAccountIdentity,
 } from "./identity";
-import type { CreateMikaBackendApiInput, MikaBackendRepositories } from "./ports";
+import type { MikaBackendDependencies, MikaBackendRepositories } from "./ports";
 
 export async function orderInvoiceAccessError(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
   token: string | undefined,
@@ -36,7 +36,7 @@ export async function orderInvoiceAccessError(
 }
 
 export async function createOrderLineDownloadToken(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
   line: OrderLine,
@@ -90,7 +90,7 @@ export async function createOrderLineDownloadToken(
 }
 
 export async function downloadTokenPointerKey(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   orderId: MikaId,
   orderLineId: MikaId,
   downloadRef: string,
@@ -100,7 +100,7 @@ export async function downloadTokenPointerKey(
 
 /** Reuses a still-valid, not-yet-consumed download token minted for the same line, if any. */
 export async function reusableDownloadToken(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   pointerKey: string,
   now: ISODateTime,
 ): Promise<{ token: string; expiresAt: ISODateTime } | null> {
@@ -136,35 +136,35 @@ export function accountExportArtifactRef(account: AccountDTO, exportedAt: ISODat
 }
 
 export async function hashAccountExportDownloadToken(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   token: string,
 ): Promise<string> {
   return input.hash(`account-export-download-token:${token}`);
 }
 
 export async function hashDownloadToken(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   token: string,
 ): Promise<string> {
   return input.hash(`download-token:${token}`);
 }
 
 export async function hashCheckoutStatusToken(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   token: string,
 ): Promise<string> {
   return input.hash(`checkout-status-token:${token}`);
 }
 
 export async function hashOrderInvoiceToken(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   token: string,
 ): Promise<string> {
   return input.hash(`order-invoice-token:${token}`);
 }
 
 export async function createOrderInvoiceToken(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
 ): Promise<string> {
@@ -193,7 +193,7 @@ export async function createOrderInvoiceToken(
 }
 
 export async function validateCheckoutStatusToken(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   now: ISODateTime,
   token: string,
   document: CheckoutDocument,
@@ -215,7 +215,7 @@ export async function validateCheckoutStatusToken(
 }
 
 export async function validateOrderInvoiceToken(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   now: ISODateTime,
   token: string,
   order: OrderDocument,
@@ -332,7 +332,7 @@ export function downloadTokenError(
 }
 
 export async function hashMagicLinkToken(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   token: string,
 ): Promise<string> {
   return input.hash(`magic-link-token:${token}`);
@@ -356,7 +356,7 @@ export function magicLinkTokenError(
 }
 
 export async function putCheckoutStatusToken(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   checkoutDocument: CheckoutDocument,
   token: string,
@@ -399,7 +399,7 @@ export function checkoutAccessSubjectHash(document: CheckoutDocument): string | 
 }
 
 export async function checkoutCancelAccessError(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   document: CheckoutDocument,
   token: string | undefined,
@@ -413,7 +413,7 @@ export async function checkoutCancelAccessError(
 }
 
 export async function checkoutStatusAccessError(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   document: CheckoutDocument,
   token: string | undefined,
