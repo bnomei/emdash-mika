@@ -23,15 +23,6 @@ export type MikaStorageConfig = {
   readonly [K in keyof MikaStorageDocuments]: MikaStorageCollectionConfig<MikaStorageDocuments[K]>;
 };
 
-/** Ordered list of document collection names in the storage partition. */
-export const MIKA_STORAGE_COLLECTION_NAMES = [
-  "catalog",
-  "session",
-  "account",
-  "ledger",
-  "ops",
-] as const satisfies readonly (keyof MikaStorageDocuments)[];
-
 /** Default index configuration for catalog, session, account, ledger, and ops documents. */
 export const mikaStorageConfig = {
   catalog: {

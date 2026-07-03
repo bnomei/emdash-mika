@@ -27,24 +27,10 @@ export const mikaInitialMigration: MikaMigration = {
   },
 };
 
-/** Alias of the initial migration for atomic operational storage bootstrap. */
-export const initialAtomicStorageMigration: Migration = mikaInitialMigration;
-
-/** Ordered registry of all Mika SQLite migrations. */
-export const mikaMigrations = [mikaInitialMigration] as const;
-
-/** Kysely migration provider map keyed by migration name. */
+/** Kysely migration provider map keyed by migration name, for a host-run Kysely Migrator. */
 export const mikaKyselyMigrations = {
-  "0001_initial_atomic_stock_and_ephemeral_state": initialAtomicStorageMigration,
+  "0001_initial_atomic_stock_and_ephemeral_state": mikaInitialMigration,
 } satisfies Record<string, Migration>;
-
-/** Runs a single migration against a Kysely database executor. */
-export async function executeMikaMigration(
-  db: Kysely<unknown>,
-  migration: Migration = mikaInitialMigration,
-): Promise<void> {
-  await migration.up(db);
-}
 
 async function createStockItemsTable(db: Kysely<unknown>): Promise<void> {
   await db.schema
