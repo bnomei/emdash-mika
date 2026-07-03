@@ -29,7 +29,7 @@ export function workflowIsDueForLease(
   if (force) return workflow.status !== "completed";
   if (workflow.record.attemptCount >= workflow.record.maxAttempts) return false;
 
-  return !workflow.nextAttemptAt || workflow.nextAttemptAt <= now;
+  return !workflow.record.nextAttemptAt || workflow.record.nextAttemptAt <= now;
 }
 
 export function workflowIsExhausted(workflow: WorkflowDocument, now: ISODateTime): boolean {
@@ -42,12 +42,10 @@ export function workflowIsExhausted(workflow: WorkflowDocument, now: ISODateTime
 }
 
 export function workflowDueSortKey(workflow: WorkflowDocument): ISODateTime {
-  return (
-    workflow.nextAttemptAt ??
-    workflow.record.leaseExpiresAt ??
-    workflow.leaseExpiresAt ??
-    workflow.updatedAt
-  );
+  // Read due/lease timestamps from the record (the source the top-level mirrors are derived from);
+  // updatedAt is the base-document fallback. The old top-level workflow.leaseExpiresAt arm was
+  // redundant with record.leaseExpiresAt.
+  return workflow.record.nextAttemptAt ?? workflow.record.leaseExpiresAt ?? workflow.updatedAt;
 }
 
 export function workflowHasActiveLease(

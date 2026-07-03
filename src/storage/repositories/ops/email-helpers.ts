@@ -10,7 +10,7 @@ export function emailIsDueForLease(email: EmailDocument, now: ISODateTime, force
   if (force) return true;
   if (email.record.attemptCount >= email.record.maxAttempts) return false;
 
-  return !email.nextAttemptAt || email.nextAttemptAt <= now;
+  return !email.record.nextAttemptAt || email.record.nextAttemptAt <= now;
 }
 
 export function emailIsExhaustedLeaseLoss(email: EmailDocument, now: ISODateTime): boolean {
