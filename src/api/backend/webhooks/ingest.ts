@@ -300,8 +300,7 @@ function storedWebhookPayload(
   event: MikaProviderWebhookEvent,
 ): JsonObject {
   return jsonObject({
-    ...(verified.parsed ? { providerPayload: verified.parsed } : {}),
-    ...(event.raw ? { providerPayload: verified.parsed ?? event.raw } : {}),
+    ...(verified.parsed || event.raw ? { providerPayload: verified.parsed ?? event.raw } : {}),
     normalizedEvent: webhookEventToJson(event, { includeRaw: true }),
   });
 }
