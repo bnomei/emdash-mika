@@ -247,6 +247,16 @@ function isFulfillmentKind(value: string | undefined): value is FulfillmentKind 
   return value !== undefined && (FULFILLMENT_KINDS as readonly string[]).includes(value);
 }
 
+/**
+ * Exhaustiveness guard for `switch`/`if` chains that cannot be table-driven (e.g. a `void` switch,
+ * where `noImplicitReturns` offers no protection). Passing a still-inhabited union member is a
+ * compile error (not assignable to `never`), turning a forgotten case into a build failure; if
+ * somehow reached at runtime it throws.
+ */
+export function assertNever(value: never): never {
+  throw new Error(`Unhandled value: ${JSON.stringify(value)}`);
+}
+
 export function providerLineChildren(
   input: JsonObject,
   key: string,

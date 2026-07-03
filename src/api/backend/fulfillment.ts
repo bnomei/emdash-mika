@@ -41,7 +41,13 @@ import {
 } from "./errors";
 import type { MikaApiResult } from "../types";
 import { orderAccessRevokedForAccountDelete, orderAllowsDownload } from "./identity";
-import { addMilliseconds, currentBackendISODateTime, metadataMikaId, stringChild } from "./shared";
+import {
+  addMilliseconds,
+  assertNever,
+  currentBackendISODateTime,
+  metadataMikaId,
+  stringChild,
+} from "./shared";
 import { createMikaStockLifecycleService } from "./stock-lifecycle";
 import { WorkflowRunner } from "./workflow-runner";
 import type { MikaBackendDependencies } from "./ports";
@@ -98,6 +104,14 @@ export async function revokeOrderFulfillmentAccess(
         }
         break;
       }
+      case "none":
+      case "download":
+      case "external":
+        // Nothing to revoke here: downloads are gated by the order's own status and external
+        // fulfillment is handled out of band. A future revocable kind will fail the assertNever below.
+        break;
+      default:
+        assertNever(line.item.fulfillmentKind);
     }
   }
 }
