@@ -20,7 +20,11 @@ import {
   type MikaActionDefinition as MikaOperationActionDefinition,
   type MikaActionName as MikaOperationActionName,
 } from "./api/operations";
-import { mikaActionTreeSpec, type MikaActionTreeSpec } from "./api/action-tree";
+import {
+  mikaActionTreeSpec,
+  type MikaActionDefinitionKey,
+  type MikaActionTreeSpec,
+} from "./api/action-tree";
 import { runMikaOperation } from "./api/operation-runner";
 import type { MikaOperationPolicy } from "./api/operation-policy";
 import { mikaOperationInputWithIdempotencyContext } from "./api/operation-idempotency";
@@ -207,6 +211,22 @@ export function createMikaActions(options: MikaActionsOptions = {}): MikaActions
 
   return buildMikaActionTree(mikaActionTreeSpec) as MikaActions;
 }
+
+/**
+ * Zero-runtime drift guard for the `as MikaActions` cast in createMikaActions: asserts the derived
+ * mikaActionTreeSpec structurally covers every namespace/method declared on the hand-written
+ * MikaActions interface, with action-definition keys at the leaves. Adding or renaming a MikaActions
+ * member without a matching tree entry collapses this to `never` and fails the build.
+ */
+type MikaActionsTreeCoverage = typeof mikaActionTreeSpec extends {
+  readonly [TNamespace in keyof MikaActions]: {
+    readonly [TMethod in keyof MikaActions[TNamespace]]: MikaActionDefinitionKey;
+  };
+}
+  ? true
+  : never;
+const _mikaActionsTreeCoverage: MikaActionsTreeCoverage = true;
+void _mikaActionsTreeCoverage;
 
 function actionRequestContext(ctx: ActionAPIContext): MikaRequestContext {
   return createMikaRequestContext({
