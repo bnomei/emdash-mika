@@ -130,8 +130,19 @@ export function mikaPlugin(
     );
   }
   const entrypoint = options.entrypoint ?? MIKA_PACKAGE_NAME;
+  const descriptorMaintenance =
+    options.maintenance === undefined
+      ? undefined
+      : {
+          ...(options.maintenance.enabled === undefined
+            ? {}
+            : { enabled: options.maintenance.enabled }),
+          ...(options.maintenance.schedule === undefined
+            ? {}
+            : { schedule: options.maintenance.schedule }),
+        };
   const pluginOptions: MikaDescriptorPluginOptions = {
-    ...(options.maintenance === undefined ? {} : { maintenance: options.maintenance }),
+    ...(descriptorMaintenance === undefined ? {} : { maintenance: descriptorMaintenance }),
     ...(options.assertWired === undefined ? {} : { assertWired: options.assertWired }),
   };
 

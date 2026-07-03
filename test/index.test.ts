@@ -424,9 +424,16 @@ describe("Mika native plugin package", () => {
   });
 
   it("keeps JSON-safe descriptor options flowing through mikaPlugin", () => {
+    const maintenanceWithRuntimeDeps = {
+      enabled: true,
+      schedule: "*/5 * * * *",
+      repositories: {},
+      acpSessionStore: {},
+      emailOutboxRunner: {},
+    } as unknown as MikaDescriptorOptions["maintenance"];
     const descriptor = mikaPlugin({
       entrypoint: "./src/lib/mika-plugin.ts",
-      maintenance: { enabled: true, schedule: "*/5 * * * *" },
+      maintenance: maintenanceWithRuntimeDeps,
       assertWired: ["catalog"],
     });
     expect(descriptor.options).toEqual({
