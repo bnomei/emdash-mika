@@ -25,6 +25,10 @@ export function normalizeAccountExportInput(input: AccountExportStatusInput | st
 /**
  * Accepts an export id string or structured download input for {@link account.exportDownload}.
  * String shorthand maps to `{ exportId }`; structured input preserves an optional token.
+ *
+ * `consumeToken` is deliberately dropped: it is server-only (the internal
+ * accountExportDownloadConsume operation injects it), and honoring a caller-supplied value here
+ * would let facade callers opt out of single-use token consumption.
  */
 export function normalizeAccountExportDownloadInput(input: AccountExportDownloadInput | string) {
   return typeof input === "string"
