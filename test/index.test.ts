@@ -4402,6 +4402,20 @@ describe("Mika Astro template contracts", () => {
     }
   });
 
+  it("keeps the webhook template on the public receive input contract", () => {
+    const source = readFileSync(
+      new URL("../src/templates/astro/pages/api/mika-webhook/[provider].ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("type WebhookReceiveInput");
+    expect(source).toContain("const receiveInput: WebhookReceiveInput");
+    expect(source).toContain("payloadHash");
+    expect(source).toContain("Mika.webhook.receive(receiveInput)");
+    expect(source).not.toContain("rawBodyLength");
+    expect(source).not.toContain("signatureHeaderPresent");
+  });
+
   it("ships a host plugin entrypoint that merges the live api behind the JSON boundary", () => {
     const entrypoint = readFileSync(
       new URL("../src/templates/astro/lib/mika-plugin.ts", import.meta.url),
