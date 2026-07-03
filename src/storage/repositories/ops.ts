@@ -20,17 +20,27 @@ import {
   adminAuditHasTopLevelAction,
   adminAuditInputHashMatches,
   adminAuditWithId,
-  type AdminAuditIdempotencyClaimResult,
 } from "./ops/admin-audit-helpers";
 import {
   accountDeleteMaintenanceStepMetadata,
   accountDeleteRequestDocumentWithRecord,
   accountExportMatchesAccountDeleteIdentity,
-  type AccountDeleteEmailRedactionRepositoryInput,
-  type AccountDeleteMaintenanceStepRepositoryInput,
-  type AccountDeleteRequestCompletionRepositoryInput,
-  type AccountDeleteRequestFailureRepositoryInput,
 } from "./ops/account-delete-helpers";
+import type {
+  AccountDeleteEmailRedactionRepositoryInput,
+  AccountDeleteMaintenanceStepRepositoryInput,
+  AccountDeleteRequestCompletionRepositoryInput,
+  AccountDeleteRequestFailureRepositoryInput,
+  AdminAuditIdempotencyClaimResult,
+  EmailCompleteRepositoryInput,
+  EmailDeliveredRepositoryInput,
+  EmailFailureRepositoryInput,
+  EmailLeaseRepositoryInput,
+  EmailSkipRepositoryInput,
+  WorkflowFailureRepositoryInput,
+  WorkflowLeaseRepositoryInput,
+  WorkflowStepRepositoryInput,
+} from "./contracts";
 import {
   emailDocumentWithRecord,
   emailHasActiveLease,
@@ -50,75 +60,6 @@ import type {
   WorkflowDocument,
 } from "../../types/documents";
 import type { ISODateTime, JsonObject, MikaId } from "../../types/primitives";
-
-/** Input for acquiring a workflow execution lease. */
-export interface WorkflowLeaseRepositoryInput {
-  readonly workflowId: MikaId;
-  readonly leaseKey: string;
-  readonly now: ISODateTime;
-  readonly leaseExpiresAt: ISODateTime;
-  readonly force?: boolean;
-}
-
-/** Input for advancing a leased workflow step. */
-export interface WorkflowStepRepositoryInput {
-  readonly workflowId: MikaId;
-  readonly leaseKey: string;
-  readonly stepName: string;
-  readonly now: ISODateTime;
-  readonly state?: JsonObject;
-}
-
-/** Input for failing a leased workflow or step with retry scheduling. */
-export interface WorkflowFailureRepositoryInput {
-  readonly workflowId: MikaId;
-  readonly leaseKey: string;
-  readonly now: ISODateTime;
-  readonly lastError: string;
-  readonly nextAttemptAt: ISODateTime;
-  readonly stepName?: string;
-}
-
-/** Input for acquiring an email delivery lease. */
-export interface EmailLeaseRepositoryInput {
-  readonly emailId: MikaId;
-  readonly leaseKey: string;
-  readonly now: ISODateTime;
-  readonly leaseExpiresAt: ISODateTime;
-  readonly force?: boolean;
-}
-
-/** Input for marking a leased email as successfully sent. */
-export interface EmailCompleteRepositoryInput {
-  readonly emailId: MikaId;
-  readonly leaseKey: string;
-  readonly now: ISODateTime;
-  readonly providerMessageId?: string;
-}
-
-/** Input for idempotently marking an email as delivered without an active lease. */
-export interface EmailDeliveredRepositoryInput {
-  readonly emailId: MikaId;
-  readonly now: ISODateTime;
-  readonly providerMessageId?: string;
-}
-
-/** Input for failing a leased email with optional retry scheduling. */
-export interface EmailFailureRepositoryInput {
-  readonly emailId: MikaId;
-  readonly leaseKey: string;
-  readonly now: ISODateTime;
-  readonly lastError: string;
-  readonly nextAttemptAt?: ISODateTime;
-}
-
-/** Input for skipping a leased email without retry. */
-export interface EmailSkipRepositoryInput {
-  readonly emailId: MikaId;
-  readonly leaseKey: string;
-  readonly now: ISODateTime;
-  readonly lastError: string;
-}
 
 /** Document repository for webhooks, emails, workflows, audits, and account ops records. */
 export class OpsRepository {

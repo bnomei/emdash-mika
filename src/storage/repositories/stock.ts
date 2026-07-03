@@ -9,153 +9,25 @@ import { encodeJson } from "../json";
 import type { MikaInsertable, MikaSelectable, MikaUpdateable } from "../schema";
 import type { StockEventRecord, StockItemRecord } from "../../types/operational";
 import { createISODateTime, createMikaId } from "../../types/primitives";
-import type { ISODateTime, JsonObject, MikaId } from "../../types/primitives";
+import type { ISODateTime, MikaId } from "../../types/primitives";
 import { affected, parseMetadata, undef, type MikaDbExecutor } from "./db-shared";
+import type {
+  AdjustStockRepositoryInput,
+  AdjustStockRepositoryResult,
+  ConsumeReservedStockRepositoryInput,
+  ConsumeReservedStockRepositoryResult,
+  ExpireReservedStockRepositoryResult,
+  ExtendReservationsRepositoryInput,
+  ReleaseActiveReservationsByCustomerRepositoryInput,
+  ReleaseExpiredReservationsRepositoryInput,
+  ReleaseExpiredReservationsRepositoryResult,
+  ReleaseReservedStockRepositoryInput,
+  ReleaseReservedStockRepositoryResult,
+  ReservationEventMutationRepositoryResult,
+  ReserveStockRepositoryInput,
+  ReserveStockRepositoryResult,
+} from "./contracts";
 
-/** Input for creating a stock reservation event with optional idempotency key. */
-export interface ReserveStockRepositoryInput {
-  readonly reservationEventId: MikaId;
-  readonly stockItemId: MikaId;
-  readonly quantity: number;
-  readonly expiresAt: ISODateTime;
-  readonly now: ISODateTime;
-  readonly cartId?: MikaId;
-  readonly checkoutSessionId?: MikaId;
-  readonly customerId?: MikaId;
-  readonly sessionId?: string;
-  readonly idempotencyKey?: string;
-  readonly metadata?: JsonObject;
-}
-
-/** Discriminated result of a stock reservation attempt or idempotent replay. */
-export type ReserveStockRepositoryResult =
-  | {
-      readonly status: "reserved";
-      readonly event: StockEventRecord;
-      readonly stock: StockItemRecord;
-    }
-  | {
-      readonly status: "replayed";
-      readonly event: StockEventRecord;
-      readonly stock: StockItemRecord | null;
-    }
-  | {
-      readonly status: "idempotency_conflict";
-      readonly event: StockEventRecord;
-      readonly stock: StockItemRecord | null;
-    }
-  | {
-      readonly status: "insufficient_stock";
-      readonly stock: StockItemRecord;
-    }
-  | {
-      readonly status: "not_found";
-    };
-
-/** Input for releasing an active reservation event. */
-export interface ReleaseReservedStockRepositoryInput {
-  readonly reservationEventId: MikaId;
-  readonly now: ISODateTime;
-}
-
-/** Input for consuming a reservation into an order line fulfillment. */
-export interface ConsumeReservedStockRepositoryInput {
-  readonly reservationEventId: MikaId;
-  readonly now: ISODateTime;
-  readonly orderId?: MikaId;
-  readonly orderLineId?: MikaId;
-}
-
-/** Input for sweeping expired reservation events back to availability. */
-export interface ReleaseExpiredReservationsRepositoryInput {
-  readonly now: ISODateTime;
-}
-
-/** Summary counts from an expired reservation release sweep. */
-export interface ReleaseExpiredReservationsRepositoryResult {
-  readonly scannedCount: number;
-  readonly releasedCount: number;
-  readonly stockItemsAffected: number;
-}
-
-/** Input for releasing all active reservations owned by a customer. */
-export interface ReleaseActiveReservationsByCustomerRepositoryInput {
-  readonly customerId: MikaId;
-  readonly now: ISODateTime;
-}
-
-/** Input for extending the expiry of active reservation events. */
-export interface ExtendReservationsRepositoryInput {
-  readonly reservationEventIds: readonly MikaId[];
-  readonly expiresAt: ISODateTime;
-  readonly now: ISODateTime;
-}
-
-/** Input for recording a manual or audited stock movement event. */
-export interface AdjustStockRepositoryInput {
-  readonly movementEventId: MikaId;
-  readonly stockItemId: MikaId;
-  readonly quantityDelta: number;
-  readonly now: ISODateTime;
-  readonly reason?: NonNullable<StockEventRecord["reason"]>;
-  readonly adminAuditId?: MikaId;
-  readonly idempotencyKey?: string;
-  readonly metadata?: JsonObject;
-}
-
-/** Discriminated result of a stock adjustment attempt or idempotent replay. */
-export type AdjustStockRepositoryResult =
-  | {
-      readonly status: "adjusted";
-      readonly event: StockEventRecord;
-      readonly stock: StockItemRecord;
-    }
-  | {
-      readonly status: "replayed";
-      readonly event: StockEventRecord;
-      readonly stock: StockItemRecord | null;
-    }
-  | {
-      readonly status: "idempotency_conflict";
-      readonly event: StockEventRecord;
-      readonly stock: StockItemRecord | null;
-    }
-  | {
-      readonly status: "would_go_negative";
-      readonly stock: StockItemRecord;
-    }
-  | {
-      readonly status: "would_undercut_reserved";
-      readonly stock: StockItemRecord;
-    }
-  | {
-      readonly status: "not_found";
-    };
-
-type ReservationEventMutationRepositoryResult<TStatus extends "released" | "consumed" | "expired"> =
-    | {
-        readonly status: TStatus;
-        readonly event: StockEventRecord;
-        readonly stock: StockItemRecord;
-      }
-    | {
-        readonly status: "not_active";
-        readonly event: StockEventRecord;
-        readonly stock: StockItemRecord | null;
-      }
-    | {
-        readonly status: "not_found";
-      };
-
-/** Result of releasing an active reservation event. */
-export type ReleaseReservedStockRepositoryResult =
-  ReservationEventMutationRepositoryResult<"released">;
-/** Result of expiring an active reservation event (frees stock, stays consumable). */
-export type ExpireReservedStockRepositoryResult =
-  ReservationEventMutationRepositoryResult<"expired">;
-/** Result of consuming a reservation event into fulfillment. */
-export type ConsumeReservedStockRepositoryResult =
-  ReservationEventMutationRepositoryResult<"consumed">;
 
 type StockMutationResult = {
   readonly numAffectedRows?: bigint | number;

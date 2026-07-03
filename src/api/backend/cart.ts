@@ -5,10 +5,8 @@
  * first-line cart creation used when adding to a cart that doesn't exist yet.
  */
 import { createCartAggregate, cartWithCoupon, cartWithoutCoupon } from "../../model/builders";
-import {
-  findSessionRepositoryOpenCartBySessionAnyCurrency,
-  nextCartVersion,
-} from "../../storage/repositories";
+import { nextCartVersion } from "../../model/cart-version";
+import { findSessionRepositoryOpenCartBySessionAnyCurrency } from "../../storage/repositories/session";
 import type { CartLine, SellableDefinition } from "../../types/aggregates";
 import type { CartDocument } from "../../types/documents";
 import type { StockItemRecord } from "../../types/operational";
@@ -41,9 +39,12 @@ import {
   validateQuantityLimit,
 } from "./quote";
 import type { MikaCartWishlistBackendInput } from "./quote";
+import type { CreateMikaBackendApiInput } from "./ports";
 import { addMilliseconds, defaultBackendCurrency } from "./shared";
 
-export function createCartBackend(input: MikaCartWishlistBackendInput): MikaApi["cart"] {
+export function createCartBackend(
+  input: MikaCartWishlistBackendInput & Pick<CreateMikaBackendApiInput, "overrides">,
+): MikaApi["cart"] {
   const cart = {
     get: async (ctx) => {
       const document = await findOrCreateOpenCart(input, ctx);

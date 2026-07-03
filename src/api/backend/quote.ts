@@ -11,7 +11,7 @@ import {
   stockAvailabilityToDTO,
   wishlistToDTO,
 } from "../../model/builders";
-import { nextCartVersion } from "../../storage/repositories";
+import { nextCartVersion } from "../../model/cart-version";
 import type {
   CartLine,
   CouponSnapshot,
@@ -45,7 +45,7 @@ import {
 } from "./shared";
 import { expireCheckoutReservations } from "./stock-lifecycle";
 import type {
-  CreateMikaBackendApiInput,
+  MikaBackendDependencies,
   MikaBackendRepositories,
   MikaCouponResolver,
 } from "./ports";
@@ -54,7 +54,7 @@ export type MikaCartWishlistBackendRepositories = Pick<
   MikaBackendRepositories,
   "account" | "catalog" | "session" | "stock" | "ephemeral"
 >;
-export type MikaCartWishlistBackendInput = Omit<CreateMikaBackendApiInput, "repositories"> & {
+export type MikaCartWishlistBackendInput = Omit<MikaBackendDependencies, "repositories"> & {
   readonly repositories: MikaCartWishlistBackendRepositories;
 };
 
@@ -501,7 +501,7 @@ export function createMikaFixedRateCouponResolver(
 }
 
 export async function couponSnapshotForSubtotal(
-  input: Pick<CreateMikaBackendApiInput, "hash" | "config">,
+  input: Pick<MikaBackendDependencies, "hash" | "config">,
   code: string,
   subtotalAmount: number,
   currency: CurrencyCode,
@@ -528,7 +528,7 @@ export async function couponSnapshotForSubtotal(
 }
 
 export function couponRejectionMessage(
-  input: Pick<CreateMikaBackendApiInput, "config">,
+  input: Pick<MikaBackendDependencies, "config">,
   label: string,
 ): string {
   return input.config?.coupons?.resolver

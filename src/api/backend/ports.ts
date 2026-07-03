@@ -30,7 +30,7 @@ import type {
   WorkflowFailureRepositoryInput,
   WorkflowLeaseRepositoryInput,
   WorkflowStepRepositoryInput,
-} from "../../storage/repositories";
+} from "../../storage/repositories/contracts";
 import type { PaginatedStorageResult } from "../../storage/collections";
 import type { MikaProviderRegistry } from "../../provider";
 import type {

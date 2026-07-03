@@ -5,7 +5,7 @@
  * notification (license issued, download ready, order confirmed).
  */
 import { renderMikaEmail } from "../../email";
-import { nextCartVersion } from "../../storage/repositories";
+import { nextCartVersion } from "../../model/cart-version";
 import { createMikaId } from "../../types/primitives";
 import type { ISODateTime, JsonObject, MikaId } from "../../types/primitives";
 import type {
@@ -47,10 +47,10 @@ import { orderAccessRevokedForAccountDelete, orderAllowsDownload } from "./ident
 import { addMilliseconds, currentBackendISODateTime, metadataMikaId, stringChild } from "./shared";
 import { createMikaStockLifecycleService } from "./stock-lifecycle";
 import { WorkflowRunner } from "./workflow-runner";
-import type { CreateMikaBackendApiInput } from "./ports";
+import type { MikaBackendDependencies } from "./ports";
 
 export async function revokeOrderFulfillmentAccess(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   order: OrderDocument,
   now: ISODateTime,
   revokeReason: "order_refunded" | "order_cancelled" = "order_refunded",
@@ -141,7 +141,7 @@ export function createManualEntitlementDocument(
 }
 
 export async function findEntitlementsForRevoke(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   revokeInput: EntitlementRevokeInput,
 ): Promise<readonly EntitlementDocument[]> {
   if (revokeInput.entitlementId) {
@@ -164,7 +164,7 @@ export async function findEntitlementsForRevoke(
 }
 
 export async function resolveDownloadIssueTarget(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   issueInput: DownloadIssueInput,
 ): Promise<{
   readonly order: OrderDocument;
@@ -198,7 +198,7 @@ export async function resolveDownloadIssueTarget(
 }
 
 export async function findLicenseForDownload(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   order: OrderDocument,
   line: OrderLine,
   entitlementId?: MikaId,
@@ -242,7 +242,7 @@ export function addDownloadRefToOrder(
 }
 
 export async function resolveDownload(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   downloadInput: { readonly token: string },
   consumeToken: boolean,
 ): Promise<MikaApiResult<DownloadResolutionDTO>> {
@@ -346,7 +346,7 @@ export type RunPaymentWebhookWorkflowStep = <TResult>(
 ) => Promise<TResult>;
 
 export async function fulfillCheckoutPaymentOrder(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   runWorkflowStep: RunPaymentWebhookWorkflowStep,
   order: OrderDocument,
@@ -361,7 +361,7 @@ export async function fulfillCheckoutPaymentOrder(
 }
 
 export async function completeCheckoutForPaymentOrder(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
   event: MikaProviderPaymentEvent,
@@ -411,7 +411,7 @@ export async function completeCheckoutForPaymentOrder(
 }
 
 export async function findOrderCheckout(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   order: OrderDocument,
   event: MikaProviderPaymentEvent,
 ): Promise<CheckoutDocument | null> {
@@ -441,7 +441,7 @@ export function completedCheckoutMetadata(
 }
 
 export async function fulfillPaidOrder(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
 ): Promise<OrderDocument> {
@@ -523,7 +523,7 @@ export function orderWithFulfilledLines(
 }
 
 export async function fulfillPaidOrderLine(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
   line: OrderLine,
@@ -586,7 +586,7 @@ export async function fulfillPaidOrderLine(
 }
 
 export async function consumeOrderLineReservation(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
   line: OrderLine,
@@ -651,7 +651,7 @@ export function createOrderLineEntitlementDocument(
 }
 
 export async function createOrderLineLicenseDocument(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   order: OrderDocument,
   line: OrderLine,
   now: ISODateTime,
@@ -693,7 +693,7 @@ export async function createOrderLineLicenseDocument(
 }
 
 export async function queueOrderConfirmationEmail(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
   lines: readonly OrderLine[],
@@ -782,7 +782,7 @@ export async function queueOrderConfirmationEmail(
 }
 
 export async function queueDefaultOrderConfirmedEmail(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   intent: MikaNotificationIntent<"order.confirmed">,
   emailId?: MikaId,
 ): Promise<void> {
@@ -842,7 +842,7 @@ export async function queueDefaultOrderConfirmedEmail(
 }
 
 export async function emitOrderDownloadReadyNotifications(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
   originalLines: readonly OrderLine[],
@@ -897,7 +897,7 @@ export type NotificationMarkerLease =
     };
 
 export async function acquireNotificationMarker(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   marker: {
     readonly id: MikaId;
@@ -967,7 +967,7 @@ export async function acquireNotificationMarker(
 }
 
 export async function emitFulfillmentNotificationOnce<TKind extends MikaNotificationKind>(
-  input: CreateMikaBackendApiInput,
+  input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   marker: {
     readonly id: MikaId;

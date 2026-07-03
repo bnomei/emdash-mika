@@ -1,5 +1,5 @@
 import { mirrorRecordFields } from "../record-mirror";
-import type { AccountDeleteEmailRedactionRepositoryInput } from "./account-delete-helpers";
+import type { AccountDeleteEmailRedactionRepositoryInput } from "../contracts";
 import type { EmailDocument } from "../../../types/documents";
 import type { ISODateTime, JsonObject } from "../../../types/primitives";
 

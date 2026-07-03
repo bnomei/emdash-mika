@@ -1,41 +1,10 @@
 import { mirrorRecordFields } from "../record-mirror";
 import type { AccountDeleteRequestDocument, AccountExportDocument } from "../../../types/documents";
-import {
-  isJsonObject,
-  type ISODateTime,
-  type JsonObject,
-  type MikaId,
-} from "../../../types/primitives";
-
-/** Input for completing a queued account deletion request record. */
-export interface AccountDeleteRequestCompletionRepositoryInput {
-  readonly requestId: MikaId;
-  readonly now: ISODateTime;
-  readonly metadata?: JsonObject;
-}
-
-/** Input for failing a queued account deletion request record. */
-export interface AccountDeleteRequestFailureRepositoryInput {
-  readonly requestId: MikaId;
-  readonly now: ISODateTime;
-  readonly lastError: string;
-}
-
-/** Input for recording one completed account-delete maintenance step. */
-export interface AccountDeleteMaintenanceStepRepositoryInput {
-  readonly requestId: MikaId;
-  readonly now: ISODateTime;
-  readonly stepName: string;
-  readonly result: JsonObject;
-}
-
-/** Identity selectors for redacting queued email records after account deletion. */
-export interface AccountDeleteEmailRedactionRepositoryInput {
-  readonly now: ISODateTime;
-  readonly customerId?: MikaId;
-  readonly userId?: string;
-  readonly emailHash?: string;
-}
+import type {
+  AccountDeleteEmailRedactionRepositoryInput,
+  AccountDeleteMaintenanceStepRepositoryInput,
+} from "../contracts";
+import { isJsonObject, type ISODateTime, type JsonObject } from "../../../types/primitives";
 
 export function accountExportMatchesAccountDeleteIdentity(
   document: AccountExportDocument,

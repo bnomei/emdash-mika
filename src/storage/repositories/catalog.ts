@@ -1,15 +1,8 @@
 import { findFirstByTypeCandidate, typedCollection, type TypedCollectionFacade } from "./kit";
 import type { StorageCollection } from "../collections";
 import type { CatalogDocument, CatalogItemDocument } from "../../types/documents";
-import type { PriceDefinition, SellableDefinition } from "../../types/aggregates";
+import type { CatalogProviderPriceMatch } from "./contracts";
 import type { ContentRef, MikaId } from "../../types/primitives";
-
-/** Catalog item, sellable, and price tuple resolved from provider price lookup. */
-export interface CatalogProviderPriceMatch {
-  readonly catalog: CatalogItemDocument;
-  readonly sellable: SellableDefinition;
-  readonly price: PriceDefinition;
-}
 
 /** Document repository for catalog item and coupon lookup by content and provider refs. */
 export class CatalogRepository {

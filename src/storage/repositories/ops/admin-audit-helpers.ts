@@ -1,10 +1,6 @@
 import type { AdminAuditDocument } from "../../../types/documents";
 import type { MikaId } from "../../../types/primitives";
 
-/** Result of atomically claiming an admin action idempotency key. */
-export type AdminAuditIdempotencyClaimResult =
-  | { readonly status: "claimed"; readonly audit: AdminAuditDocument }
-  | { readonly status: "existing"; readonly audit: AdminAuditDocument };
 
 const ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY = "idempotencyInputHash";
 
