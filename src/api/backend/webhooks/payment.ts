@@ -28,9 +28,7 @@ import type { MikaRequestContext } from "../../context";
 import { checkoutCustomerFromMetadata, expireCheckoutDocument } from "../checkout";
 import { emitBackendNotification, observeBackendError } from "../errors";
 import {
-  completeCheckoutForPaymentOrder,
   fulfillCheckoutPaymentOrder,
-  fulfillPaidOrder,
   fulfillmentDocumentId,
   revokeOrderFulfillmentAccess,
 } from "../fulfillment";
@@ -353,13 +351,8 @@ async function processPaymentWebhook(
       const order = await runWorkflowStep("persist_order", () =>
         updatePaymentOrderFromEvent(input, ctx, orderSource, event),
       );
-      const fulfilledOrder = orderBlocksFulfillment(order)
-        ? order
-        : await fulfillCheckoutPaymentOrder(input, ctx, runWorkflowStep, order, event);
 
-      return runWorkflowStep("mark_webhook", () =>
-        markWebhookProcessedForOrder(input, webhook, ctx.now, fulfilledOrder),
-      );
+      return fulfillAndMarkPaymentOrder(input, ctx, runWorkflowStep, webhook, order, event);
     }
 
     const checkout = await runWorkflowStep("link_checkout", () =>
@@ -387,12 +380,15 @@ async function processPaymentWebhook(
       const order = await runWorkflowStep("persist_order", () =>
         updatePaymentOrderFromEvent(input, ctx, orderSource, event),
       );
-      const fulfilledOrder = orderBlocksFulfillment(order)
-        ? order
-        : await fulfillCheckoutPaymentOrder(input, ctx, runWorkflowStep, order, event, checkout);
 
-      return runWorkflowStep("mark_webhook", () =>
-        markWebhookProcessedForOrder(input, webhook, ctx.now, fulfilledOrder),
+      return fulfillAndMarkPaymentOrder(
+        input,
+        ctx,
+        runWorkflowStep,
+        webhook,
+        order,
+        event,
+        checkout,
       );
     }
 
@@ -405,17 +401,33 @@ async function processPaymentWebhook(
         checkout,
       ),
     );
-    await runWorkflowStep("complete_checkout", () =>
-      completeCheckoutForPaymentOrder(input, ctx, order, event, checkout),
-    );
-    const fulfilledOrder = await runWorkflowStep("fulfill_order", () =>
-      fulfillPaidOrder(input, ctx, order),
-    );
 
-    return runWorkflowStep("mark_webhook", () =>
-      markWebhookProcessedForOrder(input, webhook, ctx.now, fulfilledOrder),
-    );
+    return fulfillAndMarkPaymentOrder(input, ctx, runWorkflowStep, webhook, order, event, checkout);
   });
+}
+
+/**
+ * Shared tail for every processPaymentWebhook branch: fulfill the order (unless its lifecycle
+ * blocks fulfillment — a refunded/cancelled replay) via the complete_checkout + fulfill_order
+ * workflow steps, then record the webhook as processed. For a brand-new paid order the block check
+ * is always false, so this runs the same two steps the branch used to inline.
+ */
+async function fulfillAndMarkPaymentOrder(
+  input: MikaBackendDependencies,
+  ctx: MikaRequestContext,
+  runWorkflowStep: RunPaymentWebhookWorkflowStep,
+  webhook: WebhookDocument,
+  order: OrderDocument,
+  event: MikaProviderPaymentEvent,
+  checkout?: CheckoutDocument,
+): Promise<WebhookDocument> {
+  const fulfilledOrder = orderBlocksFulfillment(order)
+    ? order
+    : await fulfillCheckoutPaymentOrder(input, ctx, runWorkflowStep, order, event, checkout);
+
+  return runWorkflowStep("mark_webhook", () =>
+    markWebhookProcessedForOrder(input, webhook, ctx.now, fulfilledOrder),
+  );
 }
 
 async function runPaymentWebhookWorkflow(
