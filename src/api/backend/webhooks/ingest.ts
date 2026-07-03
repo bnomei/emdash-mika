@@ -15,7 +15,13 @@ import type {
   WebhookReplayInput,
 } from "../../types";
 import { runAdminRepositoryAction, toIdempotencyJson } from "../admin-audit";
-import { apiFailure, providerFailed, webhookInvalid, webhookProcessingDeferred } from "../errors";
+import {
+  apiFailure,
+  observeBackendError,
+  providerFailed,
+  webhookInvalid,
+  webhookProcessingDeferred,
+} from "../errors";
 import type { CreateMikaBackendApiInput } from "../ports";
 import {
   booleanChild,
@@ -63,7 +69,8 @@ export async function receiveWebhook(
       rawBody,
     });
     event = await provider.parseWebhookEvent(verified);
-  } catch {
+  } catch (error) {
+    observeBackendError(input, "webhook.verify", error, { provider: webhookInput.provider });
     return webhookInvalid("Webhook signature or payload could not be verified.");
   }
 
@@ -99,7 +106,8 @@ export async function receiveWebhook(
 
   try {
     await input.repositories.ops.put(webhook);
-  } catch {
+  } catch (error) {
+    observeBackendError(input, "webhook.store", error, { provider: webhookInput.provider });
     const replayedDuplicate = await input.repositories.ops.findWebhookDuplicate({
       provider: webhookInput.provider,
       providerEventId,

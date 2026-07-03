@@ -374,7 +374,11 @@ export async function startCheckout(
         cancelUrl: checkoutCancelUrl(input, ctx, checkoutInput, checkoutId, statusToken),
         metadata: checkoutCustomMetadata(checkoutInput.customFields),
       });
-    } catch {
+    } catch (error) {
+      observeBackendError(input, "checkout.providerSession", error, {
+        checkoutId,
+        provider: providerName,
+      });
       await releaseCheckoutReservations(input, reserved.reservationIds, ctx.now);
       if (claimedCart) {
         await releaseCartCheckoutClaimQuietly(input, claimedCart.id, checkoutId, ctx.now);
@@ -429,7 +433,8 @@ export async function startCheckout(
         now: ctx.now,
       });
     }
-  } catch {
+  } catch (error) {
+    observeBackendError(input, "checkout.extendReservations", error, { checkoutId });
     await releaseCheckoutReservations(input, reserved.reservationIds, ctx.now);
     if (claimedCart) {
       await releaseCartCheckoutClaimQuietly(input, claimedCart.id, checkoutId, ctx.now);
@@ -804,7 +809,8 @@ async function persistCheckoutStart(
         cartWithCheckoutReservations(cart, checkoutId, lines, ctx.now),
       );
     }
-  } catch {
+  } catch (error) {
+    observeBackendError(input, "checkout.persist", error, { checkoutId });
     await releaseCheckoutReservations(input, reservationIds, ctx.now);
     if (cart) {
       await releaseCartCheckoutClaimQuietly(input, cart.id, checkoutId, ctx.now);
