@@ -6,6 +6,20 @@ import type { ISODateTime, JsonObject } from "../../types/primitives";
 import { createISODateTime } from "../../types/primitives";
 import { affected, parseMetadata, undef, type MikaDbExecutor } from "./db-shared";
 
+/**
+ * Kind-specific lifecycle statuses written to the ephemeral `status` column (typed `string` in the
+ * schema, so these magic strings are otherwise unchecked). Routing every literal through these
+ * constants turns a typo into a compile error.
+ */
+type EphemeralLifecycleStatus = "active" | "held" | "released" | "pending" | "consumed";
+const EPHEMERAL_STATUS = {
+  active: "active",
+  held: "held",
+  released: "released",
+  pending: "pending",
+  consumed: "consumed",
+} as const satisfies Record<EphemeralLifecycleStatus, EphemeralLifecycleStatus>;
+
 /** Operational repository for TTL-bound ephemeral records and token consumption. */
 export class EphemeralRepository {
   private readonly db: MikaDbExecutor;
@@ -69,7 +83,7 @@ export class EphemeralRepository {
         key: input.key,
         kind: input.kind,
         subject_hash: input.subjectHash ?? null,
-        status: input.status ?? "active",
+        status: input.status ?? EPHEMERAL_STATUS.active,
         count: 1,
         expires_at: input.expiresAt,
         version: 1,
@@ -81,7 +95,7 @@ export class EphemeralRepository {
         oc.column("key").doUpdateSet({
           kind: input.kind,
           subject_hash: input.subjectHash ?? null,
-          status: input.status ?? "active",
+          status: input.status ?? EPHEMERAL_STATUS.active,
           count: sql<number>`count + 1`,
           version: sql<number>`version + 1`,
           expires_at: input.expiresAt,
@@ -111,7 +125,7 @@ export class EphemeralRepository {
       .updateTable("mika_ephemeral_records")
       .set((eb) => ({
         subject_hash: input.subjectHash ?? null,
-        status: "held",
+        status: EPHEMERAL_STATUS.held,
         count: eb("count", "+", 1),
         expires_at: input.expiresAt,
         version: eb("version", "+", 1),
@@ -122,7 +136,7 @@ export class EphemeralRepository {
       .where("kind", "=", "lock")
       .where((eb) =>
         eb.or([
-          eb("status", "!=", "held"),
+          eb("status", "!=", EPHEMERAL_STATUS.held),
           eb("expires_at", "<=", input.now),
           eb("data_json", "=", ownerData),
         ]),
@@ -136,7 +150,7 @@ export class EphemeralRepository {
         key: input.key,
         kind: "lock",
         subject_hash: input.subjectHash ?? null,
-        status: "held",
+        status: EPHEMERAL_STATUS.held,
         count: 1,
         expires_at: input.expiresAt,
         version: 1,
@@ -158,14 +172,14 @@ export class EphemeralRepository {
     const result = await this.db
       .updateTable("mika_ephemeral_records")
       .set((eb) => ({
-        status: "released",
+        status: EPHEMERAL_STATUS.released,
         expires_at: input.now,
         version: eb("version", "+", 1),
         updated_at: input.now,
       }))
       .where("key", "=", input.key)
       .where("kind", "=", "lock")
-      .where("status", "=", "held")
+      .where("status", "=", EPHEMERAL_STATUS.held)
       .where("data_json", "=", ephemeralLockOwnerData(input.owner))
       .executeTakeFirst();
 
@@ -176,13 +190,13 @@ export class EphemeralRepository {
     const result = await this.db
       .updateTable("mika_ephemeral_records")
       .set((eb) => ({
-        status: "consumed",
+        status: EPHEMERAL_STATUS.consumed,
         version: eb("version", "+", 1),
         updated_at: now,
       }))
       .where("key", "=", key)
       .where("kind", "=", "token")
-      .where("status", "=", "pending")
+      .where("status", "=", EPHEMERAL_STATUS.pending)
       .where("expires_at", ">", now)
       .executeTakeFirst();
 
@@ -193,13 +207,13 @@ export class EphemeralRepository {
     const result = await this.db
       .updateTable("mika_ephemeral_records")
       .set((eb) => ({
-        status: "pending",
+        status: EPHEMERAL_STATUS.pending,
         version: eb("version", "+", 1),
         updated_at: now,
       }))
       .where("key", "=", key)
       .where("kind", "=", "token")
-      .where("status", "=", "consumed")
+      .where("status", "=", EPHEMERAL_STATUS.consumed)
       .executeTakeFirst();
 
     return affected(result.numUpdatedRows);
