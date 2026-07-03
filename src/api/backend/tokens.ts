@@ -242,11 +242,14 @@ async function validateOrderInvoiceToken(
   });
 }
 
+/** Purpose discriminator stored on a reusable capability token's ephemeral record. */
+type CapabilityTokenPurpose = "checkout_status" | "order_invoice";
+
 function reusableCapabilityTokenError(
   record: Awaited<ReturnType<MikaBackendRepositories["ephemeral"]["get"]>>,
   options: {
     readonly now: ISODateTime;
-    readonly purpose: string;
+    readonly purpose: CapabilityTokenPurpose;
     readonly label: string;
     readonly target: Record<string, string | undefined>;
   },
