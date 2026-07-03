@@ -51,7 +51,7 @@ const {
 const purchase = purchaseInput ?? createMikaPurchaseModel(sellables);
 const syncAvailabilityPanels = !showPurchaseControls || purchase.useGroupedVariantControls;
 const needsAddToCartSync = showPurchaseControls && purchase.useGroupedVariantControls;
-const selectedAvailabilityStatus = purchase.selectedSellable?.availability.status;
+const selectedAvailabilityStatus = purchase.selectedSellable?.availability?.status;
 const disabledButtonLabel = purchase.missingActivePrice
   ? unavailableLabel
   : selectedAvailabilityStatus === "out_of_stock"
