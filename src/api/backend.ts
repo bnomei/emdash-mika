@@ -6,21 +6,6 @@
 export { createMikaBackendApi } from "./backend/factory";
 export { createMikaFixedRateCouponResolver } from "./backend/quote";
 export { createMikaStockLifecycleService } from "./backend/stock-lifecycle";
-export type {
-  ReserveStockInput,
-  ReserveStockResult,
-  ReleaseReservedStockInput,
-  ReleaseReservedStockResult,
-  ExpireReservedStockResult,
-  ConsumeReservedStockInput,
-  ConsumeReservedStockResult,
-  ReleaseExpiredReservationsInput,
-  ReleaseExpiredReservationsResult,
-  ExtendReservationsInput,
-  AdjustStockInput,
-  AdjustStockResult,
-  MikaStockLifecycleService,
-} from "./backend/stock-lifecycle";
 // Repository ports and shared backend config/dependency types live in ./backend/ports.
 export type {
   MikaDocumentList,

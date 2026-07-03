@@ -51,7 +51,7 @@ export function orderBlocksFulfillment(order: OrderDocument): boolean {
 }
 
 /** Derives post-payment status without downgrading terminal orders. */
-export function orderPaymentStatusAfterPaymentEvent(order: OrderDocument): {
+function orderPaymentStatusAfterPaymentEvent(order: OrderDocument): {
   readonly status: OrderStatus;
   readonly paymentStatus: PaymentStatus;
   readonly paidAt?: ISODateTime;

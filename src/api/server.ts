@@ -352,7 +352,7 @@ function mikaApiWireScopeNames(): ReadonlySet<string> {
 }
 
 /** Standard not-implemented {@link MikaApiResult} returned by unwired stub methods. */
-export async function notImplemented<TData>(feature: string): Promise<MikaApiResult<TData>> {
+async function notImplemented<TData>(feature: string): Promise<MikaApiResult<TData>> {
   return {
     ok: false,
     status: 501,

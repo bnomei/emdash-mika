@@ -6,7 +6,7 @@ import { mikaOperationPluginRoutes, mikaOperationPublicRouteNames } from "./oper
 /** Default EmDash plugin identifier for Mika. */
 export const MIKA_PLUGIN_ID = "mika";
 /** Base path prefix for EmDash plugin API routes. */
-export const EMDASH_PLUGIN_API_BASE = "/_emdash/api/plugins";
+const EMDASH_PLUGIN_API_BASE = "/_emdash/api/plugins";
 
 /** Re-exported operation route map keyed by stable route names. */
 export const mikaPluginRoutes = mikaOperationPluginRoutes;
