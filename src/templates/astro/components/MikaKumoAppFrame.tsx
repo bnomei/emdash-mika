@@ -179,6 +179,20 @@ export default function MikaKumoAppFrame({
             </Link>
           </nav>
         </div>
+        <nav aria-label="Account sections" className="mika-kumo-mobile-account-links">
+          <Link href="/account/orders" variant="plain">
+            Orders
+          </Link>
+          <Link href="/account/subscriptions" variant="plain">
+            Subscriptions
+          </Link>
+          <Link href="/account/licenses" variant="plain">
+            Licenses
+          </Link>
+          <Link href="/account/downloads" variant="plain">
+            Downloads
+          </Link>
+        </nav>
 
         {children}
 

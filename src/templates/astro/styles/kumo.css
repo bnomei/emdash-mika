@@ -105,6 +105,13 @@ a {
   backdrop-filter: blur(12px);
 }
 
+.mika-kumo-mobile-account-links {
+  display: none;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: 10px 16px 0;
+}
+
 .mika-kumo-mobile-brand {
   display: inline-flex;
   gap: 8px;
@@ -400,6 +407,10 @@ a {
   }
 
   .mika-kumo-mobile-topbar {
+    display: flex;
+  }
+
+  .mika-kumo-mobile-account-links {
     display: flex;
   }
 
