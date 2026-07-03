@@ -67,7 +67,7 @@ async function completeAdminAudit(
   });
 }
 
-export function adminAuditReplayResult<TData extends JsonObject>(
+function adminAuditReplayResult<TData extends JsonObject>(
   audit: AdminAuditDocument,
 ): TData | null {
   const storedVersion = audit.record.metadata?.[ADMIN_AUDIT_RESULT_SCHEMA_VERSION_METADATA_KEY];
