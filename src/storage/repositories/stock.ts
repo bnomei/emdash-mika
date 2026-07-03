@@ -67,20 +67,7 @@ export class StockRepository {
 
   /** Upserts stock item including on-hand and reserved quantities on sellable_id conflict. */
   async putItem(record: StockItemRecord): Promise<void> {
-    const row: MikaInsertable<"mika_stock_items"> = {
-      id: record.id,
-      sellable_id: record.sellableId,
-      policy: record.policy,
-      quantity_on_hand: record.quantityOnHand,
-      quantity_reserved: record.quantityReserved,
-      low_stock_threshold: record.lowStockThreshold ?? null,
-      allow_backorder: record.allowBackorder ? 1 : 0,
-      available_override:
-        record.availableOverride === undefined ? null : record.availableOverride ? 1 : 0,
-      metadata_json: record.metadata ? encodeJson(record.metadata) : null,
-      created_at: record.createdAt,
-      updated_at: record.updatedAt,
-    };
+    const row = stockItemInsertRow(record);
 
     await this.db
       .insertInto("mika_stock_items")
@@ -102,20 +89,7 @@ export class StockRepository {
 
   /** Upserts stock definition only; does not overwrite quantity_on_hand or quantity_reserved. */
   async putItemDefinition(record: StockItemRecord): Promise<void> {
-    const row: MikaInsertable<"mika_stock_items"> = {
-      id: record.id,
-      sellable_id: record.sellableId,
-      policy: record.policy,
-      quantity_on_hand: record.quantityOnHand,
-      quantity_reserved: record.quantityReserved,
-      low_stock_threshold: record.lowStockThreshold ?? null,
-      allow_backorder: record.allowBackorder ? 1 : 0,
-      available_override:
-        record.availableOverride === undefined ? null : record.availableOverride ? 1 : 0,
-      metadata_json: record.metadata ? encodeJson(record.metadata) : null,
-      created_at: record.createdAt,
-      updated_at: record.updatedAt,
-    };
+    const row = stockItemInsertRow(record);
 
     await this.db
       .insertInto("mika_stock_items")
@@ -659,6 +633,25 @@ async function insertStockEvent(executor: MikaDbExecutor, record: StockEventReco
     .execute();
 }
 
+/** Serializes a stock item record to its insertable row. Shared by putItem and putItemDefinition,
+ * which differ only in their doUpdateSet clause. */
+function stockItemInsertRow(record: StockItemRecord): MikaInsertable<"mika_stock_items"> {
+  return {
+    id: record.id,
+    sellable_id: record.sellableId,
+    policy: record.policy,
+    quantity_on_hand: record.quantityOnHand,
+    quantity_reserved: record.quantityReserved,
+    low_stock_threshold: record.lowStockThreshold ?? null,
+    allow_backorder: record.allowBackorder ? 1 : 0,
+    available_override:
+      record.availableOverride === undefined ? null : record.availableOverride ? 1 : 0,
+    metadata_json: record.metadata ? encodeJson(record.metadata) : null,
+    created_at: record.createdAt,
+    updated_at: record.updatedAt,
+  };
+}
+
 function mapStockItem(row: MikaSelectable<"mika_stock_items">): StockItemRecord {
   return {
     id: createMikaId(row.id),
@@ -720,7 +713,7 @@ function mapStockEvent(row: MikaSelectable<"mika_stock_events">): StockEventReco
     stockItemId: createMikaId(row.stock_item_id),
     kind: row.kind,
     status: row.status,
-    reason: row.reason ? (row.reason as NonNullable<StockEventRecord["reason"]>) : undefined,
+    reason: undef(row.reason),
     reservationEventId: mikaIdOrUndefined(row.reservation_event_id),
     cartId: mikaIdOrUndefined(row.cart_id),
     checkoutSessionId: mikaIdOrUndefined(row.checkout_session_id),

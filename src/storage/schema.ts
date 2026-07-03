@@ -32,7 +32,7 @@ export interface MikaStockEventsTable {
   stock_item_id: string;
   kind: StockEventRecord["kind"];
   status: StockEventRecord["status"];
-  reason: NullableColumn<string>;
+  reason: NullableColumn<NonNullable<StockEventRecord["reason"]>>;
   reservation_event_id: NullableColumn<string>;
   cart_id: NullableColumn<string>;
   checkout_session_id: NullableColumn<string>;
