@@ -21255,7 +21255,7 @@ function createWorkflowDocument(
   const recordOverrides = overrides.record;
   const safeRecordOverrides = omitUndefined(recordOverrides ?? {});
   const id = safeRecordOverrides.id ?? overrides.id ?? createTestMikaId("workflow", 1);
-  const kind = safeRecordOverrides.kind ?? "payment_webhook_fulfillment";
+  const kind = safeRecordOverrides.kind ?? overrides.kind ?? "payment_webhook_fulfillment";
   const status = safeRecordOverrides.status ?? overrides.status ?? "queued";
   const subjectType = optionalOverride(
     recordOverrides,
@@ -21385,7 +21385,7 @@ function createWebhookDocument(
   });
 
   return omitUndefined({
-    id: safeDocumentOverrides.id ?? record.id,
+    id: record.id,
     type: "webhook",
     schemaVersion: safeDocumentOverrides.schemaVersion ?? 1,
     provider,
