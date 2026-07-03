@@ -4658,7 +4658,9 @@ describe("Mika Astro template contracts", () => {
     expect(addToCartSource).toContain('name="purchase"');
     expect(addToCartSource).toContain("needsAddToCartSync");
     expect(addToCartSource).toContain("<AddToCartFormSync />");
-    expect(addToCartSyncSource).toContain('form.querySelector("[data-mika-variant-groups]")');
+    expect(addToCartSyncSource).toContain(
+      'form.querySelector<HTMLFieldSetElement>("[data-mika-variant-groups]")',
+    );
     expect(addToCartSyncSource).toContain('groups.addEventListener("mika:variant-change"');
     expect(addToCartSyncSource).toContain("event.detail");
     expect(addToCartSyncSource).toContain("groups.dataset.mikaSelectedSellableId");

@@ -1,10 +1,16 @@
 <!-- mika-template-version: 0.0.0 -->
 <script>
-  for (const form of document.querySelectorAll("[data-mika-add-to-cart]")) {
-    const groups = form.querySelector("[data-mika-variant-groups]");
+  interface MikaVariantChangeDetail {
+    readonly sellableId?: string;
+    readonly priceId?: string;
+    readonly maxQuantity?: number;
+  }
+
+  for (const form of document.querySelectorAll<HTMLFormElement>("[data-mika-add-to-cart]")) {
+    const groups = form.querySelector<HTMLFieldSetElement>("[data-mika-variant-groups]");
     if (!groups) continue;
 
-    const sync = (detail = {}) => {
+    const sync = (detail: MikaVariantChangeDetail = {}) => {
       const sellableId =
         detail.sellableId ?? groups.dataset.mikaSelectedSellableId ?? "";
       const maxQuantity =
@@ -12,7 +18,7 @@
           ? groups.dataset.mikaSelectedMaxQuantity ?? ""
           : String(detail.maxQuantity);
 
-      for (const button of form.querySelectorAll("[data-mika-purchase-submit]")) {
+      for (const button of form.querySelectorAll<HTMLButtonElement>("[data-mika-purchase-submit]")) {
         button.disabled =
           sellableId === "" || button.dataset.mikaInitialDisabled === "true";
         if (button.dataset.mikaEnabledLabel && button.dataset.mikaDisabledLabel) {
@@ -22,7 +28,7 @@
         }
       }
 
-      for (const input of form.querySelectorAll("[data-mika-purchase-quantity]")) {
+      for (const input of form.querySelectorAll<HTMLInputElement>("[data-mika-purchase-quantity]")) {
         input.disabled =
           sellableId === "" || input.dataset.mikaInitialDisabled === "true";
         if (maxQuantity === "") {
@@ -33,12 +39,14 @@
         }
       }
 
-      for (const panel of form.querySelectorAll("[data-mika-availability-for]")) {
+      for (const panel of form.querySelectorAll<HTMLElement>("[data-mika-availability-for]")) {
         panel.hidden = panel.dataset.mikaAvailabilityFor !== sellableId;
       }
     };
 
-    groups.addEventListener("mika:variant-change", (event) => sync(event.detail));
+    groups.addEventListener("mika:variant-change", (event: CustomEvent<MikaVariantChangeDetail>) =>
+      sync(event.detail)
+    );
     sync();
   }
 </script>
