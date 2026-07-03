@@ -39,7 +39,7 @@ export { MIKA_PLUGIN_ID } from "./api/routes";
  */
 export const MIKA_PLUGIN_VERSION = "0.0.0";
 
-/** npm package name used as the default plugin entrypoint. */
+/** npm package name used to derive package-owned descriptor and runtime entrypoints. */
 export const MIKA_PACKAGE_NAME = "@bnomei/emdash-mika";
 
 /** Default runtime entrypoint imported by EmDash hosts for native plugin activation. */
