@@ -299,7 +299,7 @@ export async function requestAccountDelete(
   return { ok: true, status: 202, data: { requested: true } };
 }
 
-export async function accountDeleteBlocked(
+async function accountDeleteBlocked(
   input: MikaBackendDependencies,
   identity: { readonly customerId?: MikaId; readonly sessionId?: string },
 ): Promise<MikaApiFailure | null> {
@@ -352,7 +352,7 @@ export async function accountDeleteBlocked(
   return null;
 }
 
-export function subscriptionBlocksAccountDelete(subscription: SubscriptionDocument): boolean {
+function subscriptionBlocksAccountDelete(subscription: SubscriptionDocument): boolean {
   return subscription.status !== "cancelled" && subscription.status !== "expired";
 }
 
@@ -513,7 +513,7 @@ export async function accountDTOForCustomer(
   };
 }
 
-export function uniqueDocumentsById<TDocument extends { readonly id: string }>(
+function uniqueDocumentsById<TDocument extends { readonly id: string }>(
   items: readonly {
     readonly id: string;
     readonly data: TDocument;
@@ -537,7 +537,7 @@ export function uniqueDocumentsById<TDocument extends { readonly id: string }>(
   return unique;
 }
 
-export async function orderSummaryDTO(
+async function orderSummaryDTO(
   input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
@@ -558,7 +558,7 @@ export async function orderSummaryDTO(
   };
 }
 
-export function subscriptionDTO(subscription: SubscriptionDocument): SubscriptionDTO {
+function subscriptionDTO(subscription: SubscriptionDocument): SubscriptionDTO {
   return {
     id: subscription.id,
     title: subscription.aggregate.sellable.titleSnapshot,
@@ -568,7 +568,7 @@ export function subscriptionDTO(subscription: SubscriptionDocument): Subscriptio
   };
 }
 
-export function entitlementDTO(entitlement: EntitlementDocument): EntitlementDTO {
+function entitlementDTO(entitlement: EntitlementDocument): EntitlementDTO {
   return {
     key: entitlement.entitlementKey,
     status: entitlement.status,
@@ -577,7 +577,7 @@ export function entitlementDTO(entitlement: EntitlementDocument): EntitlementDTO
   };
 }
 
-export async function orderDownloadDTOs(
+async function orderDownloadDTOs(
   input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
@@ -603,7 +603,7 @@ export async function orderDownloadDTOs(
   return downloads;
 }
 
-export function accountExportDTO(
+function accountExportDTO(
   document: AccountExportDocument,
   ctx: MikaRequestContext,
   token?: string,
@@ -630,7 +630,7 @@ export function accountExportDTO(
   };
 }
 
-export function accountExportDownloadResult(
+function accountExportDownloadResult(
   document: AccountExportDocument,
   now: ISODateTime,
 ): MikaApiResult<AccountExportDownloadDTO> {
@@ -652,7 +652,7 @@ export function accountExportDownloadResult(
   };
 }
 
-export function accountExportDownloadConfirmationResult(
+function accountExportDownloadConfirmationResult(
   document: AccountExportDocument,
   now: ISODateTime,
 ): MikaApiResult<AccountExportDownloadDTO> {
@@ -671,7 +671,7 @@ export function accountExportDownloadConfirmationResult(
   };
 }
 
-export function accountPortalReturnUrl(ctx: MikaRequestContext, returnTo?: string): string {
+function accountPortalReturnUrl(ctx: MikaRequestContext, returnTo?: string): string {
   if (!returnTo) return ctx.url?.href ?? "/";
   if (!ctx.url) return safeRequestReturnPath(ctx, returnTo);
 

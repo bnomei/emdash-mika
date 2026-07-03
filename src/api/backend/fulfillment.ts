@@ -194,7 +194,7 @@ export async function resolveDownloadIssueTarget(
   return { order, line, downloadRef, ...(license ? { license } : {}) };
 }
 
-export async function findLicenseForDownload(
+async function findLicenseForDownload(
   input: MikaBackendDependencies,
   order: OrderDocument,
   line: OrderLine,
@@ -357,7 +357,7 @@ export async function fulfillCheckoutPaymentOrder(
   return runWorkflowStep("fulfill_order", () => fulfillPaidOrder(input, ctx, order));
 }
 
-export async function completeCheckoutForPaymentOrder(
+async function completeCheckoutForPaymentOrder(
   input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
@@ -407,7 +407,7 @@ export async function completeCheckoutForPaymentOrder(
   });
 }
 
-export async function findOrderCheckout(
+async function findOrderCheckout(
   input: MikaBackendDependencies,
   order: OrderDocument,
   event: MikaProviderPaymentEvent,
@@ -423,7 +423,7 @@ export async function findOrderCheckout(
   return input.repositories.session.findCheckoutByProvider(event.provider, providerCheckoutId);
 }
 
-export function completedCheckoutMetadata(
+function completedCheckoutMetadata(
   metadata: JsonObject | undefined,
   order: OrderDocument,
   event: MikaProviderPaymentEvent,
@@ -437,7 +437,7 @@ export function completedCheckoutMetadata(
   };
 }
 
-export async function fulfillPaidOrder(
+async function fulfillPaidOrder(
   input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
@@ -499,7 +499,7 @@ export async function fulfillPaidOrder(
   return fulfilledOrder;
 }
 
-export function orderWithFulfilledLines(
+function orderWithFulfilledLines(
   order: OrderDocument,
   lines: readonly OrderLine[],
   now: ISODateTime,
@@ -519,7 +519,7 @@ export function orderWithFulfilledLines(
   };
 }
 
-export async function fulfillPaidOrderLine(
+async function fulfillPaidOrderLine(
   input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
@@ -582,7 +582,7 @@ export async function fulfillPaidOrderLine(
   }
 }
 
-export async function consumeOrderLineReservation(
+async function consumeOrderLineReservation(
   input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
@@ -605,7 +605,7 @@ export async function consumeOrderLineReservation(
   throw new Error(`Reservation '${reservationId}' for order line '${line.id}' was not active.`);
 }
 
-export function createOrderLineEntitlementDocument(
+function createOrderLineEntitlementDocument(
   order: OrderDocument,
   line: OrderLine,
   now: ISODateTime,
@@ -647,7 +647,7 @@ export function createOrderLineEntitlementDocument(
   };
 }
 
-export async function createOrderLineLicenseDocument(
+async function createOrderLineLicenseDocument(
   input: MikaBackendDependencies,
   order: OrderDocument,
   line: OrderLine,
@@ -689,7 +689,7 @@ export async function createOrderLineLicenseDocument(
   };
 }
 
-export async function queueOrderConfirmationEmail(
+async function queueOrderConfirmationEmail(
   input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
@@ -778,7 +778,7 @@ export async function queueOrderConfirmationEmail(
   }
 }
 
-export async function queueDefaultOrderConfirmedEmail(
+async function queueDefaultOrderConfirmedEmail(
   input: MikaBackendDependencies,
   intent: MikaNotificationIntent<"order.confirmed">,
   emailId?: MikaId,
@@ -838,7 +838,7 @@ export async function queueDefaultOrderConfirmedEmail(
   await input.repositories.ops.put(document);
 }
 
-export async function emitOrderDownloadReadyNotifications(
+async function emitOrderDownloadReadyNotifications(
   input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   order: OrderDocument,
@@ -876,11 +876,11 @@ export async function emitOrderDownloadReadyNotifications(
   }
 }
 
-export function orderLineDownloadRef(order: OrderDocument, line: OrderLine): string {
+function orderLineDownloadRef(order: OrderDocument, line: OrderLine): string {
   return `download:${order.id}:${line.id}`;
 }
 
-export function orderConfirmedNotificationMarkerId(orderId: MikaId): MikaId {
+function orderConfirmedNotificationMarkerId(orderId: MikaId): MikaId {
   return fulfillmentDocumentId("workflow", orderId, "notification_order_confirmed");
 }
 
@@ -893,7 +893,7 @@ export type NotificationMarkerLease =
       readonly status: "active" | "completed";
     };
 
-export async function acquireNotificationMarker(
+async function acquireNotificationMarker(
   input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   marker: {
@@ -963,7 +963,7 @@ export async function acquireNotificationMarker(
   };
 }
 
-export async function emitFulfillmentNotificationOnce<TKind extends MikaNotificationKind>(
+async function emitFulfillmentNotificationOnce<TKind extends MikaNotificationKind>(
   input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   marker: {
@@ -998,7 +998,7 @@ export async function emitFulfillmentNotificationOnce<TKind extends MikaNotifica
   }
 }
 
-export function orderLineContentKey(line: OrderLine): string {
+function orderLineContentKey(line: OrderLine): string {
   return `${line.item.content.collection}:${line.item.content.id}`;
 }
 
@@ -1006,7 +1006,7 @@ export function fulfillmentDocumentId(namespace: string, ...parts: readonly stri
   return createMikaId([namespace, ...parts].map(fulfillmentIdPart).join("_"));
 }
 
-export function fulfillmentIdPart(value: string): string {
+function fulfillmentIdPart(value: string): string {
   const sanitized = value.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   return sanitized || "value";
 }

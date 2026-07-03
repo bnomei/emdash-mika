@@ -435,7 +435,7 @@ function storedWebhookEvent(webhook: WebhookDocument): MikaProviderWebhookEvent 
   }
 }
 
-export function webhookDuplicateResult(
+function webhookDuplicateResult(
   duplicate: WebhookDocument,
 ): MikaApiResult<WebhookReceiveDTO> {
   return {
@@ -449,7 +449,7 @@ export function webhookDuplicateResult(
   };
 }
 
-export function webhookReceiptResult(
+function webhookReceiptResult(
   webhook: WebhookDocument,
   event: MikaProviderWebhookEvent,
 ): MikaApiResult<WebhookReceiveDTO> {

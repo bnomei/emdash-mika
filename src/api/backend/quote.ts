@@ -74,7 +74,7 @@ export async function findOpenCart(
   return reopenAbandonedCheckoutCart(input, ctx, currency);
 }
 
-export async function reopenAbandonedCheckoutCart(
+async function reopenAbandonedCheckoutCart(
   input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
   currency: CurrencyCode,
@@ -109,7 +109,7 @@ export async function reopenAbandonedCheckoutCart(
   return reopened;
 }
 
-export function checkoutIsResumable(checkout: CheckoutDocument, now: ISODateTime): boolean {
+function checkoutIsResumable(checkout: CheckoutDocument, now: ISODateTime): boolean {
   // Only the non-terminal statuses (created/redirected) are resumable.
   if (checkoutStatusIsTerminal(checkout.status)) return false;
   if (!checkout.expiresAt) return true;
@@ -117,7 +117,7 @@ export function checkoutIsResumable(checkout: CheckoutDocument, now: ISODateTime
   return new Date(checkout.expiresAt).getTime() > new Date(now).getTime();
 }
 
-export function cartHasActiveCheckoutStartClaim(cart: CartDocument, now: ISODateTime): boolean {
+function cartHasActiveCheckoutStartClaim(cart: CartDocument, now: ISODateTime): boolean {
   const claimId = metadataString(cart.aggregate.metadata, "checkoutStartClaimId");
   if (!claimId) return false;
   const claimExpiresAt = metadataString(cart.aggregate.metadata, "checkoutStartClaimExpiresAt");
@@ -315,7 +315,7 @@ export async function findQuoteCart(
   return { cart, expired };
 }
 
-export async function findOwnedCartById(
+async function findOwnedCartById(
   input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
   cartId: MikaId,
@@ -327,7 +327,7 @@ export async function findOwnedCartById(
   return document;
 }
 
-export async function quoteCartLine(
+async function quoteCartLine(
   input: MikaCartWishlistBackendInput,
   line: CartLine,
   options: { readonly quantityForLimit?: number } = {},
@@ -404,7 +404,7 @@ export async function quoteCartLine(
   };
 }
 
-export async function quoteInputLine(
+async function quoteInputLine(
   input: MikaCartWishlistBackendInput,
   quoteInput: CartQuoteInput,
   currency: CurrencyCode,
@@ -584,7 +584,7 @@ export async function wishlistDocumentToDTO(
   });
 }
 
-export async function loadAvailabilityBySellableId(
+async function loadAvailabilityBySellableId(
   input: MikaCartWishlistBackendInput,
   sellableIds: readonly MikaId[],
 ) {
@@ -614,7 +614,7 @@ export async function loadAvailabilityBySellableId(
   );
 }
 
-export function stockAvailabilitySellable(sellableId: MikaId): SellableDefinition {
+function stockAvailabilitySellable(sellableId: MikaId): SellableDefinition {
   return {
     id: sellableId,
     active: true,
@@ -790,7 +790,7 @@ export function selectCartPrice(
   return price?.active ? price : null;
 }
 
-export function activeCartPrices(
+function activeCartPrices(
   sellable: SellableDefinition,
   currency: CurrencyCode,
 ): readonly PriceDefinition[] {
@@ -885,7 +885,7 @@ export function isEquivalentWishlistItem(left: WishlistItem, right: WishlistItem
   );
 }
 
-export function variantOptionsMatch(
+function variantOptionsMatch(
   sellable: SellableDefinition,
   variantOptions: Record<string, string> | undefined,
 ): boolean {

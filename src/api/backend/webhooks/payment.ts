@@ -605,7 +605,7 @@ function nextWorkflowAttemptAt(now: ISODateTime, workflow: WorkflowDocument): IS
   return addMilliseconds(now, delay);
 }
 
-export async function processSubscriptionWebhook(
+async function processSubscriptionWebhook(
   input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   webhook: WebhookDocument,
@@ -1077,7 +1077,7 @@ function paymentOrderLineMetadata(line: CheckoutLine, event: MikaProviderPayment
   };
 }
 
-export async function markWebhookProcessedForOrder(
+async function markWebhookProcessedForOrder(
   input: MikaBackendDependencies,
   webhook: WebhookDocument,
   now: ISODateTime,
@@ -1089,7 +1089,7 @@ export async function markWebhookProcessedForOrder(
   });
 }
 
-export async function markWebhookProcessedForSubscription(
+async function markWebhookProcessedForSubscription(
   input: MikaBackendDependencies,
   webhook: WebhookDocument,
   now: ISODateTime,
@@ -1101,7 +1101,7 @@ export async function markWebhookProcessedForSubscription(
   });
 }
 
-export async function markWebhookProcessed(
+async function markWebhookProcessed(
   input: MikaBackendDependencies,
   webhook: WebhookDocument,
   now: ISODateTime,

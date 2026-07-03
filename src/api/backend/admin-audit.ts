@@ -40,7 +40,7 @@ const ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY = "idempotencyInputHash";
  */
 const ADMIN_AUDIT_RESULT_SCHEMA_VERSION = 1;
 
-export async function completeAdminAudit(
+async function completeAdminAudit(
   input: MikaBackendDependencies,
   audit: AdminAuditDocument,
   result?: unknown,
@@ -78,7 +78,7 @@ export function adminAuditReplayResult<TData extends JsonObject>(
   return isJsonObject(snapshot) ? (snapshot as TData) : null;
 }
 
-export function adminAuditStoredIdempotencyInputHash(
+function adminAuditStoredIdempotencyInputHash(
   audit: AdminAuditDocument,
 ): string | undefined {
   const value = audit.record.metadata?.[ADMIN_AUDIT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY];
@@ -86,7 +86,7 @@ export function adminAuditStoredIdempotencyInputHash(
   return typeof value === "string" ? value : undefined;
 }
 
-export async function adminActionIdempotencyInputHash(
+async function adminActionIdempotencyInputHash(
   input: MikaBackendDependencies,
   idempotencyInput: JsonValue | undefined,
   record: Pick<MikaAdminAuditStartRecord, "action" | "targetType" | "targetId" | "metadata">,
@@ -104,7 +104,7 @@ export async function adminActionIdempotencyInputHash(
   return input.hash(stableJsonStringify(hashedInput));
 }
 
-export async function failAdminAudit(
+async function failAdminAudit(
   input: MikaBackendDependencies,
   audit: AdminAuditDocument,
   message: string,
@@ -154,7 +154,7 @@ export async function runAdminRepositoryAction<TData>(
   return runAdminAction(input, record, action, fallbackMessage, adminActionFailed, "fallback");
 }
 
-export async function runAdminAction<TData>(
+async function runAdminAction<TData>(
   input: MikaBackendDependencies,
   record: MikaAdminAuditStartRecord,
   action: (audit: AdminAuditDocument) => Promise<TData>,
@@ -252,7 +252,7 @@ function adminIdempotencyClaimResult<TData>(
   };
 }
 
-export function missingTarget(targetType: string, field: string, value: string): MikaApiFailure {
+function missingTarget(targetType: string, field: string, value: string): MikaApiFailure {
   const label = targetType[0]?.toUpperCase() + targetType.slice(1);
 
   return {
@@ -297,7 +297,7 @@ export async function missingTargetWithAudit(
   return failure;
 }
 
-export function adminActionFailed(message: string): MikaApiFailure {
+function adminActionFailed(message: string): MikaApiFailure {
   return {
     ok: false,
     status: 500,
@@ -317,7 +317,7 @@ export function toIdempotencyJson(input: object): JsonValue {
   return input as unknown as JsonValue;
 }
 
-export function createAdminAuditDocument(
+function createAdminAuditDocument(
   input: MikaBackendDependencies,
   record: Omit<AdminAuditDocument["record"], "id">,
 ): AdminAuditDocument {

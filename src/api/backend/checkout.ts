@@ -1043,14 +1043,14 @@ export async function checkoutIdempotencyInputHash(
   );
 }
 
-export function checkoutStoredIdempotencyInputHash(document: CheckoutDocument): string | undefined {
+function checkoutStoredIdempotencyInputHash(document: CheckoutDocument): string | undefined {
   return (
     document.checkoutIdempotencyInputHash ??
     metadataString(document.aggregate.metadata, CHECKOUT_IDEMPOTENCY_INPUT_HASH_METADATA_KEY)
   );
 }
 
-export function checkoutDocumentResult(
+function checkoutDocumentResult(
   document: CheckoutDocument,
 ): MikaApiResult<CheckoutSessionDTO> {
   if (document.status === "failed") {
@@ -1189,7 +1189,7 @@ export async function cancelCheckout(
   return checkoutDocumentSuccessResult(stored);
 }
 
-export function checkoutDocumentSuccessResult(
+function checkoutDocumentSuccessResult(
   document: CheckoutDocument,
 ): MikaApiResult<CheckoutSessionDTO> {
   const rawRedirectUrl =
@@ -1258,7 +1258,7 @@ function checkoutBindingError(document: CheckoutDocument): MikaApiFailure | null
   };
 }
 
-export function checkoutIsExpired(
+function checkoutIsExpired(
   input: MikaBackendDependencies,
   document: CheckoutDocument,
 ): boolean {
@@ -1273,7 +1273,7 @@ function checkoutStatusCanExpire(status: CheckoutStatus): boolean {
   return status === "created" || status === "redirected";
 }
 
-export function checkoutStatusExpired(document: CheckoutDocument): MikaApiFailure {
+function checkoutStatusExpired(document: CheckoutDocument): MikaApiFailure {
   return {
     ok: false,
     status: 409,
@@ -1426,7 +1426,7 @@ function checkoutCancelTarget(
     : safeRequestReturnPath(ctx, checkoutInput.cancelPath, "/checkout/cancel");
 }
 
-export function checkoutExpiresAt(
+function checkoutExpiresAt(
   input: MikaBackendDependencies,
   ctx: MikaRequestContext,
 ): ISODateTime {
@@ -1435,7 +1435,7 @@ export function checkoutExpiresAt(
   return createISODateTime(new Date(new Date(ctx.now).getTime() + ttlMs).toISOString());
 }
 
-export function checkoutDocumentStatus(status: CheckoutSessionDTO["status"]): CheckoutStatus {
+function checkoutDocumentStatus(status: CheckoutSessionDTO["status"]): CheckoutStatus {
   return status === "pending" ? "created" : status === "binding_mismatch" ? "failed" : status;
 }
 
@@ -1564,7 +1564,7 @@ function delegatedPaymentProofCustomFields(
   return Object.keys(filtered).length > 0 ? filtered : undefined;
 }
 
-export async function resolveCheckoutPreviewMode(
+async function resolveCheckoutPreviewMode(
   input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   previewInput: CheckoutPreviewInput,

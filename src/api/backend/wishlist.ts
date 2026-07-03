@@ -208,7 +208,7 @@ export function createWishlistBackend(
   };
 }
 
-export async function findOrCreateActiveWishlist(
+async function findOrCreateActiveWishlist(
   input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
 ): Promise<WishlistDocument> {
@@ -221,7 +221,7 @@ export async function findOrCreateActiveWishlist(
   return wishlist;
 }
 
-export async function findActiveWishlist(
+async function findActiveWishlist(
   input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
 ): Promise<WishlistDocument | null> {
@@ -232,7 +232,7 @@ export async function findActiveWishlist(
   return ctx.sessionId ? input.repositories.session.findWishlistBySession(ctx.sessionId) : null;
 }
 
-export async function findOwnedActiveWishlistById(
+async function findOwnedActiveWishlistById(
   input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
   wishlistId: MikaId,
@@ -249,7 +249,7 @@ export async function findOwnedActiveWishlistById(
   return { ok: true, wishlist: document };
 }
 
-export function createWishlistDocument(
+function createWishlistDocument(
   input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
 ): WishlistDocument {
@@ -274,7 +274,7 @@ export function createWishlistDocument(
   };
 }
 
-export function updateWishlistDocument(
+function updateWishlistDocument(
   wishlist: WishlistDocument,
   items: readonly WishlistItem[],
   updatedAt: ISODateTime,
@@ -289,7 +289,7 @@ export function updateWishlistDocument(
   };
 }
 
-export function mergeWishlistItems(
+function mergeWishlistItems(
   targetItems: readonly WishlistItem[],
   sourceItems: readonly WishlistItem[],
 ): readonly WishlistItem[] {

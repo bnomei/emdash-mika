@@ -89,7 +89,7 @@ export async function createOrderLineDownloadToken(
   return { token, expiresAt };
 }
 
-export async function downloadTokenPointerKey(
+async function downloadTokenPointerKey(
   input: MikaBackendDependencies,
   orderId: MikaId,
   orderLineId: MikaId,
@@ -99,7 +99,7 @@ export async function downloadTokenPointerKey(
 }
 
 /** Reuses a still-valid, not-yet-consumed download token minted for the same line, if any. */
-export async function reusableDownloadToken(
+async function reusableDownloadToken(
   input: MikaBackendDependencies,
   pointerKey: string,
   now: ISODateTime,
@@ -149,14 +149,14 @@ export async function hashDownloadToken(
   return input.hash(`download-token:${token}`);
 }
 
-export async function hashCheckoutStatusToken(
+async function hashCheckoutStatusToken(
   input: MikaBackendDependencies,
   token: string,
 ): Promise<string> {
   return input.hash(`checkout-status-token:${token}`);
 }
 
-export async function hashOrderInvoiceToken(
+async function hashOrderInvoiceToken(
   input: MikaBackendDependencies,
   token: string,
 ): Promise<string> {
@@ -192,7 +192,7 @@ export async function createOrderInvoiceToken(
   return token;
 }
 
-export async function validateCheckoutStatusToken(
+async function validateCheckoutStatusToken(
   input: MikaBackendDependencies,
   now: ISODateTime,
   token: string,
@@ -214,7 +214,7 @@ export async function validateCheckoutStatusToken(
   });
 }
 
-export async function validateOrderInvoiceToken(
+async function validateOrderInvoiceToken(
   input: MikaBackendDependencies,
   now: ISODateTime,
   token: string,
@@ -249,7 +249,7 @@ function orderAccessRevokedForAccountDeleteCheck(order: OrderDocument): boolean 
   return orderEmailHash?.startsWith("account-deleted") ?? false;
 }
 
-export function reusableCapabilityTokenError(
+function reusableCapabilityTokenError(
   record: Awaited<ReturnType<MikaBackendRepositories["ephemeral"]["get"]>>,
   options: {
     readonly now: ISODateTime;
@@ -383,7 +383,7 @@ export async function putCheckoutStatusToken(
   });
 }
 
-export function requiredCheckoutExpiry(document: CheckoutDocument): ISODateTime {
+function requiredCheckoutExpiry(document: CheckoutDocument): ISODateTime {
   if (!document.expiresAt) {
     throw new Error("Checkout status token requires checkout expiry.");
   }
@@ -391,7 +391,7 @@ export function requiredCheckoutExpiry(document: CheckoutDocument): ISODateTime 
   return document.expiresAt;
 }
 
-export function checkoutAccessSubjectHash(document: CheckoutDocument): string | undefined {
+function checkoutAccessSubjectHash(document: CheckoutDocument): string | undefined {
   if (document.customerId) return formatSubjectRef({ kind: "customer", id: document.customerId });
   return document.sessionId
     ? formatSubjectRef({ kind: "session", id: document.sessionId })

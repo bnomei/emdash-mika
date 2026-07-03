@@ -78,7 +78,7 @@ export async function requestMagicLink(
   return { ok: true, status: 200, data: { sent: true } };
 }
 
-export async function queueDefaultMagicLinkRequestedEmail(
+async function queueDefaultMagicLinkRequestedEmail(
   input: MikaBackendDependencies,
   intent: MikaNotificationIntent<"magic_link.requested">,
   tokenHash: string,
@@ -211,7 +211,7 @@ async function clearSessionKeys(
 
 const DEFAULT_MAGIC_LINK_VERIFY_PATH = "/account/magic-link";
 
-export function magicLinkUrl(
+function magicLinkUrl(
   input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   token: string,

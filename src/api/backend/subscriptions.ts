@@ -161,7 +161,7 @@ export async function runSubscriptionAction(
   );
 }
 
-export async function updateSubscriptionAfterAction(
+async function updateSubscriptionAfterAction(
   input: MikaBackendDependencies,
   ctx: MikaRequestContext,
   subscription: SubscriptionDocument,
@@ -341,7 +341,7 @@ export async function emitSubscriptionLifecycleNotification(
   });
 }
 
-export function entitlementStatusForSubscription(
+function entitlementStatusForSubscription(
   status: SubscriptionStatus,
 ): EntitlementDocument["status"] {
   switch (status) {
@@ -358,7 +358,7 @@ export function entitlementStatusForSubscription(
   }
 }
 
-export function subscriptionSellableContentKey(subscription: SubscriptionDocument): string {
+function subscriptionSellableContentKey(subscription: SubscriptionDocument): string {
   const content = subscription.aggregate.sellable.content;
   return `${content.collection}:${content.id}`;
 }

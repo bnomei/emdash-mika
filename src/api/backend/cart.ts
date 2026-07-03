@@ -300,7 +300,7 @@ export function cartWriteBlocked(cart: CartDocument): MikaApiFailure | null {
  * (a concurrent tab, or a checkout claim) already changed the cart since it was read, instead of
  * blindly overwriting — and silently discarding — that concurrent write.
  */
-export async function putCartOrConflict(
+async function putCartOrConflict(
   input: MikaCartWishlistBackendInput,
   cart: CartDocument,
   expectedVersion: number | undefined,
@@ -325,7 +325,7 @@ export async function putCartOrConflict(
  * Best-effort beyond one retry: if the source keeps changing, it's left open (not force-abandoned,
  * which would discard whatever it still holds) and the caller can merge it again later.
  */
-export async function abandonMergedSourceCart(
+async function abandonMergedSourceCart(
   input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
   source: CartDocument,
@@ -426,7 +426,7 @@ export async function abandonMergedSourceCart(
  * removing it entirely if the result drops to zero or below. A no-op if no equivalent line exists
  * (nothing to decrease).
  */
-export function applyCartLineQuantityDelta(
+function applyCartLineQuantityDelta(
   items: readonly CartLine[],
   line: CartLine,
   quantityDelta: number,
@@ -445,7 +445,7 @@ export function applyCartLineQuantityDelta(
 }
 
 /** Merges `line` into `currentItems` (combining quantities for an equivalent existing line). */
-export function mergeCartAddLine(
+function mergeCartAddLine(
   currentItems: readonly CartLine[],
   line: CartLine,
   resolved: { readonly sellable: SellableDefinition; readonly stock: StockItemRecord | null },
@@ -472,7 +472,7 @@ export function mergeCartAddLine(
  * and blind-`put` a separate document — the loser's cart becomes invisible to subsequent reads
  * (which only ever return one open cart per identity+currency), silently discarding its line.
  */
-export async function createCartWithFirstLine(
+async function createCartWithFirstLine(
   input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
   currency: CurrencyCode,
@@ -564,7 +564,7 @@ export function createCartDocument(
   };
 }
 
-export async function findOwnedOpenCartById(
+async function findOwnedOpenCartById(
   input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
   cartId: MikaId,

@@ -24,7 +24,7 @@ export function isAnonymizedCustomer(customer: CustomerDocument): boolean {
   return customer.aggregate.metadata?.["anonymizedAt"] != null;
 }
 
-export function customerIsCompatibleWithContext(
+function customerIsCompatibleWithContext(
   customer: CustomerDocument,
   ctx: MikaRequestContext,
 ): boolean {
@@ -176,7 +176,7 @@ export async function checkoutBelongsToContext(
   return Boolean(document.sessionId && ctx.sessionId && document.sessionId === ctx.sessionId);
 }
 
-export async function effectiveCustomerId(
+async function effectiveCustomerId(
   input: MikaCustomerHydrationInput,
   ctx: MikaRequestContext,
 ): Promise<MikaId | undefined> {
@@ -189,7 +189,7 @@ export async function effectiveCustomerId(
   return customer && customerIsCompatibleWithContext(customer, ctx) ? sessionCustomerId : undefined;
 }
 
-export async function withEffectiveCustomer(
+async function withEffectiveCustomer(
   input: MikaCustomerHydrationInput,
   ctx: MikaRequestContext,
 ): Promise<MikaRequestContext> {
