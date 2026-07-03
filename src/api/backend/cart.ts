@@ -531,7 +531,7 @@ async function createCartWithFirstLine(
   }
 }
 
-export async function findOpenCartBySessionAnyCurrency(
+async function findOpenCartBySessionAnyCurrency(
   input: MikaCartWishlistBackendInput,
   sessionId: string,
 ): Promise<CartDocument | null> {
@@ -582,7 +582,7 @@ async function findOwnedOpenCartById(
   return { ok: true, cart: document };
 }
 
-export async function mergeCartLines(
+async function mergeCartLines(
   input: MikaCartWishlistBackendInput,
   target: CartDocument,
   source: CartDocument,

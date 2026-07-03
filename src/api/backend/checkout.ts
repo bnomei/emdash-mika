@@ -1116,8 +1116,9 @@ export async function expireCheckoutDocument(
     await expireCheckoutReservations(input, reservationIds, now);
   }
 
-  if (document.status === "expired" && document.providerStatus === "expired") return document;
-
+  // No snapshot-status guard here: an already-"expired" snapshot returns at the terminal-status check
+  // above, and a concurrent double-expire is handled idempotently by putCheckoutIfNotSettled's CAS
+  // (whose allowedFromStatuses includes "expired", checked against the current *stored* status).
   const expired: CheckoutDocument = {
     ...document,
     status: "expired",
@@ -1454,7 +1455,7 @@ function checkoutDocumentStatus(status: CheckoutSessionDTO["status"]): CheckoutS
   return status === "pending" ? "created" : status === "binding_mismatch" ? "failed" : status;
 }
 
-export function checkoutSessionStatus(status: string): CheckoutSessionDTO["status"] {
+function checkoutSessionStatus(status: string): CheckoutSessionDTO["status"] {
   return status === "created" ||
     status === "redirected" ||
     status === "pending" ||
