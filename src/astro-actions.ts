@@ -11,7 +11,7 @@ import {
   type ActionClient,
   type ActionErrorCode,
   type SafeResult,
-} from "astro/actions/runtime/entrypoints/server.js";
+} from "astro:actions";
 import { MIKA_AGENT_IDEMPOTENCY_KEY_HEADER } from "./api/agent-types";
 import { createMikaRequestContext } from "./api/context";
 import {

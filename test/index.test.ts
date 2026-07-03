@@ -4305,11 +4305,26 @@ describe("Mika Astro template contracts", () => {
 
     expect(source).toContain("createMikaRequestContext");
     expect(source).toContain("createMikaApi");
+    expect(source).toContain('from "astro:actions"');
     expect(source).not.toContain("createMikaClient");
     expect(source).toContain("normalizeMikaActionInput");
     expect(source).not.toContain("const purchaseSellableId = parsePurchaseMikaId");
     expect(operationsSource).toContain("const purchaseSellableId = parsePurchaseMikaId");
     expect(operationsSource).toContain("normalizeCheckoutStartActionInput");
+  });
+
+  it("keeps package sources off Astro's internal action runtime path", () => {
+    const internalActionRuntimePath = ["astro", "actions", "runtime"].join("/");
+    const sources = sourceFiles(new URL("../src/", import.meta.url)).filter(
+      (file) =>
+        file.pathname.endsWith(".ts") ||
+        file.pathname.endsWith(".tsx") ||
+        file.pathname.endsWith(".astro"),
+    );
+
+    for (const file of sources) {
+      expect(readFileSync(file, "utf8")).not.toContain(internalActionRuntimePath);
+    }
   });
 
   it("documents the Kumo core copy path separately from contract examples", () => {
