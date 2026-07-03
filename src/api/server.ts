@@ -280,6 +280,32 @@ export interface AssertMikaApiWiredOptions {
   readonly scope?: readonly string[];
 }
 
+/**
+ * Machine-readable discriminator for {@link assertMikaApiWired} failures, so callers can tailor
+ * remediation without string-matching the message. Internal: intentionally not re-exported from
+ * the `/server` package entry. The thrown value stays an ordinary Error subclass with the same
+ * human-facing message for consumers.
+ */
+export type MikaApiWiringErrorCode = "unknown_scope" | "missing_methods";
+
+export class MikaApiWiringError extends Error {
+  readonly code: MikaApiWiringErrorCode;
+
+  constructor(code: MikaApiWiringErrorCode, message: string) {
+    super(message);
+    this.name = "MikaApiWiringError";
+    this.code = code;
+  }
+}
+
+/** Narrows an unknown thrown value to a {@link MikaApiWiringError} with the given code. */
+export function isMikaApiWiringError(
+  error: unknown,
+  code?: MikaApiWiringErrorCode,
+): error is MikaApiWiringError {
+  return error instanceof MikaApiWiringError && (code === undefined || error.code === code);
+}
+
 /** Throws when any requested method still resolves to the not-implemented stub. */
 export function assertMikaApiWired(api: MikaApi, options: AssertMikaApiWiredOptions = {}): void {
   const scope = options.scope ? new Set(options.scope) : undefined;
@@ -287,7 +313,10 @@ export function assertMikaApiWired(api: MikaApi, options: AssertMikaApiWiredOpti
     ? [...scope].filter((entry) => !mikaApiWireScopeNames().has(entry)).sort()
     : [];
   if (unknownScope.length > 0) {
-    throw new Error(`Unknown Mika API wiring scope: ${unknownScope.join(", ")}.`);
+    throw new MikaApiWiringError(
+      "unknown_scope",
+      `Unknown Mika API wiring scope: ${unknownScope.join(", ")}.`,
+    );
   }
 
   const missing: string[] = [];
@@ -303,7 +332,10 @@ export function assertMikaApiWired(api: MikaApi, options: AssertMikaApiWiredOpti
   }
 
   if (missing.length > 0) {
-    throw new Error(`Mika API is missing wired methods: ${missing.sort().join(", ")}.`);
+    throw new MikaApiWiringError(
+      "missing_methods",
+      `Mika API is missing wired methods: ${missing.sort().join(", ")}.`,
+    );
   }
 }
 
