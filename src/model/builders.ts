@@ -33,7 +33,6 @@ import type {
   ProviderName,
   PurchaseMode,
 } from "../types/primitives";
-import { createISODateTime } from "../types/primitives";
 
 /** Input for constructing a catalog commerce aggregate from content and sellables. */
 export interface CatalogAggregateInput {
@@ -454,6 +453,11 @@ export function stockAvailabilityToDTO(
     };
   }
 
+  // The branch order above is load-bearing (a backorder-allowed, sold-out untracked item is
+  // reported as backorder, not untracked), so this stays an if-chain rather than a switch on
+  // policy. By here policy is narrowed to "finite"; the assertion turns any future StockPolicy
+  // member into a compile error demanding an explicit branch instead of silently landing here.
+  stock.policy satisfies "finite";
   return {
     sellableId: sellable.id,
     status: availableQuantity <= 0 ? "out_of_stock" : lowStock ? "low_stock" : "available",
@@ -463,22 +467,12 @@ export function stockAvailabilityToDTO(
   };
 }
 
-// Synthetic epoch addedAt: totals only; checkout line timestamps are not meaningful here.
 function calculateCheckoutTotals(
   currency: CurrencyCode,
   lines: readonly CheckoutLine[],
   coupon?: CouponSnapshot,
 ): CartTotals {
-  const cartLines = lines.map<CartLine>((line) => ({
-    id: line.id,
-    item: line.item,
-    quantity: line.quantity,
-    reservationId: line.reservationId,
-    addedAt: createISODateTime(new Date(0).toISOString()),
-    metadata: line.metadata,
-  }));
-
-  return calculateTotals(currency, cartLines, coupon);
+  return calculateTotals(currency, lines, coupon);
 }
 
 /**
@@ -505,9 +499,11 @@ export function couponDiscountAmount(
   return Math.max(0, Math.min(discountAmount, cap));
 }
 
+// Second param is the structural minimum both cart lines and checkout lines share, so the
+// checkout path can pass its lines directly rather than fabricating throwaway CartLines.
 function calculateTotals(
   currency: CurrencyCode,
-  lines: readonly CartLine[],
+  lines: readonly Pick<CartLine, "item" | "quantity">[],
   coupon?: CouponSnapshot,
 ): CartTotals {
   const subtotalAmount = lines.reduce((sum, line) => sum + line.item.unitAmount * line.quantity, 0);
