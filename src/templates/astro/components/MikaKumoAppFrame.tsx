@@ -162,6 +162,12 @@ export default function MikaKumoAppFrame({
             <span>{brandLabel}</span>
           </a>
           <nav aria-label="Quick links" className="mika-kumo-mobile-actions">
+            <Link href="/" variant="plain" aria-label="Products">
+              <PackageIcon size={18} aria-hidden="true" />
+            </Link>
+            <Link href="/wishlist" variant="plain" aria-label="Wishlist">
+              <HeartIcon size={18} aria-hidden="true" />
+            </Link>
             <Link href="/cart" variant="plain" aria-label={cartAriaLabel}>
               <ShoppingCartSimpleIcon size={18} aria-hidden="true" />
               {visibleCartItemCount > 0 && (

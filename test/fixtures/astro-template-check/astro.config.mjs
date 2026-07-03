@@ -8,8 +8,8 @@ import react from "@astrojs/react";
  *
  * `src/` is a symlink to `../../../src/templates/astro`, so the files checked
  * here are the actual templates a host would copy — not a stale duplicate.
- * The React integration is required so `.astro` files that mount the Kumo
- * React shell (`MikaKumoAppFrame.tsx` via `client:load`) resolve correctly.
+ * The React integration is required so `.astro` files can server-render the
+ * Kumo React shell (`MikaKumoAppFrame.tsx`) correctly.
  */
 export default defineConfig({
   integrations: [react()],

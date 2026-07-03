@@ -391,6 +391,14 @@ a {
 }
 
 @media (max-width: 900px) {
+  .mika-kumo-app-frame {
+    display: block;
+  }
+
+  .mika-kumo-sidebar {
+    display: none;
+  }
+
   .mika-kumo-mobile-topbar {
     display: flex;
   }

@@ -4490,6 +4490,8 @@ describe("Mika Astro template contracts", () => {
     expect(frame).toContain('href="/account/downloads"');
     expect(frame).toContain('href="/.well-known/mika-agent.json"');
     expect(frame).toContain('href="/llms.txt"');
+    expect(frame).toContain('aria-label="Products"');
+    expect(frame).toContain('aria-label="Wishlist"');
     expect(frame).not.toContain("Buttonwood Lot");
     expect(frame).not.toContain("Fixture mode");
     expect(frame).not.toContain("/api/mika-action-contract.json");
@@ -4518,6 +4520,8 @@ describe("Mika Astro template contracts", () => {
     expect(styles).toContain(".mika-kumo-app-frame");
     expect(styles).toContain(".mika-kumo-mobile-topbar");
     expect(styles).not.toContain(".mika-kumo-mobile-trigger");
+    expect(styles).toContain(".mika-kumo-sidebar");
+    expect(styles).toContain("display: none;");
     expect(styles).toContain(".mika-kumo-footer");
     expect(styles).not.toContain(".mika-kumo-sidebar-footer");
     expect(styles).not.toContain(".mika-kumo-footer-copy");
