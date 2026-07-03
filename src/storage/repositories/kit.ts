@@ -124,7 +124,7 @@ export async function findFirstByTypeCandidate<
 }
 
 /** Page size for {@link listAllByType} sweeps — bounded per request, not per sweep. */
-export const ACCOUNT_DELETE_SWEEP_PAGE_SIZE = 50;
+const ACCOUNT_DELETE_SWEEP_PAGE_SIZE = 50;
 
 /**
  * Collects every document matching `options.where`, fetched in bounded pages instead of one

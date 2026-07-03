@@ -123,7 +123,7 @@ export function customerChild(
   };
 }
 
-export function moneyChild(input: JsonObject, key: string): MoneyDTO | undefined {
+function moneyChild(input: JsonObject, key: string): MoneyDTO | undefined {
   const value = jsonChild(input, key);
   const amount = value ? numberChild(value, "amount") : undefined;
   const currency = value ? stringChild(value, "currency") : undefined;
@@ -147,7 +147,7 @@ export function totalsChild(
   };
 }
 
-export function contentRefChild(
+function contentRefChild(
   input: JsonObject,
   key: string,
 ): MikaProviderLineItem["contentRef"] | undefined {
@@ -159,7 +159,7 @@ export function contentRefChild(
   return { collection, id, locale: stringChild(value, "locale") };
 }
 
-export function variantOptionChildren(
+function variantOptionChildren(
   input: JsonObject,
   key: string,
 ): MikaProviderLineItem["variantOptions"] {
@@ -178,7 +178,7 @@ export function variantOptionChildren(
   });
 }
 
-export function mikaIdChild(input: JsonObject, key: string): MikaId | undefined {
+function mikaIdChild(input: JsonObject, key: string): MikaId | undefined {
   const value = stringChild(input, key);
   return value ? createMikaId(value) : undefined;
 }
@@ -208,7 +208,7 @@ type AssertAllFulfillmentKinds =
 const _assertAllFulfillmentKinds: AssertAllFulfillmentKinds = true;
 void _assertAllFulfillmentKinds;
 
-export function isFulfillmentKind(value: string | undefined): value is FulfillmentKind {
+function isFulfillmentKind(value: string | undefined): value is FulfillmentKind {
   return value !== undefined && (FULFILLMENT_KINDS as readonly string[]).includes(value);
 }
 
