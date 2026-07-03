@@ -13,6 +13,7 @@ import type {
   AddCartItemInput,
   ApplyCouponInput,
   CartQuoteInput,
+  CheckoutCustomerInput,
   CheckoutPreviewInput,
   CheckoutCancelInput,
   CheckoutStatusInput,
@@ -128,7 +129,7 @@ export const integerSchema = z.preprocess((value) => Number(value), z.number().i
 /** Optional non-negative money amount in minor units. */
 export const optionalAmountSchema = z.preprocess(
   (value) => (value === null || value === undefined || value === "" ? undefined : Number(value)),
-  z.number().finite().nonnegative().optional(),
+  z.number().int().finite().nonnegative().optional(),
 );
 
 /** Plain JSON object guard used for custom fields and provider metadata. */
@@ -184,7 +185,15 @@ export const accountExportStatusInputSchema = z.object({
   exportId: mikaIdSchema,
 }) satisfies z.ZodType<AccountExportStatusInput>;
 
-/** Export id and optional download token for account export retrieval. */
+/**
+ * Export id and optional download token for account export retrieval.
+ *
+ * Deliberately narrower than {@link AccountExportDownloadInput}: `consumeToken` is server-only —
+ * the internal accountExportDownloadConsume operation force-sets it, and letting clients pass it
+ * over the wire would let them opt out of single-use token consumption. `satisfies z.ZodType<T>`
+ * cannot enforce the omission (optional fields satisfy one-way assignability), so
+ * test/schema-contracts.ts pins the exact parsed shape.
+ */
 export const accountExportDownloadInputSchema = z.object({
   exportId: mikaIdSchema,
   token: optionalStringSchema,
@@ -294,12 +303,23 @@ export const mergeWishlistInputSchema = z.object({
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<MergeWishlistInput>;
 
-const checkoutCustomerInputSchema = z.object({
-  email: optionalStringSchema,
+/** Optional email address; empty form values become undefined, malformed ones fail field validation. */
+const optionalEmailSchema = z.preprocess(
+  emptyToUndefined,
+  z.string().trim().email().optional(),
+);
+
+/** Flattened checkout customer fields shared by the nested and HTML-form transports. */
+const checkoutCustomerShape = {
+  email: optionalEmailSchema,
   name: optionalStringSchema,
   company: optionalStringSchema,
   vatId: optionalStringSchema,
-});
+} as const;
+
+const checkoutCustomerInputSchema = z.object(
+  checkoutCustomerShape,
+) satisfies z.ZodType<CheckoutCustomerInput>;
 
 /** Quote, checkout start, preview, and HTML form transport schemas. */
 export const cartQuoteInputSchema = z.object({
@@ -374,22 +394,9 @@ export const checkoutPreviewInputSchema = startCheckoutInputSchema.extend({
 }) satisfies z.ZodType<CheckoutPreviewInput>;
 
 /** HTML form transport for checkout start posts with flattened customer fields. */
-export const checkoutStartFormInputSchema = z.object({
-  cartId: optionalMikaIdSchema,
-  sellableId: optionalMikaIdSchema,
-  priceId: optionalMikaIdSchema,
-  quantity: optionalQuantitySchema,
-  provider: optionalProviderNameSchema,
-  couponCode: optionalCouponCodeSchema,
-  email: optionalStringSchema,
-  name: optionalStringSchema,
-  company: optionalStringSchema,
-  vatId: optionalStringSchema,
-  customFields: optionalJsonObjectSchema,
-  successPath: optionalStringSchema,
-  cancelPath: optionalStringSchema,
-  returnTo: optionalStringSchema,
-});
+export const checkoutStartFormInputSchema = startCheckoutInputSchema
+  .omit({ customer: true })
+  .extend(checkoutCustomerShape);
 
 /** Account magic-link auth and subscription lifecycle action schemas. */
 export const magicLinkRequestInputSchema = z.object({
@@ -403,7 +410,11 @@ export const magicLinkVerifyInputSchema = z.object({
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<MagicLinkVerifyInput>;
 
-/** Subscription id for cancel-at-period-end or immediate cancellation. */
+/**
+ * Subscription id for cancel-at-period-end or immediate cancellation.
+ * Deliberately omits {@link SubscriptionActionInput}'s `priceId` — the backend only reads it for
+ * plan changes, so cancel input never carries one (pinned in test/schema-contracts.ts).
+ */
 export const subscriptionCancelInputSchema = z.object({
   subscriptionId: mikaIdSchema,
   returnTo: optionalStringSchema,
@@ -416,7 +427,10 @@ export const subscriptionChangeInputSchema = z.object({
   returnTo: optionalStringSchema,
 }) satisfies z.ZodType<SubscriptionActionInput>;
 
-/** Subscription id for manual renewal or payment retry handoff. */
+/**
+ * Subscription id for manual renewal or payment retry handoff.
+ * Deliberately omits `priceId` for the same reason as {@link subscriptionCancelInputSchema}.
+ */
 export const subscriptionRenewInputSchema = z.object({
   subscriptionId: mikaIdSchema,
   returnTo: optionalStringSchema,
@@ -496,7 +510,7 @@ export const entitlementGrantInputSchema = z.object({
   entitlementKey: requiredStringSchema,
   customerId: optionalMikaIdSchema,
   userId: optionalStringSchema,
-  email: optionalStringSchema,
+  email: optionalEmailSchema,
   expiresAt: optionalISODateTimeSchema,
   idempotencyKey: optionalStringSchema,
 }) satisfies z.ZodType<EntitlementGrantInput>;

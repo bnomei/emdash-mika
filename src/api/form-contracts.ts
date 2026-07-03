@@ -2,6 +2,8 @@
  * Serialized form-field contracts for purchase buttons and checkout customer fields.
  * Keeps HTML form values aligned with operation input schemas.
  */
+import type { CheckoutCustomerInput } from "./types";
+
 /** Hidden-field or query-string contract for sellable selection with optional price variant. */
 export interface MikaPurchaseFieldInput {
   readonly sellableId: string;
@@ -14,13 +16,12 @@ export interface MikaParsedPurchaseField {
   readonly priceId?: string;
 }
 
-/** Optional checkout customer fields collected from HTML forms. */
-export interface MikaCheckoutCustomerFields {
-  readonly email?: string;
-  readonly name?: string;
-  readonly company?: string;
-  readonly vatId?: string;
-}
+/**
+ * Optional checkout customer fields collected from HTML forms. Structurally identical to the wire
+ * type it feeds — the extends link makes any {@link CheckoutCustomerInput} field change surface
+ * here instead of drifting silently.
+ */
+export interface MikaCheckoutCustomerFields extends CheckoutCustomerInput {}
 
 /** Encodes purchase intent as URL search params for hidden inputs. */
 export function serializeMikaPurchaseField(input: MikaPurchaseFieldInput): string {
