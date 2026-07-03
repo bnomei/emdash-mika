@@ -49,7 +49,7 @@ import {
 } from "./fulfillment";
 import { orderIsPaymentTerminal, orderRefundedAmount } from "../lifecycle";
 import type { CreateMikaBackendApiInput } from "./ports";
-import { addMilliseconds, currentBackendISODateTime } from "./shared";
+import { addMilliseconds, currentBackendISODateTime, emailHashKey } from "./shared";
 import { createMikaStockLifecycleService } from "./stock-lifecycle";
 import { hashDownloadToken, orderDownloadSubjectHash } from "./tokens";
 
@@ -314,7 +314,7 @@ export async function grantEntitlement(
   grantInput: EntitlementGrantInput,
 ): Promise<MikaApiResult<AdminActionResultDTO>> {
   const email = grantInput.email?.trim();
-  const emailHash = email ? await input.hash(`email:${email.toLowerCase()}`) : undefined;
+  const emailHash = email ? await input.hash(emailHashKey(email)) : undefined;
   const entitlementId = input.createId("entitlement");
 
   return runAdminRepositoryAction(

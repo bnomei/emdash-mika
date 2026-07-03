@@ -43,7 +43,7 @@ import {
   orderRefundedAmount,
 } from "../../lifecycle";
 import type { CreateMikaBackendApiInput } from "../ports";
-import { addMilliseconds, currentBackendISODateTime } from "../shared";
+import { addMilliseconds, currentBackendISODateTime, emailHashKey } from "../shared";
 import {
   emitSubscriptionLifecycleNotification,
   updateSubscriptionEntitlement,
@@ -1030,8 +1030,8 @@ async function paymentCustomerSnapshot(
   const checkoutMetadataCustomer = checkoutCustomerFromMetadata(checkout.aggregate.metadata);
   const email =
     checkoutCustomer?.aggregate.email ?? event.customer?.email ?? checkoutMetadataCustomer.email;
-  const normalizedEmail = email?.trim().toLowerCase();
-  const payerEmailHash = normalizedEmail ? await input.hash(`email:${normalizedEmail}`) : undefined;
+  const trimmedEmail = email?.trim();
+  const payerEmailHash = trimmedEmail ? await input.hash(emailHashKey(trimmedEmail)) : undefined;
 
   const customer =
     checkoutCustomer ??

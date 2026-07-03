@@ -9,7 +9,7 @@ import type { AccountDTO, MikaApiResult } from "../types";
 import { accountDTOForCustomer, safeRequestReturnPath } from "./account";
 import { authRequired, observeBackendError, tokenResult } from "./errors";
 import type { CreateMikaBackendApiInput } from "./ports";
-import { addMilliseconds, stringChild } from "./shared";
+import { addMilliseconds, emailHashKey, stringChild } from "./shared";
 import { hashMagicLinkToken, magicLinkTokenError } from "./tokens";
 
 /** Reports a swallowed best-effort failure to the host observer; never throws. */
@@ -19,8 +19,7 @@ export async function requestMagicLink(
   requestInput: { readonly email: string; readonly returnTo?: string },
 ): Promise<MikaApiResult<{ sent: boolean }>> {
   const email = requestInput.email.trim();
-  const normalizedEmail = email.toLowerCase();
-  const emailHash = await input.hash(`email:${normalizedEmail}`);
+  const emailHash = await input.hash(emailHashKey(email));
   const token = input.createId("magic_link_token");
   const tokenHash = await hashMagicLinkToken(input, token);
   const tokenId = token;

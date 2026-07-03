@@ -278,3 +278,12 @@ export function currentBackendISODateTime(
 export function addMilliseconds(value: ISODateTime, milliseconds: number): ISODateTime {
   return createISODateTime(new Date(Date.parse(value) + milliseconds).toISOString());
 }
+
+/**
+ * Canonical pre-hash key for customer email lookups. Trims and lowercases here — backend
+ * functions are host-callable without schema parsing, and webhook emails come from provider
+ * events that never passed a trimming schema, so normalization cannot be left to callers.
+ */
+export function emailHashKey(email: string): string {
+  return `email:${email.trim().toLowerCase()}`;
+}
