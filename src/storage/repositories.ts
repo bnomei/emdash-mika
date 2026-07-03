@@ -11,7 +11,6 @@ export {
   SessionRepository,
   findSessionRepositoryOpenCartBySessionAnyCurrency,
 } from "./repositories/session";
-export { nextCartVersion } from "../model/cart-version";
 export { StockRepository } from "./repositories/stock";
 export { OpsRepository } from "./repositories/ops";
 export type {
