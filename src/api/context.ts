@@ -95,17 +95,3 @@ export function createMikaRequestContext(
     now: createISODateTime((input.now ?? new Date()).toISOString()),
   };
 }
-
-/** Reads a non-empty string field from `FormData`. */
-export function readFormString(form: FormData, key: string): string | undefined {
-  const value = form.get(key);
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-/** Reads a finite numeric field from `FormData`. */
-export function readFormNumber(form: FormData, key: string): number | undefined {
-  const value = readFormString(form, key);
-  if (value === undefined) return undefined;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : undefined;
-}

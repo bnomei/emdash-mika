@@ -71,73 +71,68 @@ export type MikaValidationResult<T> =
   | { readonly ok: false; readonly result: MikaApiResult<never> };
 
 /** Primitive string, branded id, quantity, and JSON object schemas shared across operations. */
-export const requiredStringSchema = z.string().trim().min(1);
+const requiredStringSchema = z.string().trim().min(1);
 /** Trimmed non-empty string, or undefined when the form field is empty. */
-export const optionalStringSchema = z.preprocess(
+const optionalStringSchema = z.preprocess(
   emptyToUndefined,
   z.string().trim().min(1).optional(),
 );
 
 /** Branded {@link MikaId} string validated through {@link createMikaId}. */
-export const mikaIdSchema = brandedStringSchema(createMikaId, "MikaId");
+const mikaIdSchema = brandedStringSchema(createMikaId, "MikaId");
 /** Optional branded {@link MikaId}; empty form values become undefined. */
-export const optionalMikaIdSchema = z.preprocess(emptyToUndefined, mikaIdSchema.optional());
+const optionalMikaIdSchema = z.preprocess(emptyToUndefined, mikaIdSchema.optional());
 /** Branded {@link ISODateTime} string validated through {@link createISODateTime}. */
-export const isoDateTimeSchema = brandedStringSchema(createISODateTime, "ISODateTime");
+const isoDateTimeSchema = brandedStringSchema(createISODateTime, "ISODateTime");
 /** Optional branded {@link ISODateTime}; empty form values become undefined. */
-export const optionalISODateTimeSchema = z.preprocess(
+const optionalISODateTimeSchema = z.preprocess(
   emptyToUndefined,
   isoDateTimeSchema.optional(),
 );
 /** Branded {@link CurrencyCode} string validated through {@link createCurrencyCode}. */
-export const currencyCodeSchema = brandedStringSchema(createCurrencyCode, "CurrencyCode");
-/** Optional branded {@link CurrencyCode}; empty form values become undefined. */
-export const optionalCurrencyCodeSchema = z.preprocess(
-  emptyToUndefined,
-  currencyCodeSchema.optional(),
-);
+const currencyCodeSchema = brandedStringSchema(createCurrencyCode, "CurrencyCode");
 /** Branded {@link ProviderName} string validated through {@link createProviderName}. */
-export const providerNameSchema = brandedStringSchema(createProviderName, "ProviderName");
+const providerNameSchema = brandedStringSchema(createProviderName, "ProviderName");
 /** Optional branded {@link ProviderName}; empty form values become undefined. */
-export const optionalProviderNameSchema = z.preprocess(
+const optionalProviderNameSchema = z.preprocess(
   emptyToUndefined,
   providerNameSchema.optional(),
 );
 
 /** Positive integer quantity; empty form values default to 1. */
-export const quantitySchema = z.preprocess(
+const quantitySchema = z.preprocess(
   (value) => (value === null || value === undefined || value === "" ? 1 : Number(value)),
   z.number().int().positive(),
 );
 /** Required positive integer quantity; empty or missing values are rejected. */
-export const requiredQuantitySchema = z.preprocess(
+const requiredQuantitySchema = z.preprocess(
   (value) => (value === null || value === undefined || value === "" ? undefined : Number(value)),
   z.number().int().positive(),
 );
 /** Optional positive integer quantity; empty form values become undefined. */
-export const optionalQuantitySchema = z.preprocess(
+const optionalQuantitySchema = z.preprocess(
   (value) => (value === null || value === undefined || value === "" ? undefined : Number(value)),
   z.number().int().positive().optional(),
 );
 /** Optional coupon override; explicit empty strings are preserved so callers can clear a coupon. */
-export const optionalCouponCodeSchema = z.preprocess(
+const optionalCouponCodeSchema = z.preprocess(
   (value) => (value === null || value === undefined ? undefined : value),
   z.string().trim().optional(),
 );
 /** Signed integer parsed from string or numeric form values. */
-export const integerSchema = z.preprocess((value) => Number(value), z.number().int());
+const integerSchema = z.preprocess((value) => Number(value), z.number().int());
 /** Optional non-negative money amount in minor units. */
-export const optionalAmountSchema = z.preprocess(
+const optionalAmountSchema = z.preprocess(
   (value) => (value === null || value === undefined || value === "" ? undefined : Number(value)),
   z.number().int().finite().nonnegative().optional(),
 );
 
 /** Plain JSON object guard used for custom fields and provider metadata. */
-export const jsonObjectSchema = z.custom<JsonObject>(isJsonObject, {
+const jsonObjectSchema = z.custom<JsonObject>(isJsonObject, {
   message: "Expected JSON object.",
 });
 /** Optional JSON object parsed from hidden form fields or request bodies. */
-export const optionalJsonObjectSchema = z.preprocess(
+const optionalJsonObjectSchema = z.preprocess(
   parseJsonFormValue,
   jsonObjectSchema.optional(),
 );
@@ -151,7 +146,7 @@ export const stockMovementReasonSchema = z.enum([
   "sync",
 ]) satisfies z.ZodType<StockMovementReason>;
 /** Variant axis selections keyed by option name, parsed from JSON form transport. */
-export const variantOptionsSchema = z.preprocess(
+const variantOptionsSchema = z.preprocess(
   parseJsonFormValue,
   z.record(z.string(), z.string()).optional(),
 );
@@ -562,7 +557,7 @@ export function searchParamsObject(
 }
 
 /** Parses JSON-encoded hidden form fields; passes through non-string values unchanged. */
-export function parseJsonFormValue(value: unknown): unknown {
+function parseJsonFormValue(value: unknown): unknown {
   if (value === null || value === undefined || value === "") return undefined;
   if (typeof value !== "string") return value;
 
