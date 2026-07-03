@@ -7249,12 +7249,13 @@ describe("backend API composition", () => {
     await repositories.account.put(createCustomerDocument());
     await repositories.account.put(createProviderAccountDocument());
 
+    // Customer-facing path: the provider's raw message stays off the wire.
     await expect(api.account.portal(createTestRequestContext(), {})).resolves.toMatchObject({
       ok: false,
       status: 502,
       error: {
         code: "PROVIDER_FAILED",
-        message: "Portal session failed.",
+        message: "Provider portal session failed.",
       },
     });
   });

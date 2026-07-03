@@ -17,6 +17,7 @@ import type {
 import type { AdminActionResultDTO, MikaApiResult, MikaProviderCapability } from "../types";
 import {
   adminIdempotencyInputMismatch,
+  observeBackendError,
   providerFailed,
   providerUnsupportedForAction,
 } from "./errors";
@@ -214,7 +215,8 @@ export async function runAdminProviderAction<TData>(
   action: (audit: AdminAuditDocument) => Promise<TData>,
   fallbackMessage: string,
 ): Promise<MikaApiResult<TData>> {
-  return runAdminAction(input, record, action, fallbackMessage, providerFailed);
+  // Provider errors are admin-facing diagnostics: their message stays on the wire.
+  return runAdminAction(input, record, action, fallbackMessage, providerFailed, "detailed");
 }
 
 export function assertCompletedProviderAction(
@@ -232,7 +234,9 @@ export async function runAdminRepositoryAction<TData>(
   action: (audit: AdminAuditDocument) => Promise<TData>,
   fallbackMessage: string,
 ): Promise<MikaApiResult<TData>> {
-  return runAdminAction(input, record, action, fallbackMessage, adminActionFailed);
+  // Repository errors can carry driver/SQL fragments: the wire gets the static fallback while
+  // the detailed message stays in the audit document.
+  return runAdminAction(input, record, action, fallbackMessage, adminActionFailed, "fallback");
 }
 
 export async function runAdminAction<TData>(
@@ -241,6 +245,7 @@ export async function runAdminAction<TData>(
   action: (audit: AdminAuditDocument) => Promise<TData>,
   fallbackMessage: string,
   failure: (message: string) => MikaApiFailure,
+  wireMessage: "detailed" | "fallback" = "detailed",
 ): Promise<MikaApiResult<TData>> {
   const { idempotencyInput, ...auditRecord } = record;
   const idempotencyInputHash = record.idempotencyKey
@@ -279,10 +284,14 @@ export async function runAdminAction<TData>(
       data,
     };
   } catch (error) {
+    // The detailed message is always preserved in the audit document and the error object always
+    // reaches the host observer; whether the wire envelope carries the detail is the caller's
+    // choice (provider diagnostics: yes; repository/driver errors: static fallback).
     const message = error instanceof Error ? error.message : fallbackMessage;
+    observeBackendError(input, `admin.action.${record.action}`, error, { action: record.action });
     await failAdminAudit(input, audit, message);
 
-    return failure(message);
+    return failure(wireMessage === "detailed" ? message : fallbackMessage);
   }
 }
 

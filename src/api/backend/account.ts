@@ -36,6 +36,7 @@ import {
   authRequired,
   emitBackendNotification,
   forbidden,
+  observeBackendError,
   orderNotFound,
   providerFailed,
   tokenResult,
@@ -400,9 +401,11 @@ export async function createAccountPortalSession(
       data: { redirectUrl: session.redirectUrl },
     };
   } catch (error) {
-    return providerFailed(
-      error instanceof Error ? error.message : "Provider portal session failed.",
-    );
+    // Customer-facing path: the raw provider error goes to the host observer, never onto the wire.
+    observeBackendError(input, "account.portalSession", error, {
+      provider: providerAccount.provider,
+    });
+    return providerFailed("Provider portal session failed.");
   }
 }
 

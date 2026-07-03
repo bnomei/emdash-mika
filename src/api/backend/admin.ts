@@ -32,6 +32,7 @@ import {
 } from "./admin-audit";
 import {
   emitBackendNotification,
+  observeBackendError,
   orderNotFound,
   orderNotificationRecipient,
   providerFailed,
@@ -76,6 +77,8 @@ export async function providerHealth(
 
     return { ok: true, status: 200, data: health };
   } catch (error) {
+    // Admin-only diagnostic surface: the message stays, but the error object no longer vanishes.
+    observeBackendError(input, "admin.providerHealth", error, { provider: providerName });
     return providerFailed(error instanceof Error ? error.message : "Provider health check failed.");
   }
 }
