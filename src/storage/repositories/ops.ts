@@ -1,6 +1,7 @@
 import {
   documentOfType,
   findFirstByTypeCandidate,
+  listAllByTypeCandidates,
   listByTypeCandidates,
   typedCollection,
   type DocumentList,
@@ -785,10 +786,12 @@ export class OpsRepository {
   async redactQueuedFailedEmailsForAccountDelete(
     input: AccountDeleteEmailRedactionRepositoryInput,
   ): Promise<number> {
-    const candidates = await listByTypeCandidates(
+    // Unbounded sweep: a customer with more than a page's worth of queued/failed emails must be
+    // redacted completely, so this must not cap at listByTypeCandidates' `target` like the
+    // maintenance listings do — residual PII after account deletion is a compliance defect.
+    const candidates = await listAllByTypeCandidates(
       this.documents,
       "email",
-      1000,
       {
         where: { status: { in: ["queued", "failed"] } },
         orderBy: { createdAt: "asc" },
@@ -797,7 +800,7 @@ export class OpsRepository {
     );
     let redacted = 0;
 
-    for (const item of candidates.items) {
+    for (const item of candidates) {
       const updated = await this.documents.update(item.id, (current) => {
         const email = documentOfType(current, "email");
         if (!email || !emailMatchesAccountDeleteIdentity(email, input)) return null;
@@ -830,10 +833,11 @@ export class OpsRepository {
   async redactAccountExportsForAccountDelete(
     input: AccountDeleteEmailRedactionRepositoryInput,
   ): Promise<number> {
-    const candidates = await listByTypeCandidates(
+    // Unbounded sweep (see redactQueuedFailedEmailsForAccountDelete): every matching export must be
+    // redacted, not just the first listByTypeCandidates `target` — residual PII is a compliance defect.
+    const candidates = await listAllByTypeCandidates(
       this.documents,
       "accountExport",
-      1000,
       {
         orderBy: { createdAt: "asc" },
       },
@@ -841,7 +845,7 @@ export class OpsRepository {
     );
     let redacted = 0;
 
-    for (const item of candidates.items) {
+    for (const item of candidates) {
       const updated = await this.documents.update(item.id, (current) => {
         const document = documentOfType(current, "accountExport");
         if (!document || !accountExportMatchesAccountDeleteIdentity(document, input)) return null;

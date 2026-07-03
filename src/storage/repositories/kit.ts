@@ -168,6 +168,42 @@ export async function listAllByType<
   return items;
 }
 
+/**
+ * Collects every document matching `options.where` that also satisfies `isCandidate`, fetched in
+ * bounded pages with no upper cap on matches. Used by the account-delete PII redaction sweeps, where
+ * a customer with more than a page's worth of queued/failed emails or account exports must still be
+ * redacted completely — unlike {@link listByTypeCandidates}, which stops once it has `target` matches
+ * (correct for the maintenance listings, but a residual-PII gap for a compliance-driven sweep).
+ */
+export async function listAllByTypeCandidates<
+  TDocument extends TypedDocument & { readonly id: string },
+  TType extends DocumentType<TDocument>,
+>(
+  documents: TypedCollectionFacade<TDocument>,
+  type: TType,
+  options: TypeScopedQueryOptions<DocumentOfType<TDocument, TType>>,
+  isCandidate: (document: DocumentOfType<TDocument, TType>) => boolean,
+): Promise<StorageResultItem<DocumentOfType<TDocument, TType>>[]> {
+  const items: StorageResultItem<DocumentOfType<TDocument, TType>>[] = [];
+  let cursor = options.cursor;
+
+  do {
+    const page = await documents.listByType(type, {
+      ...options,
+      cursor,
+      limit: ACCOUNT_DELETE_SWEEP_PAGE_SIZE,
+    });
+
+    for (const item of page.items) {
+      if (isCandidate(item.data)) items.push(item);
+    }
+
+    cursor = page.cursor;
+  } while (cursor);
+
+  return items;
+}
+
 export async function listByTypeCandidates<
   TDocument extends TypedDocument & { readonly id: string },
   TType extends DocumentType<TDocument>,
