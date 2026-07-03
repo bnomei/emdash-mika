@@ -13,20 +13,7 @@ import type {
   WishlistDocument,
 } from "../../types/documents";
 import type { ISODateTime, MikaId } from "../../types/primitives";
-
-type SessionRepositoryInternals = {
-  readonly findOpenCartBySessionAnyCurrency: (sessionId: string) => Promise<CartDocument | null>;
-};
-const sessionRepositoryInternals = new WeakMap<object, SessionRepositoryInternals>();
-
-/**
- * Increments a cart's optimistic-concurrency version, tolerating a missing `current` (a cart
- * persisted before this field existed) by treating it as version 0 rather than producing NaN —
- * which would otherwise permanently 409 every write to that cart from here on (NaN !== NaN).
- */
-export function nextCartVersion(current: number | undefined): number {
-  return (current ?? 0) + 1;
-}
+import { nextCartVersion } from "../../model/cart-version";
 
 function cartWithCheckoutClaim(
   cart: CartDocument,
@@ -71,17 +58,26 @@ function cartWithoutCheckoutClaim(cart: CartDocument, now: ISODateTime): CartDoc
 
 /**
  * Reads an open cart by session id across currencies without importing {@link SessionRepository}.
- * Duck-types the repository instance so Astro layout shells can read cart badges with loose coupling.
+ * Structurally probes for the {@link SessionRepository.findOpenCartBySessionAnyCurrency} method,
+ * so host-implemented ports and wrapped/proxied instances participate by simply exposing the
+ * method — unlike the WeakMap registry this replaces, which silently missed for anything that was
+ * not the identical constructor-registered instance.
  */
 export function findSessionRepositoryOpenCartBySessionAnyCurrency(
   repository: unknown,
   sessionId: string,
 ): Promise<CartDocument | null> {
   if (typeof repository !== "object" || repository === null) return Promise.resolve(null);
-  return (
-    sessionRepositoryInternals.get(repository)?.findOpenCartBySessionAnyCurrency(sessionId) ??
-    Promise.resolve(null)
-  );
+  const candidate = repository as {
+    readonly findOpenCartBySessionAnyCurrency?: (
+      sessionId: string,
+    ) => Promise<CartDocument | null>;
+  };
+  if (typeof candidate.findOpenCartBySessionAnyCurrency !== "function") {
+    return Promise.resolve(null);
+  }
+
+  return candidate.findOpenCartBySessionAnyCurrency(sessionId);
 }
 
 /** Document repository for cart, wishlist, and checkout session documents. */
@@ -90,12 +86,13 @@ export class SessionRepository {
 
   constructor(collection: StorageCollection<SessionDocument>) {
     this.documents = typedCollection(collection);
-    sessionRepositoryInternals.set(this, {
-      findOpenCartBySessionAnyCurrency: (sessionId) =>
-        this.documents.findOneByType("cart", {
-          sessionId,
-          status: "open",
-        }),
+  }
+
+  /** Open cart for a session across currencies; used by cart.merge's any-currency fallback. */
+  async findOpenCartBySessionAnyCurrency(sessionId: string): Promise<CartDocument | null> {
+    return this.documents.findOneByType("cart", {
+      sessionId,
+      status: "open",
     });
   }
 

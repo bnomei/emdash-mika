@@ -88,6 +88,7 @@ import {
   AccountRepository,
   CatalogRepository,
   EphemeralRepository,
+  findSessionRepositoryOpenCartBySessionAnyCurrency,
   LedgerRepository,
   OpsRepository,
   SessionRepository,
@@ -16947,9 +16948,8 @@ describe("backend API composition", () => {
         ],
       ]),
     });
-    // Note: the proxy is not identity-equal to the SessionRepository instance, so WeakMap-keyed
-    // internals (findSessionRepositoryOpenCartBySessionAnyCurrency) silently miss through it —
-    // fine here because this flow never reaches cart.merge; don't reuse this pattern for merges.
+    // The any-currency cart lookup (findSessionRepositoryOpenCartBySessionAnyCurrency) probes
+    // structurally, so it works through this proxy — asserted below.
     const failingSession = new Proxy(repositories.session, {
       get(target, property, receiver) {
         if (property === "releaseCartCheckoutClaim") {
@@ -16996,6 +16996,38 @@ describe("backend API composition", () => {
     });
 
     expect(observed).toContain("checkout.releaseCartClaim");
+  });
+
+  it("finds the any-currency cart through proxied and host-implemented session ports", async () => {
+    const repositories = createTestBackendRepositories();
+    const sessionId = "session-any-currency";
+    const cart = createCartDocument({ sessionId });
+    await repositories.session.put(cart);
+
+    // Structural probe: a Proxy wrapper participates because it exposes the method.
+    const proxied = new Proxy(repositories.session, {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver);
+
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    await expect(
+      findSessionRepositoryOpenCartBySessionAnyCurrency(proxied, sessionId),
+    ).resolves.toMatchObject({ id: cart.id });
+
+    // A host object implementing just the method participates too.
+    const hostPort = {
+      findOpenCartBySessionAnyCurrency: async () => cart,
+    };
+    await expect(
+      findSessionRepositoryOpenCartBySessionAnyCurrency(hostPort, sessionId),
+    ).resolves.toMatchObject({ id: cart.id });
+
+    // Objects without the method fall back to null instead of throwing.
+    await expect(
+      findSessionRepositoryOpenCartBySessionAnyCurrency({}, sessionId),
+    ).resolves.toBeNull();
   });
 
   it("does not persist checkout.start couponCode when checkout creation fails", async () => {
