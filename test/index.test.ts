@@ -4426,6 +4426,7 @@ describe("Mika Astro template contracts", () => {
   it("centralizes typed template status display helpers", () => {
     expect(mikaTemplateStatusLabel("paid")).toBe("Paid");
     expect(mikaTemplateStatusVariant("paid")).toBe("success");
+    expect(mikaTemplateStatusVariant("refunded")).toBe("neutral");
     expect(mikaTemplateStatusLabel("provider_review_needed")).toBe("Provider review needed");
     expect(mikaTemplateStatusVariant("provider_review_needed")).toBe("neutral");
     expect(mikaTemplateAvailabilityStatusLabel("low_stock")).toBe("Low stock");
@@ -4433,6 +4434,8 @@ describe("Mika Astro template contracts", () => {
       mikaTemplateAvailabilityStatusLabel("available", { available: "Ships today" }),
     ).toBe("Ships today");
     expect(mikaTemplateAvailabilityStatusVariant("manual")).toBe("secondary");
+    expect(mikaTemplateCheckoutStatusMessage("created")).toBe("Checkout created.");
+    expect(mikaTemplateCheckoutStatusMessage("redirected")).toBe("Checkout started.");
     expect(mikaTemplateCheckoutStatusMessage("binding_mismatch")).toBe(
       "Checkout could not be verified.",
     );

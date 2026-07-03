@@ -108,7 +108,7 @@ const statusVariants = {
   redirected: "warning",
   requires_confirmation: "warning",
   requires_payment_authorization: "warning",
-  refunded: "success",
+  refunded: "neutral",
   revoked: "error",
   running: "warning",
   trialing: "success",
@@ -123,13 +123,15 @@ const statusLabelsByCode: Partial<Record<string, string>> = statusLabels;
 const statusVariantsByCode: Partial<Record<string, MikaTemplateBadgeVariant>> = statusVariants;
 
 const checkoutStatusMessages = {
+  created: "Checkout created.",
   pending: "Payment pending.",
+  redirected: "Checkout started.",
   completed: "Order complete.",
   cancelled: "Checkout cancelled.",
   expired: "Checkout expired.",
   failed: "Checkout failed.",
   binding_mismatch: "Checkout could not be verified.",
-} satisfies Partial<Record<CheckoutStatusDTO, string>>;
+} satisfies Record<CheckoutStatusDTO, string>;
 
 const checkoutStatusMessagesByCode: Partial<Record<string, string>> = checkoutStatusMessages;
 
