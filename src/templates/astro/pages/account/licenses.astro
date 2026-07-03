@@ -6,7 +6,7 @@ import { api } from "../../lib/mika-api";
 import AccountLicenses from "../../components/AccountLicenses.astro";
 import AccountSignInPanel from "../../components/AccountSignInPanel.astro";
 import MikaKumoPage from "../../components/MikaKumoPage.astro";
-import { mikaTemplateAccount } from "../../lib/account";
+import type { MikaTemplateAccountLicense } from "../../lib/account";
 import { mikaTemplateCurrentCartItemCount } from "../../lib/cart";
 import { mikaTemplateRoutes } from "../../lib/routes";
 
@@ -21,7 +21,8 @@ const magicLinkError = isInputError(magicLinkResult?.error)
   ? null
   : magicLinkResult?.error?.message;
 const accountResult = await Mika.account.get();
-const account = accountResult.ok ? mikaTemplateAccount(accountResult.data) : null;
+const account = accountResult.ok ? accountResult.data : null;
+const licenses: readonly MikaTemplateAccountLicense[] = [];
 const accountLoadError =
   !accountResult.ok && accountResult.error.code !== "AUTH_REQUIRED"
     ? accountResult.error.message
@@ -42,7 +43,7 @@ const orderHref = (license: { readonly orderId?: string }) =>
     />
   ) : (
     <section class="mika-kumo-panel">
-      <AccountLicenses licenses={account.licenses ?? []} orderHref={orderHref} />
+      <AccountLicenses licenses={licenses} orderHref={orderHref} />
     </section>
   )}
 </MikaKumoPage>

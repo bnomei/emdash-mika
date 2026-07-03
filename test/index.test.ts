@@ -4646,6 +4646,10 @@ describe("Mika Astro template contracts", () => {
       new URL("../src/templates/astro/pages/account/licenses.astro", import.meta.url),
       "utf8",
     );
+    const accountHelper = readFileSync(
+      new URL("../src/templates/astro/lib/account.ts", import.meta.url),
+      "utf8",
+    );
     const accountDownloads = readFileSync(
       new URL("../src/templates/astro/pages/account/downloads.astro", import.meta.url),
       "utf8",
@@ -4684,6 +4688,13 @@ describe("Mika Astro template contracts", () => {
     expect(accountSubscriptions).toContain("<AccountSubscriptions");
     expect(accountLicenses).toContain("mikaTemplateRoutes.accountLicenses");
     expect(accountLicenses).toContain("<AccountLicenses");
+    expect(accountLicenses).toContain("const account = accountResult.ok ? accountResult.data : null");
+    expect(accountLicenses).toContain("const licenses: readonly MikaTemplateAccountLicense[] = []");
+    expect(accountLicenses).toContain("<AccountLicenses licenses={licenses}");
+    expect(accountLicenses).not.toContain("mikaTemplateAccount");
+    expect(accountLicenses).not.toContain("account.licenses");
+    expect(accountHelper).not.toContain("MikaTemplateAccountDTO");
+    expect(accountHelper).not.toContain("AccountDTO &");
     expect(accountDownloads).toContain("mikaTemplateRoutes.accountDownloads");
     expect(accountDownloads).toContain("<AccountDownloads");
     expect(checkoutSuccess).toContain("mikaTemplateCheckoutSuccessHref");
