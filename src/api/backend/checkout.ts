@@ -280,7 +280,11 @@ export async function startCheckout(
     }
     if (checkoutIsExpired(input, replayedCheckout)) {
       const expired = await expireCheckoutDocument(input, replayedCheckout, ctx.now);
-      return checkoutStatusExpired(expired);
+      // See checkoutStatus: a concurrent completion makes expireCheckoutDocument return the settled
+      // document, so report its real status rather than masking a paid order as expired.
+      return expired.status === "expired"
+        ? checkoutStatusExpired(expired)
+        : checkoutDocumentResult(expired);
     }
 
     return checkoutDocumentResult(replayedCheckout);
@@ -332,7 +336,17 @@ export async function startCheckout(
       cartId: "Cart is already being checked out.",
     });
   }
-  const reserved = await reserveCheckoutLines(input, ctx, checkoutId, resolved, expiresAt);
+  // A thrown reservation error (vs. a returned failure) must still release the cart claim, or the
+  // cart stays locked in checkout_pending until the claim TTL. reserveCheckoutLines releases its own
+  // reservations on throw; only the claim is left for us to release here.
+  let reserved: Awaited<ReturnType<typeof reserveCheckoutLines>>;
+  try {
+    reserved = await reserveCheckoutLines(input, ctx, checkoutId, resolved, expiresAt);
+  } catch (error) {
+    if (claimedCart)
+      await releaseCartCheckoutClaimQuietly(input, claimedCart.id, checkoutId, ctx.now);
+    throw error;
+  }
   if (!reserved.ok) {
     if (claimedCart)
       await releaseCartCheckoutClaimQuietly(input, claimedCart.id, checkoutId, ctx.now);
@@ -1075,7 +1089,12 @@ export async function checkoutStatus(
 
   if (checkoutIsExpired(input, document)) {
     const expired = await expireCheckoutDocument(input, document, ctx.now);
-    return checkoutStatusExpired(expired);
+    // expireCheckoutDocument's CAS returns the *settled* document (not an expired one) when a payment
+    // webhook completed the checkout in the race window — surface that real status via
+    // checkoutDocumentResult (which replays a concurrently-failed settle) instead of a hard 409.
+    return expired.status === "expired"
+      ? checkoutStatusExpired(expired)
+      : checkoutDocumentResult(expired);
   }
 
   return checkoutDocumentSuccessResult(document);
