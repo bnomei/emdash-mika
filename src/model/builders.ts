@@ -34,25 +34,6 @@ import type {
   PurchaseMode,
 } from "../types/primitives";
 
-/** Input for constructing a catalog commerce aggregate from content and sellables. */
-export interface CatalogAggregateInput {
-  readonly content: ContentRef;
-  readonly titleSnapshot?: string;
-  readonly sellables?: readonly SellableDefinition[];
-  readonly metadata?: JsonObject;
-}
-
-/** Builds a versioned catalog commerce aggregate payload. */
-export function createCatalogAggregate(input: CatalogAggregateInput): CatalogCommerceAggregate {
-  return {
-    schemaVersion: 1,
-    content: input.content,
-    titleSnapshot: input.titleSnapshot,
-    sellables: input.sellables ?? [],
-    metadata: input.metadata,
-  };
-}
-
 /** Input for projecting catalog sellables to API DTOs with optional stock context. */
 export interface CatalogSellableDTOInput {
   readonly catalog: CatalogCommerceAggregate;
@@ -246,7 +227,7 @@ export function createCheckoutAggregate(input: {
     mode: input.mode,
     currency: input.currency,
     lines: input.lines,
-    totals: calculateCheckoutTotals(input.currency, input.lines, input.coupon),
+    totals: calculateTotals(input.currency, input.lines, input.coupon),
     binding: input.binding,
     coupon: input.coupon,
     metadata: input.metadata,
@@ -465,14 +446,6 @@ export function stockAvailabilityToDTO(
     maxPerOrder: sellable.maxPerOrder,
     lowStock,
   };
-}
-
-function calculateCheckoutTotals(
-  currency: CurrencyCode,
-  lines: readonly CheckoutLine[],
-  coupon?: CouponSnapshot,
-): CartTotals {
-  return calculateTotals(currency, lines, coupon);
 }
 
 /**

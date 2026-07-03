@@ -476,7 +476,7 @@ function findValue(keys: readonly string[], sources: readonly unknown[]) {
 
 function findPrimitiveId(sources: readonly unknown[]) {
   for (const source of sources) {
-    const value = presentValue(source);
+    const value = stringValue(source);
     if (value !== undefined) return value;
   }
   return undefined;
@@ -705,10 +705,6 @@ function isMikaAdminActionTargetList(
     | MikaAdminActionTargetMetadata,
 ): requirement is readonly MikaAdminActionTarget[] {
   return Array.isArray(requirement);
-}
-
-function presentValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function stringValue(value: unknown): string | undefined {

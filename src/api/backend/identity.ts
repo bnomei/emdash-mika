@@ -193,14 +193,8 @@ async function withEffectiveCustomer(
   input: MikaCustomerHydrationInput,
   ctx: MikaRequestContext,
 ): Promise<MikaRequestContext> {
-  if (ctx.customerId) return ctx;
-  const sessionCustomerId = await ctx.session?.get<MikaId>("mika.customerId");
-  if (!sessionCustomerId) return ctx;
-
-  const customer = await input.repositories.account.findCustomerById(sessionCustomerId);
-  return customer && customerIsCompatibleWithContext(customer, ctx)
-    ? { ...ctx, customerId: sessionCustomerId }
-    : ctx;
+  const customerId = await effectiveCustomerId(input, ctx);
+  return customerId === ctx.customerId ? ctx : { ...ctx, customerId };
 }
 
 export function withHydratedCustomerHandler<TArgs extends readonly unknown[], TResult>(

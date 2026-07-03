@@ -14,6 +14,7 @@ import { authRequired, forbidden, tokenResult } from "./errors";
 import type { MikaApiFailure } from "./errors";
 import {
   checkoutBelongsToContext,
+  orderAccessRevokedForAccountDelete,
   orderBelongsToIdentity,
   resolveAccountIdentity,
 } from "./identity";
@@ -220,7 +221,7 @@ async function validateOrderInvoiceToken(
   token: string,
   order: OrderDocument,
 ): Promise<MikaApiFailure | null> {
-  if (orderAccessRevokedForAccountDeleteCheck(order)) {
+  if (orderAccessRevokedForAccountDelete(order)) {
     return tokenResult("DOWNLOAD_REVOKED", "Order invoice access has been revoked.");
   }
   const record = await input.repositories.ephemeral.get(
@@ -239,14 +240,6 @@ async function validateOrderInvoiceToken(
       ...(subjectHash ? { subjectHash } : {}),
     },
   });
-}
-
-// Inlined rather than imported to avoid a dependency cycle with ./identity (which this module
-// already depends on for resolveAccountIdentity/orderBelongsToIdentity/checkoutBelongsToContext);
-// identical to identity.ts's orderAccessRevokedForAccountDelete.
-function orderAccessRevokedForAccountDeleteCheck(order: OrderDocument): boolean {
-  const orderEmailHash = order.emailHash ?? order.aggregate.customer.emailHash;
-  return orderEmailHash?.startsWith("account-deleted") ?? false;
 }
 
 function reusableCapabilityTokenError(

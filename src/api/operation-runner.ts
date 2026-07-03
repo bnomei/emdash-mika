@@ -29,12 +29,16 @@ export async function runMikaOperation<TOperation extends MikaApiOperation>({
   input,
   operationPolicy,
 }: RunMikaOperationInput<TOperation>): Promise<MikaApiResult<MikaApiOperationData<TOperation>>> {
-  const policyRejection = await runMikaOperationPolicy(operationPolicy, {
-    descriptor: mikaOperationDescriptor(operation),
-    ctx,
-    input,
-  });
-  if (policyRejection) return policyRejection;
+  // Only project the (deep-frozen, ~8-alloc) descriptor when a policy will actually read it;
+  // runMikaOperationPolicy no-ops on an absent policy, which is the default hot path.
+  if (operationPolicy) {
+    const policyRejection = await runMikaOperationPolicy(operationPolicy, {
+      descriptor: mikaOperationDescriptor(operation),
+      ctx,
+      input,
+    });
+    if (policyRejection) return policyRejection;
+  }
 
   return callMikaOperation(operation, api, ctx, input);
 }
