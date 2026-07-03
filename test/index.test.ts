@@ -4471,7 +4471,7 @@ describe("Mika Astro template contracts", () => {
     expect(page).toContain("cartItemCount?: number");
     expect(page).not.toContain("productNavItems?: readonly MikaKumoNavItem[]");
     expect(page).toContain("<MikaKumoAppFrame");
-    expect(page).toContain("client:load");
+    expect(page).not.toContain("client:load");
     expect(page).toContain("brandLabel={brandLabel}");
     expect(page).toContain("cartItemCount={cartItemCount}");
     expect(page).toContain("{cartLabel}");
@@ -4497,6 +4497,13 @@ describe("Mika Astro template contracts", () => {
     expect(frame).not.toContain("emdash-actions");
     expect(frame).not.toContain("Actions package");
     expect(frame).not.toContain("<Sidebar.GroupLabel>Developer</Sidebar.GroupLabel>");
+    expect(frame).not.toContain("useSidebar");
+    expect(frame).not.toContain("MobileSidebarTrigger");
+    expect(frame).not.toContain("Sidebar.Trigger");
+    expect(frame).not.toContain("Sidebar.Rail");
+    expect(frame).not.toContain("Sidebar.ResizeHandle");
+    expect(frame).not.toContain("peekable");
+    expect(frame).not.toContain("resizable");
     expect(frame).not.toContain("function ProductsSidebarMenu");
     expect(frame).not.toContain("const [productsOpen, setProductsOpen]");
     expect(frame).not.toContain("aria-controls={productMenuId}");
@@ -4510,6 +4517,7 @@ describe("Mika Astro template contracts", () => {
 
     expect(styles).toContain(".mika-kumo-app-frame");
     expect(styles).toContain(".mika-kumo-mobile-topbar");
+    expect(styles).not.toContain(".mika-kumo-mobile-trigger");
     expect(styles).toContain(".mika-kumo-footer");
     expect(styles).not.toContain(".mika-kumo-sidebar-footer");
     expect(styles).not.toContain(".mika-kumo-footer-copy");

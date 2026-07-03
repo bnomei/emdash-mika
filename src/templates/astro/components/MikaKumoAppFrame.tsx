@@ -4,13 +4,12 @@
  * Provides navigation, cart badge, and links to agent discovery routes.
  */
 import type { ReactNode } from "react";
-import { Button, Link, Sidebar, Text, useSidebar } from "@cloudflare/kumo";
+import { Link, Sidebar, Text } from "@cloudflare/kumo";
 import {
   BagIcon,
   CompassIcon,
   HeartIcon,
   KeyIcon,
-  ListIcon,
   PackageIcon,
   ReceiptIcon,
   ShoppingCartSimpleIcon,
@@ -59,8 +58,6 @@ export default function MikaKumoAppFrame({
       maxWidth={360}
       minWidth={220}
       mobileBreakpoint={900}
-      peekable
-      resizable
     >
       <Sidebar aria-label={`${title} navigation`} className="mika-kumo-sidebar">
         <Sidebar.Header>
@@ -156,17 +153,10 @@ export default function MikaKumoAppFrame({
             </Sidebar.Menu>
           </Sidebar.Group>
         </Sidebar.Content>
-
-        <Sidebar.Footer>
-          <Sidebar.Trigger aria-label="Collapse navigation" />
-        </Sidebar.Footer>
-        <Sidebar.Rail aria-label="Toggle navigation rail" />
-        <Sidebar.ResizeHandle aria-label="Resize navigation" />
       </Sidebar>
 
       <div className="mika-kumo-app-main">
         <div className="mika-kumo-mobile-topbar">
-          <MobileSidebarTrigger />
           <a className="mika-kumo-mobile-brand" href="/">
             <SparkleIcon size={16} weight="fill" aria-hidden="true" />
             <span>{brandLabel}</span>
@@ -204,28 +194,4 @@ export default function MikaKumoAppFrame({
 function isActive(currentPath: string, href: string) {
   if (href === "/") return currentPath === "/";
   return currentPath === href || currentPath.startsWith(href + "/");
-}
-
-function MobileSidebarTrigger() {
-  const { isMobile, open, openMobile, setOpenMobile, toggleSidebar } = useSidebar();
-  const expanded = isMobile ? openMobile : open;
-
-  return (
-    <Button
-      aria-expanded={expanded}
-      aria-label={expanded ? "Close navigation" : "Open navigation"}
-      className="mika-kumo-mobile-trigger"
-      icon={<ListIcon size={18} aria-hidden="true" />}
-      onClick={() => {
-        if (isMobile) {
-          setOpenMobile(!openMobile);
-        } else {
-          toggleSidebar();
-        }
-      }}
-      shape="square"
-      type="button"
-      variant="ghost"
-    />
-  );
 }

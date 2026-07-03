@@ -133,10 +133,6 @@ a {
   line-height: 1;
 }
 
-.mika-kumo-mobile-trigger {
-  color: var(--text-color-kumo-default);
-}
-
 .mika-kumo-page {
   box-sizing: border-box;
   display: grid;
