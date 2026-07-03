@@ -89,6 +89,17 @@ async function listByType<TDocument extends TypedDocument, TType extends Documen
     ),
   } as StorageQueryOptions<TDocument>);
 
+  // The where clause scopes the query to `type` at the adapter, but a misbehaving adapter could
+  // still return a wrong-type row. Validate before the cast so silent corruption surfaces as a
+  // diagnosable error instead — mirroring findOneByType's documentOfType guard.
+  for (const item of result.items) {
+    if (documentOfType(item.data, type) === null) {
+      throw new Error(
+        `Storage returned a '${item.data.type}' document where '${type}' was queried.`,
+      );
+    }
+  }
+
   return result as DocumentList<DocumentOfType<TDocument, TType>>;
 }
 
