@@ -308,15 +308,11 @@ function reversalHasStrongOrderIdentity(event: MikaProviderPaymentEvent): boolea
   return Boolean(event.providerPaymentId || event.providerOrderId);
 }
 
-type PaymentFailureWebhookEvent = Omit<MikaProviderPaymentEvent, "paymentStatus"> & {
-  readonly paymentStatus?: string;
-};
-
 async function emitCheckoutPaymentFailedNotification(
   input: MikaBackendDependencies,
   now: ISODateTime,
   webhook: WebhookDocument,
-  event: PaymentFailureWebhookEvent,
+  event: MikaProviderPaymentEvent,
 ): Promise<void> {
   const checkout = await findPaymentEventCheckout(input, event);
 

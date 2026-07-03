@@ -534,9 +534,7 @@ async function transitionActiveReservation<TStatus extends "released" | "expired
   });
 }
 
-async function mutateActiveReservationEvent<
-  TStatus extends "released" | "consumed" | "expired",
->(input: {
+async function mutateActiveReservationEvent<TStatus extends "released" | "expired">(input: {
   readonly executor: MikaDbExecutor;
   readonly reservationEventId: MikaId;
   readonly now: ISODateTime;
