@@ -44,8 +44,8 @@
       }
     };
 
-    groups.addEventListener("mika:variant-change", (event: CustomEvent<MikaVariantChangeDetail>) =>
-      sync(event.detail)
+    groups.addEventListener("mika:variant-change", (event) =>
+      sync((event as CustomEvent<MikaVariantChangeDetail>).detail)
     );
     sync();
   }
