@@ -49,7 +49,7 @@ import {
   updateSubscriptionEntitlement,
 } from "../subscriptions";
 import { WorkflowRunner, WorkflowRunnerLeaseLostError } from "../workflow-runner";
-import { isReplayableWebhookStatus } from "./ingest";
+import { isReplayableWebhookStatus } from "./status";
 
 export async function processStoredWebhook(
   input: CreateMikaBackendApiInput,

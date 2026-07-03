@@ -32,6 +32,7 @@ import {
   totalsChild,
 } from "../shared";
 import { markWebhookFailed, processStoredWebhook } from "./payment";
+import { isReplayableWebhookStatus } from "./status";
 
 export async function receiveWebhook(
   input: CreateMikaBackendApiInput,
@@ -357,19 +358,6 @@ function webhookEventToJson(
         raw: options.includeRaw ? event.raw : undefined,
       });
   }
-}
-
-export function isReplayableWebhookStatus(status: WebhookDocument["status"]): boolean {
-  return (
-    status === "failed" ||
-    status === "received" ||
-    status === "processing" ||
-    isLegacyQueuedWebhookStatus(status)
-  );
-}
-
-function isLegacyQueuedWebhookStatus(status: unknown): status is "queued" {
-  return status === "queued";
 }
 
 function storedWebhookEvent(webhook: WebhookDocument): MikaProviderWebhookEvent | null {
