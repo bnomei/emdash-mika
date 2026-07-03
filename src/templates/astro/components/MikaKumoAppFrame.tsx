@@ -4,55 +4,39 @@
  * Provides navigation, cart badge, and links to agent discovery routes.
  */
 import type { ReactNode } from "react";
-import { Badge, Button, Link, Sidebar, Text, useSidebar } from "@cloudflare/kumo";
-import type { Icon } from "@phosphor-icons/react";
+import { Button, Link, Sidebar, Text, useSidebar } from "@cloudflare/kumo";
 import {
   BagIcon,
-  BookOpenIcon,
   CompassIcon,
-  FileTextIcon,
-  GithubLogoIcon,
   HeartIcon,
   KeyIcon,
   ListIcon,
   PackageIcon,
   ReceiptIcon,
-  RobotIcon,
   ShoppingCartSimpleIcon,
   SparkleIcon,
   UserCircleIcon,
-  WrenchIcon,
 } from "@phosphor-icons/react";
-
-interface MikaKumoResourceLink {
-  readonly label: string;
-  readonly href: string;
-  readonly badge?: string;
-}
 
 interface AppFrameProps {
   readonly title: string;
+  readonly brandLabel?: string;
   readonly currentPath: string;
   readonly cartItemCount?: number;
   readonly children: ReactNode;
 }
 
-const fixtureLinks: readonly (MikaKumoResourceLink & { readonly icon: Icon })[] = [
-  { label: "Agent manifest", href: "/.well-known/mika-agent.json", icon: RobotIcon },
-  { label: "llms.txt", href: "/llms.txt", icon: FileTextIcon },
-  { label: "Action contract", href: "/api/mika-action-contract.json", icon: ReceiptIcon },
-  { label: "Admin action testbed", href: "/_emdash/admin", icon: WrenchIcon },
-];
-
 /**
- * Root layout frame with storefront, account, and developer navigation.
+ * Root layout frame with storefront and account navigation.
  *
  * @param title - Page title used in sidebar aria labels.
+ * @param brandLabel - Storefront label shown in the sidebar and mobile header.
  * @param currentPath - Active route path for nav highlighting.
  * @param cartItemCount - Optional cart quantity shown in sidebar and mobile bar.
  */
 export default function MikaKumoAppFrame({
   title,
+  brandLabel = "Storefront",
   currentPath,
   cartItemCount = 0,
   children,
@@ -86,7 +70,7 @@ export default function MikaKumoAppFrame({
             </span>
             <span className="mika-kumo-brand-copy">
               <Text as="span" variant="heading3">
-                Buttonwood Lot
+                {brandLabel}
               </Text>
               <Text as="span" variant="secondary" size="sm">
                 Mika storefront
@@ -171,41 +155,9 @@ export default function MikaKumoAppFrame({
               </Sidebar.MenuButton>
             </Sidebar.Menu>
           </Sidebar.Group>
-
-          <Sidebar.Group>
-            <Sidebar.GroupLabel>Developer</Sidebar.GroupLabel>
-            <Sidebar.Menu>
-              {fixtureLinks.map((item) => (
-                <Sidebar.MenuButton
-                  active={isActive(currentPath, item.href)}
-                  href={item.href}
-                  icon={item.icon}
-                  key={item.href}
-                  tooltip={item.label}
-                >
-                  {item.label}
-                </Sidebar.MenuButton>
-              ))}
-            </Sidebar.Menu>
-          </Sidebar.Group>
         </Sidebar.Content>
 
         <Sidebar.Footer>
-          <div className="mika-kumo-sidebar-footer">
-            <Badge appearance="dot" variant="success">
-              Fixture mode
-            </Badge>
-            <Link
-              href="https://github.com/bnomei/emdash-actions"
-              target="_blank"
-              rel="noreferrer"
-              variant="plain"
-            >
-              <GithubLogoIcon size={16} aria-hidden="true" />
-              Actions package
-              <Link.ExternalIcon aria-hidden="true" />
-            </Link>
-          </div>
           <Sidebar.Trigger aria-label="Collapse navigation" />
         </Sidebar.Footer>
         <Sidebar.Rail aria-label="Toggle navigation rail" />
@@ -217,7 +169,7 @@ export default function MikaKumoAppFrame({
           <MobileSidebarTrigger />
           <a className="mika-kumo-mobile-brand" href="/">
             <SparkleIcon size={16} weight="fill" aria-hidden="true" />
-            <span>Buttonwood Lot</span>
+            <span>{brandLabel}</span>
           </a>
           <nav aria-label="Quick links" className="mika-kumo-mobile-actions">
             <Link href="/cart" variant="plain" aria-label={cartAriaLabel}>
@@ -235,34 +187,12 @@ export default function MikaKumoAppFrame({
         {children}
 
         <footer className="mika-kumo-footer">
-          <div className="mika-kumo-footer-copy">
-            <Text as="p" variant="secondary" size="sm">
-              Resettable Mika fixture storefront with purchases, stock, subscriptions, licenses,
-              downloads, webhooks, and admin actions.
-            </Text>
-          </div>
-          <nav aria-label="Template resources" className="mika-kumo-footer-links">
+          <nav aria-label="Agent-readable storefront resources" className="mika-kumo-footer-links">
             <Link href="/.well-known/mika-agent.json" variant="plain">
-              Agent
+              Agent manifest
             </Link>
             <Link href="/llms.txt" variant="plain">
               llms.txt
-            </Link>
-            <Link href="/api/mika-action-contract.json" variant="plain">
-              Contract
-            </Link>
-            <Link href="/_emdash/admin" variant="plain">
-              Admin
-            </Link>
-            <Link
-              href="https://github.com/bnomei/emdash-actions"
-              target="_blank"
-              rel="noreferrer"
-              variant="plain"
-            >
-              <BookOpenIcon size={16} aria-hidden="true" />
-              Actions
-              <Link.ExternalIcon aria-hidden="true" />
             </Link>
           </nav>
         </footer>

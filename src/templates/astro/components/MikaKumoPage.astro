@@ -6,6 +6,7 @@ import "../styles/kumo.css";
 
 interface Props {
   title: string;
+  brandLabel?: string;
   description?: string;
   eyebrow?: string;
   documentTitle?: string;
@@ -19,6 +20,7 @@ interface Props {
 
 const {
   title,
+  brandLabel,
   description,
   eyebrow,
   documentTitle = title,
@@ -45,6 +47,7 @@ const cartLabel = cartItemCount > 0 ? `Cart (${cartItemCount})` : "Cart";
     <MikaKumoAppFrame
       client:load
       title={title}
+      brandLabel={brandLabel}
       currentPath={currentPath}
       cartItemCount={cartItemCount}
     >
