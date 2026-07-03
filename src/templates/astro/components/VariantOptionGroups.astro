@@ -61,15 +61,28 @@ const selectedOptions = selected?.options ?? {};
 ) : null}
 
 <script>
-  for (const root of document.querySelectorAll("[data-mika-variant-groups]")) {
-    const input = root.querySelector('input[name="sellableId"]');
-    const priceInput = root.querySelector('input[name="priceId"]');
-    const controls = [...root.querySelectorAll("[data-mika-variant-option]")];
-    const sellables = JSON.parse(root.getAttribute("data-mika-sellables") ?? "[]");
+  interface MikaVariantSellable {
+    readonly id: string;
+    readonly priceId?: string;
+    readonly maxQuantity?: number;
+    readonly disabled: boolean;
+    readonly options: Record<string, string>;
+  }
+
+  for (const root of document.querySelectorAll<HTMLFieldSetElement>("[data-mika-variant-groups]")) {
+    const input = root.querySelector<HTMLInputElement>('input[name="sellableId"]');
+    const priceInput = root.querySelector<HTMLInputElement>('input[name="priceId"]');
+    const controls = [...root.querySelectorAll<HTMLSelectElement>("[data-mika-variant-option]")];
+    const sellables: MikaVariantSellable[] = JSON.parse(
+      root.getAttribute("data-mika-sellables") ?? "[]"
+    );
 
     const update = () => {
-      const selected = Object.fromEntries(
-        controls.map((control) => [control.dataset.mikaVariantOption, control.value])
+      const selected: Record<string, string> = Object.fromEntries(
+        controls.map((control): [string, string] => [
+          control.dataset.mikaVariantOption ?? "",
+          control.value,
+        ])
       );
       const sellable = sellables.find(
         (candidate) =>
