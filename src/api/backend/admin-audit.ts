@@ -67,9 +67,7 @@ async function completeAdminAudit(
   });
 }
 
-function adminAuditReplayResult<TData extends JsonObject>(
-  audit: AdminAuditDocument,
-): TData | null {
+function adminAuditReplayResult<TData extends JsonObject>(audit: AdminAuditDocument): TData | null {
   const storedVersion = audit.record.metadata?.[ADMIN_AUDIT_RESULT_SCHEMA_VERSION_METADATA_KEY];
   if (storedVersion !== ADMIN_AUDIT_RESULT_SCHEMA_VERSION) return null;
 
