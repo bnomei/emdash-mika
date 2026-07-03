@@ -2154,11 +2154,12 @@ describe("Mika client", () => {
     expect(operationRunnerSource).toContain("runMikaOperationPolicy(operationPolicy");
     expect(operationRunnerSource).toContain("callMikaOperation(operation, api, ctx, input)");
     expect(operationsSource).not.toContain("input: never");
-    // Both route dispatch sites funnel through one local wrapper that itself calls
-    // runMikaOperation(input) exactly once, converting unhandled throws to a 500 envelope.
-    expect(routeHandlersSource).toContain("runMikaOperationSafely({");
-    expect(routeHandlersSource.match(/runMikaOperationSafely\(\{/g)).toHaveLength(2);
-    expect(routeHandlersSource).toContain("return runMikaOperation(input)");
+    // Both route dispatch sites call runMikaOperation directly inside a full-body try/catch
+    // that observes the error and converts it into the shared 500 envelope.
+    expect(routeHandlersSource.match(/await runMikaOperation\(\{/g)).toHaveLength(2);
+    expect(routeHandlersSource.match(/observeRouteError\(options,/g)).toHaveLength(2);
+    // One declaration plus exactly one catch-path return per handler.
+    expect(routeHandlersSource.match(/mikaInternalFailure\(\)/g)).toHaveLength(3);
     expect(routeHandlersSource).not.toContain("callMikaOperation(operation");
     expect(routeHandlersSource).not.toContain("runMikaOperationPolicy");
     expect(routeHandlersSource).not.toContain("as never");

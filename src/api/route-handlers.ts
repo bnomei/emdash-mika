@@ -17,6 +17,7 @@ import {
 } from "./operations";
 import { runMikaOperation } from "./operation-runner";
 import type { MikaOperationPolicy } from "./operation-policy";
+import type { MikaApiResult } from "./types";
 import { mikaPluginRoutes, type MikaPluginRouteName } from "./routes";
 import { createMikaApi, type MikaApi } from "./server";
 
@@ -38,6 +39,13 @@ export interface MikaPluginRoute<TInput = unknown> {
 /** Options applied when constructing the plugin route table. */
 export interface MikaPluginRoutesOptions {
   readonly operationPolicy?: MikaOperationPolicy;
+  /**
+   * Observer for unexpected throws converted into the generic INTERNAL envelope at the route
+   * boundary — a host MikaApi override or MikaOperationPolicy hook that throws, or malformed
+   * input breaking pre-dispatch parsing. Defaults to console.error so the original error, stack,
+   * and cause are never silently dropped.
+   */
+  readonly onError?: (input: { readonly scope: string; readonly error: unknown }) => void;
 }
 
 /** Concrete plugin route path resolved from {@link MikaPluginRouteName}. */
@@ -87,53 +95,77 @@ async function handleActionRunner(
     };
   }
 
-  const resolved = resolveMikaAdminActionInvocation(ctx.input);
-  if (!resolved.ok) return toMikaAdminActionRunResult(resolved);
+  let resultAdapter: Parameters<typeof toMikaAdminActionRunResult>[1];
+  try {
+    const resolved = resolveMikaAdminActionInvocation(ctx.input);
+    if (!resolved.ok) return toMikaAdminActionRunResult(resolved);
+    resultAdapter = resolved.data.resultAdapter;
 
-  const mikaContext = requestContext(ctx, resolved.data.invocationId);
-  if (resolved.data.operation.agent.idempotency === "required" && !mikaContext.idempotencyKey) {
-    return toMikaAdminActionRunResult({
-      ok: false,
-      status: 409,
-      error: {
-        code: "CONFLICT",
-        message: `Mika operation '${resolved.data.operation.name}' requires an idempotency key.`,
-      },
+    const mikaContext = requestContext(ctx, resolved.data.invocationId);
+    if (resolved.data.operation.agent.idempotency === "required" && !mikaContext.idempotencyKey) {
+      return toMikaAdminActionRunResult(idempotencyKeyRequired(resolved.data.operation.name));
+    }
+    const result = await runMikaOperation({
+      operation: resolved.data.operation,
+      api,
+      ctx: mikaContext,
+      input: mikaOperationInputWithIdempotencyContext(
+        resolved.data.operation,
+        resolved.data.input,
+        mikaContext.idempotencyKey,
+      ),
+      operationPolicy: options.operationPolicy,
     });
-  }
-  const result = await runMikaOperationSafely({
-    operation: resolved.data.operation,
-    api,
-    ctx: mikaContext,
-    input: mikaOperationInputWithIdempotencyContext(
-      resolved.data.operation,
-      resolved.data.input,
-      mikaContext.idempotencyKey,
-    ),
-    operationPolicy: options.operationPolicy,
-  });
 
-  return toMikaAdminActionRunResult(result, resolved.data.resultAdapter);
+    return toMikaAdminActionRunResult(result, resultAdapter);
+  } catch (error) {
+    observeRouteError(options, "actionsRunner", error);
+    return toMikaAdminActionRunResult(mikaInternalFailure(), resultAdapter);
+  }
 }
 
 /**
- * Runs a Mika operation and converts an unhandled throw into a generic 500 envelope instead of
- * leaking it to the host framework. Built-in operation handlers already return structured
- * {@link MikaApiResult} failures for every case they anticipate (including webhook receive, whose
- * retryable-vs-terminal status codes are decided inside the handler); this only catches genuinely
- * unexpected throws — a host `MikaApi` override or {@link MikaOperationPolicy} hook that throws.
+ * Generic 500 envelope for unexpected throws at the plugin route boundary. Built-in operation
+ * handlers already return structured {@link MikaApiResult} failures for every case they
+ * anticipate (including webhook receive, whose retryable-vs-terminal status codes are decided
+ * inside the handler); the route-level catches that return this guard genuinely unexpected
+ * throws — a host `MikaApi` override or {@link MikaOperationPolicy} hook that throws, or
+ * pre-dispatch input parsing and request-context construction breaking on malformed requests.
  */
-async function runMikaOperationSafely(
-  input: Parameters<typeof runMikaOperation>[0],
-): ReturnType<typeof runMikaOperation> {
-  return runMikaOperation(input).catch(() => ({
-    ok: false as const,
+function mikaInternalFailure(): MikaApiResult<never> {
+  return {
+    ok: false,
     status: 500,
     error: {
-      code: "INTERNAL" as const,
+      code: "INTERNAL",
       message: "Mika operation failed.",
     },
-  }));
+  };
+}
+
+/** 409 envelope for idempotency-required operations invoked without an idempotency key. */
+function idempotencyKeyRequired(operationName: string): MikaApiResult<never> {
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "CONFLICT",
+      message: `Mika operation '${operationName}' requires an idempotency key.`,
+    },
+  };
+}
+
+/** Reports a route-boundary failure to the host observer; observer bugs never break the envelope. */
+function observeRouteError(options: MikaPluginRoutesOptions, scope: string, error: unknown): void {
+  try {
+    if (options.onError) {
+      options.onError({ scope, error });
+      return;
+    }
+    console.error(`Mika route handler failed (${scope}).`, error);
+  } catch {
+    // Observer bugs must not break the never-throw route boundary.
+  }
 }
 
 async function handleRouteOperation(
@@ -145,36 +177,34 @@ async function handleRouteOperation(
   const operation = selectRouteOperation(ctx.request, operations);
   if (!operation) return methodNotAllowed(ctx.request, operations);
 
-  const parsedInput = parseMikaOperationInput(operation, ctx.input, ctx.request.url);
-  if (!parsedInput.ok) return parsedInput.result;
+  try {
+    const parsedInput = parseMikaOperationInput(operation, ctx.input, ctx.request.url);
+    if (!parsedInput.ok) return parsedInput.result;
 
-  const mikaContext = requestContext(ctx);
-  if (
-    operation.name.startsWith("admin.") &&
-    operation.agent.idempotency === "required" &&
-    !mikaContext.idempotencyKey
-  ) {
-    return {
-      ok: false,
-      status: 409,
-      error: {
-        code: "CONFLICT",
-        message: `Mika operation '${operation.name}' requires an idempotency key.`,
-      },
-    } as const;
-  }
+    const mikaContext = requestContext(ctx);
+    if (
+      operation.name.startsWith("admin.") &&
+      operation.agent.idempotency === "required" &&
+      !mikaContext.idempotencyKey
+    ) {
+      return idempotencyKeyRequired(operation.name);
+    }
 
-  return runMikaOperationSafely({
-    operation,
-    api,
-    ctx: mikaContext,
-    input: mikaOperationInputWithIdempotencyContext(
+    return await runMikaOperation({
       operation,
-      parsedInput.data,
-      mikaContext.idempotencyKey,
-    ),
-    operationPolicy: options.operationPolicy,
-  });
+      api,
+      ctx: mikaContext,
+      input: mikaOperationInputWithIdempotencyContext(
+        operation,
+        parsedInput.data,
+        mikaContext.idempotencyKey,
+      ),
+      operationPolicy: options.operationPolicy,
+    });
+  } catch (error) {
+    observeRouteError(options, `operation:${operation.name}`, error);
+    return mikaInternalFailure();
+  }
 }
 
 function selectRouteOperation(
