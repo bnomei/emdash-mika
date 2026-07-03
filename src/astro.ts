@@ -5,7 +5,7 @@
 import type { APIContext } from "astro";
 
 import { createMikaRequestContext } from "./api/context";
-import { type MikaClientRoute } from "./api/client";
+import type { MikaClientRoute } from "./api/client";
 import { runMikaOperation } from "./api/operation-runner";
 import { mikaOperationDefinitions, type MikaApiOperationData } from "./api/operations";
 import {
