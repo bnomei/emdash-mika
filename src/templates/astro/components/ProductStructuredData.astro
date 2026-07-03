@@ -309,7 +309,7 @@ function resolveImages(
 }
 
 function variantUrlFor(sellable: SellableDTO): string {
-  const variantUrl = variants && variants.urls?.[sellable.id];
+  const variantUrl = variants ? variants.urls?.[sellable.id] : undefined;
   return toAbsoluteUrl(variantUrl) ?? productUrl;
 }
 
