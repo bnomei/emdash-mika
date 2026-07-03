@@ -1861,9 +1861,10 @@ function requiredProductField(value: string | undefined, field: string): string 
 /** The subset of MikaAcpAvailability.status that acpAvailability actually produces. */
 type AcpProducedStatus = "in_stock" | "backorder" | "out_of_stock";
 
-function acpAvailability(
-  sellable: SellableDTO,
-): { readonly available: boolean; readonly status: AcpProducedStatus } {
+function acpAvailability(sellable: SellableDTO): {
+  readonly available: boolean;
+  readonly status: AcpProducedStatus;
+} {
   const status = sellable.availability?.status;
 
   if (!sellable.active || status === "out_of_stock" || status === "manual") {
