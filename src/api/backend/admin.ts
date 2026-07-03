@@ -45,10 +45,13 @@ import {
   findEntitlementsForRevoke,
   resolveDownloadIssueTarget,
   revokeOrderFulfillmentAccess,
-  updateOrderAfterCancel,
-  updateOrderAfterRefund,
 } from "./fulfillment";
-import { orderIsPaymentTerminal, orderRefundedAmount } from "../lifecycle";
+import {
+  applyOrderCancel,
+  applyOrderRefund,
+  orderIsPaymentTerminal,
+  orderRefundedAmount,
+} from "../lifecycle";
 import type { MikaBackendDependencies } from "./ports";
 import { addMilliseconds, currentBackendISODateTime, emailHashKey } from "./shared";
 import { createMikaStockLifecycleService } from "./stock-lifecycle";
@@ -231,7 +234,7 @@ export async function refundOrder(
       assertCompletedProviderAction(result, "Provider order refund did not complete.");
 
       const now = currentBackendISODateTime(input);
-      const updated = updateOrderAfterRefund(order, refundInput, now);
+      const updated = applyOrderRefund(order, refundInput, now);
       await input.repositories.ledger.put(updated);
       if (updated.status === "refunded") {
         await revokeOrderFulfillmentAccess(input, updated, now, "order_refunded");
@@ -298,7 +301,7 @@ export async function cancelOrder(
       assertCompletedProviderAction(result, "Provider order cancellation did not complete.");
 
       const now = currentBackendISODateTime(input);
-      const updated = updateOrderAfterCancel(order, cancelInput, now);
+      const updated = applyOrderCancel(order, cancelInput, now);
       await input.repositories.ledger.put(updated);
       await revokeOrderFulfillmentAccess(input, updated, now, "order_cancelled");
 

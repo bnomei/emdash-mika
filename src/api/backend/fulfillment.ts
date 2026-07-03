@@ -19,7 +19,6 @@ import type {
 import type { OrderLine } from "../../types/aggregates";
 import type { MikaProviderPaymentEvent } from "../../provider";
 import type { MikaRequestContext } from "../context";
-import { applyOrderCancel, applyOrderRefund } from "../lifecycle";
 import {
   emitMikaNotification,
   type MikaNotificationContextMap,
@@ -32,8 +31,6 @@ import type {
   DownloadResolutionDTO,
   EntitlementGrantInput,
   EntitlementRevokeInput,
-  OrderCancelInput,
-  OrderRefundInput,
 } from "../types";
 import { downloadTokenError, hashDownloadToken } from "./tokens";
 import {
@@ -1014,18 +1011,3 @@ export function fulfillmentIdPart(value: string): string {
   return sanitized || "value";
 }
 
-export function updateOrderAfterRefund(
-  order: OrderDocument,
-  refundInput: OrderRefundInput,
-  now: ISODateTime,
-): OrderDocument {
-  return applyOrderRefund(order, refundInput, now);
-}
-
-export function updateOrderAfterCancel(
-  order: OrderDocument,
-  cancelInput: OrderCancelInput,
-  now: ISODateTime,
-): OrderDocument {
-  return applyOrderCancel(order, cancelInput, now);
-}
