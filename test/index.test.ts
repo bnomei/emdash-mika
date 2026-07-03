@@ -400,6 +400,28 @@ describe("Mika native plugin package", () => {
     expect(() => mikaPlugin(descriptorWithUndefinedApi)).not.toThrow();
   });
 
+  it("rejects non-JSON-safe descriptor option values at config time", () => {
+    expect(() =>
+      mikaPlugin({ entrypoint: {} } as unknown as MikaDescriptorOptions),
+    ).toThrow(/entrypoint/);
+    expect(() =>
+      mikaPlugin({ maintenance: null } as unknown as MikaDescriptorOptions),
+    ).toThrow(/maintenance/);
+    expect(() =>
+      mikaPlugin({
+        maintenance: { enabled: {} },
+      } as unknown as MikaDescriptorOptions),
+    ).toThrow(/maintenance\.enabled/);
+    expect(() =>
+      mikaPlugin({
+        maintenance: { schedule: () => "* * * * *" },
+      } as unknown as MikaDescriptorOptions),
+    ).toThrow(/maintenance\.schedule/);
+    expect(() =>
+      mikaPlugin({ assertWired: [1] } as unknown as MikaDescriptorOptions),
+    ).toThrow(/assertWired/);
+  });
+
   it("keeps descriptor option types JSON-safe", () => {
     expectTypeOf<MikaDescriptorOptions>().toHaveProperty("entrypoint").toEqualTypeOf<
       string | undefined

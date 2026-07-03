@@ -129,6 +129,7 @@ export function mikaPlugin(
         "assertWired) cross the descriptor boundary.",
     );
   }
+  assertDescriptorSafeOptions(options);
   const entrypoint = options.entrypoint ?? MIKA_PACKAGE_NAME;
   const descriptorMaintenance =
     options.maintenance === undefined
@@ -158,6 +159,60 @@ export function mikaPlugin(
     // rather than the maximally-unsafe `as never`.
     storage: mikaStorageConfig as unknown as PluginDescriptor["storage"],
   };
+}
+
+function assertDescriptorSafeOptions(options: MikaDescriptorOptions): void {
+  const descriptorOptions = options as {
+    readonly entrypoint?: unknown;
+    readonly maintenance?: {
+      readonly enabled?: unknown;
+      readonly schedule?: unknown;
+    };
+    readonly assertWired?: unknown;
+  };
+  if (
+    descriptorOptions.entrypoint !== undefined &&
+    typeof descriptorOptions.entrypoint !== "string"
+  ) {
+    throw new Error("mikaPlugin() descriptor option entrypoint must be a string.");
+  }
+
+  if (descriptorOptions.maintenance !== undefined) {
+    if (
+      typeof descriptorOptions.maintenance !== "object" ||
+      descriptorOptions.maintenance === null ||
+      Array.isArray(descriptorOptions.maintenance)
+    ) {
+      throw new Error(
+        "mikaPlugin() descriptor option maintenance must be an object with JSON-safe enabled and schedule fields.",
+      );
+    }
+    if (
+      descriptorOptions.maintenance.enabled !== undefined &&
+      typeof descriptorOptions.maintenance.enabled !== "boolean"
+    ) {
+      throw new Error("mikaPlugin() descriptor option maintenance.enabled must be a boolean.");
+    }
+    if (
+      descriptorOptions.maintenance.schedule !== undefined &&
+      typeof descriptorOptions.maintenance.schedule !== "string"
+    ) {
+      throw new Error("mikaPlugin() descriptor option maintenance.schedule must be a string.");
+    }
+  }
+
+  if (
+    descriptorOptions.assertWired !== undefined &&
+    typeof descriptorOptions.assertWired !== "boolean" &&
+    !(
+      Array.isArray(descriptorOptions.assertWired) &&
+      descriptorOptions.assertWired.every((scope) => typeof scope === "string")
+    )
+  ) {
+    throw new Error(
+      "mikaPlugin() descriptor option assertWired must be a boolean or an array of strings.",
+    );
+  }
 }
 
 /**
