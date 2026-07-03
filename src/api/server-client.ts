@@ -3,16 +3,15 @@
  * Forwards same-origin cookies from the incoming request by default.
  */
 import type { MikaClientOptions } from "./client";
+import { mikaOperationRequestInit, mikaOperationDefinitions } from "./operations";
 import {
-  mikaOperationRequestInit,
-  mikaOperationDefinitions,
-  type MikaApiOperationData,
-} from "./operations";
-import { createMikaOperationFacade, type MikaServerOperationFacade } from "./operation-facade";
+  createMikaOperationFacade,
+  type MikaFacadeInvoke,
+  type MikaServerOperationFacade,
+} from "./operation-facade";
 import { requestMika } from "./request";
 import type { MikaRequestInit } from "./request";
 import { createMikaPluginRouteBuilder, type MikaPluginRouteBuilder } from "./routes";
-import type { MikaApiResult } from "./types";
 import type { MikaPluginRouteName } from "./routes";
 
 /** Server client options including cross-origin cookie forwarding control. */
@@ -29,17 +28,9 @@ export interface MikaServerClient extends MikaServerOperationFacade {
 export function createMikaServerClient(options: MikaServerClientOptions = {}): MikaServerClient {
   const request = <TData>(route: MikaPluginRouteName, init: MikaRequestInit = {}) =>
     requestMika<TData>(route, init, options);
-  const requestOperation = <TOperation extends keyof typeof mikaOperationDefinitions>(
-    operationKey: TOperation,
-    input?: unknown,
-  ): Promise<
-    MikaApiResult<MikaApiOperationData<(typeof mikaOperationDefinitions)[TOperation]>>
-  > => {
+  const requestOperation: MikaFacadeInvoke = (operationKey, input) => {
     const operation = mikaOperationDefinitions[operationKey];
-    return request<MikaApiOperationData<(typeof mikaOperationDefinitions)[TOperation]>>(
-      operation.routeKey as MikaPluginRouteName,
-      mikaOperationRequestInit(operation, input),
-    );
+    return request(operation.routeKey, mikaOperationRequestInit(operation, input));
   };
   const routes = createMikaPluginRouteBuilder({
     apiBase: options.apiBase,
