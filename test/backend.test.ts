@@ -146,6 +146,14 @@ type TestDocumentOverrides<TDocument extends { readonly record: object }> = Exac
   readonly record?: ExactPartial<TDocument["record"]>;
 };
 
+function optionalOverride<T extends object, K extends keyof T>(
+  overrides: ExactPartial<T> | undefined,
+  key: K,
+  fallback: T[K] | undefined,
+): T[K] | undefined {
+  return Object.hasOwn(overrides ?? {}, key) ? overrides?.[key] : fallback;
+}
+
 describe("isJsonValue / isJsonObject", () => {
   it("accepts valid JSON that reuses a non-cyclic object reference (diamond)", () => {
     const ref = { v: 1 };
@@ -21244,41 +21252,72 @@ function createWorkflowDocument(
     readonly leasedAt?: ISODateTime | undefined;
   } = {},
 ): WorkflowDocument {
-  const id = overrides.id ?? createTestMikaId("workflow", 1);
-  const status = overrides.status ?? "queued";
-  const subjectId = overrides.subjectId ?? createTestMikaId("webhook", 1);
-  const idempotencyKey = overrides.idempotencyKey ?? "event_1";
-  const nextAttemptAt = Object.hasOwn(overrides, "nextAttemptAt")
-    ? overrides.nextAttemptAt
-    : TEST_NOW;
-  const leaseExpiresAt = Object.hasOwn(overrides, "leaseExpiresAt")
-    ? overrides.leaseExpiresAt
-    : undefined;
+  const recordOverrides = overrides.record;
+  const safeRecordOverrides = omitUndefined(recordOverrides ?? {});
+  const id = safeRecordOverrides.id ?? overrides.id ?? createTestMikaId("workflow", 1);
+  const kind = safeRecordOverrides.kind ?? "payment_webhook_fulfillment";
+  const status = safeRecordOverrides.status ?? overrides.status ?? "queued";
+  const subjectType = optionalOverride(
+    recordOverrides,
+    "subjectType",
+    optionalOverride(overrides, "subjectType", "webhook"),
+  );
+  const subjectId = optionalOverride(
+    recordOverrides,
+    "subjectId",
+    optionalOverride(overrides, "subjectId", createTestMikaId("webhook", 1)),
+  );
+  const idempotencyKey = optionalOverride(
+    recordOverrides,
+    "idempotencyKey",
+    optionalOverride(overrides, "idempotencyKey", "event_1"),
+  );
+  const nextAttemptAt = optionalOverride(
+    recordOverrides,
+    "nextAttemptAt",
+    optionalOverride(overrides, "nextAttemptAt", TEST_NOW),
+  );
+  const leaseKey = optionalOverride(
+    recordOverrides,
+    "leaseKey",
+    optionalOverride(overrides, "leaseKey", undefined),
+  );
+  const leasedAt = optionalOverride(
+    recordOverrides,
+    "leasedAt",
+    optionalOverride(overrides, "leasedAt", undefined),
+  );
+  const leaseExpiresAt = optionalOverride(
+    recordOverrides,
+    "leaseExpiresAt",
+    optionalOverride(overrides, "leaseExpiresAt", undefined),
+  );
   const record: WorkflowDocument["record"] = omitUndefined({
     id,
-    kind: "payment_webhook_fulfillment" as const,
+    kind,
     status,
-    subjectType: "webhook",
-    subjectId,
-    idempotencyKey,
-    attemptCount: overrides.record?.attemptCount ?? overrides.attemptCount ?? 0,
-    maxAttempts: overrides.record?.maxAttempts ?? overrides.maxAttempts ?? 5,
+    ...optionalProperty("subjectType", subjectType),
+    ...optionalProperty("subjectId", subjectId),
+    ...optionalProperty("idempotencyKey", idempotencyKey),
+    attemptCount: safeRecordOverrides.attemptCount ?? overrides.attemptCount ?? 0,
+    maxAttempts: safeRecordOverrides.maxAttempts ?? overrides.maxAttempts ?? 5,
     ...optionalProperty("nextAttemptAt", nextAttemptAt),
-    ...optionalProperty("leaseKey", overrides.record?.leaseKey ?? overrides.leaseKey),
-    ...optionalProperty("leasedAt", overrides.record?.leasedAt ?? overrides.leasedAt),
+    ...optionalProperty("leaseKey", leaseKey),
+    ...optionalProperty("leasedAt", leasedAt),
     ...optionalProperty("leaseExpiresAt", leaseExpiresAt),
-    steps: overrides.record?.steps ?? [
+    steps: safeRecordOverrides.steps ?? [
       { name: "link_checkout", status: "queued" as const, attemptCount: 0 },
       { name: "persist_order", status: "queued" as const, attemptCount: 0 },
       { name: "complete_checkout", status: "queued" as const, attemptCount: 0 },
       { name: "fulfill_order", status: "queued" as const, attemptCount: 0 },
       { name: "mark_webhook", status: "queued" as const, attemptCount: 0 },
     ],
-    ...optionalProperty("resumeState", overrides.record?.resumeState),
-    ...optionalProperty("lastError", overrides.record?.lastError),
-    createdAt: overrides.record?.createdAt ?? TEST_NOW,
-    updatedAt: overrides.record?.updatedAt ?? TEST_NOW,
-    ...optionalProperty("metadata", overrides.record?.metadata),
+    ...optionalProperty("resumeState", safeRecordOverrides.resumeState),
+    ...optionalProperty("lastError", safeRecordOverrides.lastError),
+    createdAt: safeRecordOverrides.createdAt ?? TEST_NOW,
+    updatedAt: safeRecordOverrides.updatedAt ?? TEST_NOW,
+    ...optionalProperty("completedAt", safeRecordOverrides.completedAt),
+    ...optionalProperty("metadata", safeRecordOverrides.metadata),
   });
 
   return omitUndefined({
@@ -21287,70 +21326,78 @@ function createWorkflowDocument(
     schemaVersion: 1,
     kind: record.kind,
     status,
-    subjectType: record.subjectType,
-    subjectId,
-    idempotencyKey,
+    ...optionalProperty("subjectType", record.subjectType),
+    ...optionalProperty("subjectId", record.subjectId),
+    ...optionalProperty("idempotencyKey", record.idempotencyKey),
     ...optionalProperty("nextAttemptAt", nextAttemptAt),
     ...optionalProperty("leaseExpiresAt", leaseExpiresAt),
     record,
     createdAt: TEST_NOW,
     updatedAt: TEST_NOW,
-    ...optionalProperty("leaseKey", overrides.leaseKey),
-    ...optionalProperty("leasedAt", overrides.leasedAt),
   });
 }
 
 function createWebhookDocument(
   overrides: TestDocumentOverrides<WebhookDocument> = {},
 ): WebhookDocument {
-  const recordOverrides = overrides.record ?? {};
-  const id = recordOverrides.id ?? overrides.id ?? createTestMikaId("webhook", 1);
-  const provider = recordOverrides.provider ?? overrides.provider ?? TEST_PROVIDER;
-  const providerEventId = recordOverrides.providerEventId ?? overrides.providerEventId ?? "event_1";
-  const eventType = recordOverrides.eventType ?? overrides.eventType ?? "payment.completed";
-  const payloadHash = recordOverrides.payloadHash ?? overrides.payloadHash ?? "hash_1";
-  const status = recordOverrides.status ?? overrides.status ?? "received";
-  const nextAttemptAt = Object.hasOwn(recordOverrides, "nextAttemptAt")
-    ? recordOverrides.nextAttemptAt
-    : overrides.nextAttemptAt;
-  const receivedAt = recordOverrides.receivedAt ?? overrides.receivedAt ?? TEST_NOW;
-  const rawPayloadJson = Object.hasOwn(recordOverrides, "rawPayloadJson")
-    ? recordOverrides.rawPayloadJson
+  const { record: recordOverrides, ...documentOverrides } = overrides;
+  const safeRecordOverrides = omitUndefined(recordOverrides ?? {});
+  const safeDocumentOverrides = omitUndefined(documentOverrides);
+  const id = safeRecordOverrides.id ?? safeDocumentOverrides.id ?? createTestMikaId("webhook", 1);
+  const provider = safeRecordOverrides.provider ?? safeDocumentOverrides.provider ?? TEST_PROVIDER;
+  const providerEventId = optionalOverride(
+    recordOverrides,
+    "providerEventId",
+    optionalOverride(documentOverrides, "providerEventId", "event_1"),
+  );
+  const eventType =
+    safeRecordOverrides.eventType ?? safeDocumentOverrides.eventType ?? "payment.completed";
+  const payloadHash =
+    safeRecordOverrides.payloadHash ?? safeDocumentOverrides.payloadHash ?? "hash_1";
+  const status = safeRecordOverrides.status ?? safeDocumentOverrides.status ?? "received";
+  const nextAttemptAt = optionalOverride(
+    recordOverrides,
+    "nextAttemptAt",
+    optionalOverride(documentOverrides, "nextAttemptAt", undefined),
+  );
+  const receivedAt = safeRecordOverrides.receivedAt ?? safeDocumentOverrides.receivedAt ?? TEST_NOW;
+  const rawPayloadJson = Object.hasOwn(recordOverrides ?? {}, "rawPayloadJson")
+    ? recordOverrides?.rawPayloadJson
     : { providerPayload: { marker: id } };
   const record: WebhookDocument["record"] = omitUndefined({
     id,
     provider,
-    providerEventId,
+    ...optionalProperty("providerEventId", providerEventId),
     eventType,
     payloadHash,
     status,
-    attemptCount: recordOverrides.attemptCount ?? 0,
+    attemptCount: safeRecordOverrides.attemptCount ?? 0,
     ...optionalProperty("nextAttemptAt", nextAttemptAt),
     receivedAt,
-    ...optionalProperty("processedAt", recordOverrides.processedAt),
-    ...optionalProperty("lastError", recordOverrides.lastError),
+    ...optionalProperty("processedAt", safeRecordOverrides.processedAt),
+    ...optionalProperty("lastError", safeRecordOverrides.lastError),
     ...optionalProperty("rawPayloadJson", rawPayloadJson),
-    ...optionalProperty("normalizedPayloadJson", recordOverrides.normalizedPayloadJson),
-    ...optionalProperty("rawPayloadPurgedAt", recordOverrides.rawPayloadPurgedAt),
-    ...optionalProperty("relatedCustomerId", recordOverrides.relatedCustomerId),
-    ...optionalProperty("relatedOrderId", recordOverrides.relatedOrderId),
-    ...optionalProperty("relatedSubscriptionId", recordOverrides.relatedSubscriptionId),
+    ...optionalProperty("normalizedPayloadJson", safeRecordOverrides.normalizedPayloadJson),
+    ...optionalProperty("rawPayloadPurgedAt", safeRecordOverrides.rawPayloadPurgedAt),
+    ...optionalProperty("relatedCustomerId", safeRecordOverrides.relatedCustomerId),
+    ...optionalProperty("relatedOrderId", safeRecordOverrides.relatedOrderId),
+    ...optionalProperty("relatedSubscriptionId", safeRecordOverrides.relatedSubscriptionId),
   });
 
   return omitUndefined({
-    id,
+    id: safeDocumentOverrides.id ?? record.id,
     type: "webhook",
-    schemaVersion: 1,
+    schemaVersion: safeDocumentOverrides.schemaVersion ?? 1,
     provider,
-    providerEventId,
+    ...optionalProperty("providerEventId", providerEventId),
     eventType,
     payloadHash,
     status,
     ...optionalProperty("nextAttemptAt", nextAttemptAt),
     receivedAt,
     record,
-    createdAt: overrides.createdAt ?? receivedAt,
-    updatedAt: overrides.updatedAt ?? receivedAt,
+    createdAt: safeDocumentOverrides.createdAt ?? receivedAt,
+    updatedAt: safeDocumentOverrides.updatedAt ?? receivedAt,
   });
 }
 
@@ -22165,22 +22212,30 @@ function isCartRouteResult(
 }
 
 function createCustomerDocument(overrides: TestOverrides<CustomerDocument> = {}): CustomerDocument {
+  const safeOverrides = omitUndefined(overrides);
+  const emailHash = optionalOverride(
+    overrides,
+    "emailHash",
+    createTestHash("email:subscriber@example.test"),
+  );
+
   return {
-    id: createTestMikaId("customer_document", 1),
+    id: safeOverrides.id ?? createTestMikaId("customer_document", 1),
     type: "customer",
-    schemaVersion: 1,
-    customerId: createTestMikaId("customer", 1),
-    userId: "user_1",
-    emailHash: createTestHash("email:subscriber@example.test"),
-    aggregate: {
-      schemaVersion: 1,
-      email: "Subscriber@Example.test",
-      emailHash: createTestHash("email:subscriber@example.test"),
-      name: "Subscriber One",
-    },
-    createdAt: TEST_NOW,
-    updatedAt: TEST_NOW,
-    ...omitUndefined(overrides),
+    schemaVersion: safeOverrides.schemaVersion ?? 1,
+    customerId: safeOverrides.customerId ?? createTestMikaId("customer", 1),
+    ...optionalProperty("userId", optionalOverride(overrides, "userId", "user_1")),
+    ...optionalProperty("emailHash", emailHash),
+    aggregate:
+      safeOverrides.aggregate ??
+      omitUndefined({
+        schemaVersion: 1,
+        email: "Subscriber@Example.test",
+        ...optionalProperty("emailHash", emailHash),
+        name: "Subscriber One",
+      }),
+    createdAt: safeOverrides.createdAt ?? TEST_NOW,
+    updatedAt: safeOverrides.updatedAt ?? TEST_NOW,
   };
 }
 
@@ -22210,33 +22265,45 @@ async function issueDownloadToken(
 }
 
 function createProviderAccountDocument(
-  overrides: TestOverrides<ProviderAccountDocument> = {},
+  overrides: TestDocumentOverrides<ProviderAccountDocument> = {},
 ): ProviderAccountDocument {
-  const provider = overrides.provider ?? TEST_PROVIDER;
-  const providerCustomerId = overrides.providerCustomerId ?? "provider_customer_1";
-  const customerId = overrides.customerId ?? createTestMikaId("customer", 1);
-  const record = {
-    id: overrides.id ?? createTestMikaId("provider_account", 1),
+  const { record: recordOverrides, ...documentOverrides } = overrides;
+  const safeDocumentOverrides = omitUndefined(documentOverrides);
+  const safeRecordOverrides = omitUndefined(recordOverrides ?? {});
+  const provider = safeRecordOverrides.provider ?? safeDocumentOverrides.provider ?? TEST_PROVIDER;
+  const providerCustomerId =
+    safeRecordOverrides.providerCustomerId ??
+    safeDocumentOverrides.providerCustomerId ??
+    "provider_customer_1";
+  const customerId =
+    safeRecordOverrides.customerId ??
+    safeDocumentOverrides.customerId ??
+    createTestMikaId("customer", 1);
+  const record: ProviderAccountDocument["record"] = omitUndefined({
+    id:
+      safeRecordOverrides.id ?? safeDocumentOverrides.id ?? createTestMikaId("provider_account", 1),
     customerId,
     provider,
     providerCustomerId,
-    emailSnapshot: "Subscriber@Example.test",
-    createdAt: TEST_NOW,
-    updatedAt: TEST_NOW,
-    ...omitUndefined(overrides.record ?? {}),
-  };
+    ...optionalProperty(
+      "emailSnapshot",
+      optionalOverride(recordOverrides, "emailSnapshot", "Subscriber@Example.test"),
+    ),
+    createdAt: safeRecordOverrides.createdAt ?? TEST_NOW,
+    updatedAt: safeRecordOverrides.updatedAt ?? TEST_NOW,
+    ...optionalProperty("metadata", safeRecordOverrides.metadata),
+  });
 
   return {
-    id: record.id,
+    id: safeDocumentOverrides.id ?? record.id,
     type: "providerAccount",
-    schemaVersion: 1,
+    schemaVersion: safeDocumentOverrides.schemaVersion ?? 1,
     customerId: record.customerId,
     provider: record.provider,
     providerCustomerId: record.providerCustomerId,
     record,
-    createdAt: TEST_NOW,
-    updatedAt: TEST_NOW,
-    ...omitUndefined(overrides),
+    createdAt: safeDocumentOverrides.createdAt ?? TEST_NOW,
+    updatedAt: safeDocumentOverrides.updatedAt ?? TEST_NOW,
   };
 }
 
@@ -22336,68 +22403,92 @@ function createOrderDocument(overrides: TestOverrides<OrderDocument> = {}): Orde
 function createSubscriptionDocument(
   overrides: TestOverrides<SubscriptionDocument> = {},
 ): SubscriptionDocument {
-  const currentPeriodEnd = createTestClock().isoAt(31 * 24 * 60 * 60_000);
+  const safeOverrides = omitUndefined(overrides);
+  const currentPeriodEnd = optionalOverride(
+    overrides,
+    "currentPeriodEnd",
+    createTestClock().isoAt(31 * 24 * 60 * 60_000),
+  );
+  const customerId = optionalOverride(overrides, "customerId", createTestMikaId("customer", 1));
+  const provider = safeOverrides.provider ?? TEST_PROVIDER;
+  const providerCustomerId = optionalOverride(
+    overrides,
+    "providerCustomerId",
+    "provider_customer_1",
+  );
+  const providerSubscriptionId = optionalOverride(
+    overrides,
+    "providerSubscriptionId",
+    "provider_subscription_1",
+  );
 
   return {
-    id: createTestMikaId("subscription", 1),
+    id: safeOverrides.id ?? createTestMikaId("subscription", 1),
     type: "subscription",
-    schemaVersion: 1,
-    customerId: createTestMikaId("customer", 1),
-    provider: TEST_PROVIDER,
-    providerCustomerId: "provider_customer_1",
-    providerSubscriptionId: "provider_subscription_1",
-    status: "active",
-    currentPeriodEnd,
-    aggregate: {
-      schemaVersion: 1,
-      customer: {
-        customerId: createTestMikaId("customer", 1),
-        userId: "user_1",
-        email: "Subscriber@Example.test",
-        emailHash: createTestHash("email:subscriber@example.test"),
-        name: "Subscriber One",
-      },
-      sellable: createPurchasableSnapshot({
-        titleSnapshot: "Test subscription",
-        mode: "subscription",
-        fulfillmentKind: "entitlement",
+    schemaVersion: safeOverrides.schemaVersion ?? 1,
+    ...optionalProperty("customerId", customerId),
+    provider,
+    ...optionalProperty("providerCustomerId", providerCustomerId),
+    ...optionalProperty("providerSubscriptionId", providerSubscriptionId),
+    status: safeOverrides.status ?? "active",
+    ...optionalProperty("currentPeriodEnd", currentPeriodEnd),
+    aggregate:
+      safeOverrides.aggregate ??
+      omitUndefined({
+        schemaVersion: 1,
+        customer: omitUndefined({
+          ...optionalProperty("customerId", customerId),
+          userId: "user_1",
+          email: "Subscriber@Example.test",
+          emailHash: createTestHash("email:subscriber@example.test"),
+          name: "Subscriber One",
+        }),
+        sellable: createPurchasableSnapshot({
+          titleSnapshot: "Test subscription",
+          mode: "subscription",
+          fulfillmentKind: "entitlement",
+        }),
+        providerRef: omitUndefined({
+          provider,
+          ...optionalProperty("customerId", providerCustomerId),
+          ...optionalProperty("subscriptionId", providerSubscriptionId),
+        }),
+        status: safeOverrides.status ?? "active",
+        cancelAtPeriodEnd: false,
+        ...optionalProperty("currentPeriodEnd", currentPeriodEnd),
       }),
-      providerRef: {
-        provider: TEST_PROVIDER,
-        customerId: "provider_customer_1",
-        subscriptionId: "provider_subscription_1",
-      },
-      status: "active",
-      cancelAtPeriodEnd: false,
-      currentPeriodEnd,
-    },
-    createdAt: TEST_NOW,
-    updatedAt: TEST_NOW,
-    ...omitUndefined(overrides),
+    createdAt: safeOverrides.createdAt ?? TEST_NOW,
+    updatedAt: safeOverrides.updatedAt ?? TEST_NOW,
   };
 }
 
 function createCartDocument(overrides: TestOverrides<CartDocument> = {}): CartDocument {
-  const id = overrides.id ?? createTestMikaId("cart", 1);
+  const safeOverrides = omitUndefined(overrides);
+  const id = safeOverrides.id ?? createTestMikaId("cart", 1);
 
   return {
     id,
     type: "cart",
-    schemaVersion: 1,
-    sessionId: "session_1",
-    customerId: createTestMikaId("customer", 1),
-    userId: "user_1",
-    status: "open",
-    currency: TEST_CURRENCY,
-    version: 1,
-    aggregate: {
-      schemaVersion: 1,
-      currency: TEST_CURRENCY,
-      items: [],
-    },
-    createdAt: TEST_NOW,
-    updatedAt: TEST_NOW,
-    ...omitUndefined(overrides),
+    schemaVersion: safeOverrides.schemaVersion ?? 1,
+    ...optionalProperty("sessionId", optionalOverride(overrides, "sessionId", "session_1")),
+    ...optionalProperty(
+      "customerId",
+      optionalOverride(overrides, "customerId", createTestMikaId("customer", 1)),
+    ),
+    ...optionalProperty("userId", optionalOverride(overrides, "userId", "user_1")),
+    status: safeOverrides.status ?? "open",
+    currency: safeOverrides.currency ?? TEST_CURRENCY,
+    ...optionalProperty("expiresAt", safeOverrides.expiresAt),
+    version: safeOverrides.version ?? 1,
+    aggregate:
+      safeOverrides.aggregate ??
+      ({
+        schemaVersion: 1,
+        currency: safeOverrides.currency ?? TEST_CURRENCY,
+        items: [],
+      } satisfies CartDocument["aggregate"]),
+    createdAt: safeOverrides.createdAt ?? TEST_NOW,
+    updatedAt: safeOverrides.updatedAt ?? TEST_NOW,
   };
 }
 
@@ -22466,95 +22557,183 @@ function createEntitlementDocument(
   };
 }
 
-function createLicenseDocument(overrides: TestOverrides<LicenseDocument> = {}): LicenseDocument {
-  const record = {
-    id: overrides.id ?? createTestMikaId("license", 1),
-    orderId: createTestMikaId("order", 1),
-    orderLineId: createTestMikaId("order_line", 1),
-    entitlementId: createTestMikaId("entitlement", 1),
-    licenseKeyHash: createTestHash("license-key:one"),
-    displayKeySuffix: "1234",
-    status: "active" as const,
-    createdAt: TEST_NOW,
-    ...omitUndefined(overrides.record ?? {}),
-  };
+function createLicenseDocument(
+  overrides: TestDocumentOverrides<LicenseDocument> = {},
+): LicenseDocument {
+  const { record: recordOverrides, ...documentOverrides } = overrides;
+  const safeDocumentOverrides = omitUndefined(documentOverrides);
+  const safeRecordOverrides = omitUndefined(recordOverrides ?? {});
+  const orderId = optionalOverride(
+    recordOverrides,
+    "orderId",
+    optionalOverride(documentOverrides, "orderId", createTestMikaId("order", 1)),
+  );
+  const orderLineId = optionalOverride(
+    recordOverrides,
+    "orderLineId",
+    optionalOverride(documentOverrides, "orderLineId", createTestMikaId("order_line", 1)),
+  );
+  const entitlementId = optionalOverride(
+    recordOverrides,
+    "entitlementId",
+    optionalOverride(documentOverrides, "entitlementId", createTestMikaId("entitlement", 1)),
+  );
+  const status = safeRecordOverrides.status ?? safeDocumentOverrides.status ?? "active";
+  const record: LicenseDocument["record"] = omitUndefined({
+    id: safeRecordOverrides.id ?? safeDocumentOverrides.id ?? createTestMikaId("license", 1),
+    ...optionalProperty("orderId", orderId),
+    ...optionalProperty("orderLineId", orderLineId),
+    ...optionalProperty("entitlementId", entitlementId),
+    licenseKeyHash: safeRecordOverrides.licenseKeyHash ?? createTestHash("license-key:one"),
+    displayKeySuffix: safeRecordOverrides.displayKeySuffix ?? "1234",
+    status,
+    createdAt: safeRecordOverrides.createdAt ?? TEST_NOW,
+    ...optionalProperty("revokedAt", safeRecordOverrides.revokedAt),
+    ...optionalProperty("metadata", safeRecordOverrides.metadata),
+  });
 
-  return {
-    id: record.id,
+  return omitUndefined({
+    id: safeDocumentOverrides.id ?? record.id,
     type: "license",
-    schemaVersion: 1,
-    orderId: record.orderId,
-    orderLineId: record.orderLineId,
-    entitlementId: record.entitlementId,
+    schemaVersion: safeDocumentOverrides.schemaVersion ?? 1,
+    ...optionalProperty("orderId", record.orderId),
+    ...optionalProperty("orderLineId", record.orderLineId),
+    ...optionalProperty("entitlementId", record.entitlementId),
     status: record.status,
-    customerId: createTestMikaId("customer", 1),
+    ...optionalProperty(
+      "customerId",
+      optionalOverride(documentOverrides, "customerId", createTestMikaId("customer", 1)),
+    ),
     record,
-    createdAt: TEST_NOW,
-    updatedAt: TEST_NOW,
-    ...omitUndefined(overrides),
-  };
+    createdAt: safeDocumentOverrides.createdAt ?? TEST_NOW,
+    updatedAt: safeDocumentOverrides.updatedAt ?? TEST_NOW,
+  });
 }
 
 function createEmailDocument(overrides: TestDocumentOverrides<EmailDocument> = {}): EmailDocument {
-  const record = {
-    id: overrides.id ?? createTestMikaId("email", 1),
-    customerId: createTestMikaId("customer", 1),
-    orderId: createTestMikaId("order", 1),
-    kind: "download" as const,
-    toEmail: "subscriber@example.test",
-    subject: "Your download",
-    status: "queued" as const,
-    templateKey: "download",
-    templateVersion: "1",
-    attemptCount: 1,
-    maxAttempts: 5,
-    nextAttemptAt: TEST_NOW,
-    createdAt: TEST_NOW,
-    ...omitUndefined(overrides.record ?? {}),
-  };
+  const { record: recordOverrides, ...documentOverrides } = overrides;
+  const safeDocumentOverrides = omitUndefined(documentOverrides);
+  const safeRecordOverrides = omitUndefined(recordOverrides ?? {});
+  const orderId = optionalOverride(
+    recordOverrides,
+    "orderId",
+    optionalOverride(documentOverrides, "orderId", createTestMikaId("order", 1)),
+  );
+  const tokenId = optionalOverride(
+    recordOverrides,
+    "tokenId",
+    optionalOverride(documentOverrides, "tokenId", undefined),
+  );
+  const nextAttemptAt = optionalOverride(
+    recordOverrides,
+    "nextAttemptAt",
+    optionalOverride(documentOverrides, "nextAttemptAt", TEST_NOW),
+  );
+  const kind = safeRecordOverrides.kind ?? safeDocumentOverrides.kind ?? "download";
+  const status = safeRecordOverrides.status ?? safeDocumentOverrides.status ?? "queued";
+  const record: EmailDocument["record"] = omitUndefined({
+    id: safeRecordOverrides.id ?? safeDocumentOverrides.id ?? createTestMikaId("email", 1),
+    ...optionalProperty(
+      "customerId",
+      optionalOverride(recordOverrides, "customerId", createTestMikaId("customer", 1)),
+    ),
+    ...optionalProperty("orderId", orderId),
+    ...optionalProperty("tokenId", tokenId),
+    kind,
+    toEmail: safeRecordOverrides.toEmail ?? "subscriber@example.test",
+    subject: safeRecordOverrides.subject ?? "Your download",
+    status,
+    ...optionalProperty("providerMessageId", safeRecordOverrides.providerMessageId),
+    ...optionalProperty("idempotencyKey", safeRecordOverrides.idempotencyKey),
+    ...optionalProperty(
+      "templateKey",
+      optionalOverride(recordOverrides, "templateKey", "download"),
+    ),
+    ...optionalProperty(
+      "templateVersion",
+      optionalOverride(recordOverrides, "templateVersion", "1"),
+    ),
+    attemptCount: safeRecordOverrides.attemptCount ?? 1,
+    maxAttempts: safeRecordOverrides.maxAttempts ?? 5,
+    ...optionalProperty("nextAttemptAt", nextAttemptAt),
+    ...optionalProperty("leaseKey", safeRecordOverrides.leaseKey),
+    ...optionalProperty("leasedAt", safeRecordOverrides.leasedAt),
+    ...optionalProperty("leaseExpiresAt", safeRecordOverrides.leaseExpiresAt),
+    ...optionalProperty("lastError", safeRecordOverrides.lastError),
+    createdAt: safeRecordOverrides.createdAt ?? TEST_NOW,
+    ...optionalProperty("sentAt", safeRecordOverrides.sentAt),
+    ...optionalProperty("metadata", safeRecordOverrides.metadata),
+  });
 
   return omitUndefined({
-    id: record.id,
+    id: safeDocumentOverrides.id ?? record.id,
     type: "email",
-    schemaVersion: 1,
-    ...omitUndefined(overrides),
+    schemaVersion: safeDocumentOverrides.schemaVersion ?? 1,
     status: record.status,
-    nextAttemptAt: record.nextAttemptAt,
-    orderId: record.orderId,
-    tokenId: record.tokenId,
+    ...optionalProperty("nextAttemptAt", record.nextAttemptAt),
+    ...optionalProperty("orderId", record.orderId),
+    ...optionalProperty("tokenId", record.tokenId),
     kind: record.kind,
     record,
-    createdAt: TEST_NOW,
-    updatedAt: TEST_NOW,
+    createdAt: safeDocumentOverrides.createdAt ?? TEST_NOW,
+    updatedAt: safeDocumentOverrides.updatedAt ?? TEST_NOW,
   });
 }
 
 function createAccountExportDocument(
   overrides: TestDocumentOverrides<AccountExportDocument> = {},
 ): AccountExportDocument {
-  const record = {
-    id: overrides.id ?? createTestMikaId("account_export", 1),
-    customerId: createTestMikaId("customer", 1),
-    status: "ready" as const,
-    requestedAt: TEST_NOW,
-    expiresAt: TEST_NOW,
-    downloadTokenHash: createTestHash("account-export-download-token:account_export_token_1"),
-    artifactRef: "data:application/json;base64,e30=",
-    ...omitUndefined(overrides.record ?? {}),
-  };
+  const { record: recordOverrides, ...documentOverrides } = overrides;
+  const safeDocumentOverrides = omitUndefined(documentOverrides);
+  const safeRecordOverrides = omitUndefined(recordOverrides ?? {});
+  const customerId = optionalOverride(
+    recordOverrides,
+    "customerId",
+    optionalOverride(documentOverrides, "customerId", createTestMikaId("customer", 1)),
+  );
+  const userId = optionalOverride(
+    recordOverrides,
+    "userId",
+    optionalOverride(documentOverrides, "userId", undefined),
+  );
+  const status = safeRecordOverrides.status ?? safeDocumentOverrides.status ?? "ready";
+  const expiresAt = safeRecordOverrides.expiresAt ?? safeDocumentOverrides.expiresAt ?? TEST_NOW;
+  const record: AccountExportDocument["record"] = omitUndefined({
+    id: safeRecordOverrides.id ?? safeDocumentOverrides.id ?? createTestMikaId("account_export", 1),
+    ...optionalProperty("customerId", customerId),
+    ...optionalProperty("userId", userId),
+    ...optionalProperty("emailHash", safeRecordOverrides.emailHash),
+    status,
+    requestedAt: safeRecordOverrides.requestedAt ?? TEST_NOW,
+    ...optionalProperty("finishedAt", safeRecordOverrides.finishedAt),
+    expiresAt,
+    ...optionalProperty(
+      "downloadTokenHash",
+      optionalOverride(
+        recordOverrides,
+        "downloadTokenHash",
+        createTestHash("account-export-download-token:account_export_token_1"),
+      ),
+    ),
+    ...optionalProperty(
+      "artifactRef",
+      optionalOverride(recordOverrides, "artifactRef", "data:application/json;base64,e30="),
+    ),
+    ...optionalProperty("lastError", safeRecordOverrides.lastError),
+    ...optionalProperty("metadata", safeRecordOverrides.metadata),
+  });
 
   return omitUndefined({
-    id: record.id,
+    id: safeDocumentOverrides.id ?? record.id,
     type: "accountExport",
-    schemaVersion: 1,
-    ...omitUndefined(overrides),
-    customerId: record.customerId,
-    userId: record.userId,
+    schemaVersion: safeDocumentOverrides.schemaVersion ?? 1,
+    ...optionalProperty("customerId", record.customerId),
+    ...optionalProperty("userId", record.userId),
     status: record.status,
     expiresAt: record.expiresAt,
     record,
-    createdAt: TEST_NOW,
-    updatedAt: TEST_NOW,
+    createdAt: safeDocumentOverrides.createdAt ?? TEST_NOW,
+    updatedAt: safeDocumentOverrides.updatedAt ?? TEST_NOW,
   });
 }
 
