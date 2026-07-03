@@ -2,7 +2,7 @@
  * Integration harness for the published Mika package surface.
  * Covers plugin wiring, subpath exports, agent manifests, and template contracts.
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import Ajv2020 from "ajv/dist/2020";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import {
@@ -4275,27 +4275,34 @@ describe("Mika Astro template contracts", () => {
       new URL("../src/templates/astro/examples/astro-storefront.md", import.meta.url),
       "utf8",
     );
-    const productFlowEntrypoints = ["ProductPurchase.astro", "AddToCartForm.astro"];
-    const productFlowComponents = new Set(
-      productFlowEntrypoints.map((file) => `components/${file}`),
-    );
+    const templateRoot = new URL("../src/templates/astro/", import.meta.url);
+    const seen = new Set<string>();
+    const pending = [new URL("components/ProductPurchase.astro", templateRoot)];
 
-    for (const file of productFlowEntrypoints) {
-      const source = readFileSync(
-        new URL(`../src/templates/astro/components/${file}`, import.meta.url),
-        "utf8",
-      );
-      const localComponentImports = source.matchAll(/from\s+["']\.\/([^"']+\.astro)["']/g);
+    for (let file = pending.pop(); file; file = pending.pop()) {
+      const templatePath = decodeURIComponent(file.pathname.slice(templateRoot.pathname.length));
+      if (seen.has(templatePath)) continue;
+      seen.add(templatePath);
 
-      for (const [, component] of localComponentImports) {
-        if (!component) continue;
-        productFlowComponents.add(`components/${component}`);
+      const source = readFileSync(file, "utf8");
+      const localImports = source.matchAll(/from\s+["'](\.{1,2}\/[^"']+)["']/g);
+
+      for (const [, specifier] of localImports) {
+        if (!specifier) continue;
+        const dependency = [
+          new URL(specifier, file),
+          new URL(`${specifier}.astro`, file),
+          new URL(`${specifier}.ts`, file),
+          new URL(`${specifier}.tsx`, file),
+        ].find((candidate) => existsSync(candidate));
+        if (!dependency || !dependency.pathname.startsWith(templateRoot.pathname)) continue;
+        pending.push(dependency);
       }
     }
 
-    for (const component of productFlowComponents) {
-      expect(readme).toContain(component);
-      expect(storefrontExample).toContain(component);
+    for (const file of seen) {
+      expect(readme).toContain(file);
+      expect(storefrontExample).toContain(file);
     }
   });
 

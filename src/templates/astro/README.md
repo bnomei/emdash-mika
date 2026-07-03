@@ -122,6 +122,7 @@ Core product flow:
 ```txt
 actions/index.ts
 actions/mika.ts
+lib/routes.ts
 styles/kumo.css
 components/MikaKumoAppFrame.tsx
 components/MikaKumoPage.astro
