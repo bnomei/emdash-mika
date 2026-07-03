@@ -2,7 +2,12 @@
  * Compile-time package export contract checks.
  * Ensures subpath barrels expose expected types and block accidental internals.
  */
-import type { mikaPlugin, MikaOperationDescriptor, MikaOperationPolicy } from "@bnomei/emdash-mika";
+import type {
+  mikaPlugin,
+  MikaMaintenanceRuntimeOptions,
+  MikaOperationDescriptor,
+  MikaOperationPolicy,
+} from "@bnomei/emdash-mika";
 import type {
   createMikaAcpCheckoutHandlers,
   createMikaAcpProductFeed,
@@ -48,6 +53,7 @@ import type {
   MikaEmailDeliveryMessage,
   MikaEmailOutboxRunner,
   MikaMaintenanceRunner,
+  MikaMaintenanceRunnerInput,
   MikaApiOverrides,
   MikaAccountDeleteRequestedNotificationContext,
   MikaAccountExportReadyNotificationContext,
@@ -155,6 +161,8 @@ export type PackageEntryContract = {
   readonly emdashEmailSenderFactory: typeof createEmDashMikaEmailSender;
   readonly emailOutboxRunner: MikaEmailOutboxRunner;
   readonly maintenanceRunner: MikaMaintenanceRunner;
+  readonly maintenanceRuntimeOptions: MikaMaintenanceRuntimeOptions;
+  readonly maintenanceRunnerInput: MikaMaintenanceRunnerInput;
   readonly emailDeliveryMessage: MikaEmailDeliveryMessage;
   readonly assertWired: typeof assertMikaApiWired;
   readonly backendInput: CreateMikaBackendApiInput;

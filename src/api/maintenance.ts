@@ -155,7 +155,7 @@ type MikaMaintenanceRepositories = Pick<
   "account" | "ephemeral" | "ledger" | "ops" | "session" | "stock"
 >;
 
-interface MikaMaintenanceRunnerInput {
+export interface MikaMaintenanceRunnerInput {
   readonly api?: Pick<MikaApi, "admin">;
   readonly acpSessionStore?: MikaAcpSessionStore;
   readonly cleanupExpiredAcpSessions?: (

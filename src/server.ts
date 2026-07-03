@@ -136,6 +136,7 @@ export {
 /** Scheduled maintenance runner for stock release, outbox drain, and account delete jobs. */
 export {
   createMikaMaintenanceRunner,
+  type MikaMaintenanceRunnerInput,
   type MikaMaintenanceRunner,
   type MikaMaintenanceRunOptions,
   type MikaMaintenanceRunResult,

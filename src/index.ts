@@ -20,6 +20,7 @@ export {
   type MikaDescriptorOptions,
   type MikaDescriptorPluginOptions,
   type MikaMaintenancePluginOptions,
+  type MikaMaintenanceRuntimeOptions,
 } from "./plugin";
 /** Host policy toggles applied when constructing plugin routes and operation runners. */
 export type { MikaOperationPolicy } from "./api/operation-policy";

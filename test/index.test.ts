@@ -16,9 +16,11 @@ import {
   type MikaCreatePluginOptions,
   type MikaDescriptorOptions,
   type MikaDescriptorPluginOptions,
+  type MikaMaintenanceRuntimeOptions,
 } from "../src/index";
 import type {
   mikaPlugin as PackageMikaPlugin,
+  MikaMaintenanceRuntimeOptions as PackageRootMikaMaintenanceRuntimeOptions,
   MikaOperationDescriptor as PackageRootMikaOperationDescriptor,
   MikaOperationPolicy as PackageRootMikaOperationPolicy,
 } from "@bnomei/emdash-mika";
@@ -57,6 +59,7 @@ import type {
   MikaNotificationHook as PackageMikaNotificationHook,
   MikaNotificationIntent as PackageMikaNotificationIntent,
   MikaNotificationKind as PackageMikaNotificationKind,
+  MikaMaintenanceRunnerInput as PackageMikaMaintenanceRunnerInput,
   MikaOperationDescriptor as PackageServerMikaOperationDescriptor,
   MikaOperationPolicy as PackageServerMikaOperationPolicy,
 } from "@bnomei/emdash-mika/server";
@@ -123,6 +126,7 @@ import {
   type MikaNotificationHook,
   type MikaNotificationIntent,
   type MikaNotificationKind,
+  type MikaMaintenanceRunnerInput,
   type MikaOperationDescriptor,
   type MikaOperationPolicy,
   type MikaServerClient,
@@ -4025,6 +4029,12 @@ describe("public types", () => {
 
     expectTypeOf(client).toMatchTypeOf<MikaClient>();
     expectTypeOf<ReturnType<typeof createMikaAgentManifest>>().toEqualTypeOf<MikaAgentManifest>();
+    expectTypeOf<MikaCreatePluginOptions["maintenance"]>().toEqualTypeOf<
+      MikaMaintenanceRuntimeOptions | undefined
+    >();
+    expectTypeOf<Parameters<typeof createMikaMaintenanceRunner>[0]>().toEqualTypeOf<
+      MikaMaintenanceRunnerInput | undefined
+    >();
     expectTypeOf<typeof PackageMikaAgentManifestJsonSchema>().toEqualTypeOf<
       typeof mikaAgentManifestJsonSchema
     >();
@@ -4238,6 +4248,10 @@ describe("public types", () => {
     expectTypeOf<PackageServerMikaOperationDescriptor>().toEqualTypeOf<MikaOperationDescriptor>();
     expectTypeOf<PackageRootMikaOperationPolicy>().toEqualTypeOf<MikaOperationPolicy>();
     expectTypeOf<PackageServerMikaOperationPolicy>().toEqualTypeOf<MikaOperationPolicy>();
+    expectTypeOf<PackageRootMikaMaintenanceRuntimeOptions>().toEqualTypeOf<
+      MikaMaintenanceRuntimeOptions
+    >();
+    expectTypeOf<PackageMikaMaintenanceRunnerInput>().toEqualTypeOf<MikaMaintenanceRunnerInput>();
     expectTypeOf<typeof PACKAGE_MIKA_ERROR_CODES>().toEqualTypeOf<typeof MIKA_ERROR_CODES>();
     expectTypeOf<typeof PackageCreateMikaId>().toEqualTypeOf<typeof createMikaId>();
     expectTypeOf<typeof PackageCreateMikaStripeProvider>().toEqualTypeOf<
