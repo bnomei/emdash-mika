@@ -46,8 +46,7 @@ import type {
   MikaApiResult,
   StartCheckoutInput,
 } from "../types";
-import { safeRequestReturnPath } from "./account";
-import { requireProviderFeature, stableJsonStringify } from "./admin-audit";
+import { requireProviderFeature } from "./provider-dispatch";
 import {
   apiFailure,
   checkoutEmpty,
@@ -81,7 +80,14 @@ import {
   validateQuantityLimit,
 } from "./quote";
 import { checkoutIsSettled, checkoutStatusIsTerminal } from "../lifecycle";
-import { defaultBackendCurrency, metadataMikaId, metadataString, moneyDTO } from "./shared";
+import {
+  defaultBackendCurrency,
+  metadataMikaId,
+  metadataString,
+  moneyDTO,
+  safeRequestReturnPath,
+  stableJsonStringify,
+} from "./shared";
 import { createMikaStockLifecycleService, expireCheckoutReservations } from "./stock-lifecycle";
 import type { MikaStockLifecycleDependencies } from "./stock-lifecycle";
 import {

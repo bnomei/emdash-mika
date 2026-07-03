@@ -1,58 +1,16 @@
 /**
  * Admin-action audit trail: the durable, idempotency-keyed record every admin operation writes
- * before/after running, the provider-feature dispatch helper those actions use to reach a
- * provider adapter method, and the small JSON-stability helpers (stable stringify, idempotency
- * widening) the audit hash and snapshot logic depends on.
+ * before/after running, and the audit-hash/snapshot logic around it. Provider-feature dispatch
+ * lives in ./provider-dispatch and the stable-JSON helper in ./shared.
  */
-import type { MikaProviderAdapter } from "../../provider";
 import type { AdminAuditDocument } from "../../types/documents";
 import { isJsonObject } from "../../types/primitives";
-import type {
-  ISODateTime,
-  JsonObject,
-  JsonValue,
-  MikaId,
-  ProviderName,
-} from "../../types/primitives";
-import type { AdminActionResultDTO, MikaApiResult, MikaProviderCapability } from "../types";
-import {
-  adminIdempotencyInputMismatch,
-  observeBackendError,
-  providerFailed,
-  providerUnsupportedForAction,
-} from "./errors";
+import type { ISODateTime, JsonObject, JsonValue, MikaId } from "../../types/primitives";
+import type { AdminActionResultDTO, MikaApiResult } from "../types";
+import { adminIdempotencyInputMismatch, observeBackendError, providerFailed } from "./errors";
 import type { MikaApiFailure } from "./errors";
-import { currentBackendISODateTime } from "./shared";
+import { currentBackendISODateTime, stableJsonStringify } from "./shared";
 import type { MikaBackendDependencies } from "./ports";
-
-export type MikaProviderMethodName = Extract<
-  {
-    readonly [K in keyof MikaProviderAdapter]: NonNullable<MikaProviderAdapter[K]> extends (
-      ...args: any[]
-    ) => any
-      ? K
-      : never;
-  }[keyof MikaProviderAdapter],
-  keyof MikaProviderAdapter
->;
-
-export type MikaProviderFeature<TMethod extends MikaProviderMethodName> =
-  | {
-      readonly ok: true;
-      readonly providerName: ProviderName;
-      readonly provider: MikaProviderAdapter;
-      readonly method: NonNullable<MikaProviderAdapter[TMethod]>;
-    }
-  | MikaApiFailure;
-
-export interface MikaProviderFeatureOptions<TMethod extends MikaProviderMethodName> {
-  readonly providerName?: ProviderName;
-  readonly method: TMethod;
-  readonly capability?: MikaProviderCapability;
-  readonly capabilityFailureMessage?: string;
-  readonly missingProviderMessage?: string;
-  readonly unsupportedMessage: (providerName: ProviderName) => string;
-}
 
 export type MikaAdminAuditStartRecord = Omit<
   AdminAuditDocument["record"],
@@ -164,49 +122,6 @@ export async function failAdminAudit(
       },
     },
   });
-}
-
-export async function requireProviderFeature<TMethod extends MikaProviderMethodName>(
-  input: MikaBackendDependencies,
-  options: MikaProviderFeatureOptions<TMethod>,
-): Promise<MikaProviderFeature<TMethod>> {
-  const providerName = options.providerName ?? input.defaults?.provider;
-  if (!providerName) {
-    return providerUnsupportedForAction(
-      options.missingProviderMessage ?? "No provider is configured.",
-    );
-  }
-
-  const provider = input.providers.get(providerName);
-  if (!provider) {
-    return providerUnsupportedForAction(`Provider '${providerName}' is not configured.`);
-  }
-
-  if (options.capability) {
-    let capabilities: readonly MikaProviderCapability[];
-    try {
-      capabilities = await provider.capabilities();
-    } catch {
-      return providerFailed(
-        options.capabilityFailureMessage ?? "Provider capabilities could not be verified.",
-      );
-    }
-    if (!capabilities.includes(options.capability)) {
-      return providerUnsupportedForAction(options.unsupportedMessage(providerName));
-    }
-  }
-
-  const method = provider[options.method];
-  if (typeof method !== "function") {
-    return providerUnsupportedForAction(options.unsupportedMessage(providerName));
-  }
-
-  return {
-    ok: true,
-    providerName,
-    provider,
-    method: method as NonNullable<MikaProviderAdapter[TMethod]>,
-  };
 }
 
 export async function runAdminProviderAction<TData>(
@@ -400,26 +315,6 @@ export function adminActionFailed(message: string): MikaApiFailure {
  */
 export function toIdempotencyJson(input: object): JsonValue {
   return input as unknown as JsonValue;
-}
-
-export function stableJsonStringify(value: unknown): string {
-  return JSON.stringify(stableJsonValue(value));
-}
-
-export function stableJsonValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(stableJsonValue);
-  }
-  if (value === null || typeof value !== "object") {
-    return value;
-  }
-
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, child]) => child !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, child]) => [key, stableJsonValue(child)]),
-  );
 }
 
 export function createAdminAuditDocument(

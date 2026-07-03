@@ -16,7 +16,6 @@ import type {
 import { createMikaId } from "../../types/primitives";
 import type { ISODateTime, MikaId } from "../../types/primitives";
 import type { MikaRequestContext } from "../context";
-import { mikaSafeReturnPath } from "../redirect-policy";
 import { mikaPluginRoute } from "../routes";
 import type {
   AccountDTO,
@@ -30,7 +29,7 @@ import type {
   OrderSummaryDTO,
   SubscriptionDTO,
 } from "../types";
-import { requireProviderFeature } from "./admin-audit";
+import { requireProviderFeature } from "./provider-dispatch";
 import {
   apiFailure,
   authRequired,
@@ -49,7 +48,7 @@ import {
   resolveAccountIdentity,
 } from "./identity";
 import type { MikaBackendDependencies } from "./ports";
-import { addMilliseconds } from "./shared";
+import { addMilliseconds, safeRequestReturnPath } from "./shared";
 import {
   accountExportArtifactRef,
   accountExportDownloadTokenError,
@@ -679,13 +678,3 @@ export function accountPortalReturnUrl(ctx: MikaRequestContext, returnTo?: strin
   return new URL(safeRequestReturnPath(ctx, returnTo), ctx.url.origin).toString();
 }
 
-export function safeRequestReturnPath(
-  ctx: MikaRequestContext,
-  candidate?: string,
-  fallback = ctx.url ? `${ctx.url.pathname}${ctx.url.search}${ctx.url.hash}` : "/",
-): string {
-  return mikaSafeReturnPath(candidate ?? fallback, {
-    origin: ctx.url,
-    fallback,
-  });
-}

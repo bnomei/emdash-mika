@@ -25,11 +25,11 @@ import type {
 import {
   assertCompletedProviderAction,
   missingTargetWithAudit,
-  requireProviderFeature,
   runAdminProviderAction,
   runAdminRepositoryAction,
   toIdempotencyJson,
 } from "./admin-audit";
+import { requireProviderFeature } from "./provider-dispatch";
 import {
   emitBackendNotification,
   observeBackendError,

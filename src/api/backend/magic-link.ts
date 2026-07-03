@@ -6,10 +6,10 @@ import { renderMikaEmail } from "../../email";
 import type { MikaRequestContext } from "../context";
 import { emitMikaNotification, type MikaNotificationIntent } from "../notifications";
 import type { AccountDTO, MikaApiResult } from "../types";
-import { accountDTOForCustomer, safeRequestReturnPath } from "./account";
+import { accountDTOForCustomer } from "./account";
 import { authRequired, observeBackendError, tokenResult } from "./errors";
 import type { MikaBackendDependencies } from "./ports";
-import { addMilliseconds, emailHashKey, stringChild } from "./shared";
+import { addMilliseconds, emailHashKey, safeRequestReturnPath, stringChild } from "./shared";
 import { hashMagicLinkToken, magicLinkTokenError } from "./tokens";
 
 /** Reports a swallowed best-effort failure to the host observer; never throws. */

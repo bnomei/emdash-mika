@@ -13,7 +13,8 @@ import type { ISODateTime, JsonObject, MikaId, SubscriptionStatus } from "../../
 import type { MikaRequestContext } from "../context";
 import type { AccountDTO, MikaApiResult } from "../types";
 import { accountDTOForCustomer } from "./account";
-import { requireProviderFeature, runAdminProviderAction } from "./admin-audit";
+import { runAdminProviderAction } from "./admin-audit";
+import { requireProviderFeature } from "./provider-dispatch";
 import {
   authRequired,
   emitBackendNotification,

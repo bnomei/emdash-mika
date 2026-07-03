@@ -16,8 +16,43 @@ import type {
 } from "../../types/primitives";
 import type { MoneyDTO } from "../types";
 import type { MikaBackendDefaults, MikaBackendDependencies } from "./ports";
+import type { MikaRequestContext } from "../context";
+import { mikaSafeReturnPath } from "../redirect-policy";
 
 const DEFAULT_BACKEND_CURRENCY = createCurrencyCode("EUR");
+
+/** Deterministic JSON stringify with sorted keys and dropped undefineds, for stable hashing. */
+export function stableJsonStringify(value: unknown): string {
+  return JSON.stringify(stableJsonValue(value));
+}
+
+function stableJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stableJsonValue);
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, child]) => child !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => [key, stableJsonValue(child)]),
+  );
+}
+
+/** Safe same-origin return path resolved from a request-context candidate, falling back to `/`. */
+export function safeRequestReturnPath(
+  ctx: MikaRequestContext,
+  candidate?: string,
+  fallback = ctx.url ? `${ctx.url.pathname}${ctx.url.search}${ctx.url.hash}` : "/",
+): string {
+  return mikaSafeReturnPath(candidate ?? fallback, {
+    origin: ctx.url,
+    fallback,
+  });
+}
 
 export function defaultBackendCurrency(input: {
   readonly defaults?: MikaBackendDefaults;
