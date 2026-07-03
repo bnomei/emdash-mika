@@ -2,7 +2,7 @@
  * Subject reference parsing and serialization for capability token binding.
  * Canonical `kind:id` strings tie download, invoice, and magic-link tokens to a principal.
  */
-import { createMikaId, type MikaId } from "../types/primitives";
+import { isMikaId, type MikaId } from "../types/primitives";
 
 /** Discriminated principal identity accepted when issuing or resolving capability tokens. */
 export type SubjectRef =
@@ -44,7 +44,9 @@ export function parseSubjectRef(value: string): SubjectRef | null {
 
   switch (kind) {
     case "customer":
-      return { kind, id: createMikaId(id) };
+      // isMikaId instead of createMikaId: the latter throws on malformed ids, breaking this
+      // function's documented returns-null contract.
+      return isMikaId(id) ? { kind, id } : null;
     case "user":
     case "email":
     case "session":
