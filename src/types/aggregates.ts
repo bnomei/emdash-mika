@@ -128,7 +128,16 @@ export interface CouponSnapshot {
   readonly codeHash?: string;
   readonly label?: string;
   readonly providerRef?: ProviderProductRef;
+  /**
+   * Fractional discount rate in `[0, 1]`. When present it is authoritative: `couponDiscountAmount`
+   * (the sole reader) recomputes the amount from `rate` and ignores `discountAmount`.
+   */
   readonly rate?: number;
+  /**
+   * Apply-time snapshot of the resolved discount, used for display and as the fallback when `rate`
+   * is absent. Not authoritative when `rate` is set — see {@link CouponSnapshot.rate} and
+   * `couponDiscountAmount` in model/builders.ts.
+   */
   readonly discountAmount?: number;
   readonly metadata?: JsonObject;
 }

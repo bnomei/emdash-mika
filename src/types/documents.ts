@@ -26,10 +26,12 @@ import type {
 } from "./operational";
 import type {
   CartStatus,
+  CheckoutProviderStatus,
   CheckoutStatus,
   CurrencyCode,
   ISODateTime,
   MikaId,
+  MikaSchemaVersion,
   OrderStatus,
   PaymentStatus,
   ProviderName,
@@ -41,7 +43,7 @@ import type {
 export interface MikaStorageDocument {
   readonly id: MikaId;
   readonly type: string;
-  readonly schemaVersion: 1;
+  readonly schemaVersion: MikaSchemaVersion;
   readonly createdAt: ISODateTime;
   readonly updatedAt: ISODateTime;
 }
@@ -140,7 +142,7 @@ export type CheckoutDocument = AggregateDocument<
     readonly providerCheckoutId?: string;
     readonly checkoutIdempotencyKey?: string;
     readonly checkoutIdempotencyInputHash?: string;
-    readonly providerStatus?: CheckoutStatus | "pending" | "binding_mismatch";
+    readonly providerStatus?: CheckoutProviderStatus;
     readonly redirectUrl?: string;
     readonly orderId?: MikaId;
     readonly failureReason?: string;

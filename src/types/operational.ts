@@ -32,7 +32,11 @@ export interface StockItemRecord {
   readonly metadata?: JsonObject;
 }
 
-/** Legacy reservation record shape; active reservations use stock event records. */
+/**
+ * Legacy reservation record shape; active reservations use stock event records.
+ * @deprecated Superseded by {@link StockEventRecord} (with {@link StockEventStatus}). Retained for
+ * back-compat type consumers; no code path writes this shape.
+ */
 export interface StockReservationRecord {
   readonly id: MikaId;
   readonly stockItemId: MikaId;
@@ -49,7 +53,11 @@ export interface StockReservationRecord {
   readonly metadata?: JsonObject;
 }
 
-/** Legacy movement record shape; movements are recorded as stock event records. */
+/**
+ * Legacy movement record shape; movements are recorded as stock event records.
+ * @deprecated Superseded by {@link StockEventRecord} (with {@link StockEventStatus}). Retained for
+ * back-compat type consumers; no code path writes this shape.
+ */
 export interface StockMovementRecord {
   readonly id: MikaId;
   readonly stockItemId: MikaId;

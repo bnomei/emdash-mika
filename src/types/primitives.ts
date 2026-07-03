@@ -229,6 +229,14 @@ export type CheckoutStatus =
   | "expired"
   | "failed";
 
+/**
+ * Provider/transport-reported checkout status: the persisted {@link CheckoutStatus} plus the
+ * transport-only `pending` (awaiting provider confirmation) and `binding_mismatch`
+ * (delegated-payment proof failed verification) states. Single source for the widened union used
+ * by the checkout document's `providerStatus` and the `CheckoutStatusDTO` wire type.
+ */
+export type CheckoutProviderStatus = CheckoutStatus | "pending" | "binding_mismatch";
+
 /** Order document payment and fulfillment lifecycle. */
 export type OrderStatus =
   | "pending"
@@ -277,7 +285,11 @@ export type WebhookStatus =
 /** Email message record delivery lifecycle with lease-backed retries. */
 export type EmailStatus = "queued" | "sent" | "skipped" | "failed";
 
-/** Stock reservation event lifecycle from hold through release or consumption. */
+/**
+ * Stock reservation event lifecycle from hold through release or consumption.
+ * @deprecated Only used by the legacy {@link StockReservationRecord}; live stock events use
+ * `StockEventStatus`.
+ */
 export type StockReservationStatus = "active" | "released" | "consumed" | "expired";
 
 /** Reason code recorded on stock movement events for audit trails. */

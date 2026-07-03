@@ -4,7 +4,7 @@
  */
 import type {
   CartStatus,
-  CheckoutStatus,
+  CheckoutProviderStatus,
   CurrencyCode,
   EntitlementStatus,
   FulfillmentKind,
@@ -225,7 +225,7 @@ export interface WishlistDTO {
  * plus the transport-only `pending` (awaiting provider confirmation) and `binding_mismatch`
  * (delegated-payment proof failed verification) states.
  */
-export type CheckoutStatusDTO = CheckoutStatus | "pending" | "binding_mismatch";
+export type CheckoutStatusDTO = CheckoutProviderStatus;
 
 /** Provider checkout session created from cart handoff. */
 export interface CheckoutSessionDTO {
