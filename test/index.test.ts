@@ -4439,6 +4439,7 @@ describe("Mika Astro template contracts", () => {
     expect(mikaTemplateCheckoutStatusMessage("binding_mismatch")).toBe(
       "Checkout could not be verified.",
     );
+    expect(mikaTemplateCheckoutStatusMessage("provider_review_needed")).toBe("Checkout received.");
   });
 
   it("ships a host plugin entrypoint that merges the live api behind the JSON boundary", () => {
