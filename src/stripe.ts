@@ -4,8 +4,10 @@
  */
 import { createHash } from "node:crypto";
 
+import { optionalProperty } from "./internal/object";
 import type {
   AdminActionResultDTO,
+  CheckoutCustomerInput,
   CheckoutStatusDTO,
   MoneyDTO,
   MikaProviderCapability,
@@ -292,7 +294,7 @@ export function createMikaStripeProvider(
 
       return {
         redirectUrl: requiredString(session.url, "Stripe portal session URL"),
-        expiresAt: stripeTimestamp(session.expires_at),
+        ...optionalProperty("expiresAt", stripeTimestamp(session.expires_at)),
       };
     },
     getInvoiceUrl: async (input): Promise<OrderInvoiceDTO> => {
@@ -386,7 +388,10 @@ async function stripeHealth(
     ok: Boolean(options.stripe.checkout?.sessions || options.stripe.paymentIntents),
     capabilities,
     checkedAt: createISODateTime((options.now?.() ?? new Date()).toISOString()),
-    warnings: options.webhookSecret ? undefined : ["Stripe webhook secret is not configured."],
+    ...optionalProperty(
+      "warnings",
+      options.webhookSecret ? undefined : ["Stripe webhook secret is not configured."],
+    ),
   };
 }
 
@@ -410,11 +415,14 @@ async function createStripeCheckoutSession(
       ...(input.customer?.email ? { customer_email: input.customer.email } : {}),
       ...(input.idempotencyKey ? { client_reference_id: input.idempotencyKey } : {}),
       ...(discounts ? { discounts } : {}),
-      metadata: stripeMetadata({
-        ...input.metadata,
-        mikaProvider: provider,
-        mikaMode: input.mode,
-      }),
+      ...optionalProperty(
+        "metadata",
+        stripeMetadata({
+          ...input.metadata,
+          mikaProvider: provider,
+          mikaMode: input.mode,
+        }),
+      ),
     },
     requestOptions(input.idempotencyKey),
   );
@@ -485,12 +493,15 @@ async function createStripeDelegatedPayment(
       payment_method_data: {
         shared_payment_granted_token: input.token,
       },
-      metadata: stripeMetadata({
-        ...input.metadata,
-        mikaProvider: provider,
-        mikaMode: input.mode,
-        mikaCheckoutKind: "delegated_payment",
-      }),
+      ...optionalProperty(
+        "metadata",
+        stripeMetadata({
+          ...input.metadata,
+          mikaProvider: provider,
+          mikaMode: input.mode,
+          mikaCheckoutKind: "delegated_payment",
+        }),
+      ),
     },
     requestOptions(input.idempotencyKey),
   );
@@ -573,10 +584,10 @@ function stripeCheckoutSessionToMika(
     status: stripeCheckoutStatus(session),
     mode: session.mode === "subscription" ? "subscription" : "payment",
     provider,
-    ...(session.url ? { redirectUrl: session.url } : {}),
-    expiresAt: stripeTimestamp(session.expires_at),
+    ...optionalProperty("redirectUrl", session.url ?? undefined),
+    ...optionalProperty("expiresAt", stripeTimestamp(session.expires_at)),
     providerCheckoutId: session.id,
-    providerCustomerId: stripeObjectId(session.customer),
+    ...optionalProperty("providerCustomerId", stripeObjectId(session.customer)),
     raw: stripeRaw(session),
   };
 }
@@ -591,9 +602,9 @@ function stripePaymentIntentToMika(
     status: stripePaymentIntentStatus(intent.status),
     mode,
     provider,
-    redirectUrl: stripeNextActionUrl(intent.next_action),
+    ...optionalProperty("redirectUrl", stripeNextActionUrl(intent.next_action)),
     providerCheckoutId: intent.id,
-    providerCustomerId: stripeObjectId(intent.customer),
+    ...optionalProperty("providerCustomerId", stripeObjectId(intent.customer)),
     raw: stripeRaw(intent),
   };
 }
@@ -776,16 +787,22 @@ function parseStripeWebhookEvent(
     return {
       kind: "subscription",
       provider,
-      providerEventId,
+      ...optionalProperty("providerEventId", providerEventId),
       type,
-      providerSubscriptionId: stringChild(object, "id"),
-      providerCustomerId: stripeObjectId(object["customer"]),
-      providerPriceId: firstSubscriptionPriceId(object),
+      ...optionalProperty("providerSubscriptionId", stringChild(object, "id")),
+      ...optionalProperty("providerCustomerId", stripeObjectId(object["customer"])),
+      ...optionalProperty("providerPriceId", firstSubscriptionPriceId(object)),
       status: stripeSubscriptionStatus(stringChild(object, "status")),
-      currentPeriodStart: stripeTimestamp(numberChild(object, "current_period_start")),
-      currentPeriodEnd: stripeTimestamp(numberChild(object, "current_period_end")),
-      cancelAtPeriodEnd: booleanChild(object, "cancel_at_period_end"),
-      raw: input.parsed,
+      ...optionalProperty(
+        "currentPeriodStart",
+        stripeTimestamp(numberChild(object, "current_period_start")),
+      ),
+      ...optionalProperty(
+        "currentPeriodEnd",
+        stripeTimestamp(numberChild(object, "current_period_end")),
+      ),
+      ...optionalProperty("cancelAtPeriodEnd", booleanChild(object, "cancel_at_period_end")),
+      ...optionalProperty("raw", input.parsed),
     };
   }
 
@@ -806,20 +823,19 @@ function parseStripeWebhookEvent(
       kind: "payment",
       paymentStatus: "paid",
       provider,
-      providerEventId,
+      ...optionalProperty("providerEventId", providerEventId),
       type,
-      providerPaymentId: stringChild(object, "payment_intent") ?? stringChild(object, "id"),
-      providerOrderId: stringChild(object, "id"),
-      ...(stringChild(object, "subscription")
-        ? { providerSubscriptionId: stringChild(object, "subscription") }
-        : {}),
-      customer: {
-        email: stringChild(object, "customer_email"),
-      },
+      ...optionalProperty(
+        "providerPaymentId",
+        stringChild(object, "payment_intent") ?? stringChild(object, "id"),
+      ),
+      ...optionalProperty("providerOrderId", stringChild(object, "id")),
+      ...optionalProperty("providerSubscriptionId", stringChild(object, "subscription")),
+      ...optionalProperty("customer", stripeCustomerInput(stringChild(object, "customer_email"))),
       lines: [],
-      totals: moneyTotalsFromStripeAmount(object),
-      invoiceUrl: stringChild(object, "hosted_invoice_url"),
-      raw: input.parsed,
+      ...optionalProperty("totals", moneyTotalsFromStripeAmount(object)),
+      ...optionalProperty("invoiceUrl", stringChild(object, "hosted_invoice_url")),
+      ...optionalProperty("raw", input.parsed),
     };
   }
 
@@ -828,15 +844,14 @@ function parseStripeWebhookEvent(
       kind: "payment",
       paymentStatus: "paid",
       provider,
-      providerEventId,
+      ...optionalProperty("providerEventId", providerEventId),
       type,
-      providerCheckoutId: stringChild(object, "id"),
-      providerPaymentId: stringChild(object, "id"),
-      providerOrderId: stringChild(object, "id"),
-      customer: undefined,
+      ...optionalProperty("providerCheckoutId", stringChild(object, "id")),
+      ...optionalProperty("providerPaymentId", stringChild(object, "id")),
+      ...optionalProperty("providerOrderId", stringChild(object, "id")),
       lines: [],
-      totals: moneyTotalsFromStripeAmount(object),
-      raw: input.parsed,
+      ...optionalProperty("totals", moneyTotalsFromStripeAmount(object)),
+      ...optionalProperty("raw", input.parsed),
     };
   }
 
@@ -848,19 +863,24 @@ function parseStripeWebhookEvent(
       kind: "payment",
       paymentStatus: "paid",
       provider,
-      providerEventId,
+      ...optionalProperty("providerEventId", providerEventId),
       type,
-      providerCheckoutId: stringChild(object, "id"),
-      providerPaymentId: stripeObjectId(object["payment_intent"]),
-      providerOrderId: stripeObjectId(object["payment_intent"]) ?? stringChild(object, "id"),
-      customer: {
-        email:
+      ...optionalProperty("providerCheckoutId", stringChild(object, "id")),
+      ...optionalProperty("providerPaymentId", stripeObjectId(object["payment_intent"])),
+      ...optionalProperty(
+        "providerOrderId",
+        stripeObjectId(object["payment_intent"]) ?? stringChild(object, "id"),
+      ),
+      ...optionalProperty(
+        "customer",
+        stripeCustomerInput(
           stringChild(jsonObjectChild(object, "customer_details"), "email") ??
-          stringChild(object, "customer_email"),
-      },
+            stringChild(object, "customer_email"),
+        ),
+      ),
       lines: [],
-      totals: moneyTotalsFromStripeAmount(object),
-      raw: input.parsed,
+      ...optionalProperty("totals", moneyTotalsFromStripeAmount(object)),
+      ...optionalProperty("raw", input.parsed),
     };
   }
 
@@ -900,15 +920,15 @@ function stripePaymentFailureEvent(
     kind: "payment",
     paymentStatus: "failed",
     provider,
-    providerEventId,
+    ...optionalProperty("providerEventId", providerEventId),
     type,
     ...(providerCheckoutId ? { providerCheckoutId } : {}),
     ...(providerPaymentId ? { providerPaymentId } : {}),
     ...(providerOrderId ? { providerOrderId } : {}),
-    ...(email ? { customer: { email } } : {}),
+    ...optionalProperty("customer", stripeCustomerInput(email)),
     lines: [],
-    totals: moneyTotalsFromStripeAmount(object),
-    raw,
+    ...optionalProperty("totals", moneyTotalsFromStripeAmount(object)),
+    ...optionalProperty("raw", raw),
   };
 }
 
@@ -946,14 +966,14 @@ function stripePaymentReversalEvent(
     kind: "payment",
     paymentStatus,
     provider,
-    providerEventId,
+    ...optionalProperty("providerEventId", providerEventId),
     type,
     ...(providerPaymentId ? { providerPaymentId } : {}),
     ...(providerOrderId ? { providerOrderId } : {}),
-    ...(email ? { customer: { email } } : {}),
+    ...optionalProperty("customer", stripeCustomerInput(email)),
     lines: [],
     ...(totals ? { totals } : {}),
-    raw,
+    ...optionalProperty("raw", raw),
   };
 }
 
@@ -966,10 +986,14 @@ function unknownStripeWebhookEvent(
   return {
     kind: "unknown",
     provider,
-    providerEventId,
+    ...optionalProperty("providerEventId", providerEventId),
     type,
-    raw,
+    ...optionalProperty("raw", raw),
   };
+}
+
+function stripeCustomerInput(email: string | undefined): CheckoutCustomerInput | undefined {
+  return email ? { email } : undefined;
 }
 
 function stripeInvoiceEventIsPaid(type: string, object: JsonObject): boolean {

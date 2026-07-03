@@ -3,6 +3,7 @@
  * webhooks, orders, entitlements, licenses, downloads, and email resend via the actions runner.
  */
 import { MIKA_PLUGIN_ID } from "./api/routes";
+import { omitUndefined } from "./internal/object";
 
 /** Well-known route serving the Mika admin actions manifest JSON. */
 export const MIKA_ACTIONS_MANIFEST_ROUTE = ".well-known/actions";
@@ -565,7 +566,7 @@ export function createMikaActionButtonOptions(
   const provider = options.provider ?? MIKA_PLUGIN_ID;
   const providerLabel = options.providerLabel ?? "Mika";
 
-  return {
+  return omitUndefined({
     mode: options.mode ?? "run",
     provider,
     providerLabel,
@@ -589,7 +590,7 @@ export function createMikaActionButtonOptions(
     feedback: options.feedback ?? action.feedback,
     pollIntervalMs: options.pollIntervalMs ?? action.pollIntervalMs,
     pollTimeoutMs: options.pollTimeoutMs ?? action.pollTimeoutMs,
-  };
+  });
 }
 
 /** Preset field-button options for the per-entry catalog sync admin action. */

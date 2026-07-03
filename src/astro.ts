@@ -4,7 +4,9 @@
  */
 import type { APIContext } from "astro";
 
+import { optionalProperty } from "./internal/object";
 import { createMikaRequestContext } from "./api/context";
+import type { MikaSessionAccess } from "./api/context";
 import type { MikaClientRoute } from "./api/client";
 import { runMikaOperation } from "./api/operation-runner";
 import { mikaOperationDefinitions } from "./api/operations";
@@ -107,8 +109,8 @@ export function createMikaAstroClient<
   const requestContext = createMikaRequestContext({
     request: ctx.request,
     url: ctx.url,
-    session: ctx.session,
-    locale: ctx.currentLocale,
+    ...optionalProperty("session", ctx.session as MikaSessionAccess | undefined),
+    ...optionalProperty("locale", ctx.currentLocale),
   });
   const requestOperation: MikaFacadeInvoke = (operationKey, input) => {
     const operation = mikaOperationDefinitions[operationKey];
@@ -117,12 +119,12 @@ export function createMikaAstroClient<
       api,
       ctx: requestContext,
       input,
-      operationPolicy: resolvedOptions.operationPolicy,
+      ...optionalProperty("operationPolicy", resolvedOptions.operationPolicy),
     });
   };
   const facade = createMikaOperationFacade(requestOperation, {
-    locale: requestContext.locale,
-    includeWebhook: resolvedOptions.includeWebhook,
+    ...optionalProperty("locale", requestContext.locale),
+    ...optionalProperty("includeWebhook", resolvedOptions.includeWebhook),
   });
 
   return {
@@ -198,20 +200,20 @@ export function mikaRedirectInputs(
     successPath: mikaHiddenInput(
       "successPath",
       mikaSafeReturnTo(input.successPath, {
-        origin: options.origin,
-        fallback: options.successFallback,
+        ...optionalProperty("origin", options.origin),
+        ...optionalProperty("fallback", options.successFallback),
       }),
     ),
     cancelPath: mikaHiddenInput(
       "cancelPath",
       mikaSafeReturnTo(input.cancelPath, {
-        origin: options.origin,
-        fallback: options.cancelFallback,
+        ...optionalProperty("origin", options.origin),
+        ...optionalProperty("fallback", options.cancelFallback),
       }),
     ),
     returnTo: mikaReturnToInput(input.returnTo, {
-      origin: options.origin,
-      fallback: options.returnToFallback,
+      ...optionalProperty("origin", options.origin),
+      ...optionalProperty("fallback", options.returnToFallback),
     }),
   };
 }
@@ -330,10 +332,10 @@ export function createMikaPurchaseModel(
     activeSellables,
     options: purchaseOptions,
     selectedOptionIndex,
-    selectedOption,
-    selectedSellable,
-    selectedPrice,
-    maxQuantity,
+    ...optionalProperty("selectedOption", selectedOption),
+    ...optionalProperty("selectedSellable", selectedSellable),
+    ...optionalProperty("selectedPrice", selectedPrice),
+    ...optionalProperty("maxQuantity", maxQuantity),
     missingActivePrice,
     unavailable,
     hasGroupedVariants,
@@ -387,8 +389,8 @@ function selectedMikaPurchaseIndex(
 function mikaVariantMapItem(sellable: SellableDTO): MikaPurchaseVariantMapItem {
   return {
     id: sellable.id,
-    priceId: sellable.prices.find((price) => price.active)?.id,
-    maxQuantity: mikaMaxPurchaseQuantity(sellable.availability),
+    ...optionalProperty("priceId", sellable.prices.find((price) => price.active)?.id),
+    ...optionalProperty("maxQuantity", mikaMaxPurchaseQuantity(sellable.availability)),
     disabled: !isMikaPurchasable(sellable.availability),
     options: Object.fromEntries(
       sellable.variantOptions.map((option) => [option.option, option.value]),

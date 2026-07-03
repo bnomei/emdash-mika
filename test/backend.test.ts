@@ -10,6 +10,7 @@ import { LibsqlDialect } from "@libsql/kysely-libsql";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import { Kysely, sql } from "kysely";
 
+import { omitUndefined, optionalProperty, type ExactPartial } from "../src/internal/object";
 import {
   createMikaStockLifecycleService,
   createMikaBackendApi,
@@ -137,6 +138,12 @@ type MemoryRecord = {
   readonly amount: number;
   readonly createdAt: string;
   readonly priority?: number;
+};
+type TestOverrides<T extends object> = ExactPartial<T>;
+type TestDocumentOverrides<TDocument extends { readonly record: object }> = ExactPartial<
+  Omit<TDocument, "record">
+> & {
+  readonly record?: ExactPartial<TDocument["record"]>;
 };
 
 describe("isJsonValue / isJsonObject", () => {
@@ -733,12 +740,13 @@ describe("backend test storage helpers", () => {
         rawPayloadPurgedAt: TEST_NOW,
       },
     });
-    await expect(ops.findWebhookById(staleReplayable.id)).resolves.toMatchObject({
+    const retainedReplayable = await ops.findWebhookById(staleReplayable.id);
+    expect(retainedReplayable).toMatchObject({
       record: {
         rawPayloadJson: { providerPayload: { marker: "replayable" } },
-        rawPayloadPurgedAt: undefined,
       },
     });
+    expect(retainedReplayable?.record).not.toHaveProperty("rawPayloadPurgedAt");
     await expect(ops.findWebhookById(normalizedReplayable.id)).resolves.toMatchObject({
       record: {
         rawPayloadJson: undefined,
@@ -750,12 +758,13 @@ describe("backend test storage helpers", () => {
         rawPayloadPurgedAt: TEST_NOW,
       },
     });
-    await expect(ops.findWebhookById(fresh.id)).resolves.toMatchObject({
+    const retainedFresh = await ops.findWebhookById(fresh.id);
+    expect(retainedFresh).toMatchObject({
       record: {
         rawPayloadJson: { providerPayload: { marker: "fresh" } },
-        rawPayloadPurgedAt: undefined,
       },
     });
+    expect(retainedFresh?.record).not.toHaveProperty("rawPayloadPurgedAt");
     await expect(ops.findWebhookById(alreadyPurged.id)).resolves.toMatchObject({
       record: { rawPayloadPurgedAt: clock.isoAt(-1_000) },
     });
@@ -989,8 +998,9 @@ describe("backend test storage helpers", () => {
     const requeued = await repositories.ops.findEmail(email.id);
     expect(requeued).toMatchObject({
       status: "queued",
-      record: { status: "queued", attemptCount: 0, leaseKey: undefined },
+      record: { status: "queued", attemptCount: 0 },
     });
+    expect(requeued?.record).not.toHaveProperty("leaseKey");
 
     await expect(
       repositories.ops.tryLeaseEmail({
@@ -1418,7 +1428,8 @@ describe("backend test storage helpers", () => {
       record: { attemptCount: 1, lastError: "provider unavailable" },
     });
 
-    await expect(runner.runOnce({ now: clock.isoAt(60_000) })).resolves.toMatchObject({
+    const terminalRun = await runner.runOnce({ now: clock.isoAt(60_000) });
+    expect(terminalRun).toMatchObject({
       scanned: 1,
       failed: 1,
       items: [
@@ -1426,10 +1437,10 @@ describe("backend test storage helpers", () => {
           emailId: email.id,
           status: "failed",
           terminal: true,
-          nextAttemptAt: undefined,
         },
       ],
     });
+    expect(terminalRun.items[0]).not.toHaveProperty("nextAttemptAt");
     await expect(repositories.ops.findEmail(email.id)).resolves.toMatchObject({
       status: "failed",
       nextAttemptAt: undefined,
@@ -1670,14 +1681,15 @@ describe("backend test storage helpers", () => {
         }),
       ),
     ).resolves.toBeNull();
-    await expect(ops.findWorkflow(existing.id)).resolves.toMatchObject({
+    const retainedWorkflow = await ops.findWorkflow(existing.id);
+    expect(retainedWorkflow).toMatchObject({
       status: "running",
-      nextAttemptAt: undefined,
       record: {
         leaseKey: "worker_1",
         attemptCount: 1,
       },
     });
+    expect(retainedWorkflow).not.toHaveProperty("nextAttemptAt");
   });
 
   it("does not complete a workflow step when the side effect fails", async () => {
@@ -1886,7 +1898,7 @@ describe("backend test storage helpers", () => {
       where: { type: "order" },
       orderBy: { amount: "desc" },
       limit: 2,
-      cursor: firstPage.cursor,
+      ...optionalProperty("cursor", firstPage.cursor),
     });
     expect(secondPage).toMatchObject({
       items: [{ id: "record_2" }],
@@ -4807,11 +4819,11 @@ describe("backend API composition", () => {
       emailHash,
       aggregate: {
         ...baseOrder.aggregate,
-        customer: {
+        customer: omitUndefined({
           ...baseOrder.aggregate.customer,
           customerId: undefined,
           emailHash,
-        },
+        }),
       },
     });
     const guestEntitlement = createEntitlementDocument({
@@ -4925,13 +4937,13 @@ describe("backend API composition", () => {
       emailHash,
       aggregate: {
         ...baseOrder.aggregate,
-        customer: {
+        customer: omitUndefined({
           ...baseOrder.aggregate.customer,
           customerId: undefined,
           userId: undefined,
           email: "guest-download@example.test",
           emailHash,
-        },
+        }),
       },
     });
     await repositories.ledger.put(guestOrder);
@@ -5012,20 +5024,22 @@ describe("backend API composition", () => {
     const userOnlyEntitlement = createEntitlementDocument({
       id: createTestMikaId("entitlement", 2),
     });
-    await userOnlyRepositories.account.put({
-      ...userOnlyEntitlement,
-      customerId: undefined,
-      userId: "user_only",
-      emailHash: undefined,
-      entitlementKey: "downloads.user",
-      record: {
-        ...userOnlyEntitlement.record,
+    await userOnlyRepositories.account.put(
+      omitUndefined({
+        ...userOnlyEntitlement,
         customerId: undefined,
         userId: "user_only",
         emailHash: undefined,
         entitlementKey: "downloads.user",
-      },
-    });
+        record: omitUndefined({
+          ...userOnlyEntitlement.record,
+          customerId: undefined,
+          userId: "user_only",
+          emailHash: undefined,
+          entitlementKey: "downloads.user",
+        }),
+      }),
+    );
 
     const userOnlyApi = createMikaBackendApi(
       createTestBackendDependencies({ repositories: userOnlyRepositories }),
@@ -5051,20 +5065,22 @@ describe("backend API composition", () => {
     const emailHashEntitlement = createEntitlementDocument({
       id: createTestMikaId("entitlement", 3),
     });
-    await emailHashRepositories.account.put({
-      ...emailHashEntitlement,
-      customerId: undefined,
-      userId: undefined,
-      emailHash,
-      entitlementKey: "downloads.email",
-      record: {
-        ...emailHashEntitlement.record,
+    await emailHashRepositories.account.put(
+      omitUndefined({
+        ...emailHashEntitlement,
         customerId: undefined,
         userId: undefined,
         emailHash,
         entitlementKey: "downloads.email",
-      },
-    });
+        record: omitUndefined({
+          ...emailHashEntitlement.record,
+          customerId: undefined,
+          userId: undefined,
+          emailHash,
+          entitlementKey: "downloads.email",
+        }),
+      }),
+    );
 
     const emailHashApi = createMikaBackendApi(
       createTestBackendDependencies({ repositories: emailHashRepositories }),
@@ -5094,32 +5110,34 @@ describe("backend API composition", () => {
       emailHash,
       aggregate: {
         ...baseOrder.aggregate,
-        customer: {
+        customer: omitUndefined({
           ...baseOrder.aggregate.customer,
           customerId: undefined,
           userId: undefined,
           email: "guest@example.test",
           emailHash,
-        },
+        }),
       },
     });
     await repositories.ledger.put(guestOrder);
 
     const baseEntitlement = createEntitlementDocument({ id: createTestMikaId("entitlement", 1) });
-    await repositories.account.put({
-      ...baseEntitlement,
-      customerId: undefined,
-      userId: undefined,
-      emailHash,
-      entitlementKey: "downloads.guest",
-      record: {
-        ...baseEntitlement.record,
+    await repositories.account.put(
+      omitUndefined({
+        ...baseEntitlement,
         customerId: undefined,
         userId: undefined,
         emailHash,
         entitlementKey: "downloads.guest",
-      },
-    });
+        record: omitUndefined({
+          ...baseEntitlement.record,
+          customerId: undefined,
+          userId: undefined,
+          emailHash,
+          entitlementKey: "downloads.guest",
+        }),
+      }),
+    );
 
     const api = createMikaBackendApi(createTestBackendDependencies({ repositories }));
     const ctx = createTestRequestContext({ customerId: false, userId: false });
@@ -5149,13 +5167,13 @@ describe("backend API composition", () => {
       emailHash,
       aggregate: {
         ...baseOrder.aggregate,
-        customer: {
+        customer: omitUndefined({
           ...baseOrder.aggregate.customer,
           customerId: undefined,
           userId: undefined,
           email: "guest-orders-only@example.test",
           emailHash,
-        },
+        }),
       },
     });
     await repositories.ledger.put(guestOrder);
@@ -5201,14 +5219,14 @@ describe("backend API composition", () => {
         harness.repositories.ledger,
       );
       harness.repositories.ledger.listOrdersByCustomer = async (customerId, limit) => {
-        exportLimits.orders = limit;
+        if (limit !== undefined) exportLimits.orders = limit;
         return baseListOrders(customerId, limit);
       };
       const baseListSubscriptions = harness.repositories.account.listSubscriptionsByCustomer.bind(
         harness.repositories.account,
       );
       harness.repositories.account.listSubscriptionsByCustomer = async (customerId, limit) => {
-        exportLimits.subscriptions = limit;
+        if (limit !== undefined) exportLimits.subscriptions = limit;
         return baseListSubscriptions(customerId, limit);
       };
 
@@ -5438,20 +5456,22 @@ describe("backend API composition", () => {
     const emailHash = createTestHash("email:exporter@example.test");
     const repositories = createTestBackendRepositories();
     const baseEntitlement = createEntitlementDocument({ id: createTestMikaId("entitlement", 1) });
-    await repositories.account.put({
-      ...baseEntitlement,
-      customerId: undefined,
-      userId: undefined,
-      emailHash,
-      entitlementKey: "downloads.email",
-      record: {
-        ...baseEntitlement.record,
+    await repositories.account.put(
+      omitUndefined({
+        ...baseEntitlement,
         customerId: undefined,
         userId: undefined,
         emailHash,
         entitlementKey: "downloads.email",
-      },
-    });
+        record: omitUndefined({
+          ...baseEntitlement.record,
+          customerId: undefined,
+          userId: undefined,
+          emailHash,
+          entitlementKey: "downloads.email",
+        }),
+      }),
+    );
 
     const api = createMikaBackendApi(createTestBackendDependencies({ repositories }));
     const ctx = createTestRequestContext({ customerId: false, userId: false });
@@ -6208,9 +6228,9 @@ describe("backend API composition", () => {
       );
       expect(retainedOrder?.aggregate.customer.email).toBeUndefined();
       expect(retainedOrder?.aggregate.customer.name).toBeUndefined();
-      await expect(repositories.account.findLicenseById(license.id)).resolves.toMatchObject({
+      const redactedLicense = await repositories.account.findLicenseById(license.id);
+      expect(redactedLicense).toMatchObject({
         status: "revoked",
-        customerId: undefined,
         record: {
           status: "revoked",
           licenseKeyHash: `account-deleted:${customer.customerId}:license-redacted`,
@@ -6219,6 +6239,7 @@ describe("backend API composition", () => {
           metadata: { anonymizedAt: clock.isoAt(60_000) },
         },
       });
+      expect(redactedLicense).not.toHaveProperty("customerId");
       expect(
         (await repositories.account.listLicensesByCustomer(customer.customerId)).items,
       ).toHaveLength(0);
@@ -6304,18 +6325,20 @@ describe("backend API composition", () => {
     try {
       await mikaInitialMigration.up(db);
       const baseGrant = createEntitlementDocument();
-      await repositories.account.put({
-        ...baseGrant,
-        customerId: undefined,
-        emailHash: undefined,
-        userId: "user_only",
-        record: {
-          ...baseGrant.record,
+      await repositories.account.put(
+        omitUndefined({
+          ...baseGrant,
           customerId: undefined,
           emailHash: undefined,
           userId: "user_only",
-        },
-      });
+          record: omitUndefined({
+            ...baseGrant.record,
+            customerId: undefined,
+            emailHash: undefined,
+            userId: "user_only",
+          }),
+        }),
+      );
       const userCtx = createTestRequestContext({ customerId: false, userId: "user_only" });
 
       expect((await repositories.account.listEntitlementsByUser("user_only")).items).toHaveLength(
@@ -6587,30 +6610,30 @@ describe("backend API composition", () => {
       emailHash: guestHash,
       aggregate: {
         ...baseOrder.aggregate,
-        customer: {
+        customer: omitUndefined({
           ...baseOrder.aggregate.customer,
           customerId: undefined,
           userId: undefined,
           email: guestEmail,
           emailHash: guestHash,
-        },
+        }),
       },
     });
     const baseEntitlement = createEntitlementDocument();
-    const guestEntitlement = {
+    const guestEntitlement = omitUndefined({
       ...baseEntitlement,
       customerId: undefined,
       userId: undefined,
       emailHash: guestHash,
       entitlementKey: "downloads.guest",
-      record: {
+      record: omitUndefined({
         ...baseEntitlement.record,
         customerId: undefined,
         userId: undefined,
         emailHash: guestHash,
         entitlementKey: "downloads.guest",
-      },
-    } satisfies EntitlementDocument;
+      }),
+    }) satisfies EntitlementDocument;
 
     try {
       await mikaInitialMigration.up(db);
@@ -7534,7 +7557,10 @@ describe("backend API composition", () => {
           );
         },
         run: (api: MikaApi, subscriptionId: MikaId, priceId?: MikaId) =>
-          api.subscription.change(createTestRequestContext(), { subscriptionId, priceId }),
+          api.subscription.change(createTestRequestContext(), {
+            subscriptionId,
+            ...optionalProperty("priceId", priceId),
+          }),
         calls: (fake: ReturnType<typeof createFakeMikaProvider>) =>
           fake.getCalls().changeSubscription,
       },
@@ -11526,7 +11552,6 @@ describe("backend API composition", () => {
       "payment_deleted_customer",
     );
     expect(order).toMatchObject({
-      customerId: undefined,
       emailHash: createTestHash("email:deleted@example.test"),
       aggregate: {
         customer: {
@@ -11535,6 +11560,7 @@ describe("backend API composition", () => {
         },
       },
     });
+    expect(order).not.toHaveProperty("customerId");
     expect(order?.aggregate.customer).not.toHaveProperty("customerId");
   });
 
@@ -12097,8 +12123,8 @@ describe("backend API composition", () => {
           parseWebhookEvent: async (verified) =>
             createPaymentWebhookEvent(verified, {
               providerEventId: `event_late_${testCase.name}`,
-              providerPaymentId: testCase.order.providerPaymentId,
-              providerOrderId: testCase.order.providerOrderId,
+              ...optionalProperty("providerPaymentId", testCase.order.providerPaymentId),
+              ...optionalProperty("providerOrderId", testCase.order.providerOrderId),
               invoiceUrl: `https://invoice.example.test/late-${testCase.name}`,
             }),
         },
@@ -13446,7 +13472,7 @@ describe("backend API composition", () => {
             status: delivery.status,
             currentPeriodStart: delivery.currentPeriodStart,
             currentPeriodEnd: delivery.currentPeriodEnd,
-            cancelAtPeriodEnd: delivery.cancelAtPeriodEnd,
+            ...optionalProperty("cancelAtPeriodEnd", delivery.cancelAtPeriodEnd),
           });
         },
       },
@@ -13642,7 +13668,7 @@ describe("backend API composition", () => {
             currentPeriodEnd: createISODateTime(
               second ? "2026-03-01T00:00:00.000Z" : "2026-02-01T00:00:00.000Z",
             ),
-            cancelAtPeriodEnd: second ? true : undefined,
+            ...optionalProperty("cancelAtPeriodEnd", second ? true : undefined),
           });
         },
       },
@@ -14761,12 +14787,12 @@ describe("backend API composition", () => {
     await repositories.ops.put({
       ...webhook,
       status: "failed",
-      record: {
+      record: omitUndefined({
         ...webhook.record,
         status: "failed",
         rawPayloadJson: { providerPayload: { delivery: "malformed-replay" } },
         normalizedPayloadJson: undefined,
-      },
+      }),
     });
 
     await expect(
@@ -16672,15 +16698,17 @@ describe("backend API composition", () => {
         total: { amount: 2160, currency: TEST_CURRENCY },
       },
     });
-    await expect(api.cart.removeCoupon(ctx, {})).resolves.toMatchObject({
+    const removedCoupon = await api.cart.removeCoupon(ctx, {});
+    expect(removedCoupon).toMatchObject({
       ok: true,
       data: {
-        coupon: undefined,
         subtotal: { amount: 2400, currency: TEST_CURRENCY },
-        discount: undefined,
         total: { amount: 2400, currency: TEST_CURRENCY },
       },
     });
+    if (!removedCoupon.ok) throw new Error("Expected cart.removeCoupon to succeed.");
+    expect(removedCoupon.data).not.toHaveProperty("coupon");
+    expect(removedCoupon.data).not.toHaveProperty("discount");
   });
 
   it("rejects coupon codes when no coupon resolver is configured", async () => {
@@ -16796,7 +16824,6 @@ describe("backend API composition", () => {
       ok: true,
       data: {
         status: "unavailable",
-        discount: undefined,
         subtotal: { amount: 2400, currency: TEST_CURRENCY },
         total: { amount: 2400, currency: TEST_CURRENCY },
         errors: [
@@ -16807,6 +16834,8 @@ describe("backend API composition", () => {
         ],
       },
     });
+    if (!quote.ok) throw new Error("Expected cart.quote to succeed.");
+    expect(quote.data).not.toHaveProperty("discount");
   });
 
   it("passes the applied cart coupon discount to the checkout provider", async () => {
@@ -17112,11 +17141,12 @@ describe("backend API composition", () => {
       error: { code: "PROVIDER_FAILED" },
     });
 
-    await expect(repositories.session.findById(added.data.id)).resolves.toMatchObject({
+    const failedCheckoutCart = await repositories.session.findById(added.data.id);
+    expect(failedCheckoutCart).toMatchObject({
       type: "cart",
       status: "open",
-      aggregate: { coupon: undefined },
     });
+    expect(failedCheckoutCart?.aggregate).not.toHaveProperty("coupon");
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
       quantityReserved: 0,
     });
@@ -17992,7 +18022,7 @@ describe("backend API composition", () => {
         {
           kind: "payment_authorization",
           id: "proof_stale",
-          inputHash: originalPreview.data.inputHash,
+          ...optionalProperty("inputHash", originalPreview.data.inputHash),
         },
       ],
     });
@@ -18015,7 +18045,7 @@ describe("backend API composition", () => {
           {
             kind: "payment_authorization",
             id: "proof_current",
-            inputHash: staleProofPreview.data.inputHash,
+            ...optionalProperty("inputHash", staleProofPreview.data.inputHash),
           },
         ],
       }),
@@ -18078,7 +18108,7 @@ describe("backend API composition", () => {
         {
           kind: "payment_authorization",
           id: "proof_stale_availability",
-          inputHash: availablePreview.data.inputHash,
+          ...optionalProperty("inputHash", availablePreview.data.inputHash),
         },
       ],
     });
@@ -18105,7 +18135,7 @@ describe("backend API composition", () => {
           {
             kind: "payment_authorization",
             id: "proof_current_availability",
-            inputHash: staleAvailabilityProofPreview.data.inputHash,
+            ...optionalProperty("inputHash", staleAvailabilityProofPreview.data.inputHash),
           },
         ],
       }),
@@ -18795,9 +18825,8 @@ describe("backend API composition", () => {
         },
       ],
     });
-    await expect(
-      repositories.session.findById(createTestMikaId("checkout", 1)),
-    ).resolves.toMatchObject({
+    const persistedCheckout = await repositories.session.findById(createTestMikaId("checkout", 1));
+    expect(persistedCheckout).toMatchObject({
       type: "checkout",
       cartId: added.data.id,
       provider: "stripe",
@@ -18807,11 +18836,14 @@ describe("backend API composition", () => {
         binding: {
           provider: "stripe",
           providerCheckoutId: "provider_checkout_fake",
-          providerCustomerId: undefined,
         },
         lines: [{ cartLineId: added.data.items[0]!.id, reservationId: "stock_event_1" }],
       },
     });
+    if (persistedCheckout?.type !== "checkout") {
+      throw new Error("Expected persisted checkout document.");
+    }
+    expect(persistedCheckout.aggregate.binding).not.toHaveProperty("providerCustomerId");
     await expect(repositories.session.findById(added.data.id)).resolves.toMatchObject({
       type: "cart",
       status: "checkout_pending",
@@ -19135,7 +19167,7 @@ describe("backend API composition", () => {
     await expect(
       api.checkout.cancel(returnCtx, {
         checkoutId: checkout.data.id,
-        token: checkout.data.statusToken,
+        ...optionalProperty("token", checkout.data.statusToken),
       }),
     ).resolves.toMatchObject({
       ok: true,
@@ -20025,7 +20057,7 @@ describe("backend API composition", () => {
     await expect(
       api.checkout.status(otherCtx, {
         checkoutId: started.data.id,
-        token: started.data.statusToken,
+        ...optionalProperty("token", started.data.statusToken),
       }),
     ).resolves.toMatchObject({
       ok: true,
@@ -21193,23 +21225,23 @@ async function rollbackMikaInitialMigration(db: MikaDbExecutor): Promise<void> {
   await mikaInitialMigration.down(db);
 }
 
-function createRecord(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
+function createRecord(overrides: TestOverrides<MemoryRecord> = {}): MemoryRecord {
   return {
     type: "order",
     name: "Record",
     status: "active",
     amount: 0,
     createdAt: "2026-01-01T00:00:00.000Z",
-    ...overrides,
+    ...omitUndefined(overrides),
   };
 }
 
 function createWorkflowDocument(
-  overrides: Partial<WorkflowDocument> & {
-    readonly attemptCount?: number;
-    readonly maxAttempts?: number;
-    readonly leaseKey?: string;
-    readonly leasedAt?: ISODateTime;
+  overrides: TestDocumentOverrides<WorkflowDocument> & {
+    readonly attemptCount?: number | undefined;
+    readonly maxAttempts?: number | undefined;
+    readonly leaseKey?: string | undefined;
+    readonly leasedAt?: ISODateTime | undefined;
   } = {},
 ): WorkflowDocument {
   const id = overrides.id ?? createTestMikaId("workflow", 1);
@@ -21222,7 +21254,7 @@ function createWorkflowDocument(
   const leaseExpiresAt = Object.hasOwn(overrides, "leaseExpiresAt")
     ? overrides.leaseExpiresAt
     : undefined;
-  const record = {
+  const record: WorkflowDocument["record"] = omitUndefined({
     id,
     kind: "payment_webhook_fulfillment" as const,
     status,
@@ -21231,10 +21263,10 @@ function createWorkflowDocument(
     idempotencyKey,
     attemptCount: overrides.record?.attemptCount ?? overrides.attemptCount ?? 0,
     maxAttempts: overrides.record?.maxAttempts ?? overrides.maxAttempts ?? 5,
-    nextAttemptAt,
-    leaseKey: overrides.record?.leaseKey ?? overrides.leaseKey,
-    leasedAt: overrides.record?.leasedAt ?? overrides.leasedAt,
-    leaseExpiresAt,
+    ...optionalProperty("nextAttemptAt", nextAttemptAt),
+    ...optionalProperty("leaseKey", overrides.record?.leaseKey ?? overrides.leaseKey),
+    ...optionalProperty("leasedAt", overrides.record?.leasedAt ?? overrides.leasedAt),
+    ...optionalProperty("leaseExpiresAt", leaseExpiresAt),
     steps: overrides.record?.steps ?? [
       { name: "link_checkout", status: "queued" as const, attemptCount: 0 },
       { name: "persist_order", status: "queued" as const, attemptCount: 0 },
@@ -21242,14 +21274,14 @@ function createWorkflowDocument(
       { name: "fulfill_order", status: "queued" as const, attemptCount: 0 },
       { name: "mark_webhook", status: "queued" as const, attemptCount: 0 },
     ],
-    resumeState: overrides.record?.resumeState,
-    lastError: overrides.record?.lastError,
+    ...optionalProperty("resumeState", overrides.record?.resumeState),
+    ...optionalProperty("lastError", overrides.record?.lastError),
     createdAt: overrides.record?.createdAt ?? TEST_NOW,
     updatedAt: overrides.record?.updatedAt ?? TEST_NOW,
-    metadata: overrides.record?.metadata,
-  };
+    ...optionalProperty("metadata", overrides.record?.metadata),
+  });
 
-  return {
+  return omitUndefined({
     id,
     type: "workflow",
     schemaVersion: 1,
@@ -21258,19 +21290,18 @@ function createWorkflowDocument(
     subjectType: record.subjectType,
     subjectId,
     idempotencyKey,
-    nextAttemptAt,
-    leaseExpiresAt,
+    ...optionalProperty("nextAttemptAt", nextAttemptAt),
+    ...optionalProperty("leaseExpiresAt", leaseExpiresAt),
     record,
     createdAt: TEST_NOW,
     updatedAt: TEST_NOW,
-    ...overrides,
-  };
+    ...optionalProperty("leaseKey", overrides.leaseKey),
+    ...optionalProperty("leasedAt", overrides.leasedAt),
+  });
 }
 
 function createWebhookDocument(
-  overrides: Partial<Omit<WebhookDocument, "record">> & {
-    readonly record?: Partial<WebhookDocument["record"]>;
-  } = {},
+  overrides: TestDocumentOverrides<WebhookDocument> = {},
 ): WebhookDocument {
   const recordOverrides = overrides.record ?? {};
   const id = recordOverrides.id ?? overrides.id ?? createTestMikaId("webhook", 1);
@@ -21286,7 +21317,7 @@ function createWebhookDocument(
   const rawPayloadJson = Object.hasOwn(recordOverrides, "rawPayloadJson")
     ? recordOverrides.rawPayloadJson
     : { providerPayload: { marker: id } };
-  const record = {
+  const record: WebhookDocument["record"] = omitUndefined({
     id,
     provider,
     providerEventId,
@@ -21294,19 +21325,19 @@ function createWebhookDocument(
     payloadHash,
     status,
     attemptCount: recordOverrides.attemptCount ?? 0,
-    nextAttemptAt,
+    ...optionalProperty("nextAttemptAt", nextAttemptAt),
     receivedAt,
-    processedAt: recordOverrides.processedAt,
-    lastError: recordOverrides.lastError,
-    rawPayloadJson,
-    normalizedPayloadJson: recordOverrides.normalizedPayloadJson,
-    rawPayloadPurgedAt: recordOverrides.rawPayloadPurgedAt,
-    relatedCustomerId: recordOverrides.relatedCustomerId,
-    relatedOrderId: recordOverrides.relatedOrderId,
-    relatedSubscriptionId: recordOverrides.relatedSubscriptionId,
-  };
+    ...optionalProperty("processedAt", recordOverrides.processedAt),
+    ...optionalProperty("lastError", recordOverrides.lastError),
+    ...optionalProperty("rawPayloadJson", rawPayloadJson),
+    ...optionalProperty("normalizedPayloadJson", recordOverrides.normalizedPayloadJson),
+    ...optionalProperty("rawPayloadPurgedAt", recordOverrides.rawPayloadPurgedAt),
+    ...optionalProperty("relatedCustomerId", recordOverrides.relatedCustomerId),
+    ...optionalProperty("relatedOrderId", recordOverrides.relatedOrderId),
+    ...optionalProperty("relatedSubscriptionId", recordOverrides.relatedSubscriptionId),
+  });
 
-  return {
+  return omitUndefined({
     id,
     type: "webhook",
     schemaVersion: 1,
@@ -21315,12 +21346,12 @@ function createWebhookDocument(
     eventType,
     payloadHash,
     status,
-    nextAttemptAt,
+    ...optionalProperty("nextAttemptAt", nextAttemptAt),
     receivedAt,
     record,
     createdAt: overrides.createdAt ?? receivedAt,
     updatedAt: overrides.updatedAt ?? receivedAt,
-  };
+  });
 }
 
 function createFullyWiredTestApi(): MikaApi {
@@ -21370,7 +21401,7 @@ function createTestBackendDependencies(
         resolver: createMikaFixedRateCouponResolver(),
       },
     },
-    ...overrides,
+    ...omitUndefined(overrides),
   };
 }
 
@@ -21386,7 +21417,7 @@ function createIncrementingBackendDependencies(
 
       return createTestMikaId(namespace, count);
     },
-    ...overrides,
+    ...omitUndefined(overrides),
   });
 }
 
@@ -21432,7 +21463,7 @@ function createTestEphemeralRepository(): MikaEphemeralRepositoryPort {
     },
     async incrementCounter(input) {
       const existing = records.get(input.key);
-      const record: EphemeralRecord = {
+      const record: EphemeralRecord = omitUndefined({
         key: input.key,
         kind: input.kind,
         subjectHash: input.subjectHash,
@@ -21443,7 +21474,7 @@ function createTestEphemeralRepository(): MikaEphemeralRepositoryPort {
         createdAt: existing?.createdAt ?? input.now,
         updatedAt: input.now,
         data: input.data,
-      };
+      });
       records.set(input.key, record);
 
       return record;
@@ -21459,7 +21490,7 @@ function createTestEphemeralRepository(): MikaEphemeralRepositoryPort {
       ) {
         return null;
       }
-      const record: EphemeralRecord = {
+      const record: EphemeralRecord = omitUndefined({
         key: input.key,
         kind: "lock",
         subjectHash: input.subjectHash,
@@ -21470,7 +21501,7 @@ function createTestEphemeralRepository(): MikaEphemeralRepositoryPort {
         createdAt: existing?.createdAt ?? input.now,
         updatedAt: input.now,
         data: { owner: input.owner },
-      };
+      });
       records.set(input.key, record);
 
       return record;
@@ -21598,7 +21629,7 @@ async function createMagicLinkHarness(
       repositories,
       config: {
         magicLink: {
-          ttlMs: options.ttlMs,
+          ...optionalProperty("ttlMs", options.ttlMs),
           ...(options.verifyPath ? { verifyPath: options.verifyPath } : {}),
         },
       },
@@ -21647,7 +21678,7 @@ async function createAccountServicesHarness(
       repositories,
       config: {
         accountExport: {
-          ttlMs: options.exportTtlMs,
+          ...optionalProperty("ttlMs", options.exportTtlMs),
         },
       },
       ...(options.notificationHook ? { notifications: { handle: options.notificationHook } } : {}),
@@ -21729,10 +21760,10 @@ function createTestStockRepository(
       return { status: "not_active" as const, event, stock: current };
     }
 
+    const { idempotencyKey: _idempotencyKey, ...transitionedBase } = event;
     const transitionedEvent: StockEventRecord = {
-      ...event,
+      ...transitionedBase,
       status: input.targetStatus,
-      idempotencyKey: undefined,
       updatedAt: input.now,
     };
     const stock = current
@@ -21818,7 +21849,7 @@ function createTestStockRepository(
         quantityReserved: current.quantityReserved + reservation.quantity,
         updatedAt: reservation.now,
       };
-      const event: StockEventRecord = {
+      const event: StockEventRecord = omitUndefined({
         id: reservation.reservationEventId,
         stockItemId: reservation.stockItemId,
         kind: "reservation",
@@ -21833,7 +21864,7 @@ function createTestStockRepository(
         createdAt: reservation.now,
         updatedAt: reservation.now,
         metadata: reservation.metadata,
-      };
+      });
       stockItems.set(stock.sellableId, stock);
       eventsById.set(event.id, event);
       if (event.idempotencyKey) {
@@ -21878,13 +21909,13 @@ function createTestStockRepository(
           `Reservation event '${event.id}' cannot be consumed: insufficient available stock to fulfill the expired reservation without overselling.`,
         );
       }
-      const consumedEvent: StockEventRecord = {
+      const consumedEvent: StockEventRecord = omitUndefined({
         ...event,
         status: "consumed",
         orderId: consume.orderId,
         orderLineId: consume.orderLineId,
         updatedAt: consume.now,
-      };
+      });
       const stock = current
         ? {
             ...current,
@@ -21926,10 +21957,10 @@ function createTestStockRepository(
         }
 
         scannedCount += 1;
+        const { idempotencyKey: _idempotencyKey, ...expiredBase } = event;
         const expiredEvent: StockEventRecord = {
-          ...event,
+          ...expiredBase,
           status: "expired",
-          idempotencyKey: undefined,
           updatedAt: input.now,
         };
         const current =
@@ -21967,10 +21998,10 @@ function createTestStockRepository(
         }
 
         scannedCount += 1;
+        const { idempotencyKey: _idempotencyKey, ...releasedBase } = event;
         const releasedEvent: StockEventRecord = {
-          ...event,
+          ...releasedBase,
           status: "released",
-          idempotencyKey: undefined,
           updatedAt: input.now,
         };
         const current =
@@ -22051,7 +22082,7 @@ function createTestStockRepository(
         quantityOnHand: nextQuantityOnHand,
         updatedAt: adjustment.now,
       };
-      const event: StockEventRecord = {
+      const event: StockEventRecord = omitUndefined({
         id: adjustment.movementEventId,
         stockItemId: adjustment.stockItemId,
         kind: "movement",
@@ -22063,7 +22094,7 @@ function createTestStockRepository(
         createdAt: adjustment.now,
         updatedAt: adjustment.now,
         metadata: adjustment.metadata,
-      };
+      });
       stockItems.set(stock.sellableId, stock);
       eventsById.set(event.id, event);
       if (event.idempotencyKey) {
@@ -22133,7 +22164,7 @@ function isCartRouteResult(
   );
 }
 
-function createCustomerDocument(overrides: Partial<CustomerDocument> = {}): CustomerDocument {
+function createCustomerDocument(overrides: TestOverrides<CustomerDocument> = {}): CustomerDocument {
   return {
     id: createTestMikaId("customer_document", 1),
     type: "customer",
@@ -22149,7 +22180,7 @@ function createCustomerDocument(overrides: Partial<CustomerDocument> = {}): Cust
     },
     createdAt: TEST_NOW,
     updatedAt: TEST_NOW,
-    ...overrides,
+    ...omitUndefined(overrides),
   };
 }
 
@@ -22179,7 +22210,7 @@ async function issueDownloadToken(
 }
 
 function createProviderAccountDocument(
-  overrides: Partial<ProviderAccountDocument> = {},
+  overrides: TestOverrides<ProviderAccountDocument> = {},
 ): ProviderAccountDocument {
   const provider = overrides.provider ?? TEST_PROVIDER;
   const providerCustomerId = overrides.providerCustomerId ?? "provider_customer_1";
@@ -22192,7 +22223,7 @@ function createProviderAccountDocument(
     emailSnapshot: "Subscriber@Example.test",
     createdAt: TEST_NOW,
     updatedAt: TEST_NOW,
-    ...overrides.record,
+    ...omitUndefined(overrides.record ?? {}),
   };
 
   return {
@@ -22205,28 +22236,17 @@ function createProviderAccountDocument(
     record,
     createdAt: TEST_NOW,
     updatedAt: TEST_NOW,
-    ...overrides,
+    ...omitUndefined(overrides),
   };
 }
 
-function createOrderDocument(overrides: Partial<OrderDocument> = {}): OrderDocument {
-  const orderId = overrides.id ?? createTestMikaId("order", 1);
-
-  return {
-    id: orderId,
-    type: "order",
-    schemaVersion: 1,
-    orderNumber: "M-1001",
-    customerId: createTestMikaId("customer", 1),
-    provider: TEST_PROVIDER,
-    providerPaymentId: "payment_1",
-    providerOrderId: "provider_order_1",
-    status: "paid",
-    paymentStatus: "paid",
-    currency: TEST_CURRENCY,
-    totalAmount: 1200,
-    paidAt: TEST_NOW,
-    aggregate: {
+function createOrderDocument(overrides: TestOverrides<OrderDocument> = {}): OrderDocument {
+  const safeOverrides = omitUndefined(overrides);
+  const hasOverride = (key: keyof OrderDocument) => Object.hasOwn(overrides, key);
+  const orderId = safeOverrides.id ?? createTestMikaId("order", 1);
+  const aggregate =
+    safeOverrides.aggregate ??
+    ({
       schemaVersion: 1,
       customer: {
         customerId: createTestMikaId("customer", 1),
@@ -22257,15 +22277,64 @@ function createOrderDocument(overrides: Partial<OrderDocument> = {}): OrderDocum
         },
       ],
       invoiceUrl: "https://invoice.example.test/order_1",
-    },
-    createdAt: TEST_NOW,
-    updatedAt: TEST_NOW,
-    ...overrides,
+    } satisfies OrderDocument["aggregate"]);
+
+  return {
+    id: orderId,
+    type: "order",
+    schemaVersion: 1,
+    orderNumber: safeOverrides.orderNumber ?? "M-1001",
+    ...optionalProperty(
+      "customerId",
+      hasOverride("customerId")
+        ? overrides.customerId
+        : (safeOverrides.customerId ?? createTestMikaId("customer", 1)),
+    ),
+    ...optionalProperty(
+      "emailHash",
+      hasOverride("emailHash") ? overrides.emailHash : safeOverrides.emailHash,
+    ),
+    provider: safeOverrides.provider ?? TEST_PROVIDER,
+    ...optionalProperty(
+      "providerCheckoutId",
+      hasOverride("providerCheckoutId")
+        ? overrides.providerCheckoutId
+        : safeOverrides.providerCheckoutId,
+    ),
+    ...optionalProperty(
+      "checkoutSessionId",
+      hasOverride("checkoutSessionId")
+        ? overrides.checkoutSessionId
+        : safeOverrides.checkoutSessionId,
+    ),
+    ...optionalProperty(
+      "providerPaymentId",
+      hasOverride("providerPaymentId")
+        ? overrides.providerPaymentId
+        : (safeOverrides.providerPaymentId ?? "payment_1"),
+    ),
+    ...optionalProperty(
+      "providerOrderId",
+      hasOverride("providerOrderId")
+        ? overrides.providerOrderId
+        : (safeOverrides.providerOrderId ?? "provider_order_1"),
+    ),
+    status: safeOverrides.status ?? "paid",
+    paymentStatus: safeOverrides.paymentStatus ?? "paid",
+    currency: safeOverrides.currency ?? TEST_CURRENCY,
+    totalAmount: safeOverrides.totalAmount ?? 1200,
+    ...optionalProperty(
+      "paidAt",
+      hasOverride("paidAt") ? overrides.paidAt : (safeOverrides.paidAt ?? TEST_NOW),
+    ),
+    aggregate,
+    createdAt: safeOverrides.createdAt ?? TEST_NOW,
+    updatedAt: safeOverrides.updatedAt ?? TEST_NOW,
   };
 }
 
 function createSubscriptionDocument(
-  overrides: Partial<SubscriptionDocument> = {},
+  overrides: TestOverrides<SubscriptionDocument> = {},
 ): SubscriptionDocument {
   const currentPeriodEnd = createTestClock().isoAt(31 * 24 * 60 * 60_000);
 
@@ -22304,11 +22373,11 @@ function createSubscriptionDocument(
     },
     createdAt: TEST_NOW,
     updatedAt: TEST_NOW,
-    ...overrides,
+    ...omitUndefined(overrides),
   };
 }
 
-function createCartDocument(overrides: Partial<CartDocument> = {}): CartDocument {
+function createCartDocument(overrides: TestOverrides<CartDocument> = {}): CartDocument {
   const id = overrides.id ?? createTestMikaId("cart", 1);
 
   return {
@@ -22328,49 +22397,76 @@ function createCartDocument(overrides: Partial<CartDocument> = {}): CartDocument
     },
     createdAt: TEST_NOW,
     updatedAt: TEST_NOW,
-    ...overrides,
+    ...omitUndefined(overrides),
   };
 }
 
 function createEntitlementDocument(
-  overrides: Partial<Omit<EntitlementDocument, "record">> & {
-    readonly record?: Partial<EntitlementDocument["record"]>;
-  } = {},
+  overrides: TestDocumentOverrides<EntitlementDocument> = {},
 ): EntitlementDocument {
   const { record: recordOverrides, ...documentOverrides } = overrides;
+  const safeRecordOverrides = omitUndefined(recordOverrides ?? {});
+  const safeDocumentOverrides = omitUndefined(documentOverrides);
+  const hasRecordOverride = (key: keyof EntitlementDocument["record"]) =>
+    Object.hasOwn(recordOverrides ?? {}, key);
   const currentPeriodEnd = createTestClock().isoAt(31 * 24 * 60 * 60_000);
-  const record = {
-    id: overrides.id ?? createTestMikaId("entitlement", 1),
-    customerId: createTestMikaId("customer", 1),
-    userId: "user_1",
-    emailHash: createTestHash("email:subscriber@example.test"),
-    entitlementKey: "downloads.pro",
-    orderId: createTestMikaId("order", 1),
-    status: "active" as const,
-    currentPeriodEnd,
-    grantedAt: TEST_NOW,
-    ...recordOverrides,
+  const record: EntitlementDocument["record"] = {
+    ...safeRecordOverrides,
+    id: safeRecordOverrides.id ?? overrides.id ?? createTestMikaId("entitlement", 1),
+    entitlementKey: safeRecordOverrides.entitlementKey ?? "downloads.pro",
+    status: safeRecordOverrides.status ?? "active",
+    grantedAt: safeRecordOverrides.grantedAt ?? TEST_NOW,
+    ...optionalProperty(
+      "customerId",
+      hasRecordOverride("customerId")
+        ? recordOverrides?.customerId
+        : (safeRecordOverrides.customerId ?? createTestMikaId("customer", 1)),
+    ),
+    ...optionalProperty(
+      "userId",
+      hasRecordOverride("userId")
+        ? recordOverrides?.userId
+        : (safeRecordOverrides.userId ?? "user_1"),
+    ),
+    ...optionalProperty(
+      "emailHash",
+      hasRecordOverride("emailHash")
+        ? recordOverrides?.emailHash
+        : (safeRecordOverrides.emailHash ?? createTestHash("email:subscriber@example.test")),
+    ),
+    ...optionalProperty(
+      "orderId",
+      hasRecordOverride("orderId")
+        ? recordOverrides?.orderId
+        : (safeRecordOverrides.orderId ?? createTestMikaId("order", 1)),
+    ),
+    ...optionalProperty(
+      "currentPeriodEnd",
+      hasRecordOverride("currentPeriodEnd")
+        ? recordOverrides?.currentPeriodEnd
+        : (safeRecordOverrides.currentPeriodEnd ?? currentPeriodEnd),
+    ),
   };
 
   return {
-    id: record.id,
+    ...safeDocumentOverrides,
+    id: safeDocumentOverrides.id ?? record.id,
     type: "entitlement",
-    schemaVersion: 1,
-    customerId: record.customerId,
-    userId: record.userId,
-    emailHash: record.emailHash,
+    schemaVersion: safeDocumentOverrides.schemaVersion ?? 1,
+    ...optionalProperty("customerId", record.customerId),
+    ...optionalProperty("userId", record.userId),
+    ...optionalProperty("emailHash", record.emailHash),
     entitlementKey: record.entitlementKey,
     status: record.status,
-    orderId: record.orderId,
-    subscriptionId: record.subscriptionId,
+    ...optionalProperty("orderId", record.orderId),
+    ...optionalProperty("subscriptionId", record.subscriptionId),
     record,
-    createdAt: TEST_NOW,
-    updatedAt: TEST_NOW,
-    ...documentOverrides,
+    createdAt: safeDocumentOverrides.createdAt ?? TEST_NOW,
+    updatedAt: safeDocumentOverrides.updatedAt ?? TEST_NOW,
   };
 }
 
-function createLicenseDocument(overrides: Partial<LicenseDocument> = {}): LicenseDocument {
+function createLicenseDocument(overrides: TestOverrides<LicenseDocument> = {}): LicenseDocument {
   const record = {
     id: overrides.id ?? createTestMikaId("license", 1),
     orderId: createTestMikaId("order", 1),
@@ -22380,7 +22476,7 @@ function createLicenseDocument(overrides: Partial<LicenseDocument> = {}): Licens
     displayKeySuffix: "1234",
     status: "active" as const,
     createdAt: TEST_NOW,
-    ...overrides.record,
+    ...omitUndefined(overrides.record ?? {}),
   };
 
   return {
@@ -22395,15 +22491,11 @@ function createLicenseDocument(overrides: Partial<LicenseDocument> = {}): Licens
     record,
     createdAt: TEST_NOW,
     updatedAt: TEST_NOW,
-    ...overrides,
+    ...omitUndefined(overrides),
   };
 }
 
-function createEmailDocument(
-  overrides: Partial<Omit<EmailDocument, "record">> & {
-    readonly record?: Partial<EmailDocument["record"]>;
-  } = {},
-): EmailDocument {
+function createEmailDocument(overrides: TestDocumentOverrides<EmailDocument> = {}): EmailDocument {
   const record = {
     id: overrides.id ?? createTestMikaId("email", 1),
     customerId: createTestMikaId("customer", 1),
@@ -22418,14 +22510,14 @@ function createEmailDocument(
     maxAttempts: 5,
     nextAttemptAt: TEST_NOW,
     createdAt: TEST_NOW,
-    ...overrides.record,
+    ...omitUndefined(overrides.record ?? {}),
   };
 
-  return {
+  return omitUndefined({
     id: record.id,
     type: "email",
     schemaVersion: 1,
-    ...overrides,
+    ...omitUndefined(overrides),
     status: record.status,
     nextAttemptAt: record.nextAttemptAt,
     orderId: record.orderId,
@@ -22434,13 +22526,11 @@ function createEmailDocument(
     record,
     createdAt: TEST_NOW,
     updatedAt: TEST_NOW,
-  };
+  });
 }
 
 function createAccountExportDocument(
-  overrides: Partial<Omit<AccountExportDocument, "record">> & {
-    readonly record?: Partial<AccountExportDocument["record"]>;
-  } = {},
+  overrides: TestDocumentOverrides<AccountExportDocument> = {},
 ): AccountExportDocument {
   const record = {
     id: overrides.id ?? createTestMikaId("account_export", 1),
@@ -22450,14 +22540,14 @@ function createAccountExportDocument(
     expiresAt: TEST_NOW,
     downloadTokenHash: createTestHash("account-export-download-token:account_export_token_1"),
     artifactRef: "data:application/json;base64,e30=",
-    ...overrides.record,
+    ...omitUndefined(overrides.record ?? {}),
   };
 
-  return {
+  return omitUndefined({
     id: record.id,
     type: "accountExport",
     schemaVersion: 1,
-    ...overrides,
+    ...omitUndefined(overrides),
     customerId: record.customerId,
     userId: record.userId,
     status: record.status,
@@ -22465,7 +22555,7 @@ function createAccountExportDocument(
     record,
     createdAt: TEST_NOW,
     updatedAt: TEST_NOW,
-  };
+  });
 }
 
 function createPurchasableSnapshot(
@@ -22482,7 +22572,7 @@ function createPurchasableSnapshot(
     currency: TEST_CURRENCY,
     mode: "payment",
     fulfillmentKind: "download",
-    ...overrides,
+    ...omitUndefined(overrides),
   };
 }
 
@@ -22518,7 +22608,7 @@ function createSellableDefinition(overrides: Partial<SellableDefinition> = {}): 
     active: true,
     sortOrder: 1,
     prices: [createPriceDefinition()],
-    ...overrides,
+    ...omitUndefined(overrides),
   };
 }
 
@@ -22531,7 +22621,7 @@ function createPriceDefinition(overrides: Partial<PriceDefinition> = {}): PriceD
     mode: "payment",
     fulfillmentKind: "none",
     active: true,
-    ...overrides,
+    ...omitUndefined(overrides),
   };
 }
 
@@ -22548,7 +22638,7 @@ function createStockRecord(overrides: Partial<StockItemRecord> = {}): StockItemR
     allowBackorder: false,
     createdAt: TEST_NOW,
     updatedAt: TEST_NOW,
-    ...overrides,
+    ...omitUndefined(overrides),
   };
 }
 
@@ -22573,7 +22663,7 @@ function createCheckoutDocument(
   const id = overrides.id ?? createTestMikaId("checkout", 1);
   const providerCheckoutId = overrides.providerCheckoutId ?? "provider_checkout_fake";
 
-  return {
+  return omitUndefined({
     id,
     type: "checkout",
     schemaVersion: 1,
@@ -22589,7 +22679,7 @@ function createCheckoutDocument(
     failureReason: overrides.failureReason,
     status: overrides.status ?? "created",
     expiresAt: overrides.expiresAt ?? createTestClock().isoAt(60 * 60_000),
-    aggregate: {
+    aggregate: omitUndefined({
       schemaVersion: 1,
       mode: "payment",
       currency: TEST_CURRENCY,
@@ -22606,10 +22696,10 @@ function createCheckoutDocument(
         successPath: "/checkout/success",
       },
       metadata: overrides.metadata,
-    },
+    }),
     createdAt: TEST_NOW,
     updatedAt: TEST_NOW,
-  };
+  });
 }
 
 function createCheckoutInput(
@@ -22632,7 +22722,7 @@ function createCheckoutInput(
     ],
     successUrl: "https://shop.example.test/success",
     cancelUrl: "https://shop.example.test/cancel",
-    ...overrides,
+    ...omitUndefined(overrides),
   };
 }
 
@@ -22746,7 +22836,7 @@ function createVerifiedWebhookPayload(
     rawBody: input.rawBody,
     payloadHash: "hash_1",
     headers: Object.fromEntries(input.request.headers.entries()),
-    ...overrides,
+    ...omitUndefined(overrides),
   };
 }
 
@@ -22757,12 +22847,12 @@ function createWebhookEvent(
     readonly type?: string;
   } = {},
 ): MikaProviderWebhookEvent {
-  return {
+  return omitUndefined({
     kind: "unknown",
     provider: verified.provider,
     providerEventId: overrides.providerEventId,
     type: overrides.type ?? "test.webhook",
-  };
+  });
 }
 
 function createPaymentWebhookEvent(
@@ -22781,7 +22871,7 @@ function createPaymentWebhookEvent(
     >["paymentStatus"];
   } = {},
 ): MikaProviderWebhookEvent {
-  return {
+  return omitUndefined({
     kind: "payment",
     paymentStatus: overrides.paymentStatus ?? "paid",
     provider: verified.provider,
@@ -22793,7 +22883,7 @@ function createPaymentWebhookEvent(
     customer: overrides.customer,
     lines: [],
     invoiceUrl: overrides.invoiceUrl,
-  };
+  });
 }
 
 function createSubscriptionWebhookEvent(
@@ -22819,7 +22909,7 @@ function createSubscriptionWebhookEvent(
     readonly cancelAtPeriodEnd?: boolean;
   } = {},
 ): MikaProviderWebhookEvent {
-  return {
+  return omitUndefined({
     kind: "subscription",
     provider: verified.provider,
     providerEventId: overrides.providerEventId,
@@ -22831,7 +22921,7 @@ function createSubscriptionWebhookEvent(
     currentPeriodStart: overrides.currentPeriodStart,
     currentPeriodEnd: overrides.currentPeriodEnd,
     cancelAtPeriodEnd: overrides.cancelAtPeriodEnd,
-  };
+  });
 }
 
 function createWebhookInput(

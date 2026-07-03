@@ -180,7 +180,7 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
         licenseRevoke: async (revokeInput) => revokeLicense(input, revokeInput),
         downloadIssue: async (issueInput) => issueDownload(input, issueInput),
       },
-      overrides: input.overrides?.admin,
+      ...(input.overrides?.admin ? { overrides: input.overrides.admin } : {}),
     }),
     cart: createCartBackend(input),
     wishlist: createWishlistBackend(input),

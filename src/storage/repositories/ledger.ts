@@ -109,18 +109,21 @@ export class LedgerRepository {
 
     let anonymized = 0;
     for (const order of byId.values()) {
+      const {
+        email: _email,
+        name: _name,
+        company: _company,
+        vatId: _vatId,
+        ...retainedCustomer
+      } = order.aggregate.customer;
       const redacted: OrderDocument = {
         ...order,
         emailHash: input.sentinel,
         aggregate: {
           ...order.aggregate,
           customer: {
-            ...order.aggregate.customer,
-            email: undefined,
+            ...retainedCustomer,
             emailHash: input.sentinel,
-            name: undefined,
-            company: undefined,
-            vatId: undefined,
           },
         },
         updatedAt: input.now,

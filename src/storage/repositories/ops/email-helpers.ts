@@ -1,4 +1,5 @@
 import { mirrorRecordFields } from "../record-mirror";
+import type { ExactPartial } from "../../../internal/object";
 import type { AccountDeleteEmailRedactionRepositoryInput } from "../contracts";
 import type { EmailDocument } from "../../../types/documents";
 import type { ISODateTime, JsonObject } from "../../../types/primitives";
@@ -35,7 +36,7 @@ export function emailHasActiveLease(
 export function emailDocumentWithRecord(
   email: EmailDocument,
   now: ISODateTime,
-  patch: Partial<EmailDocument["record"]>,
+  patch: ExactPartial<EmailDocument["record"]>,
 ): EmailDocument {
   return mirrorRecordFields(email, now, patch, [
     "status",

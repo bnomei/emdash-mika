@@ -5,6 +5,7 @@
  * notification (license issued, download ready, order confirmed).
  */
 import { renderMikaEmail } from "../../email";
+import { omitUndefined, optionalProperty } from "../../internal/object";
 import { nextCartVersion } from "../../model/cart-version";
 import { createMikaId } from "../../types/primitives";
 import type { ISODateTime, JsonObject, MikaId } from "../../types/primitives";
@@ -17,6 +18,7 @@ import type {
   WorkflowDocument,
 } from "../../types/documents";
 import type { OrderLine } from "../../types/aggregates";
+import type { EmailMessageRecord } from "../../types/operational";
 import type { MikaProviderPaymentEvent } from "../../provider";
 import type { MikaRequestContext } from "../context";
 import {
@@ -335,11 +337,11 @@ export async function resolveDownload(
   return {
     ok: true,
     status: 200,
-    data: {
+    data: omitUndefined({
       title: stringChild(data, "title") ?? line.item.titleSnapshot,
       redirectUrl: stringChild(data, "redirectUrl") ?? downloadRef,
       expiresAt: record?.expiresAt,
-    },
+    }),
   };
 }
 
@@ -626,7 +628,7 @@ function createOrderLineEntitlementDocument(
 ): EntitlementDocument {
   const id = fulfillmentDocumentId("entitlement", order.id, line.id);
   const entitlementKey = line.item.entitlementKey ?? orderLineContentKey(line);
-  const record = {
+  const record = omitUndefined({
     id,
     customerId: order.customerId ?? order.aggregate.customer.customerId,
     userId: order.aggregate.customer.userId,
@@ -643,9 +645,9 @@ function createOrderLineEntitlementDocument(
       orderLineId: line.id,
       fulfillmentKind: line.item.fulfillmentKind,
     },
-  };
+  });
 
-  return {
+  return omitUndefined({
     id,
     type: "entitlement",
     schemaVersion: 1,
@@ -658,7 +660,7 @@ function createOrderLineEntitlementDocument(
     record,
     createdAt: now,
     updatedAt: now,
-  };
+  });
 }
 
 async function createOrderLineLicenseDocument(
@@ -673,7 +675,7 @@ async function createOrderLineLicenseDocument(
     .replace(/[^A-Za-z0-9]/g, "")
     .slice(-6)
     .toUpperCase();
-  const record = {
+  const record = omitUndefined({
     id,
     orderId: order.id,
     orderLineId: line.id,
@@ -686,9 +688,9 @@ async function createOrderLineLicenseDocument(
       fulfillmentKind: line.item.fulfillmentKind,
       sellableId: line.item.sellableId,
     },
-  };
+  });
 
-  return {
+  return omitUndefined({
     id,
     type: "license",
     schemaVersion: 1,
@@ -700,7 +702,7 @@ async function createOrderLineLicenseDocument(
     record,
     createdAt: now,
     updatedAt: now,
-  };
+  });
 }
 
 async function queueOrderConfirmationEmail(
@@ -814,14 +816,20 @@ async function queueDefaultOrderConfirmedEmail(
       total: line.total,
     })),
   });
-  const record = {
+  const metadata: JsonObject = {
+    orderLineIds: context.fulfilledLines.map((line) => line.lineId),
+    fulfillmentKinds: Array.from(context.fulfillmentKinds),
+    ...optionalProperty("emailHash", context.emailHash),
+    ...optionalProperty("userId", context.userId),
+  };
+  const record: EmailMessageRecord = {
     id,
-    customerId: context.customerId,
+    ...optionalProperty("customerId", context.customerId),
     orderId: context.orderId,
-    kind: "order_confirmation" as const,
+    kind: "order_confirmation",
     toEmail: context.toEmail,
     subject: rendered.subject,
-    status: "queued" as const,
+    status: "queued",
     idempotencyKey: `order-confirmation:${context.orderId}`,
     templateKey: rendered.template,
     templateVersion: "1",
@@ -829,20 +837,15 @@ async function queueDefaultOrderConfirmedEmail(
     maxAttempts: 5,
     nextAttemptAt: intent.occurredAt,
     createdAt: intent.occurredAt,
-    metadata: {
-      orderLineIds: context.fulfilledLines.map((line) => line.lineId),
-      fulfillmentKinds: [...context.fulfillmentKinds],
-      ...(context.emailHash ? { emailHash: context.emailHash } : {}),
-      ...(context.userId ? { userId: context.userId } : {}),
-    },
+    metadata,
   };
   const document: EmailDocument = {
     id,
     type: "email",
     schemaVersion: 1,
     status: record.status,
-    nextAttemptAt: record.nextAttemptAt,
-    orderId: record.orderId,
+    ...optionalProperty("nextAttemptAt", record.nextAttemptAt),
+    ...optionalProperty("orderId", record.orderId),
     kind: record.kind,
     record,
     createdAt: intent.occurredAt,

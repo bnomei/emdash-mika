@@ -1,4 +1,5 @@
 import { mirrorRecordFields } from "../record-mirror";
+import type { ExactPartial } from "../../../internal/object";
 import type { WebhookDocument } from "../../../types/documents";
 import type { ISODateTime } from "../../../types/primitives";
 
@@ -17,7 +18,7 @@ export function webhookRawPayloadIsPurgeable(
 export function webhookDocumentWithRecord(
   webhook: WebhookDocument,
   now: ISODateTime,
-  patch: Partial<WebhookDocument["record"]>,
+  patch: ExactPartial<WebhookDocument["record"]>,
 ): WebhookDocument {
   return mirrorRecordFields(webhook, now, patch, ["status", "nextAttemptAt", "receivedAt"]);
 }

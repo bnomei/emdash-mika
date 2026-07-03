@@ -3,6 +3,7 @@
  * Integrates with ops repository leasing and EmDash host email pipelines.
  */
 import { renderMikaEmail, type MikaEmailBrand, type MikaRenderedEmail } from "../email";
+import { optionalProperty } from "../internal/object";
 import type { EmailDocument, OrderDocument } from "../types/documents";
 import {
   createISODateTime,
@@ -241,23 +242,36 @@ async function deliverLeasedEmail(
 
   const providerMessageId = result?.providerMessageId;
   const completed = await input.repositories.ops
-    .completeEmail({ emailId: email.id, leaseKey, now, providerMessageId })
+    .completeEmail({
+      emailId: email.id,
+      leaseKey,
+      now,
+      ...optionalProperty("providerMessageId", providerMessageId),
+    })
     .catch(() => false);
 
   if (completed) {
-    return { emailId: email.id, status: "sent", providerMessageId };
+    return {
+      emailId: email.id,
+      status: "sent",
+      ...optionalProperty("providerMessageId", providerMessageId),
+    };
   }
 
   // Provider delivery succeeded but lease was lost; mark delivered without holding the lease.
   const recovered = await input.repositories.ops
-    .markEmailDelivered({ emailId: email.id, now, providerMessageId })
+    .markEmailDelivered({
+      emailId: email.id,
+      now,
+      ...optionalProperty("providerMessageId", providerMessageId),
+    })
     .catch(() => false);
 
   return recovered
     ? {
         emailId: email.id,
         status: "sent",
-        providerMessageId,
+        ...optionalProperty("providerMessageId", providerMessageId),
         recoveredLeaseLost: true,
       }
     : { emailId: email.id, status: "lease_lost" };
@@ -277,7 +291,7 @@ async function failLeasedEmail(
     leaseKey,
     now,
     lastError: message,
-    nextAttemptAt,
+    ...optionalProperty("nextAttemptAt", nextAttemptAt),
   });
 
   return failed
@@ -285,7 +299,7 @@ async function failLeasedEmail(
         emailId: email.id,
         status: "failed",
         error: message,
-        nextAttemptAt,
+        ...optionalProperty("nextAttemptAt", nextAttemptAt),
         terminal: nextAttemptAt === undefined,
       }
     : { emailId: email.id, status: "lease_lost" };
@@ -314,9 +328,9 @@ async function prepareEmailDelivery(
           renderMikaEmail("magic_link", {
             toEmail: email.record.toEmail,
             url,
-            purpose: jsonString(email.record.metadata, "purpose"),
-            expiresAt: jsonISODateTime(email.record.metadata, "expiresAt"),
-            brand: resolveBrand(input, email),
+            ...optionalProperty("purpose", jsonString(email.record.metadata, "purpose")),
+            ...optionalProperty("expiresAt", jsonISODateTime(email.record.metadata, "expiresAt")),
+            ...optionalProperty("brand", resolveBrand(input, email)),
           }),
         ),
       };
@@ -361,8 +375,8 @@ async function prepareEmailDelivery(
               quantity: line.quantity,
               total: { amount: line.totalAmount, currency: line.item.currency },
             })),
-            accountUrl: resolveAccountUrl(input, email, order),
-            brand: resolveBrand(input, email),
+            ...optionalProperty("accountUrl", resolveAccountUrl(input, email, order)),
+            ...optionalProperty("brand", resolveBrand(input, email)),
           }),
         ),
       };
@@ -384,8 +398,8 @@ function deliveryMessageFromRendered(
     subject: rendered.subject,
     text: rendered.text,
     html: rendered.html,
-    idempotencyKey: email.record.idempotencyKey,
-    metadata: email.record.metadata,
+    ...optionalProperty("idempotencyKey", email.record.idempotencyKey),
+    ...optionalProperty("metadata", email.record.metadata),
   };
 }
 

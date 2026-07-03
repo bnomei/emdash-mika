@@ -5,6 +5,7 @@
  * entitlement/download DTOs) the account view and admin order-invoice lookup share.
  */
 import type { MikaProviderInvoiceInput } from "../../provider";
+import { omitUndefined } from "../../internal/object";
 import type {
   AccountExportDocument,
   AccountDeleteRequestDocument,
@@ -120,24 +121,26 @@ export async function requestAccountExport(
       };
   const artifactRef = accountExportArtifactRef(account, now);
 
-  await input.repositories.ephemeral.put({
-    key: tokenHash,
-    kind: "token",
-    subjectHash: accountExportSubjectHash(identity),
-    status: "pending",
-    count: 0,
-    expiresAt,
-    version: 1,
-    createdAt: now,
-    updatedAt: now,
-    data: {
-      purpose: "account_export_download",
-      exportId,
-    },
-  });
+  await input.repositories.ephemeral.put(
+    omitUndefined({
+      key: tokenHash,
+      kind: "token",
+      subjectHash: accountExportSubjectHash(identity),
+      status: "pending",
+      count: 0,
+      expiresAt,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+      data: {
+        purpose: "account_export_download",
+        exportId,
+      },
+    }),
+  );
 
   const identityEmailHash = identity.customer?.emailHash ?? identity.emailHash;
-  const record = {
+  const record = omitUndefined({
     id: exportId,
     customerId: identity.customer?.customerId,
     userId: identity.customer?.userId ?? identity.userId,
@@ -148,9 +151,9 @@ export async function requestAccountExport(
     expiresAt,
     downloadTokenHash: tokenHash,
     artifactRef,
-  };
+  });
 
-  const document: AccountExportDocument = {
+  const document: AccountExportDocument = omitUndefined({
     id: exportId,
     type: "accountExport",
     schemaVersion: 1,
@@ -161,7 +164,7 @@ export async function requestAccountExport(
     record,
     createdAt: now,
     updatedAt: now,
-  };
+  });
 
   await input.repositories.ops.put(document);
 
@@ -258,23 +261,26 @@ export async function requestAccountDelete(
   if (!identity) {
     return authRequired("Account deletion requires an authenticated customer identity.");
   }
-  const block = await accountDeleteBlocked(input, {
-    customerId: identity.customer?.customerId,
-    sessionId: ctx.sessionId,
-  });
+  const block = await accountDeleteBlocked(
+    input,
+    omitUndefined({
+      customerId: identity.customer?.customerId,
+      sessionId: ctx.sessionId,
+    }),
+  );
   if (block) return block;
 
   const now = ctx.now;
   const requestId = input.createId("account_delete_request");
-  const record = {
+  const record = omitUndefined({
     id: requestId,
     customerId: identity.customer?.customerId,
     userId: identity.customer?.userId ?? identity.userId,
     emailHash: identity.customer?.emailHash ?? identity.emailHash,
     status: "queued" as const,
     requestedAt: now,
-  };
-  const document: AccountDeleteRequestDocument = {
+  });
+  const document: AccountDeleteRequestDocument = omitUndefined({
     id: requestId,
     type: "accountDeleteRequest",
     schemaVersion: 1,
@@ -285,7 +291,7 @@ export async function requestAccountDelete(
     record,
     createdAt: now,
     updatedAt: now,
-  };
+  });
 
   await input.repositories.ops.put(document);
 
@@ -498,12 +504,12 @@ export async function accountDTOForCustomer(
   );
 
   return {
-    customer: {
+    customer: omitUndefined({
       id: customer.customerId,
       userId: customer.userId,
       email: customer.aggregate.email,
       name: customer.aggregate.name,
-    },
+    }),
     orders: orderSummaries,
     subscriptions: subscriptions.items.map((item) => subscriptionDTO(item.data)),
     entitlements: entitlements.map((item) => entitlementDTO(item.data)),
@@ -551,30 +557,33 @@ async function orderSummaryDTO(
     paymentStatus: order.paymentStatus,
     total: order.aggregate.totals.total,
     createdAt: order.createdAt,
-    invoiceHref: mikaPluginRoute("orderInvoice", {
-      origin: ctx.url,
-      search: { orderId: order.id, token: invoiceToken },
-    }),
+    invoiceHref: mikaPluginRoute(
+      "orderInvoice",
+      omitUndefined({
+        origin: ctx.url,
+        search: { orderId: order.id, token: invoiceToken },
+      }),
+    ),
   };
 }
 
 function subscriptionDTO(subscription: SubscriptionDocument): SubscriptionDTO {
-  return {
+  return omitUndefined({
     id: subscription.id,
     title: subscription.aggregate.sellable.titleSnapshot,
     status: subscription.status,
     currentPeriodEnd: subscription.currentPeriodEnd,
     cancelAtPeriodEnd: subscription.aggregate.cancelAtPeriodEnd,
-  };
+  });
 }
 
 function entitlementDTO(entitlement: EntitlementDocument): EntitlementDTO {
-  return {
+  return omitUndefined({
     key: entitlement.entitlementKey,
     status: entitlement.status,
     source: entitlement.orderId ? "order" : entitlement.subscriptionId ? "subscription" : "manual",
     expiresAt: entitlement.record.currentPeriodEnd,
-  };
+  });
 }
 
 async function orderDownloadDTOs(
@@ -618,13 +627,16 @@ function accountExportDTO(
     expiresAt: document.expiresAt,
     ...(status === "ready"
       ? {
-          downloadHref: mikaPluginRoute("accountExportDownload", {
-            origin: ctx.url?.origin,
-            search: {
-              exportId: document.id,
-              token,
-            },
-          }),
+          downloadHref: mikaPluginRoute(
+            "accountExportDownload",
+            omitUndefined({
+              origin: ctx.url?.origin,
+              search: omitUndefined({
+                exportId: document.id,
+                token,
+              }),
+            }),
+          ),
         }
       : {}),
   };
@@ -644,11 +656,11 @@ function accountExportDownloadResult(
   return {
     ok: true,
     status: 200,
-    data: {
+    data: omitUndefined({
       id: document.id,
       href: document.record.artifactRef,
       expiresAt: document.expiresAt,
-    },
+    }),
   };
 }
 

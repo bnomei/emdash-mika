@@ -3,6 +3,7 @@
  * before/after running, and the audit-hash/snapshot logic around it. Provider-feature dispatch
  * lives in ./provider-dispatch and the stable-JSON helper in ./shared.
  */
+import { omitUndefined } from "../../internal/object";
 import type { AdminAuditDocument } from "../../types/documents";
 import { isJsonObject } from "../../types/primitives";
 import type { ISODateTime, JsonObject, JsonValue, MikaId } from "../../types/primitives";
@@ -319,7 +320,7 @@ function createAdminAuditDocument(
 ): AdminAuditDocument {
   const id = input.createId("admin_audit");
 
-  return {
+  return omitUndefined({
     id,
     type: "adminAudit",
     schemaVersion: 1,
@@ -329,11 +330,11 @@ function createAdminAuditDocument(
     targetId: record.targetId,
     status: record.status,
     idempotencyKey: record.idempotencyKey,
-    record: {
+    record: omitUndefined({
       id,
       ...record,
-    },
+    }),
     createdAt: record.createdAt,
     updatedAt: record.createdAt,
-  };
+  });
 }

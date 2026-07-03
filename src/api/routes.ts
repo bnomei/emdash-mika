@@ -1,6 +1,7 @@
 /**
  * EmDash plugin URL helpers: route key to path mapping and absolute URL construction.
  */
+import { optionalProperty } from "../internal/object";
 import { mikaOperationPluginRoutes, mikaOperationPublicRouteNames } from "./operations";
 
 /** Default EmDash plugin identifier for Mika. */
@@ -41,10 +42,10 @@ export function createMikaPluginRouteBuilder<
 >(defaults: MikaRouteOptions = {}): MikaPluginRouteBuilder<TRoute> {
   return (route, options = {}) =>
     mikaPluginRoute(route, {
-      apiBase: options.apiBase ?? defaults.apiBase,
-      pluginId: options.pluginId ?? defaults.pluginId,
-      origin: options.origin ?? defaults.origin,
-      search: options.search ?? defaults.search,
+      ...optionalProperty("apiBase", options.apiBase ?? defaults.apiBase),
+      ...optionalProperty("pluginId", options.pluginId ?? defaults.pluginId),
+      ...optionalProperty("origin", options.origin ?? defaults.origin),
+      ...optionalProperty("search", options.search ?? defaults.search),
     });
 }
 

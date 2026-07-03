@@ -1,6 +1,7 @@
 /**
  * Low-level HTTP client for Mika plugin routes: URL building, cookie forwarding, envelope parsing.
  */
+import { optionalProperty } from "../internal/object";
 import type { MikaClientOptions } from "./client";
 import { mikaPluginRoute, type MikaPluginRouteName } from "./routes";
 import {
@@ -29,10 +30,10 @@ export async function requestMika<TData>(
   let headers: Headers;
   try {
     url = mikaPluginRoute(route, {
-      apiBase: options.apiBase,
-      pluginId: options.pluginId,
-      origin,
-      search: init.search,
+      ...optionalProperty("apiBase", options.apiBase),
+      ...optionalProperty("pluginId", options.pluginId),
+      ...optionalProperty("origin", origin),
+      ...optionalProperty("search", init.search),
     });
     headers = new Headers(options.headers);
     headers.set("accept", "application/json");
@@ -63,7 +64,7 @@ export async function requestMika<TData>(
     response = await fetcher(url, {
       method: init.method ?? "GET",
       headers,
-      body,
+      ...optionalProperty("body", body),
     });
   } catch {
     return {

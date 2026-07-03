@@ -13,6 +13,7 @@ import type {
   WishlistDocument,
 } from "../../types/documents";
 import type { CheckoutStatus, ISODateTime, MikaId } from "../../types/primitives";
+import { optionalProperty } from "../../internal/object";
 import { nextCartVersion } from "../../model/cart-version";
 
 function cartWithCheckoutClaim(
@@ -49,7 +50,7 @@ function cartWithoutCheckoutClaim(cart: CartDocument, now: ISODateTime): CartDoc
     status: "open",
     aggregate: {
       ...cart.aggregate,
-      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+      ...optionalProperty("metadata", Object.keys(metadata).length > 0 ? metadata : undefined),
     },
     updatedAt: now,
     version: nextCartVersion(cart.version),

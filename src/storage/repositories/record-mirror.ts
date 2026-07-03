@@ -1,4 +1,5 @@
 import type { ISODateTime } from "../../types/primitives";
+import type { ExactPartial } from "../../internal/object";
 
 /**
  * Applies a partial patch to a {@link RecordBackedDocument}'s nested `record`, then re-derives the
@@ -15,7 +16,7 @@ export function mirrorRecordFields<
 >(
   document: TDocument,
   now: ISODateTime,
-  patch: Partial<TDocument["record"]>,
+  patch: ExactPartial<TDocument["record"]>,
   mirroredKeys: readonly TMirroredKeys[],
 ): TDocument {
   const record = { ...document.record, ...patch } as TDocument["record"];

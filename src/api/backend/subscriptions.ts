@@ -3,6 +3,7 @@
  * tracks a subscription's access grant, and the lifecycle notification emitted whenever a
  * subscription's status changes (from a caller action or a provider webhook event).
  */
+import { omitUndefined } from "../../internal/object";
 import { snapshotPrice } from "../../model/builders";
 import type {
   MikaProviderSubscriptionActionInput,
@@ -130,7 +131,7 @@ export async function runSubscriptionAction(
 
   return runAdminProviderAction(
     input,
-    {
+    omitUndefined({
       action: `subscription.${action}`,
       targetType: "subscription",
       targetId: subscription.id,
@@ -143,7 +144,7 @@ export async function runSubscriptionAction(
         ...(actionInput.priceId ? { priceId: actionInput.priceId } : {}),
         ...(providerPriceId ? { providerPriceId } : {}),
       },
-    },
+    }),
     async () => {
       const result = await providerFeature.method.call(providerFeature.provider, providerInput);
       if (result.status !== "completed") {
@@ -184,12 +185,12 @@ async function updateSubscriptionAfterAction(
     subscription.aggregate.cancelAtPeriodEnd,
     action,
   );
-  const updated: SubscriptionDocument = {
+  const updated: SubscriptionDocument = omitUndefined({
     ...subscription,
     status,
     currentPeriodEnd: subscription.currentPeriodEnd,
     updatedAt: ctx.now,
-    aggregate: {
+    aggregate: omitUndefined({
       ...subscription.aggregate,
       sellable: changedSellable,
       providerRef: {
@@ -202,8 +203,8 @@ async function updateSubscriptionAfterAction(
         ...subscription.aggregate.metadata,
         lastAdminAction: `subscription.${action}`,
       },
-    },
-  };
+    }),
+  });
 
   await input.repositories.account.put(updated);
   const fulfilled = await updateSubscriptionEntitlement(input, ctx, updated);
@@ -229,7 +230,7 @@ export async function updateSubscriptionEntitlement(
     existing?.status === "revoked"
       ? existing.status
       : entitlementStatusForSubscription(subscription.status);
-  const record = {
+  const record = omitUndefined({
     id: entitlementId,
     customerId: subscription.customerId ?? subscription.aggregate.customer.customerId,
     userId: subscription.aggregate.customer.userId,
@@ -251,8 +252,8 @@ export async function updateSubscriptionEntitlement(
         ? { providerSubscriptionId: subscription.providerSubscriptionId }
         : {}),
     },
-  };
-  const entitlement: EntitlementDocument = {
+  });
+  const entitlement: EntitlementDocument = omitUndefined({
     id: entitlementId,
     type: "entitlement",
     schemaVersion: 1,
@@ -265,7 +266,7 @@ export async function updateSubscriptionEntitlement(
     record,
     createdAt: existing?.createdAt ?? ctx.now,
     updatedAt: ctx.now,
-  };
+  });
 
   await input.repositories.account.put(entitlement);
 

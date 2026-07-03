@@ -6,6 +6,7 @@ import {
   reserveStockStatement,
 } from "../statements";
 import { encodeJson } from "../json";
+import { omitUndefined } from "../../internal/object";
 import type { MikaInsertable, MikaSelectable, MikaUpdateable } from "../schema";
 import type { StockEventRecord, StockItemRecord } from "../../types/operational";
 import { createISODateTime, createMikaId } from "../../types/primitives";
@@ -114,36 +115,39 @@ export class StockRepository {
     assertReservationQuantity(input.quantity);
 
     return withTransaction(this.db, (executor) =>
-      mutateStockWithEvent({
-        executor,
-        stockItemId: input.stockItemId,
-        idempotencyKey: input.idempotencyKey,
-        successStatus: "reserved",
-        failureStatus: "insufficient_stock",
-        reloadError: `Reserved stock item '${input.stockItemId}' could not be reloaded.`,
-        applyStockMutation: (executor) =>
-          reserveStockStatement({
-            stockItemId: input.stockItemId,
-            quantity: input.quantity,
-            now: input.now,
-          }).execute(executor),
-        createEvent: () => ({
-          id: input.reservationEventId,
+      mutateStockWithEvent<"reserved", "insufficient_stock">(
+        omitUndefined({
+          executor,
           stockItemId: input.stockItemId,
-          kind: "reservation",
-          status: "active",
-          cartId: input.cartId,
-          checkoutSessionId: input.checkoutSessionId,
-          customerId: input.customerId,
-          sessionId: input.sessionId,
           idempotencyKey: input.idempotencyKey,
-          quantityDelta: input.quantity,
-          expiresAt: input.expiresAt,
-          createdAt: input.now,
-          updatedAt: input.now,
-          metadata: input.metadata,
+          successStatus: "reserved",
+          failureStatus: "insufficient_stock",
+          reloadError: `Reserved stock item '${input.stockItemId}' could not be reloaded.`,
+          applyStockMutation: (executor: MikaDbExecutor) =>
+            reserveStockStatement({
+              stockItemId: input.stockItemId,
+              quantity: input.quantity,
+              now: input.now,
+            }).execute(executor),
+          createEvent: () =>
+            omitUndefined({
+              id: input.reservationEventId,
+              stockItemId: input.stockItemId,
+              kind: "reservation",
+              status: "active",
+              cartId: input.cartId,
+              checkoutSessionId: input.checkoutSessionId,
+              customerId: input.customerId,
+              sessionId: input.sessionId,
+              idempotencyKey: input.idempotencyKey,
+              quantityDelta: input.quantity,
+              expiresAt: input.expiresAt,
+              createdAt: input.now,
+              updatedAt: input.now,
+              metadata: input.metadata,
+            }),
         }),
-      }),
+      ),
     );
   }
 
@@ -381,33 +385,37 @@ export class StockRepository {
     assertStockAdjustmentQuantity(input.quantityDelta);
 
     return withTransaction(this.db, (executor) =>
-      mutateStockWithEvent({
-        executor,
-        stockItemId: input.stockItemId,
-        idempotencyKey: input.idempotencyKey,
-        successStatus: "adjusted",
-        failureStatus: (stock) => stockAdjustmentFailureStatus(stock, input.quantityDelta),
-        reloadError: `Adjusted stock item '${input.stockItemId}' could not be reloaded.`,
-        applyStockMutation: (executor) =>
-          adjustStockStatement({
-            stockItemId: input.stockItemId,
-            quantityDelta: input.quantityDelta,
-            now: input.now,
-          }).execute(executor),
-        createEvent: () => ({
-          id: input.movementEventId,
+      mutateStockWithEvent<"adjusted", "would_go_negative" | "would_undercut_reserved">(
+        omitUndefined({
+          executor,
           stockItemId: input.stockItemId,
-          kind: "movement",
-          status: "recorded",
-          reason: input.reason ?? "manual_adjustment",
-          adminAuditId: input.adminAuditId,
           idempotencyKey: input.idempotencyKey,
-          quantityDelta: input.quantityDelta,
-          createdAt: input.now,
-          updatedAt: input.now,
-          metadata: input.metadata,
+          successStatus: "adjusted",
+          failureStatus: (stock: StockItemRecord) =>
+            stockAdjustmentFailureStatus(stock, input.quantityDelta),
+          reloadError: `Adjusted stock item '${input.stockItemId}' could not be reloaded.`,
+          applyStockMutation: (executor: MikaDbExecutor) =>
+            adjustStockStatement({
+              stockItemId: input.stockItemId,
+              quantityDelta: input.quantityDelta,
+              now: input.now,
+            }).execute(executor),
+          createEvent: () =>
+            omitUndefined({
+              id: input.movementEventId,
+              stockItemId: input.stockItemId,
+              kind: "movement",
+              status: "recorded",
+              reason: input.reason ?? "manual_adjustment",
+              adminAuditId: input.adminAuditId,
+              idempotencyKey: input.idempotencyKey,
+              quantityDelta: input.quantityDelta,
+              createdAt: input.now,
+              updatedAt: input.now,
+              metadata: input.metadata,
+            }),
         }),
-      }),
+      ),
     );
   }
 }
@@ -650,7 +658,7 @@ function stockItemInsertRow(record: StockItemRecord): MikaInsertable<"mika_stock
 }
 
 function mapStockItem(row: MikaSelectable<"mika_stock_items">): StockItemRecord {
-  return {
+  return omitUndefined({
     id: createMikaId(row.id),
     sellableId: createMikaId(row.sellable_id),
     policy: row.policy,
@@ -662,7 +670,7 @@ function mapStockItem(row: MikaSelectable<"mika_stock_items">): StockItemRecord 
     createdAt: createISODateTime(row.created_at),
     updatedAt: createISODateTime(row.updated_at),
     metadata: parseMetadata(row.metadata_json),
-  };
+  });
 }
 
 async function findStockItemById(
@@ -705,7 +713,7 @@ async function findStockEventById(
 }
 
 function mapStockEvent(row: MikaSelectable<"mika_stock_events">): StockEventRecord {
-  return {
+  return omitUndefined({
     id: createMikaId(row.id),
     stockItemId: createMikaId(row.stock_item_id),
     kind: row.kind,
@@ -725,7 +733,7 @@ function mapStockEvent(row: MikaSelectable<"mika_stock_events">): StockEventReco
     createdAt: createISODateTime(row.created_at),
     updatedAt: createISODateTime(row.updated_at),
     metadata: parseMetadata(row.metadata_json),
-  };
+  });
 }
 
 function isoOrUndefined(value: string | null): ReturnType<typeof createISODateTime> | undefined {

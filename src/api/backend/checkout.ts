@@ -13,6 +13,7 @@ import {
   type MikaProviderAdapter,
   type MikaProviderLineItem,
 } from "../../provider";
+import { omitUndefined } from "../../internal/object";
 import {
   cartWithCoupon,
   cartWithoutCoupon,
@@ -373,29 +374,35 @@ export async function startCheckout(
       const lines = reserved.lines.map((line) => checkoutLineToProviderLine(providerName, line));
 
       if (providerDispatch.kind === "delegated") {
-        return await providerDispatch.method.call(providerDispatch.provider, {
+        return await providerDispatch.method.call(
+          providerDispatch.provider,
+          omitUndefined({
+            idempotencyKey: ctx.idempotencyKey,
+            mode: resolved.mode,
+            token: providerDispatch.token,
+            lines,
+            ...(discount ? { discount } : {}),
+            total,
+            metadata: checkoutPersistedCustomMetadata(checkoutInput.customFields),
+          }),
+        );
+      }
+
+      return await providerDispatch.method.call(
+        providerDispatch.provider,
+        omitUndefined({
           idempotencyKey: ctx.idempotencyKey,
           mode: resolved.mode,
-          token: providerDispatch.token,
+          provider: providerName,
+          customer: checkoutInput.customer,
           lines,
           ...(discount ? { discount } : {}),
           total,
-          metadata: checkoutPersistedCustomMetadata(checkoutInput.customFields),
-        });
-      }
-
-      return await providerDispatch.method.call(providerDispatch.provider, {
-        idempotencyKey: ctx.idempotencyKey,
-        mode: resolved.mode,
-        provider: providerName,
-        customer: checkoutInput.customer,
-        lines,
-        ...(discount ? { discount } : {}),
-        total,
-        successUrl: checkoutSuccessUrl(input, ctx, checkoutInput, checkoutId, statusToken),
-        cancelUrl: checkoutCancelUrl(input, ctx, checkoutInput, checkoutId, statusToken),
-        metadata: checkoutCustomMetadata(checkoutInput.customFields),
-      });
+          successUrl: checkoutSuccessUrl(input, ctx, checkoutInput, checkoutId, statusToken),
+          cancelUrl: checkoutCancelUrl(input, ctx, checkoutInput, checkoutId, statusToken),
+          metadata: checkoutCustomMetadata(checkoutInput.customFields),
+        }),
+      );
     } catch (error) {
       observeBackendError(input, "checkout.providerSession", error, {
         checkoutId,
@@ -468,7 +475,7 @@ export async function startCheckout(
 
     return checkoutPersistenceFailed();
   }
-  const checkoutDocument: CheckoutDocument = {
+  const checkoutDocument: CheckoutDocument = omitUndefined({
     id: checkoutId,
     type: "checkout",
     schemaVersion: 1,
@@ -483,45 +490,49 @@ export async function startCheckout(
     redirectUrl: providerSession.redirectUrl,
     status: checkoutDocumentStatus(providerSession.status),
     expiresAt: documentExpiresAt,
-    aggregate: createCheckoutAggregate({
-      mode: resolved.mode,
-      currency: resolved.currency,
-      lines: reserved.lines,
-      coupon: resolved.coupon,
-      binding: {
-        provider: providerName,
-        providerCheckoutId,
-        providerCustomerId: providerSession.providerCustomerId,
-        returnPath: safeRequestReturnPath(ctx, checkoutInput.returnTo),
-        cancelPath: checkoutCancelTarget(input, ctx, checkoutInput),
-        successPath: checkoutSuccessTarget(input, ctx, checkoutInput),
-        cartHash: await input.hash(
-          JSON.stringify({
-            cartId: resolved.cart?.id,
-            currency: resolved.currency,
-            lines: reserved.lines.map((line) => ({
-              sellableId: line.item.sellableId,
-              priceId: line.item.priceId,
-              quantity: line.quantity,
-              unitAmount: line.item.unitAmount,
-              currency: line.item.currency,
-              reservationId: line.reservationId,
-            })),
-            coupon: resolved.coupon,
+    aggregate: createCheckoutAggregate(
+      omitUndefined({
+        mode: resolved.mode,
+        currency: resolved.currency,
+        lines: reserved.lines,
+        coupon: resolved.coupon,
+        binding: omitUndefined({
+          provider: providerName,
+          providerCheckoutId,
+          providerCustomerId: providerSession.providerCustomerId,
+          returnPath: safeRequestReturnPath(ctx, checkoutInput.returnTo),
+          cancelPath: checkoutCancelTarget(input, ctx, checkoutInput),
+          successPath: checkoutSuccessTarget(input, ctx, checkoutInput),
+          cartHash: await input.hash(
+            JSON.stringify({
+              cartId: resolved.cart?.id,
+              currency: resolved.currency,
+              lines: reserved.lines.map((line) => ({
+                sellableId: line.item.sellableId,
+                priceId: line.item.priceId,
+                quantity: line.quantity,
+                unitAmount: line.item.unitAmount,
+                currency: line.item.currency,
+                reservationId: line.reservationId,
+              })),
+              coupon: resolved.coupon,
+            }),
+          ),
+        }),
+        metadata: checkoutMetadata(
+          omitUndefined({
+            customFields: checkoutInput.customFields,
+            customer: checkoutInput.customer,
+            idempotencyInputHash,
+            idempotencyKey: ctx.idempotencyKey,
+            providerSession,
           }),
         ),
-      },
-      metadata: checkoutMetadata({
-        customFields: checkoutInput.customFields,
-        customer: checkoutInput.customer,
-        idempotencyInputHash,
-        idempotencyKey: ctx.idempotencyKey,
-        providerSession,
       }),
-    }),
+    ),
     createdAt: ctx.now,
     updatedAt: ctx.now,
-  };
+  });
 
   const persisted = await persistCheckoutStart(
     input,
@@ -545,7 +556,7 @@ export async function startCheckout(
   return {
     ok: true,
     status: 200,
-    data: {
+    data: omitUndefined({
       id: checkoutId,
       status: providerSession.status,
       mode: providerSession.mode,
@@ -554,8 +565,10 @@ export async function startCheckout(
       statusToken,
       expiresAt: providerSession.expiresAt ?? checkoutDocument.expiresAt,
       paymentPending: providerSession.status === "pending" ? true : undefined,
-    },
-    effects: checkoutRedirectUrl ? [{ type: "redirect", url: checkoutRedirectUrl }] : undefined,
+    }),
+    ...(checkoutRedirectUrl
+      ? { effects: [{ type: "redirect" as const, url: checkoutRedirectUrl }] }
+      : {}),
   };
 }
 
@@ -585,26 +598,32 @@ async function resolveCheckoutStart(
 
   const cartLines = cartResult.cart?.aggregate.items ?? [];
   for (const cartLine of cartLines) {
-    const line = await resolveCheckoutStartLine(input, {
-      sellableId: cartLine.item.sellableId,
-      priceId: cartLine.item.priceId,
-      quantity: cartLine.quantity,
-      quantityForLimit: cartLine.quantity + siblingSellableQuantity(cartLines, cartLine),
-      currency,
-      cartLineId: cartLine.id,
-      metadata: cartLine.metadata,
-    });
+    const line = await resolveCheckoutStartLine(
+      input,
+      omitUndefined({
+        sellableId: cartLine.item.sellableId,
+        priceId: cartLine.item.priceId,
+        quantity: cartLine.quantity,
+        quantityForLimit: cartLine.quantity + siblingSellableQuantity(cartLines, cartLine),
+        currency,
+        cartLineId: cartLine.id,
+        metadata: cartLine.metadata,
+      }),
+    );
     if (!line.ok) return line;
     lines.push(line);
   }
 
   if (checkoutInput.sellableId) {
-    const line = await resolveCheckoutStartLine(input, {
-      sellableId: checkoutInput.sellableId,
-      priceId: checkoutInput.priceId,
-      quantity: checkoutInput.quantity ?? 1,
-      currency,
-    });
+    const line = await resolveCheckoutStartLine(
+      input,
+      omitUndefined({
+        sellableId: checkoutInput.sellableId,
+        priceId: checkoutInput.priceId,
+        quantity: checkoutInput.quantity ?? 1,
+        currency,
+      }),
+    );
     if (!line.ok) return line;
     lines.push(line);
   }
@@ -645,7 +664,7 @@ async function resolveCheckoutStart(
     }
   }
 
-  return {
+  return omitUndefined({
     ok: true,
     cart: resolvedCart,
     cartVersion: cartResult.cart?.version,
@@ -653,7 +672,7 @@ async function resolveCheckoutStart(
     mode: modes[0],
     coupon,
     lines,
-  };
+  });
 }
 
 async function findCheckoutStartCart(
@@ -732,7 +751,7 @@ async function resolveCheckoutStartLine(
 
   return {
     ok: true,
-    line: {
+    line: omitUndefined({
       id: input.createId("checkout_line"),
       cartLineId: lineInput.cartLineId,
       item: snapshotPrice({
@@ -743,7 +762,7 @@ async function resolveCheckoutStartLine(
       }),
       quantity: lineInput.quantity,
       metadata: lineInput.metadata,
-    },
+    }),
     stock,
   };
 }
@@ -773,18 +792,20 @@ async function reserveCheckoutLines(
         continue;
       }
 
-      const reservation = await stock.reserve({
-        stockItemId: resolution.stock.id,
-        quantity: resolution.line.quantity,
-        expiresAt,
-        now: ctx.now,
-        cartId: checkout.cart?.id,
-        checkoutSessionId: checkoutId,
-        customerId: ctx.customerId,
-        sessionId: ctx.sessionId,
-        idempotencyKey: checkoutReservationIdempotencyKey(ctx, resolution),
-        metadata: { source: "checkout.start" },
-      });
+      const reservation = await stock.reserve(
+        omitUndefined({
+          stockItemId: resolution.stock.id,
+          quantity: resolution.line.quantity,
+          expiresAt,
+          now: ctx.now,
+          cartId: checkout.cart?.id,
+          checkoutSessionId: checkoutId,
+          customerId: ctx.customerId,
+          sessionId: ctx.sessionId,
+          idempotencyKey: checkoutReservationIdempotencyKey(ctx, resolution),
+          metadata: { source: "checkout.start" },
+        }),
+      );
 
       if (reservation.status === "insufficient_stock") {
         await releaseCheckoutReservations(input, reservationIds, ctx.now);
@@ -877,18 +898,19 @@ async function markCheckoutPersistenceFailed(
   now: ISODateTime,
 ): Promise<void> {
   try {
-    await input.repositories.session.put({
-      ...checkoutDocument,
-      status: "failed",
-      providerStatus: "failed",
-      redirectUrl: undefined,
-      failureReason: "Checkout could not be persisted after provider handoff.",
-      updatedAt: now,
-      aggregate: {
-        ...checkoutDocument.aggregate,
-        metadata: checkoutFailedMetadata(checkoutDocument.aggregate.metadata),
-      },
-    });
+    await input.repositories.session.put(
+      omitUndefined({
+        ...checkoutDocument,
+        status: "failed",
+        providerStatus: "failed",
+        failureReason: "Checkout could not be persisted after provider handoff.",
+        updatedAt: now,
+        aggregate: {
+          ...checkoutDocument.aggregate,
+          metadata: checkoutFailedMetadata(checkoutDocument.aggregate.metadata),
+        },
+      }),
+    );
   } catch (error) {
     // Best effort: if the local store is unavailable, stock release already compensated inventory.
     observeBackendError(input, "checkout.markPersistenceFailed", error, {
@@ -963,10 +985,10 @@ async function emitCheckoutStartFailedNotification(
 }
 
 function checkoutMetadata(input: {
-  readonly customFields: JsonObject | undefined;
+  readonly customFields?: JsonObject;
   readonly customer?: CheckoutCustomerInput;
   readonly idempotencyInputHash?: string;
-  readonly idempotencyKey: string | undefined;
+  readonly idempotencyKey?: string;
   readonly providerSession: {
     readonly status: CheckoutSessionDTO["status"];
     readonly redirectUrl?: string;
@@ -1231,7 +1253,7 @@ function checkoutDocumentSuccessResult(
   return {
     ok: true,
     status: 200,
-    data: {
+    data: omitUndefined({
       id: document.id,
       status: sessionStatus,
       mode: document.aggregate.mode,
@@ -1240,8 +1262,8 @@ function checkoutDocumentSuccessResult(
       expiresAt: document.expiresAt,
       paymentPending: status === "pending" ? true : undefined,
       orderId,
-    },
-    effects: redirectUrl ? [{ type: "redirect", url: redirectUrl }] : undefined,
+    }),
+    ...(redirectUrl ? { effects: [{ type: "redirect" as const, url: redirectUrl }] } : {}),
   };
 }
 
@@ -1345,10 +1367,12 @@ function cartWithCheckoutReservations(
 
   const updated = updateCartDocument(
     cart,
-    cart.aggregate.items.map((item) => ({
-      ...item,
-      reservationId: reservationByCartLineId.get(item.id) ?? item.reservationId,
-    })),
+    cart.aggregate.items.map((item) =>
+      omitUndefined({
+        ...item,
+        reservationId: reservationByCartLineId.get(item.id) ?? item.reservationId,
+      }),
+    ),
     updatedAt,
   );
   const {
@@ -1376,7 +1400,7 @@ function checkoutLineToProviderLine(
 ): MikaProviderLineItem {
   const providerRef = line.item.providerRefs?.find((ref) => ref.provider === provider);
 
-  return {
+  return omitUndefined({
     sellableId: line.item.sellableId,
     priceId: line.item.priceId,
     contentRef: line.item.content,
@@ -1395,7 +1419,7 @@ function checkoutLineToProviderLine(
     interval: line.item.interval,
     intervalCount: line.item.intervalCount,
     metadata: line.metadata ?? line.item.metadata,
-  };
+  });
 }
 
 function checkoutSuccessUrl(
@@ -1513,13 +1537,13 @@ export async function createCheckoutPreview(
         proof.inputHash === inputHash,
     ) ?? false;
   const requiredProofs = [
-    {
+    omitUndefined({
       kind: "payment_authorization" as const,
       required: true,
       reason: "Checkout start requires payment confirmation before provider handoff.",
       inputHash,
       expiresAt: quote.expiresAt,
-    },
+    }),
   ];
   const status =
     quote.status === "expired"
@@ -1530,7 +1554,7 @@ export async function createCheckoutPreview(
           ? "ready"
           : "requires_payment_authorization";
 
-  return {
+  return omitUndefined({
     id: input.createId("checkout_preview"),
     quoteId: previewInput.quoteId ?? quote.id,
     status,
@@ -1544,7 +1568,7 @@ export async function createCheckoutPreview(
     inputHash,
     warnings: quote.warnings,
     errors: quote.errors,
-  };
+  });
 }
 
 async function delegatedPaymentProofHash(

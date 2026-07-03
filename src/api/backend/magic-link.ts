@@ -3,6 +3,7 @@
  * email), and verifying it (consuming the token, hydrating or creating the session identity).
  */
 import { renderMikaEmail } from "../../email";
+import { omitUndefined } from "../../internal/object";
 import type { MikaRequestContext } from "../context";
 import { emitMikaNotification, type MikaNotificationIntent } from "../notifications";
 import type { AccountDTO, MikaApiResult } from "../types";
@@ -92,7 +93,7 @@ async function queueDefaultMagicLinkRequestedEmail(
     expiresAt: context.expiresAt,
   });
   const emailId = input.createId("email");
-  const emailRecord = {
+  const emailRecord = omitUndefined({
     id: emailId,
     customerId: context.customerId,
     tokenId: context.tokenId,
@@ -115,20 +116,22 @@ async function queueDefaultMagicLinkRequestedEmail(
       ...(context.userId ? { userId: context.userId } : {}),
       ...(context.returnTo ? { returnTo: context.returnTo } : {}),
     },
-  };
-
-  await input.repositories.ops.put({
-    id: emailId,
-    type: "email",
-    schemaVersion: 1,
-    status: emailRecord.status,
-    nextAttemptAt: emailRecord.nextAttemptAt,
-    tokenId: emailRecord.tokenId,
-    kind: emailRecord.kind,
-    record: emailRecord,
-    createdAt: now,
-    updatedAt: now,
   });
+
+  await input.repositories.ops.put(
+    omitUndefined({
+      id: emailId,
+      type: "email",
+      schemaVersion: 1,
+      status: emailRecord.status,
+      nextAttemptAt: emailRecord.nextAttemptAt,
+      tokenId: emailRecord.tokenId,
+      kind: emailRecord.kind,
+      record: emailRecord,
+      createdAt: now,
+      updatedAt: now,
+    }),
+  );
 }
 
 export async function verifyMagicLink(
@@ -178,13 +181,13 @@ export async function verifyMagicLink(
     return {
       ok: true,
       status: 200,
-      data: {
+      data: omitUndefined({
         customer: email ? { email } : undefined,
         orders: [],
         subscriptions: [],
         entitlements: [],
         downloads: [],
-      },
+      }),
     };
   } catch (error) {
     await input.repositories.ephemeral

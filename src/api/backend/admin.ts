@@ -4,9 +4,10 @@
  * mutation in the audited, idempotency-keyed admin action runner from ./admin-audit.
  */
 import type { AdjustStockRepositoryResult } from "../../storage/repositories";
+import { omitUndefined } from "../../internal/object";
 import type { EntitlementDocument, LicenseDocument } from "../../types/documents";
 import { createMikaId } from "../../types/primitives";
-import type { ISODateTime, JsonObject } from "../../types/primitives";
+import type { ISODateTime, JsonObject, ProviderName } from "../../types/primitives";
 import type { MikaProviderOrderCancelInput, MikaProviderRefundInput } from "../../provider";
 import type {
   AdminActionResultDTO,
@@ -94,12 +95,15 @@ export async function providerSync(
     return validationFailed("contentRef", "Entry-scoped provider sync requires contentRef.");
   }
 
-  const providerFeature = await requireProviderFeature(input, {
-    providerName: syncInput.provider,
-    method: "syncCatalog",
-    unsupportedMessage: (providerName) =>
-      `Provider '${providerName}' does not support catalog sync.`,
-  });
+  const providerFeature = await requireProviderFeature(
+    input,
+    omitUndefined({
+      providerName: syncInput.provider,
+      method: "syncCatalog",
+      unsupportedMessage: (providerName: ProviderName) =>
+        `Provider '${providerName}' does not support catalog sync.`,
+    }),
+  );
   if (!providerFeature.ok) return providerFeature;
 
   const providerInput = {
@@ -124,12 +128,12 @@ export async function providerSync(
 
   return runAdminProviderAction(
     input,
-    {
+    omitUndefined({
       action: "provider.syncCatalog",
       idempotencyKey: syncInput.idempotencyKey,
       idempotencyInput: toIdempotencyJson(syncInput),
       metadata: syncMetadata,
-    },
+    }),
     () => providerFeature.method.call(providerFeature.provider, providerInput),
     "Provider catalog sync failed.",
   );
@@ -164,12 +168,12 @@ export async function releaseExpiredReservations(
 
   return runAdminRepositoryAction(
     input,
-    {
+    omitUndefined({
       action: "stock.releaseExpiredReservations",
       idempotencyKey: releaseInput.idempotencyKey,
       idempotencyInput: toIdempotencyJson(releaseInput),
       metadata: releaseInput.now ? { now: releaseInput.now } : {},
-    },
+    }),
     release,
     "Expired reservation release failed.",
   );
@@ -215,7 +219,7 @@ export async function refundOrder(
 
   return runAdminProviderAction(
     input,
-    {
+    omitUndefined({
       action: "order.refund",
       targetType: "order",
       targetId: order.id,
@@ -228,7 +232,7 @@ export async function refundOrder(
         ...(refundInput.amount !== undefined ? { amount: refundInput.amount } : {}),
         ...(refundInput.reason ? { reason: refundInput.reason } : {}),
       },
-    },
+    }),
     async () => {
       const result = await providerFeature.method.call(providerFeature.provider, providerInput);
       assertCompletedProviderAction(result, "Provider order refund did not complete.");
@@ -282,7 +286,7 @@ export async function cancelOrder(
 
   return runAdminProviderAction(
     input,
-    {
+    omitUndefined({
       action: "order.cancel",
       targetType: "order",
       targetId: order.id,
@@ -295,7 +299,7 @@ export async function cancelOrder(
         ...(order.providerOrderId ? { providerOrderId: order.providerOrderId } : {}),
         ...(cancelInput.reason ? { reason: cancelInput.reason } : {}),
       },
-    },
+    }),
     async () => {
       const result = await providerFeature.method.call(providerFeature.provider, providerInput);
       assertCompletedProviderAction(result, "Provider order cancellation did not complete.");
@@ -325,7 +329,7 @@ export async function grantEntitlement(
 
   return runAdminRepositoryAction(
     input,
-    {
+    omitUndefined({
       action: "entitlement.grant",
       targetType: "entitlement",
       targetId: entitlementId,
@@ -338,7 +342,7 @@ export async function grantEntitlement(
         ...(emailHash ? { emailHash } : {}),
         ...(grantInput.expiresAt ? { expiresAt: grantInput.expiresAt } : {}),
       },
-    },
+    }),
     async (audit) => {
       const entitlement = createManualEntitlementDocument(
         entitlementId,
@@ -367,22 +371,25 @@ export async function revokeEntitlement(
   const entitlements = await findEntitlementsForRevoke(input, revokeInput);
   const primaryEntitlement = entitlements[0];
   if (!primaryEntitlement) {
-    return missingTargetWithAudit(input, {
-      action: "entitlement.revoke",
-      targetType: "entitlement",
-      field: "entitlementId",
-      value: revokeInput.entitlementId ?? revokeInput.entitlementKey ?? "unknown",
-      targetId: revokeInput.entitlementId,
-      metadata: {
-        ...(revokeInput.entitlementKey ? { entitlementKey: revokeInput.entitlementKey } : {}),
-        ...(revokeInput.customerId ? { customerId: revokeInput.customerId } : {}),
-      },
-    });
+    return missingTargetWithAudit(
+      input,
+      omitUndefined({
+        action: "entitlement.revoke",
+        targetType: "entitlement",
+        field: "entitlementId",
+        value: revokeInput.entitlementId ?? revokeInput.entitlementKey ?? "unknown",
+        targetId: revokeInput.entitlementId,
+        metadata: {
+          ...(revokeInput.entitlementKey ? { entitlementKey: revokeInput.entitlementKey } : {}),
+          ...(revokeInput.customerId ? { customerId: revokeInput.customerId } : {}),
+        },
+      }),
+    );
   }
 
   return runAdminRepositoryAction(
     input,
-    {
+    omitUndefined({
       action: "entitlement.revoke",
       targetType: "entitlement",
       targetId: primaryEntitlement.id,
@@ -395,7 +402,7 @@ export async function revokeEntitlement(
         ...(primaryEntitlement.customerId ? { customerId: primaryEntitlement.customerId } : {}),
         ...(revokeInput.reason ? { reason: revokeInput.reason } : {}),
       },
-    },
+    }),
     async (audit) => {
       const now = audit.createdAt;
       const updated: EntitlementDocument[] = entitlements.map((entitlement) => ({
@@ -445,7 +452,7 @@ export async function resendEmail(
 
   return runAdminRepositoryAction(
     input,
-    {
+    omitUndefined({
       action: "email.resend",
       targetType: "email",
       targetId: email.id,
@@ -455,23 +462,26 @@ export async function resendEmail(
         emailId: email.id,
         kind: email.kind,
       },
-    },
+    }),
     async (audit) => {
       const now = audit.createdAt;
+      const {
+        lastError: _lastError,
+        leasedAt: _leasedAt,
+        leaseExpiresAt: _leaseExpiresAt,
+        leaseKey: _leaseKey,
+        ...requeuedRecord
+      } = email.record;
       await input.repositories.ops.put({
         ...email,
         status: "queued",
         nextAttemptAt: now,
         updatedAt: now,
         record: {
-          ...email.record,
+          ...requeuedRecord,
           status: "queued",
           nextAttemptAt: now,
           attemptCount: 0,
-          leaseKey: undefined,
-          leasedAt: undefined,
-          leaseExpiresAt: undefined,
-          lastError: undefined,
           metadata: {
             ...email.record.metadata,
             resentAt: now,
@@ -509,7 +519,7 @@ export async function revokeLicense(
 
   return runAdminRepositoryAction(
     input,
-    {
+    omitUndefined({
       action: "license.revoke",
       targetType: "license",
       targetId: license.id,
@@ -522,7 +532,7 @@ export async function revokeLicense(
         ...(license.orderLineId ? { orderLineId: license.orderLineId } : {}),
         ...(revokeInput.reason ? { reason: revokeInput.reason } : {}),
       },
-    },
+    }),
     async (audit) => {
       const now = audit.createdAt;
       const updated: LicenseDocument = {
@@ -559,17 +569,20 @@ export async function issueDownload(
 ): Promise<MikaApiResult<AdminActionResultDTO>> {
   const target = await resolveDownloadIssueTarget(input, issueInput);
   if (!target) {
-    return missingTargetWithAudit(input, {
-      action: "download.issue",
-      targetType: "download",
-      field: "orderId",
-      value: issueInput.orderId ?? issueInput.entitlementId ?? "unknown",
-      targetId: issueInput.orderId,
-      metadata: {
-        ...(issueInput.entitlementId ? { entitlementId: issueInput.entitlementId } : {}),
-        ...(issueInput.orderLineId ? { orderLineId: issueInput.orderLineId } : {}),
-      },
-    });
+    return missingTargetWithAudit(
+      input,
+      omitUndefined({
+        action: "download.issue",
+        targetType: "download",
+        field: "orderId",
+        value: issueInput.orderId ?? issueInput.entitlementId ?? "unknown",
+        targetId: issueInput.orderId,
+        metadata: {
+          ...(issueInput.entitlementId ? { entitlementId: issueInput.entitlementId } : {}),
+          ...(issueInput.orderLineId ? { orderLineId: issueInput.orderLineId } : {}),
+        },
+      }),
+    );
   }
 
   const now = currentBackendISODateTime(input);
@@ -579,7 +592,7 @@ export async function issueDownload(
   const downloadTokenHash = await hashDownloadToken(input, downloadToken);
   return runAdminRepositoryAction(
     input,
-    {
+    omitUndefined({
       action: "download.issue",
       targetType: "download",
       targetId: createMikaId(target.downloadRef),
@@ -594,7 +607,7 @@ export async function issueDownload(
         ...(target.license?.id ? { licenseId: target.license.id } : {}),
         expiresAt,
       },
-    },
+    }),
     async (audit) => {
       if (!target.line.downloadRefs?.includes(target.downloadRef)) {
         await input.repositories.ledger.put(

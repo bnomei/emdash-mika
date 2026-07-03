@@ -33,6 +33,7 @@ import type {
   ProviderName,
   PurchaseMode,
 } from "../types/primitives";
+import { omitUndefined } from "../internal/object";
 
 /** Input for projecting catalog sellables to API DTOs with optional stock context. */
 export interface CatalogSellableDTOInput {
@@ -57,14 +58,14 @@ export function createCartAggregate(input: {
   readonly coupon?: CouponSnapshot;
   readonly metadata?: JsonObject;
 }): CartAggregate {
-  return {
+  return omitUndefined({
     schemaVersion: 1,
     currency: input.currency,
     items: input.items ?? [],
     coupon: input.coupon,
     totals: calculateTotals(input.currency, input.items ?? [], input.coupon),
     metadata: input.metadata,
-  };
+  });
 }
 
 /** Projects a cart aggregate and document metadata to a cart DTO. */
@@ -78,14 +79,14 @@ export function cartToDTO(input: {
   const totals =
     input.cart.totals ?? calculateTotals(input.cart.currency, input.cart.items, input.cart.coupon);
 
-  return {
+  return omitUndefined({
     id: input.id,
     status: input.status,
     currency: input.cart.currency,
     items: input.cart.items.map((line) => {
       const subtotalAmount = line.item.unitAmount * line.quantity;
 
-      return {
+      return omitUndefined({
         id: line.id,
         sellableId: line.item.sellableId,
         priceId: line.item.priceId,
@@ -97,14 +98,14 @@ export function cartToDTO(input: {
         subtotal: money(subtotalAmount, line.item.currency),
         total: money(subtotalAmount, line.item.currency),
         availability: input.availabilityBySellableId?.get(line.item.sellableId),
-      };
+      });
     }),
     coupon: input.cart.coupon
-      ? {
+      ? omitUndefined({
           label: input.cart.coupon.label,
           discount: totals.discount,
           providerCouponId: input.cart.coupon.providerRef?.priceId,
-        }
+        })
       : undefined,
     subtotal: totals.subtotal,
     discount: totals.discount,
@@ -112,7 +113,7 @@ export function cartToDTO(input: {
     shipping: totals.shipping,
     total: totals.total,
     checkoutSessionId: input.checkoutSessionId,
-  };
+  });
 }
 
 /** Rebuilds a cart aggregate with replaced line items and optional coupon. */
@@ -121,21 +122,25 @@ export function cartWithItems(input: {
   readonly items: readonly CartLine[];
   readonly coupon?: CouponSnapshot;
 }): CartAggregate {
-  return createCartAggregate({
-    currency: input.cart.currency,
-    items: input.items,
-    coupon: input.coupon ?? input.cart.coupon,
-    metadata: input.cart.metadata,
-  });
+  return createCartAggregate(
+    omitUndefined({
+      currency: input.cart.currency,
+      items: input.items,
+      coupon: input.coupon ?? input.cart.coupon,
+      metadata: input.cart.metadata,
+    }),
+  );
 }
 
 /** Rebuilds a cart aggregate with coupon removed. */
 export function cartWithoutCoupon(input: { readonly cart: CartAggregate }): CartAggregate {
-  return createCartAggregate({
-    currency: input.cart.currency,
-    items: input.cart.items,
-    metadata: input.cart.metadata,
-  });
+  return createCartAggregate(
+    omitUndefined({
+      currency: input.cart.currency,
+      items: input.cart.items,
+      metadata: input.cart.metadata,
+    }),
+  );
 }
 
 /** Rebuilds a cart aggregate with an applied coupon snapshot. */
@@ -143,12 +148,14 @@ export function cartWithCoupon(input: {
   readonly cart: CartAggregate;
   readonly coupon: CouponSnapshot;
 }): CartAggregate {
-  return createCartAggregate({
-    currency: input.cart.currency,
-    items: input.cart.items,
-    coupon: input.coupon,
-    metadata: input.cart.metadata,
-  });
+  return createCartAggregate(
+    omitUndefined({
+      currency: input.cart.currency,
+      items: input.cart.items,
+      coupon: input.coupon,
+      metadata: input.cart.metadata,
+    }),
+  );
 }
 
 /** Builds a versioned wishlist aggregate payload. */
@@ -158,11 +165,11 @@ export function createWishlistAggregate(
     readonly metadata?: JsonObject;
   } = {},
 ): WishlistAggregate {
-  return {
+  return omitUndefined({
     schemaVersion: 1,
     items: input.items ?? [],
     metadata: input.metadata,
-  };
+  });
 }
 
 /** Projects a wishlist aggregate to a wishlist DTO with optional availability. */
@@ -173,16 +180,18 @@ export function wishlistToDTO(input: {
 }): WishlistDTO {
   return {
     id: input.id,
-    items: input.wishlist.items.map((item) => ({
-      id: item.id,
-      sellableId: item.item.sellableId,
-      priceId: item.item.priceId,
-      title: item.item.titleSnapshot,
-      sku: item.item.sku,
-      variantOptions: item.item.variantOptions,
-      addedAt: item.addedAt,
-      availability: input.availabilityBySellableId?.get(item.item.sellableId),
-    })),
+    items: input.wishlist.items.map((item) =>
+      omitUndefined({
+        id: item.id,
+        sellableId: item.item.sellableId,
+        priceId: item.item.priceId,
+        title: item.item.titleSnapshot,
+        sku: item.item.sku,
+        variantOptions: item.item.variantOptions,
+        addedAt: item.addedAt,
+        availability: input.availabilityBySellableId?.get(item.item.sellableId),
+      }),
+    ),
   };
 }
 
@@ -193,7 +202,7 @@ export function snapshotPrice(input: {
   readonly price: PriceDefinition;
   readonly fallbackTitle: string;
 }): PurchasableSnapshot {
-  return {
+  return omitUndefined({
     content: input.content,
     sellableId: input.sellable.id,
     priceId: input.price.id,
@@ -210,7 +219,7 @@ export function snapshotPrice(input: {
     intervalCount: input.price.intervalCount,
     providerRefs: input.price.providerRefs,
     metadata: input.price.metadata,
-  };
+  });
 }
 
 /** Builds a checkout aggregate with binding and derived totals. */
@@ -222,7 +231,7 @@ export function createCheckoutAggregate(input: {
   readonly coupon?: CouponSnapshot;
   readonly metadata?: JsonObject;
 }): CheckoutAggregate {
-  return {
+  return omitUndefined({
     schemaVersion: 1,
     mode: input.mode,
     currency: input.currency,
@@ -231,7 +240,7 @@ export function createCheckoutAggregate(input: {
     binding: input.binding,
     coupon: input.coupon,
     metadata: input.metadata,
-  };
+  });
 }
 
 /** Builds an order aggregate from checkout context and fulfillment lines. */
@@ -245,25 +254,25 @@ export function createOrderAggregate(input: {
   readonly receiptUrl?: string;
   readonly metadata?: JsonObject;
 }): OrderAggregate {
-  return {
+  return omitUndefined({
     schemaVersion: 1,
     customer: input.customer,
     lines: input.lines,
     totals: input.checkout.totals,
     coupon: input.checkout.coupon,
     providerRefs: [
-      {
+      omitUndefined({
         provider: input.checkout.binding.provider,
         checkoutId: input.checkout.binding.providerCheckoutId,
         paymentId: input.providerPaymentId,
         orderId: input.providerOrderId,
         customerId: input.checkout.binding.providerCustomerId,
-      },
+      }),
     ],
     invoiceUrl: input.invoiceUrl,
     receiptUrl: input.receiptUrl,
     metadata: input.metadata,
-  };
+  });
 }
 
 /** Builds a subscription aggregate from customer and recurring sellable context. */
@@ -280,22 +289,22 @@ export function createSubscriptionAggregate(input: {
   readonly cancelAtPeriodEnd?: boolean;
   readonly metadata?: JsonObject;
 }): SubscriptionAggregate {
-  return {
+  return omitUndefined({
     schemaVersion: 1,
     customer: input.customer,
     sellable: input.sellable,
-    providerRef: {
+    providerRef: omitUndefined({
       provider: input.provider,
       subscriptionId: input.providerSubscriptionId,
       customerId: input.providerCustomerId,
       priceId: input.providerPriceId,
-    },
+    }),
     status: input.status ?? "incomplete",
     cancelAtPeriodEnd: input.cancelAtPeriodEnd ?? false,
     currentPeriodStart: input.currentPeriodStart,
     currentPeriodEnd: input.currentPeriodEnd,
     metadata: input.metadata,
-  };
+  });
 }
 
 /** Maps a checkout line into a persisted order line with pricing breakdown. */
@@ -312,7 +321,7 @@ export function orderLineFromCheckoutLine(input: {
   const discountAmount = input.discountAmount ?? 0;
   const taxAmount = input.taxAmount ?? 0;
 
-  return {
+  return omitUndefined({
     id: input.id,
     item: input.line.item,
     quantity: input.line.quantity,
@@ -323,7 +332,7 @@ export function orderLineFromCheckoutLine(input: {
     entitlementId: input.entitlementId,
     stockMovementId: input.stockMovementId,
     metadata: input.metadata,
-  };
+  });
 }
 
 function sellableToDTO(
@@ -334,7 +343,7 @@ function sellableToDTO(
 ): SellableDTO {
   const fallbackTitle = catalog.titleSnapshot ?? sellable.id;
 
-  return {
+  return omitUndefined({
     id: sellable.id,
     contentRef: catalog.content,
     sku: sellable.sku,
@@ -348,11 +357,11 @@ function sellableToDTO(
       .filter((price) => includeInactive || price.active)
       .map((price) => priceToDTO(sellable.id, price)),
     availability: stockAvailabilityToDTO(sellable, stockBySellableId?.get(sellable.id)),
-  };
+  });
 }
 
 function priceToDTO(sellableId: MikaId, price: PriceDefinition): PriceDTO {
-  return {
+  return omitUndefined({
     id: price.id,
     sellableId,
     amount: price.amount,
@@ -362,7 +371,7 @@ function priceToDTO(sellableId: MikaId, price: PriceDefinition): PriceDTO {
     interval: price.interval,
     intervalCount: price.intervalCount,
     active: price.active,
-  };
+  });
 }
 
 /** Derives availability DTO from sellable limits and stock item record state. */
@@ -387,51 +396,51 @@ export function stockAvailabilityToDTO(
     availableQuantity <= stock.lowStockThreshold;
 
   if (stock.availableOverride === false) {
-    return {
+    return omitUndefined({
       sellableId: sellable.id,
       status: "out_of_stock",
       availableQuantity,
       maxPerOrder: sellable.maxPerOrder,
       lowStock,
-    };
+    });
   }
 
   if (stock.availableOverride === true) {
-    return {
+    return omitUndefined({
       sellableId: sellable.id,
       status: lowStock ? "low_stock" : "available",
       availableQuantity,
       maxPerOrder: sellable.maxPerOrder,
       lowStock,
-    };
+    });
   }
 
   if (stock.policy === "manual") {
-    return {
+    return omitUndefined({
       sellableId: sellable.id,
       status: "manual",
       availableQuantity,
       maxPerOrder: sellable.maxPerOrder,
       lowStock,
-    };
+    });
   }
 
   if (stock.policy === "backorder" || (availableQuantity <= 0 && stock.allowBackorder)) {
-    return {
+    return omitUndefined({
       sellableId: sellable.id,
       status: "backorder",
       availableQuantity,
       maxPerOrder: sellable.maxPerOrder,
       lowStock,
-    };
+    });
   }
 
   if (stock.policy === "untracked") {
-    return {
+    return omitUndefined({
       sellableId: sellable.id,
       status: "untracked",
       maxPerOrder: sellable.maxPerOrder,
-    };
+    });
   }
 
   // The branch order above is load-bearing (a backorder-allowed, sold-out untracked item is
@@ -439,13 +448,13 @@ export function stockAvailabilityToDTO(
   // policy. By here policy is narrowed to "finite"; the assertion turns any future StockPolicy
   // member into a compile error demanding an explicit branch instead of silently landing here.
   stock.policy satisfies "finite";
-  return {
+  return omitUndefined({
     sellableId: sellable.id,
     status: availableQuantity <= 0 ? "out_of_stock" : lowStock ? "low_stock" : "available",
     availableQuantity,
     maxPerOrder: sellable.maxPerOrder,
     lowStock,
-  };
+  });
 }
 
 /**
@@ -483,11 +492,11 @@ function calculateTotals(
   const discountAmount = couponDiscountAmount(coupon, subtotalAmount);
   const totalAmount = Math.max(0, subtotalAmount - discountAmount);
 
-  return {
+  return omitUndefined({
     subtotal: money(subtotalAmount, currency),
     discount: discountAmount > 0 ? money(discountAmount, currency) : undefined,
     total: money(totalAmount, currency),
-  };
+  });
 }
 
 function money(amount: number, currency: CurrencyCode): Money {

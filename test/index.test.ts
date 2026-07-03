@@ -5,6 +5,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import Ajv2020 from "ajv/dist/2020";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
+import { optionalProperty } from "../src/internal/object";
 import {
   MIKA_PACKAGE_NAME,
   MIKA_MAINTENANCE_CRON_SCHEDULE,
@@ -431,12 +432,12 @@ describe("Mika native plugin package", () => {
   it("rejects non-JSON-safe descriptor option values at config time", () => {
     const sparseAssertWired = Array<string>(1);
 
-    expect(() =>
-      mikaPlugin({ entrypoint: {} } as unknown as MikaDescriptorOptions),
-    ).toThrow(/entrypoint/);
-    expect(() =>
-      mikaPlugin({ maintenance: null } as unknown as MikaDescriptorOptions),
-    ).toThrow(/maintenance/);
+    expect(() => mikaPlugin({ entrypoint: {} } as unknown as MikaDescriptorOptions)).toThrow(
+      /entrypoint/,
+    );
+    expect(() => mikaPlugin({ maintenance: null } as unknown as MikaDescriptorOptions)).toThrow(
+      /maintenance/,
+    );
     expect(() =>
       mikaPlugin({
         maintenance: { enabled: {} },
@@ -447,32 +448,30 @@ describe("Mika native plugin package", () => {
         maintenance: { schedule: () => "* * * * *" },
       } as unknown as MikaDescriptorOptions),
     ).toThrow(/maintenance\.schedule/);
-    expect(() =>
-      mikaPlugin({ assertWired: [1] } as unknown as MikaDescriptorOptions),
-    ).toThrow(/assertWired/);
+    expect(() => mikaPlugin({ assertWired: [1] } as unknown as MikaDescriptorOptions)).toThrow(
+      /assertWired/,
+    );
     expect(() =>
       mikaPlugin({ assertWired: sparseAssertWired } as unknown as MikaDescriptorOptions),
     ).toThrow(/assertWired/);
   });
 
   it("keeps descriptor option types JSON-safe", () => {
-    expectTypeOf<MikaDescriptorOptions>().toHaveProperty("entrypoint").toEqualTypeOf<
-      string | undefined
-    >();
-    expectTypeOf<MikaDescriptorOptions>().toHaveProperty("maintenance").toEqualTypeOf<
-      MikaDescriptorPluginOptions["maintenance"]
-    >();
-    expectTypeOf<MikaDescriptorOptions>().toHaveProperty("assertWired").toEqualTypeOf<
-      boolean | readonly string[] | undefined
-    >();
+    expectTypeOf<MikaDescriptorOptions>()
+      .toHaveProperty("entrypoint")
+      .toEqualTypeOf<string | undefined>();
+    expectTypeOf<MikaDescriptorOptions>()
+      .toHaveProperty("maintenance")
+      .toEqualTypeOf<MikaDescriptorPluginOptions["maintenance"]>();
+    expectTypeOf<MikaDescriptorOptions>()
+      .toHaveProperty("assertWired")
+      .toEqualTypeOf<boolean | readonly string[] | undefined>();
     expectTypeOf<MikaDescriptorOptions>().not.toHaveProperty("api");
     expectTypeOf<MikaDescriptorOptions>().not.toHaveProperty("operationPolicy");
     expectTypeOf<ReturnType<typeof mikaPlugin>["options"]>().toEqualTypeOf<
       MikaDescriptorPluginOptions | undefined
     >();
-    expectTypeOf<NonNullable<ReturnType<typeof mikaPlugin>["options"]>>().not.toHaveProperty(
-      "api",
-    );
+    expectTypeOf<NonNullable<ReturnType<typeof mikaPlugin>["options"]>>().not.toHaveProperty("api");
     expectTypeOf<NonNullable<ReturnType<typeof mikaPlugin>["options"]>>().not.toHaveProperty(
       "operationPolicy",
     );
@@ -488,7 +487,7 @@ describe("Mika native plugin package", () => {
     } as unknown as MikaDescriptorOptions["maintenance"];
     const descriptor = mikaPlugin({
       entrypoint: "./src/lib/mika-plugin.ts",
-      maintenance: maintenanceWithRuntimeDeps,
+      ...optionalProperty("maintenance", maintenanceWithRuntimeDeps),
       assertWired: ["catalog"],
     });
     expect(descriptor.options).toEqual({
@@ -938,8 +937,8 @@ describe("Mika Astro helpers", () => {
     const policy: MikaOperationPolicy = ({ descriptor, ctx, input }) => {
       observed.push({
         operation: descriptor.name,
-        sessionId: ctx.sessionId,
-        locale: ctx.locale,
+        ...optionalProperty("sessionId", ctx.sessionId),
+        ...optionalProperty("locale", ctx.locale),
         input,
       });
     };
@@ -1874,7 +1873,7 @@ describe("Mika client", () => {
     const source = readFileSync(new URL("../src/astro-actions.ts", import.meta.url), "utf8");
 
     expect(source).toContain("MIKA_AGENT_IDEMPOTENCY_KEY_HEADER");
-    expect(source).toContain("idempotencyKey: actionIdempotencyKey(ctx.request)");
+    expect(source).toContain("actionIdempotencyKey(ctx.request)");
     expect(source).toContain("request.headers.get(MIKA_AGENT_IDEMPOTENCY_KEY_HEADER)");
     expect(source).toContain("mikaOperationInputWithIdempotencyContext");
   });
@@ -2148,7 +2147,7 @@ describe("Mika client", () => {
         requests.push({
           url: typeof url === "string" ? url : url instanceof URL ? url.toString() : url.url,
           method: init?.method ?? "GET",
-          body: typeof init?.body === "string" ? init.body : undefined,
+          ...optionalProperty("body", typeof init?.body === "string" ? init.body : undefined),
         });
 
         return Response.json({ ok: true, status: 200, data: {} });
@@ -2677,7 +2676,11 @@ describe("Mika client", () => {
       readonly input: unknown;
     }> = [];
     const policy: MikaOperationPolicy = ({ descriptor, ctx, input }) => {
-      observed.push({ operation: descriptor.name, sessionId: ctx.sessionId, input });
+      observed.push({
+        operation: descriptor.name,
+        ...optionalProperty("sessionId", ctx.sessionId),
+        input,
+      });
     };
     const routes = createMikaPluginRoutes(
       createMikaApi({
@@ -2741,7 +2744,11 @@ describe("Mika client", () => {
       } satisfies MikaApiOverrides),
       {
         operationPolicy: ({ descriptor, ctx, input }) => {
-          policyCalls.push({ operation: descriptor.name, sessionId: ctx.sessionId, input });
+          policyCalls.push({
+            operation: descriptor.name,
+            ...optionalProperty("sessionId", ctx.sessionId),
+            input,
+          });
         },
       },
     );
@@ -2874,7 +2881,7 @@ describe("Mika client", () => {
       createMikaApi({
         admin: {
           stockAdjust: async (input) => {
-            apiInputs.push({ idempotencyKey: input.idempotencyKey });
+            apiInputs.push({ ...optionalProperty("idempotencyKey", input.idempotencyKey) });
 
             return {
               ok: true,
@@ -2886,7 +2893,7 @@ describe("Mika client", () => {
       } satisfies MikaApiOverrides),
       {
         operationPolicy: ({ ctx }) => {
-          policyCalls.push({ idempotencyKey: ctx.idempotencyKey });
+          policyCalls.push({ ...optionalProperty("idempotencyKey", ctx.idempotencyKey) });
         },
       },
     );
@@ -3392,7 +3399,7 @@ describe("Mika client", () => {
       fetch: async (url, init) => {
         requests.push({
           url: typeof url === "string" ? url : url instanceof URL ? url.toString() : url.url,
-          method: init?.method,
+          ...optionalProperty("method", init?.method),
           body: typeof init?.body === "string" ? init.body : "",
         });
         return Response.json({
@@ -3437,7 +3444,7 @@ describe("Mika client", () => {
       fetch: async (url, init) => {
         requests.push({
           url: typeof url === "string" ? url : url instanceof URL ? url.toString() : url.url,
-          method: init?.method,
+          ...optionalProperty("method", init?.method),
           body: typeof init?.body === "string" ? init.body : "",
         });
         return Response.json({
@@ -3729,9 +3736,9 @@ describe("Mika admin and email shell", () => {
       action: "mika.stock.adjust",
       provider: "mika",
       runnerRoute: ".well-known/actions/run",
-      route: undefined,
       confirm: "Adjust stock for this item?",
     });
+    expect(createMikaActionButtonOptions("mika.stock.adjust")).not.toHaveProperty("route");
     expect(
       createMikaActionButtonOptions("mika.stock.adjust", {
         provider: "custom",
@@ -4446,9 +4453,9 @@ describe("Mika Astro template contracts", () => {
     expect(mikaTemplateStatusLabel("provider_review_needed")).toBe("Provider review needed");
     expect(mikaTemplateStatusVariant("provider_review_needed")).toBe("neutral");
     expect(mikaTemplateAvailabilityStatusLabel("low_stock")).toBe("Low stock");
-    expect(
-      mikaTemplateAvailabilityStatusLabel("available", { available: "Ships today" }),
-    ).toBe("Ships today");
+    expect(mikaTemplateAvailabilityStatusLabel("available", { available: "Ships today" })).toBe(
+      "Ships today",
+    );
     expect(mikaTemplateAvailabilityStatusVariant("manual")).toBe("secondary");
     expect(mikaTemplateCheckoutStatusMessage("created")).toBe("Checkout created.");
     expect(mikaTemplateCheckoutStatusMessage("redirected")).toBe("Checkout started.");
@@ -4730,7 +4737,9 @@ describe("Mika Astro template contracts", () => {
     expect(accountSubscriptions).toContain("<AccountSubscriptions");
     expect(accountLicenses).toContain("mikaTemplateRoutes.accountLicenses");
     expect(accountLicenses).toContain("<AccountLicenses");
-    expect(accountLicenses).toContain("const account = accountResult.ok ? accountResult.data : null");
+    expect(accountLicenses).toContain(
+      "const account = accountResult.ok ? accountResult.data : null",
+    );
     expect(accountLicenses).toContain("await mikaTemplateAccountLicenses(account)");
     expect(accountLicenses).toContain("<AccountLicenses licenses={licenses}");
     expect(accountLicenses).not.toContain("mikaTemplateAccount(");

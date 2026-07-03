@@ -3,6 +3,7 @@
  * Terminal payment states are preserved across duplicate webhook delivery.
  */
 import type { MikaProviderPaymentEvent } from "../provider";
+import { optionalProperty } from "../internal/object";
 import type { OrderRefundInput, OrderCancelInput } from "./types";
 import type { CheckoutDocument, OrderDocument } from "../types/documents";
 import type {
@@ -84,17 +85,17 @@ export function applyPaymentEventToOrder(
 
   return {
     ...order,
-    providerPaymentId: order.providerPaymentId ?? event.providerPaymentId,
-    providerOrderId: order.providerOrderId ?? event.providerOrderId,
+    ...optionalProperty("providerPaymentId", order.providerPaymentId ?? event.providerPaymentId),
+    ...optionalProperty("providerOrderId", order.providerOrderId ?? event.providerOrderId),
     status: paymentState.status,
     paymentStatus: paymentState.paymentStatus,
     paidAt: paymentState.paidAt ?? now,
     updatedAt: now,
     aggregate: {
       ...order.aggregate,
-      invoiceUrl: updates.invoiceUrl ?? order.aggregate.invoiceUrl,
+      ...optionalProperty("invoiceUrl", updates.invoiceUrl ?? order.aggregate.invoiceUrl),
       providerRefs: updates.providerRefs,
-      metadata: updates.metadata,
+      ...optionalProperty("metadata", updates.metadata),
     },
   };
 }

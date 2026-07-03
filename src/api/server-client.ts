@@ -2,6 +2,7 @@
  * Server-side HTTP client with full operation facade (including admin and webhook namespaces).
  * Forwards same-origin cookies from the incoming request by default.
  */
+import { optionalProperty } from "../internal/object";
 import type { MikaClientOptions } from "./client";
 import { mikaOperationRequestInit, mikaOperationDefinitions } from "./operations";
 import {
@@ -33,9 +34,9 @@ export function createMikaServerClient(options: MikaServerClientOptions = {}): M
     return request(operation.routeKey, mikaOperationRequestInit(operation, input));
   };
   const routes = createMikaPluginRouteBuilder({
-    apiBase: options.apiBase,
-    pluginId: options.pluginId,
-    origin: options.baseUrl ?? options.request?.url,
+    ...optionalProperty("apiBase", options.apiBase),
+    ...optionalProperty("pluginId", options.pluginId),
+    ...optionalProperty("origin", options.baseUrl ?? options.request?.url),
   });
   const facade = createMikaOperationFacade(requestOperation, {
     includeAdmin: true,

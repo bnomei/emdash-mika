@@ -8,6 +8,7 @@ import {
   type MikaAdminActionTarget,
   type MikaAdminActionTargetMetadata,
 } from "../admin";
+import { omitUndefined } from "../internal/object";
 import { parseMikaInput, type z } from "./validation";
 import { mikaOperationDefinitions, type MikaApiOperation } from "./operations";
 import type { AdminActionResultDTO, ContentRefDTO, MikaApiResult, MikaError } from "./types";
@@ -316,7 +317,7 @@ function adminActionDtoResultAdapter(result: MikaApiResult<unknown>): MikaAdminA
 
   const data = asRecord(result.data) ?? {};
   const status = readAdminActionStatus(data["status"]);
-  const actionResult: MikaAdminActionRunResult = {
+  const actionResult: MikaAdminActionRunResult = omitUndefined({
     ok: status !== "failed" && status !== "unsupported",
     status: actionResultHttpStatus(status),
     severity: actionResultSeverity(status),
@@ -325,7 +326,7 @@ function adminActionDtoResultAdapter(result: MikaApiResult<unknown>): MikaAdminA
     jobStatus: actionResultJobStatus(status),
     affected: asRecord(data["affected"]),
     data: result.data,
-  };
+  });
 
   const effects: MutableActionResultEffects = {};
   const redirectUrl = stringValue(data["redirectUrl"]);
@@ -381,7 +382,7 @@ function parseActionInvocation(input: unknown): MikaApiResult<MikaActionInvocati
   const target = readActionTarget(record["target"]);
   const payload = asRecord(record["payload"]);
   const context = asContext(record["context"]);
-  const invocation: MikaActionInvocation = {
+  const invocation: MikaActionInvocation = omitUndefined({
     actionId,
     ...(stringValue(record["invocationId"])
       ? { invocationId: stringValue(record["invocationId"]) }
@@ -389,7 +390,7 @@ function parseActionInvocation(input: unknown): MikaApiResult<MikaActionInvocati
     ...(payload ? { payload } : {}),
     ...(context ? { context } : {}),
     ...(target ? { target } : {}),
-  };
+  });
   if (!targetMatchesRequirement(action.target, target)) {
     return runnerFailure(
       "VALIDATION_FAILED",
@@ -519,27 +520,27 @@ function readActionTarget(input: unknown): MikaActionTarget | undefined {
   if (!record || !type) return undefined;
 
   if (type === "dashboard") {
-    return {
+    return omitUndefined({
       type,
       ...(stringValue(record["surface"]) ? { surface: "dashboard" as const } : {}),
       ...(stringValue(record["kind"]) ? { kind: stringValue(record["kind"]) } : {}),
-    };
+    });
   }
   if (type === "entry") {
     const collection = stringValue(record["collection"]);
     const entryId = stringValue(record["entryId"]);
     if (!collection || !entryId) return undefined;
-    return {
+    return omitUndefined({
       type,
       ...(stringValue(record["surface"]) ? { surface: "entry" as const } : {}),
       collection,
       entryId,
       ...(stringValue(record["locale"]) ? { locale: stringValue(record["locale"]) } : {}),
       ...(stringValue(record["kind"]) ? { kind: stringValue(record["kind"]) } : {}),
-    };
+    });
   }
   if (type === "field") {
-    return {
+    return omitUndefined({
       type,
       ...(stringValue(record["surface"]) ? { surface: "field" as const } : {}),
       ...(stringValue(record["collection"])
@@ -550,10 +551,10 @@ function readActionTarget(input: unknown): MikaActionTarget | undefined {
       ...(stringValue(record["fieldName"]) ? { fieldName: stringValue(record["fieldName"]) } : {}),
       ...(stringValue(record["kind"]) ? { kind: stringValue(record["kind"]) } : {}),
       ...(Object.hasOwn(record, "value") ? { value: record["value"] } : {}),
-    };
+    });
   }
   if (type === "row") {
-    return {
+    return omitUndefined({
       type,
       ...(stringValue(record["surface"]) ? { surface: "row" as const } : {}),
       ...(stringValue(record["collection"])
@@ -567,7 +568,7 @@ function readActionTarget(input: unknown): MikaActionTarget | undefined {
       ...(stringValue(record["path"]) ? { path: stringValue(record["path"]) } : {}),
       ...(Object.hasOwn(record, "value") ? { value: record["value"] } : {}),
       ...(asRecord(record["row"]) ? { row: asRecord(record["row"]) } : {}),
-    };
+    });
   }
   return undefined;
 }

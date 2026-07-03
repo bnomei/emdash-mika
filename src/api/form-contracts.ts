@@ -3,6 +3,7 @@
  * Keeps HTML form values aligned with operation input schemas.
  */
 import type { CheckoutCustomerInput } from "./types";
+import { omitUndefined } from "../internal/object";
 
 /** Hidden-field or query-string contract for sellable selection with optional price variant. */
 export interface MikaPurchaseFieldInput {
@@ -23,6 +24,13 @@ export interface MikaParsedPurchaseField {
  */
 export interface MikaCheckoutCustomerFields extends CheckoutCustomerInput {}
 
+interface MikaCheckoutCustomerFieldSource {
+  readonly email?: string | undefined;
+  readonly name?: string | undefined;
+  readonly company?: string | undefined;
+  readonly vatId?: string | undefined;
+}
+
 /** Encodes purchase intent as URL search params for hidden inputs. */
 export function serializeMikaPurchaseField(input: MikaPurchaseFieldInput): string {
   const params = new URLSearchParams({ sellableId: input.sellableId });
@@ -37,24 +45,24 @@ export function parseMikaPurchaseField(value: string | null | undefined): MikaPa
 
   const params = new URLSearchParams(value);
 
-  return {
+  return omitUndefined({
     sellableId: nonEmptyString(params.get("sellableId")),
     priceId: nonEmptyString(params.get("priceId")),
-  };
+  });
 }
 
 /** Drops empty customer fields; returns `undefined` when all fields are absent. */
 export function normalizeMikaCheckoutCustomer(
-  input: MikaCheckoutCustomerFields,
+  input: MikaCheckoutCustomerFieldSource,
 ): MikaCheckoutCustomerFields | undefined {
   if (!input.email && !input.name && !input.company && !input.vatId) return undefined;
 
-  return {
+  return omitUndefined({
     email: input.email,
     name: input.name,
     company: input.company,
     vatId: input.vatId,
-  };
+  });
 }
 
 function nonEmptyString(value: string | null): string | undefined {

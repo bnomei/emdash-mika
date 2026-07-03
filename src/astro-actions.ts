@@ -12,6 +12,7 @@ import {
   type ActionErrorCode,
   type SafeResult,
 } from "astro:actions";
+import { optionalProperty } from "./internal/object";
 import { MIKA_AGENT_IDEMPOTENCY_KEY_HEADER } from "./api/agent-types";
 import { createMikaRequestContext } from "./api/context";
 import {
@@ -30,7 +31,7 @@ import type { MikaOperationPolicy } from "./api/operation-policy";
 import { mikaOperationInputWithIdempotencyContext } from "./api/operation-idempotency";
 import { createMikaApi, type MikaApi, type MikaApiOverrides } from "./api/server";
 import type { z } from "./api/validation";
-import type { MikaRequestContext } from "./api/context";
+import type { MikaRequestContext, MikaSessionAccess } from "./api/context";
 import type {
   AccountExportDTO,
   AccountExportStatusInput,
@@ -194,7 +195,7 @@ export function createMikaActions(options: MikaActionsOptions = {}): MikaActions
             requestInput,
             requestContext.idempotencyKey,
           ),
-          operationPolicy,
+          ...optionalProperty("operationPolicy", operationPolicy),
         }),
       );
     });
@@ -232,9 +233,9 @@ function actionRequestContext(ctx: ActionAPIContext): MikaRequestContext {
   return createMikaRequestContext({
     request: ctx.request,
     url: ctx.url,
-    idempotencyKey: actionIdempotencyKey(ctx.request),
-    session: ctx.session,
-    locale: ctx.currentLocale,
+    ...optionalProperty("idempotencyKey", actionIdempotencyKey(ctx.request)),
+    ...optionalProperty("session", ctx.session as MikaSessionAccess | undefined),
+    ...optionalProperty("locale", ctx.currentLocale),
   });
 }
 

@@ -4,6 +4,7 @@
 import { LibsqlDialect } from "@libsql/kysely-libsql";
 import { Kysely } from "kysely";
 
+import { optionalProperty } from "../../src/internal/object";
 import { createMikaRequestContext, type MikaRequestContext } from "../../src/api/context";
 import type { MikaDb } from "../../src/storage/repositories";
 import type { MikaDatabase } from "../../src/storage/schema";
@@ -104,13 +105,21 @@ export function createTestRequestContext(
   return createMikaRequestContext({
     request,
     url,
-    session,
-    sessionId,
-    customerId: normalizeOptionalMikaId(options.customerId, "customer", 1),
-    userId: options.userId === false ? undefined : (options.userId ?? "user_1"),
-    idempotencyKey:
+    ...optionalProperty("session", session),
+    ...optionalProperty("sessionId", sessionId),
+    ...optionalProperty("customerId", normalizeOptionalMikaId(options.customerId, "customer", 1)),
+    ...optionalProperty(
+      "userId",
+      options.userId === false ? undefined : (options.userId ?? "user_1"),
+    ),
+    ...optionalProperty(
+      "idempotencyKey",
       options.idempotencyKey === false ? undefined : (options.idempotencyKey ?? "idem_1"),
-    locale: options.locale === false ? undefined : (options.locale ?? "en-IE"),
+    ),
+    ...optionalProperty(
+      "locale",
+      options.locale === false ? undefined : (options.locale ?? "en-IE"),
+    ),
     now: options.now ?? TEST_NOW_DATE,
   });
 }

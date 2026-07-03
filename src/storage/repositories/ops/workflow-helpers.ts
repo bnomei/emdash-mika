@@ -5,6 +5,7 @@ import {
   type TypeScopedQueryOptions,
 } from "../kit";
 import { mirrorRecordFields } from "../record-mirror";
+import type { ExactPartial } from "../../../internal/object";
 import type { OpsDocument, WorkflowDocument } from "../../../types/documents";
 import type { ISODateTime } from "../../../types/primitives";
 
@@ -62,7 +63,7 @@ export function workflowHasActiveLease(
 export function workflowDocumentWithRecord(
   workflow: WorkflowDocument,
   now: ISODateTime,
-  patch: Partial<WorkflowDocument["record"]>,
+  patch: ExactPartial<WorkflowDocument["record"]>,
 ): WorkflowDocument {
   return mirrorRecordFields(workflow, now, { ...patch, updatedAt: now }, [
     "kind",

@@ -34,6 +34,7 @@ import {
   MIKA_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY,
   MIKA_DELEGATED_PAYMENT_TOKEN_METADATA_KEY,
 } from "./provider";
+import { omitUndefined } from "./internal/object";
 import {
   createCurrencyCode,
   createISODateTime,
@@ -308,51 +309,67 @@ function acpOptional<TSchema extends z.ZodTypeAny>(schema: TSchema) {
   return schema.nullish().transform((value) => value ?? undefined);
 }
 
-const acpBuyerSchema = z.object({
-  name: acpOptional(z.string()),
-  email: acpOptional(z.string()),
-  phone_number: acpOptional(z.string()),
-}) satisfies z.ZodType<MikaAcpBuyer>;
+function acpExactObject<T extends object>(schema: z.ZodTypeAny): z.ZodType<T> {
+  return schema.transform((value) => omitUndefined(value as T)) as unknown as z.ZodType<T>;
+}
+
+const acpBuyerSchema = acpExactObject<MikaAcpBuyer>(
+  z.object({
+    name: acpOptional(z.string()),
+    email: acpOptional(z.string()),
+    phone_number: acpOptional(z.string()),
+  }),
+);
 
 const acpItemSchema = z.object({
   id: z.string().min(1),
   quantity: z.number().int().positive(),
 }) satisfies z.ZodType<MikaAcpItem>;
 
-const acpAddressSchema = z.object({
-  name: z.string(),
-  line_one: z.string(),
-  line_two: acpOptional(z.string()),
-  city: z.string(),
-  state: z.string(),
-  country: z.string(),
-  postal_code: z.string(),
-  phone_number: acpOptional(z.string()),
-}) satisfies z.ZodType<MikaAcpAddress>;
+const acpAddressSchema = acpExactObject<MikaAcpAddress>(
+  z.object({
+    name: z.string(),
+    line_one: z.string(),
+    line_two: acpOptional(z.string()),
+    city: z.string(),
+    state: z.string(),
+    country: z.string(),
+    postal_code: z.string(),
+    phone_number: acpOptional(z.string()),
+  }),
+);
 
-const acpPaymentDataSchema = z.object({
-  token: z.string().min(1),
-  provider: z.enum(["stripe", "adyen", "braintree"]),
-  billing_address: acpOptional(acpAddressSchema),
-}) satisfies z.ZodType<MikaAcpPaymentData>;
+const acpPaymentDataSchema = acpExactObject<MikaAcpPaymentData>(
+  z.object({
+    token: z.string().min(1),
+    provider: z.enum(["stripe", "adyen", "braintree"]),
+    billing_address: acpOptional(acpAddressSchema),
+  }),
+);
 
-const acpCheckoutCreateRequestSchema = z.object({
-  buyer: acpOptional(acpBuyerSchema),
-  items: z.array(acpItemSchema).min(1, "items must be a non-empty array."),
-  fulfillment_address: acpOptional(acpAddressSchema),
-}) satisfies z.ZodType<MikaAcpCheckoutCreateRequest>;
+const acpCheckoutCreateRequestSchema = acpExactObject<MikaAcpCheckoutCreateRequest>(
+  z.object({
+    buyer: acpOptional(acpBuyerSchema),
+    items: z.array(acpItemSchema).min(1, "items must be a non-empty array."),
+    fulfillment_address: acpOptional(acpAddressSchema),
+  }),
+);
 
-const acpCheckoutUpdateRequestSchema = z.object({
-  buyer: acpOptional(acpBuyerSchema),
-  items: acpOptional(z.array(acpItemSchema).min(1, "items must be a non-empty array.")),
-  fulfillment_address: acpOptional(acpAddressSchema),
-  fulfillment_option_id: acpOptional(z.string().min(1)),
-}) satisfies z.ZodType<MikaAcpCheckoutUpdateRequest>;
+const acpCheckoutUpdateRequestSchema = acpExactObject<MikaAcpCheckoutUpdateRequest>(
+  z.object({
+    buyer: acpOptional(acpBuyerSchema),
+    items: acpOptional(z.array(acpItemSchema).min(1, "items must be a non-empty array.")),
+    fulfillment_address: acpOptional(acpAddressSchema),
+    fulfillment_option_id: acpOptional(z.string().min(1)),
+  }),
+);
 
-const acpCheckoutCompleteRequestSchema = z.object({
-  buyer: acpOptional(acpBuyerSchema),
-  payment_data: acpPaymentDataSchema,
-}) satisfies z.ZodType<MikaAcpCheckoutCompleteRequest>;
+const acpCheckoutCompleteRequestSchema = acpExactObject<MikaAcpCheckoutCompleteRequest>(
+  z.object({
+    buyer: acpOptional(acpBuyerSchema),
+    payment_data: acpPaymentDataSchema,
+  }),
+);
 
 /** ACP checkout session response shape projected from Mika cart quote and checkout state. */
 export interface MikaAcpCheckoutSession {
@@ -436,22 +453,24 @@ export function createMikaAcpProductFeed(input: {
       const variants = product.sellables.flatMap((sellable) =>
         sellable.prices
           .filter((price) => price.active)
-          .map((price) => ({
-            id: `${sellable.id}:${price.id}`,
-            title: priceTitle(sellable, price.id),
-            ...(product.description ? { description: product.description } : {}),
-            ...(product.url ? { url: product.url } : {}),
-            price: {
-              amount: price.amount,
-              currency: price.currency,
-            },
-            availability: acpAvailability(sellable),
-            variant_options: acpVariantOptions(sellable.variantOptions),
-            ...(sellable.imageRef
-              ? { media: [{ type: "image" as const, url: sellable.imageRef }] }
-              : {}),
-            ...(product.seller ? { seller: product.seller } : {}),
-          })),
+          .map((price) =>
+            omitUndefined({
+              id: `${sellable.id}:${price.id}`,
+              title: priceTitle(sellable, price.id),
+              ...(product.description ? { description: product.description } : {}),
+              ...(product.url ? { url: product.url } : {}),
+              price: {
+                amount: price.amount,
+                currency: price.currency,
+              },
+              availability: acpAvailability(sellable),
+              variant_options: acpVariantOptions(sellable.variantOptions),
+              ...(sellable.imageRef
+                ? { media: [{ type: "image" as const, url: sellable.imageRef }] }
+                : {}),
+              ...(product.seller ? { seller: product.seller } : {}),
+            }),
+          ),
       );
       if (variants.length === 0) return [];
 
@@ -641,7 +660,10 @@ export function createMemoryMikaAcpSessionStore(): MikaAcpSessionStore {
 
       nextFencingToken += 1;
       const fencingToken = String(nextFencingToken);
-      idempotencyKeys.set(key, { id, pending: true, expiresAt: lease?.expiresAt, fencingToken });
+      idempotencyKeys.set(
+        key,
+        omitUndefined({ id, pending: true, expiresAt: lease?.expiresAt, fencingToken }),
+      );
 
       return { status: "claimed", fencingToken };
     },
@@ -828,7 +850,7 @@ async function handleAcpCreate(
 
   const now = nowIso(options);
   // id = ACP URL session; sessionId = isolated Mika cart/checkout session.
-  const session: MikaAcpSessionRecord = {
+  const session: MikaAcpSessionRecord = omitUndefined({
     id: options.createSessionId?.() ?? createDefaultAcpSessionId(),
     sessionId: `${MIKA_ACP_DEFAULT_SESSION_PREFIX}:${cryptoSafeId()}`,
     status: "not_ready_for_payment",
@@ -840,7 +862,7 @@ async function handleAcpCreate(
     createdAt: now,
     updatedAt: now,
     version: 1,
-  };
+  });
   const idempotency = await beginAcpIdempotency(options, request, session.id, 201, true);
   if (!idempotency.ok) return idempotency.response;
 
@@ -904,7 +926,7 @@ async function handleAcpUpdate(
       );
     }
 
-    const next: MikaAcpSessionRecord = {
+    const next: MikaAcpSessionRecord = omitUndefined({
       ...record,
       buyer: body.data.buyer ?? record.buyer,
       items: body.data.items ?? record.items,
@@ -913,7 +935,7 @@ async function handleAcpUpdate(
       expiresAt: addMilliseconds(nowIso(options), acpSessionTtlMs(options)),
       updatedAt: nowIso(options),
       version: nextAcpVersion(record.version),
-    };
+    });
     const reconciled = body.data.items
       ? await reconcileAcpCart(options, request, next, body.data.items)
       : { ok: true as const, record: next };
@@ -1046,18 +1068,21 @@ async function handleAcpComplete(
 
     const proofId = `acp_payment_authorization_${cryptoSafeId()}`;
     const ctx = acpContext(options, request, record.sessionId);
-    const checkout = await options.api.checkout.start(ctx, {
-      cartId: record.cartId,
-      provider: record.provider,
-      customer,
-      customFields: {
-        [MIKA_DELEGATED_PAYMENT_TOKEN_METADATA_KEY]: body.data.payment_data.token,
-        [MIKA_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY]: body.data.payment_data.provider,
-        [MIKA_DELEGATED_PAYMENT_AUTHORIZATION_METADATA_KEY]: proofId,
-        [MIKA_DELEGATED_PAYMENT_CHECKOUT_SESSION_ID_METADATA_KEY]: record.id,
-        [MIKA_DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY]: preview.data.inputHash,
-      },
-    });
+    const checkout = await options.api.checkout.start(
+      ctx,
+      omitUndefined({
+        cartId: record.cartId,
+        provider: record.provider,
+        customer,
+        customFields: {
+          [MIKA_DELEGATED_PAYMENT_TOKEN_METADATA_KEY]: body.data.payment_data.token,
+          [MIKA_DELEGATED_PAYMENT_PROVIDER_METADATA_KEY]: body.data.payment_data.provider,
+          [MIKA_DELEGATED_PAYMENT_AUTHORIZATION_METADATA_KEY]: proofId,
+          [MIKA_DELEGATED_PAYMENT_CHECKOUT_SESSION_ID_METADATA_KEY]: record.id,
+          [MIKA_DELEGATED_PAYMENT_AUTHORIZATION_INPUT_HASH_METADATA_KEY]: preview.data.inputHash,
+        },
+      }),
+    );
     if (!checkout.ok) {
       return acpErrorFromResult(request, checkout);
     }
@@ -1069,13 +1094,14 @@ async function handleAcpComplete(
       // verdict. A loss to nothing more than a bystander expiry sweep isn't a real conflict and
       // is retried past, same as the final completion write below — otherwise this attempt's own
       // legitimate buyer/etc. update would be silently lost to an unrelated concurrent GET.
-      const buildReverted = (version: number | undefined): MikaAcpSessionRecord => ({
-        ...record,
-        buyer: body.data.buyer ?? record.buyer,
-        status: "not_ready_for_payment",
-        updatedAt: nowIso(options),
-        version: nextAcpVersion(version),
-      });
+      const buildReverted = (version: number | undefined): MikaAcpSessionRecord =>
+        omitUndefined({
+          ...record,
+          buyer: body.data.buyer ?? record.buyer,
+          status: "not_ready_for_payment",
+          updatedAt: nowIso(options),
+          version: nextAcpVersion(version),
+        });
       const reverted = await putAcpRecordRetryingIncidentalExpiry(
         options,
         checkoutSessionId,
@@ -1108,7 +1134,7 @@ async function handleAcpComplete(
 
     const now = nowIso(options);
 
-    const completedBase: Omit<MikaAcpSessionRecord, "version"> = {
+    const completedBase: Omit<MikaAcpSessionRecord, "version"> = omitUndefined({
       ...record,
       buyer: body.data.buyer ?? record.buyer,
       checkoutId: checkout.data.id,
@@ -1116,7 +1142,7 @@ async function handleAcpComplete(
       paymentAuthorizationId: proofId,
       quoteInputHash: preview.data.inputHash,
       quoteSnapshot: acpSessionSnapshotFromQuote(
-        { ...record, fulfillmentOptionId: record.fulfillmentOptionId },
+        record,
         preview.data.quote,
         now,
         preview.data.inputHash,
@@ -1125,7 +1151,7 @@ async function handleAcpComplete(
         ? { purgeAt: addMilliseconds(now, acpTerminalRetentionMs(options)) }
         : {}),
       updatedAt: now,
-    };
+    });
 
     // checkout.start above already happened and cannot be undone from here, so the write below
     // must land somewhere sound. A CAS loss against a genuine competing decision (another
@@ -1134,10 +1160,11 @@ async function handleAcpComplete(
     // sweep ticking on a bystander request (e.g. a plain GET polling this session while this
     // handler was merely slow, not crashed) isn't a real conflict — retry past it a bounded number
     // of times rather than silently discarding a successful payment.
-    const buildCompleted = (version: number | undefined): MikaAcpSessionRecord => ({
-      ...completedBase,
-      version: nextAcpVersion(version),
-    });
+    const buildCompleted = (version: number | undefined): MikaAcpSessionRecord =>
+      omitUndefined({
+        ...completedBase,
+        version: nextAcpVersion(version),
+      });
     const persisted = await putAcpRecordRetryingIncidentalExpiry(
       options,
       checkoutSessionId,
@@ -1383,11 +1410,13 @@ async function acpTerminalStatus(
   if (record.status === "completed" || record.status === "canceled") return record.status;
   if (!record.checkoutId) return undefined;
   const checkout = await options.api.checkout.status(
-    createMikaRequestContext({
-      sessionId: record.sessionId,
-      session: createStaticSession(record.sessionId),
-      now: options.now?.(),
-    }),
+    createMikaRequestContext(
+      omitUndefined({
+        sessionId: record.sessionId,
+        session: createStaticSession(record.sessionId),
+        now: options.now?.(),
+      }),
+    ),
     { checkoutId: record.checkoutId },
   );
   if (!checkout.ok) return undefined;
@@ -1622,11 +1651,14 @@ async function reconcileAcpCart(
   }
 
   for (const { item, ids } of parsedItems) {
-    const added = await options.api.cart.add(ctx, {
-      sellableId: ids.sellableId,
-      priceId: ids.priceId,
-      quantity: item.quantity,
-    });
+    const added = await options.api.cart.add(
+      ctx,
+      omitUndefined({
+        sellableId: ids.sellableId,
+        priceId: ids.priceId,
+        quantity: item.quantity,
+      }),
+    );
     if (!added.ok) {
       const rollbackMessage = await restoreAcpCart(options, ctx, originalCart);
 
@@ -1673,11 +1705,14 @@ async function restoreAcpCart(
   }
 
   for (const line of originalCart.items) {
-    const restored = await options.api.cart.add(ctx, {
-      sellableId: line.sellableId,
-      priceId: line.priceId,
-      quantity: line.quantity,
-    });
+    const restored = await options.api.cart.add(
+      ctx,
+      omitUndefined({
+        sellableId: line.sellableId,
+        priceId: line.priceId,
+        quantity: line.quantity,
+      }),
+    );
     if (!restored.ok) return resultMessage(restored);
   }
 
@@ -1690,7 +1725,7 @@ async function recordToAcpSession(
   record: MikaAcpSessionRecord,
 ): Promise<MikaAcpCheckoutSession> {
   const ctx = acpContext(options, request, record.sessionId);
-  const quote = await options.api.cart.quote(ctx, { cartId: record.cartId });
+  const quote = await options.api.cart.quote(ctx, omitUndefined({ cartId: record.cartId }));
   const checkoutStatus = record.checkoutId
     ? await options.api.checkout.status(ctx, { checkoutId: record.checkoutId })
     : undefined;
@@ -1702,23 +1737,35 @@ async function recordToAcpSession(
         ? "canceled"
         : undefined;
   if (status === "completed" && record.quoteSnapshot) {
-    return acpCheckoutSessionFromSnapshot({
-      record,
-      snapshot: record.quoteSnapshot,
-      status,
-      seller: options.seller,
-      orderUrl: options.orderUrl?.({ checkoutId: record.checkoutId, sessionId: record.id }),
-      checkout,
-    });
+    const orderUrl = options.orderUrl?.(
+      omitUndefined({ checkoutId: record.checkoutId, sessionId: record.id }),
+    );
+
+    return acpCheckoutSessionFromSnapshot(
+      omitUndefined({
+        record,
+        snapshot: record.quoteSnapshot,
+        status,
+        seller: options.seller,
+        orderUrl,
+        checkout,
+      }),
+    );
   }
 
-  return acpCheckoutSessionFromState({
-    record,
-    quote: quote.ok ? quote.data : emptyQuote(record),
-    checkout,
-    seller: options.seller,
-    orderUrl: options.orderUrl?.({ checkoutId: record.checkoutId, sessionId: record.id }),
-  });
+  const orderUrl = options.orderUrl?.(
+    omitUndefined({ checkoutId: record.checkoutId, sessionId: record.id }),
+  );
+
+  return acpCheckoutSessionFromState(
+    omitUndefined({
+      record,
+      quote: quote.ok ? quote.data : emptyQuote(record),
+      checkout,
+      seller: options.seller,
+      orderUrl,
+    }),
+  );
 }
 
 function acpSessionSnapshotFromQuote(
@@ -2013,11 +2060,14 @@ async function previewAcpCheckout(
   record: MikaAcpSessionRecord,
   customer: CheckoutCustomerInput | undefined,
 ): Promise<MikaApiResult<CheckoutPreviewDTO>> {
-  return options.api.checkout.preview(acpContext(options, request, record.sessionId), {
-    cartId: record.cartId,
-    provider: record.provider,
-    customer,
-  });
+  return options.api.checkout.preview(
+    acpContext(options, request, record.sessionId),
+    omitUndefined({
+      cartId: record.cartId,
+      provider: record.provider,
+      customer,
+    }),
+  );
 }
 
 function acpContext(
@@ -2025,15 +2075,17 @@ function acpContext(
   request: Request,
   sessionId: string,
 ): MikaRequestContext {
-  return createMikaRequestContext({
-    request,
-    url: acpRequestUrl(options, request),
-    sessionId,
-    session: createStaticSession(sessionId),
-    idempotencyKey: request.headers.get("Idempotency-Key") ?? undefined,
-    locale: request.headers.get("Accept-Language") ?? undefined,
-    now: options.now?.(),
-  });
+  return createMikaRequestContext(
+    omitUndefined({
+      request,
+      url: acpRequestUrl(options, request),
+      sessionId,
+      session: createStaticSession(sessionId),
+      idempotencyKey: request.headers.get("Idempotency-Key") ?? undefined,
+      locale: request.headers.get("Accept-Language") ?? undefined,
+      now: options.now?.(),
+    }),
+  );
 }
 
 function acpRequestUrl(options: CreateMikaAcpCheckoutHandlersOptions, request: Request): URL {
@@ -2205,17 +2257,17 @@ function providerToAcp(provider: ProviderName | undefined): MikaAcpPaymentProvid
 function buyerToCustomer(buyer: MikaAcpBuyer | undefined): CheckoutCustomerInput | undefined {
   if (!buyer) return undefined;
 
-  return {
+  return omitUndefined({
     email: buyer.email,
     name: buyer.name,
-  };
+  });
 }
 
 function emptyQuote(record: MikaAcpSessionRecord): CartQuoteDTO {
   const currency = record.currency ?? createCurrencyCode("USD");
   const zero: MoneyDTO = { amount: 0, currency };
 
-  return {
+  return omitUndefined({
     cartId: record.cartId,
     status: "unavailable",
     currency,
@@ -2223,7 +2275,7 @@ function emptyQuote(record: MikaAcpSessionRecord): CartQuoteDTO {
     subtotal: zero,
     total: zero,
     warnings: ["Checkout session is not ready."],
-  };
+  });
 }
 
 function resultMessage(result: MikaApiResult<unknown>): string {
@@ -2247,7 +2299,7 @@ function acpErrorFromResult(
     acpErrorCodeFromMika(result.error),
     message ?? result.error.message,
     fieldName ? `$.${fieldName}` : undefined,
-    { retryAfter: result.error.retryAfter },
+    omitUndefined({ retryAfter: result.error.retryAfter }),
   );
 }
 

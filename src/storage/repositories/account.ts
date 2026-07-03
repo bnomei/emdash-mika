@@ -149,17 +149,20 @@ export class AccountRepository {
     if (!customer) return { anonymized: false };
 
     const sentinel = `account-deleted:${customer.customerId}`;
+    const {
+      email: _email,
+      name: _name,
+      company: _company,
+      vatId: _vatId,
+      ...retainedAggregate
+    } = customer.aggregate;
     const anonymized: CustomerDocument = {
       ...customer,
       emailHash: sentinel,
       userId: sentinel,
       aggregate: {
-        ...customer.aggregate,
-        email: undefined,
+        ...retainedAggregate,
         emailHash: sentinel,
-        name: undefined,
-        company: undefined,
-        vatId: undefined,
         metadata: {
           ...customer.aggregate.metadata,
           anonymizedAt: input.now,
@@ -236,24 +239,22 @@ export class AccountRepository {
     let anonymized = 0;
     for (const item of licenses) {
       const license = item.data;
-      const redacted: LicenseDocument = {
-        ...mirrorRecordFields(
-          license,
-          input.now,
-          {
-            licenseKeyHash: `${input.sentinel}:license-redacted`,
-            displayKeySuffix: "redacted",
-            status: "revoked",
-            revokedAt: license.record.revokedAt ?? input.now,
-            metadata: {
-              ...license.record.metadata,
-              anonymizedAt: input.now,
-            },
+      const mirrored = mirrorRecordFields(
+        license,
+        input.now,
+        {
+          licenseKeyHash: `${input.sentinel}:license-redacted`,
+          displayKeySuffix: "redacted",
+          status: "revoked",
+          revokedAt: license.record.revokedAt ?? input.now,
+          metadata: {
+            ...license.record.metadata,
+            anonymizedAt: input.now,
           },
-          ["status"],
-        ),
-        customerId: undefined,
-      };
+        },
+        ["status"],
+      );
+      const { customerId: _customerId, ...redacted } = mirrored;
       await this.put(redacted);
       anonymized += 1;
     }

@@ -3,6 +3,7 @@
  * Builds {@link MikaRequestContext} from incoming requests before dispatch.
  */
 import { createMikaAdminActionsManifest } from "../admin";
+import { optionalProperty } from "../internal/object";
 import {
   resolveMikaAdminActionInvocation,
   toMikaAdminActionRunResult,
@@ -114,7 +115,7 @@ async function handleActionRunner(
         resolved.data.input,
         mikaContext.idempotencyKey,
       ),
-      operationPolicy: options.operationPolicy,
+      ...optionalProperty("operationPolicy", options.operationPolicy),
     });
 
     return toMikaAdminActionRunResult(result, resultAdapter);
@@ -199,7 +200,7 @@ async function handleRouteOperation(
         parsedInput.data,
         mikaContext.idempotencyKey,
       ),
-      operationPolicy: options.operationPolicy,
+      ...optionalProperty("operationPolicy", options.operationPolicy),
     });
   } catch (error) {
     observeRouteError(options, `operation:${operation.name}`, error);
@@ -235,10 +236,10 @@ function requestContext(ctx: MikaRouteContext, idempotencyKey?: string) {
   return createMikaRequestContext({
     request: ctx.request,
     url: ctx.request.url,
-    idempotencyKey: requestIdempotencyKey(ctx.request) ?? idempotencyKey,
-    sessionId: ctx.sessionId,
-    session: ctx.session,
-    locale: ctx.currentLocale,
+    ...optionalProperty("idempotencyKey", requestIdempotencyKey(ctx.request) ?? idempotencyKey),
+    ...optionalProperty("sessionId", ctx.sessionId),
+    ...optionalProperty("session", ctx.session),
+    ...optionalProperty("locale", ctx.currentLocale),
   });
 }
 

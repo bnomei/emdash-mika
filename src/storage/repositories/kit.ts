@@ -10,6 +10,7 @@ import type {
   StorageQueryOptions,
   StorageWhereClause,
 } from "../collections";
+import { omitUndefined } from "../../internal/object";
 
 export type TypedDocument = {
   readonly type: string;
@@ -87,7 +88,7 @@ async function listByType<TDocument extends TypedDocument, TType extends Documen
       type,
       where ?? ({} as TypeScopedWhere<DocumentOfType<TDocument, TType>>),
     ),
-  } as StorageQueryOptions<TDocument>);
+  } as unknown as StorageQueryOptions<TDocument>);
 
   // The where clause scopes the query to `type` at the adapter, but a misbehaving adapter could
   // still return a wrong-type row. Validate before the cast so silent corruption surfaces as a
@@ -117,11 +118,7 @@ export async function findFirstByTypeCandidate<
   const limit = options.limit ?? 100;
 
   do {
-    const page = await documents.listByType(type, {
-      ...options,
-      cursor,
-      limit,
-    });
+    const page = await documents.listByType(type, omitUndefined({ ...options, cursor, limit }));
 
     for (const item of page.items) {
       const candidate = match(item);
@@ -155,11 +152,10 @@ export async function listAllByType<
   let cursor = options.cursor;
 
   do {
-    const page = await documents.listByType(type, {
-      ...options,
-      cursor,
-      limit: ACCOUNT_DELETE_SWEEP_PAGE_SIZE,
-    });
+    const page = await documents.listByType(
+      type,
+      omitUndefined({ ...options, cursor, limit: ACCOUNT_DELETE_SWEEP_PAGE_SIZE }),
+    );
 
     items.push(...page.items);
     cursor = page.cursor;
@@ -188,11 +184,10 @@ export async function listAllByTypeCandidates<
   let cursor = options.cursor;
 
   do {
-    const page = await documents.listByType(type, {
-      ...options,
-      cursor,
-      limit: ACCOUNT_DELETE_SWEEP_PAGE_SIZE,
-    });
+    const page = await documents.listByType(
+      type,
+      omitUndefined({ ...options, cursor, limit: ACCOUNT_DELETE_SWEEP_PAGE_SIZE }),
+    );
 
     for (const item of page.items) {
       if (isCandidate(item.data)) items.push(item);
@@ -222,11 +217,10 @@ export async function listByTypeCandidates<
   const pageLimit = Math.max(target, options.limit ?? 50);
 
   do {
-    const page = await documents.listByType(type, {
-      ...options,
-      cursor,
-      limit: pageLimit,
-    });
+    const page = await documents.listByType(
+      type,
+      omitUndefined({ ...options, cursor, limit: pageLimit }),
+    );
 
     for (const item of page.items) {
       if (isCandidate(item.data)) items.push(item);
@@ -236,11 +230,11 @@ export async function listByTypeCandidates<
     hasMore = page.hasMore;
   } while (items.length < target && cursor);
 
-  return {
+  return omitUndefined({
     items,
     cursor: hasMore ? cursor : undefined,
     hasMore,
-  };
+  });
 }
 
 function withDocumentType<TDocument extends TypedDocument, TType extends DocumentType<TDocument>>(

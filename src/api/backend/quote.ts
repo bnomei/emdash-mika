@@ -3,6 +3,7 @@
  * coupon resolution, and the small pure helpers (price selection, quantity limits, line/item
  * equivalence) that both the quote path and the cart/wishlist mutation handlers share.
  */
+import { omitUndefined } from "../../internal/object";
 import {
   cartToDTO,
   cartWithItems,
@@ -131,9 +132,11 @@ export function reopenCartDocument(cart: CartDocument, now: ISODateTime): CartDo
     version: nextCartVersion(cart.version),
     aggregate: {
       ...cart.aggregate,
-      items: cart.aggregate.items.map((item) =>
-        item.reservationId ? { ...item, reservationId: undefined } : item,
-      ),
+      items: cart.aggregate.items.map((item) => {
+        if (!item.reservationId) return item;
+        const { reservationId: _reservationId, ...rest } = item;
+        return rest;
+      }),
       metadata,
     },
   };
@@ -250,7 +253,7 @@ export async function createCartQuote(
         ? "changed"
         : "valid";
 
-  return {
+  return omitUndefined({
     id: input.createId("cart_quote"),
     cartId: cartResult.cart?.id,
     status,
@@ -262,19 +265,19 @@ export async function createCartQuote(
     adjustments:
       discountAmount > 0
         ? [
-            {
+            omitUndefined({
               type: "discount",
               label: coupon?.label,
               amount: moneyDTO(discountAmount, currency),
-            },
+            }),
           ]
         : undefined,
     coupon: coupon
-      ? {
+      ? omitUndefined({
           label: coupon.label,
           discount: discountAmount > 0 ? moneyDTO(discountAmount, currency) : undefined,
           providerCouponId: coupon.providerRef?.priceId,
-        }
+        })
       : undefined,
     expiresAt: cartResult.cart?.expiresAt,
     inputHash: await input.hash(
@@ -289,7 +292,7 @@ export async function createCartQuote(
     ),
     warnings: warnings.length > 0 ? warnings : undefined,
     errors: errors.length > 0 ? errors : undefined,
-  };
+  });
 }
 
 export async function findQuoteCart(
@@ -381,7 +384,7 @@ async function quoteCartLine(
   const subtotalAmount = unitAmount * line.quantity;
 
   return {
-    line: {
+    line: omitUndefined({
       lineId: line.id,
       sellableId: line.item.sellableId,
       priceId: line.item.priceId,
@@ -394,7 +397,7 @@ async function quoteCartLine(
       total: moneyDTO(subtotalAmount, line.item.currency),
       availability,
       warnings: warnings.length > 0 ? warnings : undefined,
-    },
+    }),
     changed,
     unavailable,
   };
@@ -445,7 +448,7 @@ async function quoteInputLine(
   const subtotalAmount = unitAmount * quantity;
 
   return {
-    line: {
+    line: omitUndefined({
       sellableId: quoteInput.sellableId ?? createMikaId("sellable_missing"),
       priceId: price?.id ?? quoteInput.priceId,
       title: sellable?.titleSnapshot,
@@ -457,7 +460,7 @@ async function quoteInputLine(
       total: price ? moneyDTO(subtotalAmount, currency) : undefined,
       availability,
       warnings: warnings.length > 0 ? warnings : undefined,
-    },
+    }),
     unavailable,
   };
 }
@@ -472,7 +475,7 @@ export function updateCartDocument(
     ...cart,
     updatedAt,
     version: nextCartVersion(cart.version),
-    aggregate: cartWithItems({ cart: cart.aggregate, items, coupon }),
+    aggregate: cartWithItems(omitUndefined({ cart: cart.aggregate, items, coupon })),
   };
 }
 

@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { createHash, createHmac } from "node:crypto";
 
+import { optionalProperty } from "../src/internal/object";
 import {
   createMemoryMikaAcpSessionStore,
   createMikaAcpCheckoutHandlers,
@@ -1876,7 +1877,8 @@ describe("Mika ACP projection", () => {
     // A record with no version yet (persisted before the field existed) has nothing to compare —
     // the write is allowed rather than permanently rejected.
     const legacyId = "checkout_session_cas_legacy";
-    await store.put({ ...record, id: legacyId, version: undefined });
+    const { version: _version, ...legacyRecord } = record;
+    await store.put({ ...legacyRecord, id: legacyId });
     await expect(
       store.putIfUnchanged(
         { ...record, id: legacyId, status: "ready_for_payment", version: 1 },
@@ -3805,7 +3807,7 @@ function createAcpTestApi(input: {
         const line = createCartLine({
           id: `cart_line_${input.getCart().items.length + 1}`,
           sellableId: String(item.sellableId),
-          priceId: item.priceId ? String(item.priceId) : undefined,
+          ...optionalProperty("priceId", item.priceId ? String(item.priceId) : undefined),
           quantity: item.quantity ?? 1,
         });
         input.setCart(createCart([...input.getCart().items, line]));
@@ -3875,7 +3877,7 @@ function createCartLine(input: {
   return {
     id: createMikaId(input.id),
     sellableId: createMikaId(input.sellableId),
-    priceId: input.priceId ? createMikaId(input.priceId) : undefined,
+    ...optionalProperty("priceId", input.priceId ? createMikaId(input.priceId) : undefined),
     title: "Limited print",
     sku: "PRINT-A3",
     variantOptions: [],
@@ -3909,9 +3911,9 @@ function cartToQuote(cart: CartDTO): CartQuoteDTO {
     items: cart.items.map((item) => ({
       lineId: item.id,
       sellableId: item.sellableId,
-      priceId: item.priceId,
+      ...optionalProperty("priceId", item.priceId),
       title: item.title,
-      sku: item.sku,
+      ...optionalProperty("sku", item.sku),
       variantOptions: item.variantOptions,
       quantity: item.quantity,
       unitAmount: item.unitAmount,

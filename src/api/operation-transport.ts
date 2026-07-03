@@ -1,6 +1,7 @@
 /**
  * Maps operation transport metadata to HTTP request init and parses wire input via Zod schemas.
  */
+import { optionalProperty } from "../internal/object";
 import type { MikaRequestInit } from "./request";
 import type { MikaApiOperation } from "./operations";
 import { parseMikaInput, searchParamsObject, type z } from "./validation";
@@ -17,7 +18,10 @@ export function mikaOperationRequestInit(
     case "none":
       return { method: operation.httpMethod };
     case "search":
-      return { method: operation.httpMethod, search: input as MikaRequestInit["search"] };
+      return {
+        method: operation.httpMethod,
+        ...optionalProperty("search", input as MikaRequestInit["search"]),
+      };
     case "body":
       return { method: operation.httpMethod, body: input };
   }

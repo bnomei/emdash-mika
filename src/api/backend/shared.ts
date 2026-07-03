@@ -3,6 +3,7 @@
  * resolution, ISO timestamp helpers, and the JSON child-extraction helpers used to parse provider
  * webhook payloads and reconstruct DTOs from stored JSON.
  */
+import { omitUndefined } from "../../internal/object";
 import type { MikaProviderLineItem, MikaProviderPaymentEvent } from "../../provider";
 import { createCurrencyCode, createISODateTime, createMikaId } from "../../types/primitives";
 import type {
@@ -48,10 +49,7 @@ export function safeRequestReturnPath(
   candidate?: string,
   fallback = ctx.url ? `${ctx.url.pathname}${ctx.url.search}${ctx.url.hash}` : "/",
 ): string {
-  return mikaSafeReturnPath(candidate ?? fallback, {
-    origin: ctx.url,
-    fallback,
-  });
+  return mikaSafeReturnPath(candidate ?? fallback, omitUndefined({ origin: ctx.url, fallback }));
 }
 
 export function defaultBackendCurrency(input: {
@@ -150,12 +148,12 @@ export function customerChild(
   const value = jsonChild(input, key);
   if (!value) return undefined;
 
-  return {
+  return omitUndefined({
     email: stringChild(value, "email"),
     name: stringChild(value, "name"),
     company: stringChild(value, "company"),
     vatId: stringChild(value, "vatId"),
-  };
+  });
 }
 
 function moneyChild(input: JsonObject, key: string): MoneyDTO | undefined {
@@ -174,12 +172,12 @@ export function totalsChild(
   const value = jsonChild(input, key);
   if (!value) return undefined;
 
-  return {
+  return omitUndefined({
     subtotal: moneyChild(value, "subtotal"),
     discount: moneyChild(value, "discount"),
     tax: moneyChild(value, "tax"),
     total: moneyChild(value, "total"),
-  };
+  });
 }
 
 function contentRefChild(
@@ -191,7 +189,7 @@ function contentRefChild(
   const id = value ? stringChild(value, "id") : undefined;
   if (!value || !collection || !id) return undefined;
 
-  return { collection, id, locale: stringChild(value, "locale") };
+  return omitUndefined({ collection, id, locale: stringChild(value, "locale") });
 }
 
 function variantOptionChildren(
@@ -209,7 +207,13 @@ function variantOptionChildren(
     const optionValue = stringChild(option, "value");
     if (!optionName || !optionValue) return [];
 
-    return [{ option: optionName, value: optionValue, label: stringChild(option, "label") }];
+    return [
+      omitUndefined({
+        option: optionName,
+        value: optionValue,
+        label: stringChild(option, "label"),
+      }),
+    ];
   });
 }
 
@@ -295,7 +299,7 @@ export function providerLineChildren(
     }
 
     return [
-      {
+      omitUndefined({
         sellableId: createMikaId(sellableId),
         priceId: mikaIdChild(line, "priceId"),
         contentRef: contentRefChild(line, "contentRef") ?? { collection: "", id: "" },
@@ -312,7 +316,7 @@ export function providerLineChildren(
         fulfillmentKind,
         entitlementKey: stringChild(line, "entitlementKey"),
         metadata: jsonChild(line, "metadata"),
-      },
+      }),
     ];
   });
 }

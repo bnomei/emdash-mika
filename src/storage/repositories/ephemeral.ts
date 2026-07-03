@@ -1,4 +1,5 @@
 import { sql } from "kysely";
+import { optionalProperty } from "../../internal/object";
 import { encodeJson } from "../json";
 import type { MikaSelectable } from "../schema";
 import type { EphemeralRecord } from "../../types/operational";
@@ -248,14 +249,14 @@ function mapEphemeral(row: MikaSelectable<"mika_ephemeral_records">): EphemeralR
   return {
     key: row.key,
     kind: row.kind,
-    subjectHash: undef(row.subject_hash),
+    ...optionalProperty("subjectHash", undef(row.subject_hash)),
     status: row.status,
     count: row.count,
     expiresAt: createISODateTime(row.expires_at),
     version: row.version,
     createdAt: createISODateTime(row.created_at),
     updatedAt: createISODateTime(row.updated_at),
-    data: parseMetadata(row.data_json),
+    ...optionalProperty("data", parseMetadata(row.data_json)),
   };
 }
 

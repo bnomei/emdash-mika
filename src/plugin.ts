@@ -10,6 +10,7 @@ import {
   type PluginDescriptor,
   type PluginStorageConfig,
 } from "emdash";
+import { optionalProperty } from "./internal/object";
 
 /** Host capabilities the Mika plugin requests, shared by the descriptor and the runtime plugin. */
 const MIKA_PLUGIN_CAPABILITIES = ["content:read", "email:send"] as const;
@@ -160,7 +161,7 @@ export function mikaPlugin(
     // The descriptor omits the runtime-only composite indexes mikaStorageConfig carries (see the
     // file header); cast to the descriptor's declared storage field so shape drift still surfaces,
     // rather than the maximally-unsafe `as never`.
-    storage: mikaStorageConfig as unknown as PluginDescriptor["storage"],
+    storage: mikaStorageConfig as unknown as NonNullable<PluginDescriptor["storage"]>,
   };
 }
 
@@ -281,7 +282,9 @@ export function createMikaPlugin(options: MikaCreatePluginOptions = {}) {
     version: MIKA_PLUGIN_VERSION,
     capabilities: [...MIKA_PLUGIN_CAPABILITIES],
     storage: mikaStorageConfig as PluginStorageConfig,
-    routes: createMikaPluginRoutes(api, { operationPolicy: options.operationPolicy }),
+    routes: createMikaPluginRoutes(api, {
+      ...optionalProperty("operationPolicy", options.operationPolicy),
+    }),
     hooks: {
       "plugin:install": registerMaintenance,
       "plugin:activate": registerMaintenance,

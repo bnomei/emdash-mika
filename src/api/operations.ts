@@ -5,6 +5,7 @@
 import type { MikaRequestContext } from "./context";
 import type { MikaApi } from "./server";
 import type { MikaApiResult } from "./types";
+import { omitUndefined } from "../internal/object";
 import { createMikaId } from "../types/primitives";
 import { normalizeMikaCheckoutCustomer, parseMikaPurchaseField } from "./form-contracts";
 import type {
@@ -435,14 +436,14 @@ function normalizeCartAddActionInput(input: CartAddFormInput): CartAddOperationI
     throw new MikaActionInputError("sellableId is required.");
   }
 
-  return {
+  return omitUndefined({
     sellableId,
     priceId: priceId || undefined,
     variantKey: input.variantKey,
     variantOptions: input.variantOptions,
     quantity: input.quantity,
     returnTo: input.returnTo,
-  };
+  });
 }
 
 function normalizeCheckoutStartActionInput(
@@ -450,7 +451,7 @@ function normalizeCheckoutStartActionInput(
 ): CheckoutStartOperationInput {
   const customer = normalizeMikaCheckoutCustomer(input);
 
-  return {
+  return omitUndefined({
     cartId: input.cartId,
     sellableId: input.sellableId,
     priceId: input.priceId,
@@ -462,7 +463,7 @@ function normalizeCheckoutStartActionInput(
     successPath: input.successPath,
     cancelPath: input.cancelPath,
     returnTo: input.returnTo,
-  };
+  });
 }
 
 function parsePurchaseMikaId(value: string | null | undefined, field: string) {

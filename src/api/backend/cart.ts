@@ -4,6 +4,7 @@
  * detection, cart-line merge for session-to-account cart merges, and the concurrency-safe
  * first-line cart creation used when adding to a cart that doesn't exist yet.
  */
+import { omitUndefined } from "../../internal/object";
 import { createCartAggregate, cartWithCoupon, cartWithoutCoupon } from "../../model/builders";
 import { nextCartVersion } from "../../model/cart-version";
 import { findSessionRepositoryOpenCartBySessionAnyCurrency } from "../../storage/repositories/session";
@@ -545,7 +546,7 @@ export function createCartDocument(
 ): CartDocument {
   const now = ctx.now;
 
-  return {
+  return omitUndefined({
     id: input.createId("cart"),
     type: "cart",
     schemaVersion: 1,
@@ -561,7 +562,7 @@ export function createCartDocument(
     aggregate: createCartAggregate({ currency }),
     createdAt: now,
     updatedAt: now,
-  };
+  });
 }
 
 async function findOwnedOpenCartById(

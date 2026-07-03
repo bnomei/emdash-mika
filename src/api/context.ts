@@ -2,6 +2,7 @@
  * Per-request context for Mika operations: actor, session, idempotency, and correlation.
  * Built by route handlers and passed into every context-aware {@link MikaApi} method.
  */
+import { optionalProperty } from "../internal/object";
 import { createISODateTime, type ISODateTime, type MikaId } from "../types/primitives";
 import type { MikaActorContext, MikaAuthorizationScope } from "./agent-types";
 
@@ -78,20 +79,20 @@ export function createMikaRequestContext(
           : undefined;
 
   return {
-    request: input.request,
-    url,
-    method: input.request?.method,
-    actor: input.actor,
-    scopes: input.scopes,
-    authSubject: input.authSubject,
-    authIssuer: input.authIssuer,
-    correlationId: input.correlationId,
-    idempotencyKey: input.idempotencyKey,
-    sessionId: input.sessionId ?? input.session?.sessionID,
-    session: input.session,
-    customerId: input.customerId,
-    userId: input.userId,
-    locale: input.locale,
+    ...optionalProperty("request", input.request),
+    ...optionalProperty("url", url),
+    ...optionalProperty("method", input.request?.method),
+    ...optionalProperty("actor", input.actor),
+    ...optionalProperty("scopes", input.scopes),
+    ...optionalProperty("authSubject", input.authSubject),
+    ...optionalProperty("authIssuer", input.authIssuer),
+    ...optionalProperty("correlationId", input.correlationId),
+    ...optionalProperty("idempotencyKey", input.idempotencyKey),
+    ...optionalProperty("sessionId", input.sessionId ?? input.session?.sessionID),
+    ...optionalProperty("session", input.session),
+    ...optionalProperty("customerId", input.customerId),
+    ...optionalProperty("userId", input.userId),
+    ...optionalProperty("locale", input.locale),
     now: createISODateTime((input.now ?? new Date()).toISOString()),
   };
 }

@@ -1,4 +1,5 @@
 import { mirrorRecordFields } from "../record-mirror";
+import type { ExactPartial } from "../../../internal/object";
 import type { AccountDeleteRequestDocument, AccountExportDocument } from "../../../types/documents";
 import type {
   AccountDeleteEmailRedactionRepositoryInput,
@@ -51,7 +52,7 @@ function jsonObjectChild(input: JsonObject | undefined, key: string): JsonObject
 export function accountDeleteRequestDocumentWithRecord(
   request: AccountDeleteRequestDocument,
   now: ISODateTime,
-  patch: Partial<AccountDeleteRequestDocument["record"]>,
+  patch: ExactPartial<AccountDeleteRequestDocument["record"]>,
 ): AccountDeleteRequestDocument {
   return mirrorRecordFields(request, now, patch, [
     "customerId",

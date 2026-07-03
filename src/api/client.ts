@@ -2,6 +2,7 @@
  * Browser-safe HTTP client for public Mika plugin routes (catalog and stock).
  * Builds plugin URLs and normalizes JSON {@link MikaApiResult} envelopes.
  */
+import { optionalProperty } from "../internal/object";
 import type { AvailabilityDTO, MikaApiResult, SellableDTO } from "./types";
 import { createMikaPluginRouteBuilder } from "./routes";
 import type { MikaPublicPluginRouteName } from "./routes";
@@ -57,9 +58,9 @@ export function createMikaClient(options: MikaClientOptions = {}): MikaClient {
   const request = <TData>(route: MikaClientRouteName, init: MikaRequestInit = {}) =>
     requestMika<TData>(route, init, options);
   const routes = createMikaPluginRouteBuilder<MikaClientRouteName>({
-    apiBase: options.apiBase,
-    pluginId: options.pluginId,
-    origin: options.baseUrl ?? options.request?.url,
+    ...optionalProperty("apiBase", options.apiBase),
+    ...optionalProperty("pluginId", options.pluginId),
+    ...optionalProperty("origin", options.baseUrl ?? options.request?.url),
   });
 
   return {

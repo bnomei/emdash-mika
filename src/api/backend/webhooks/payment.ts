@@ -10,6 +10,7 @@ import {
   orderLineFromCheckoutLine,
   snapshotPrice,
 } from "../../../model/builders";
+import { omitUndefined, optionalProperty } from "../../../internal/object";
 import type {
   MikaProviderPaymentEvent,
   MikaProviderSubscriptionEvent,
@@ -299,9 +300,14 @@ async function processCheckoutExpiredWebhook(
 
   const expired = await expireCheckoutDocument(input, checkout, ctx.now);
 
-  return markWebhookProcessed(input, webhook, ctx.now, {
-    relatedCustomerId: expired.customerId,
-  });
+  return markWebhookProcessed(
+    input,
+    webhook,
+    ctx.now,
+    omitUndefined({
+      relatedCustomerId: expired.customerId,
+    }),
+  );
 }
 
 function reversalHasStrongOrderIdentity(event: MikaProviderPaymentEvent): boolean {
@@ -316,22 +322,27 @@ async function emitCheckoutPaymentFailedNotification(
 ): Promise<void> {
   const checkout = await findPaymentEventCheckout(input, event);
 
-  await emitBackendNotification(input, "checkout.payment_failed", now, {
-    ...(event.customer?.email ? { toEmail: event.customer.email } : {}),
-    ...(checkout?.customerId ? { customerId: checkout.customerId } : {}),
-    ...(checkout?.id ? { checkoutId: checkout.id } : {}),
-    provider: event.provider,
-    ...((event.providerCheckoutId ?? checkout?.providerCheckoutId)
-      ? { providerCheckoutId: event.providerCheckoutId ?? checkout?.providerCheckoutId }
-      : {}),
-    ...(event.providerPaymentId ? { providerPaymentId: event.providerPaymentId } : {}),
-    ...(event.providerOrderId ? { providerOrderId: event.providerOrderId } : {}),
-    ...(event.paymentStatus ? { paymentStatus: event.paymentStatus } : {}),
-    eventType: event.type,
-    webhookId: webhook.id,
-    error: webhook.record.lastError ?? "Payment webhook is not in a paid state.",
-    ...(event.totals?.total ? { total: event.totals.total } : {}),
-  });
+  await emitBackendNotification(
+    input,
+    "checkout.payment_failed",
+    now,
+    omitUndefined({
+      ...(event.customer?.email ? { toEmail: event.customer.email } : {}),
+      ...(checkout?.customerId ? { customerId: checkout.customerId } : {}),
+      ...(checkout?.id ? { checkoutId: checkout.id } : {}),
+      provider: event.provider,
+      ...((event.providerCheckoutId ?? checkout?.providerCheckoutId)
+        ? { providerCheckoutId: event.providerCheckoutId ?? checkout?.providerCheckoutId }
+        : {}),
+      ...(event.providerPaymentId ? { providerPaymentId: event.providerPaymentId } : {}),
+      ...(event.providerOrderId ? { providerOrderId: event.providerOrderId } : {}),
+      ...(event.paymentStatus ? { paymentStatus: event.paymentStatus } : {}),
+      eventType: event.type,
+      webhookId: webhook.id,
+      error: webhook.record.lastError ?? "Payment webhook is not in a paid state.",
+      ...(event.totals?.total ? { total: event.totals.total } : {}),
+    }),
+  );
 }
 
 async function processPaymentWebhook(
@@ -575,7 +586,7 @@ function paymentWorkflowSteps(
 
   return PAYMENT_WEBHOOK_WORKFLOW_STEPS.map((name) => {
     const prior = existingSteps.get(name);
-    return {
+    return omitUndefined({
       name,
       status:
         prior?.status === "completed"
@@ -590,7 +601,7 @@ function paymentWorkflowSteps(
       nextAttemptAt: prior?.status === "failed" ? prior.nextAttemptAt : undefined,
       lastError: prior?.status === "failed" ? prior.lastError : undefined,
       state: prior?.state,
-    };
+    });
   });
 }
 
@@ -626,11 +637,16 @@ async function processSubscriptionWebhook(
   const previous = resolved.created ? undefined : resolved.subscription;
   const updated = await updateSubscriptionFromEvent(input, ctx, resolved.subscription, event);
   const fulfilled = await updateSubscriptionEntitlement(input, ctx, updated);
-  await emitSubscriptionLifecycleNotification(input, ctx.now, fulfilled, {
-    event,
-    previous,
-    created: resolved.created,
-  });
+  await emitSubscriptionLifecycleNotification(
+    input,
+    ctx.now,
+    fulfilled,
+    omitUndefined({
+      event,
+      previous,
+      created: resolved.created,
+    }),
+  );
 
   return markWebhookProcessedForSubscription(input, webhook, ctx.now, fulfilled);
 }
@@ -689,7 +705,7 @@ async function findOrCreateSubscriptionFromEvent(
   if (customer && isAnonymizedCustomer(customer)) {
     return { kind: "anonymized_customer", customerId: providerAccount.customerId };
   }
-  const customerSnapshot: CustomerSnapshot = {
+  const customerSnapshot: CustomerSnapshot = omitUndefined({
     customerId: providerAccount.customerId,
     userId: customer?.userId,
     email: customer?.aggregate.email ?? providerAccount.record.emailSnapshot,
@@ -697,30 +713,32 @@ async function findOrCreateSubscriptionFromEvent(
     name: customer?.aggregate.name,
     company: customer?.aggregate.company,
     vatId: customer?.aggregate.vatId,
-  };
-  const subscriptionId = input.createId("subscription");
-  const aggregate = createSubscriptionAggregate({
-    customer: customerSnapshot,
-    sellable: snapshotPrice({
-      content: priceMatch.catalog.aggregate.content,
-      sellable: priceMatch.sellable,
-      price: priceMatch.price,
-      fallbackTitle: priceMatch.catalog.titleSnapshot ?? priceMatch.sellable.id,
-    }),
-    provider: event.provider,
-    providerSubscriptionId: event.providerSubscriptionId,
-    providerCustomerId: event.providerCustomerId,
-    providerPriceId: event.providerPriceId,
-    status: event.status,
-    currentPeriodStart: event.currentPeriodStart,
-    currentPeriodEnd: event.currentPeriodEnd,
-    cancelAtPeriodEnd: event.cancelAtPeriodEnd,
-    metadata: subscriptionEventMetadata(event),
   });
+  const subscriptionId = input.createId("subscription");
+  const aggregate = createSubscriptionAggregate(
+    omitUndefined({
+      customer: customerSnapshot,
+      sellable: snapshotPrice({
+        content: priceMatch.catalog.aggregate.content,
+        sellable: priceMatch.sellable,
+        price: priceMatch.price,
+        fallbackTitle: priceMatch.catalog.titleSnapshot ?? priceMatch.sellable.id,
+      }),
+      provider: event.provider,
+      providerSubscriptionId: event.providerSubscriptionId,
+      providerCustomerId: event.providerCustomerId,
+      providerPriceId: event.providerPriceId,
+      status: event.status,
+      currentPeriodStart: event.currentPeriodStart,
+      currentPeriodEnd: event.currentPeriodEnd,
+      cancelAtPeriodEnd: event.cancelAtPeriodEnd,
+      metadata: subscriptionEventMetadata(event),
+    }),
+  );
 
   return {
     kind: "subscription",
-    subscription: {
+    subscription: omitUndefined({
       id: subscriptionId,
       type: "subscription",
       schemaVersion: 1,
@@ -733,7 +751,7 @@ async function findOrCreateSubscriptionFromEvent(
       aggregate,
       createdAt: ctx.now,
       updatedAt: ctx.now,
-    },
+    }),
     created: true,
   };
 }
@@ -805,26 +823,41 @@ async function updateSubscriptionFromEvent(
 
   const updated: SubscriptionDocument = {
     ...subscription,
-    providerCustomerId: event.providerCustomerId ?? subscription.providerCustomerId,
-    providerSubscriptionId: event.providerSubscriptionId ?? subscription.providerSubscriptionId,
+    ...optionalProperty(
+      "providerCustomerId",
+      event.providerCustomerId ?? subscription.providerCustomerId,
+    ),
+    ...optionalProperty(
+      "providerSubscriptionId",
+      event.providerSubscriptionId ?? subscription.providerSubscriptionId,
+    ),
     status,
-    currentPeriodEnd: event.currentPeriodEnd ?? subscription.currentPeriodEnd,
+    ...optionalProperty(
+      "currentPeriodEnd",
+      event.currentPeriodEnd ?? subscription.currentPeriodEnd,
+    ),
     updatedAt: ctx.now,
     aggregate: {
       ...subscription.aggregate,
-      providerRef: {
+      providerRef: omitUndefined({
         ...subscription.aggregate.providerRef,
         provider: event.provider,
         subscriptionId:
           event.providerSubscriptionId ?? subscription.aggregate.providerRef.subscriptionId,
         customerId: event.providerCustomerId ?? subscription.aggregate.providerRef.customerId,
         priceId: event.providerPriceId ?? subscription.aggregate.providerRef.priceId,
-      },
+      }),
       sellable,
       status,
       cancelAtPeriodEnd,
-      currentPeriodStart: event.currentPeriodStart ?? subscription.aggregate.currentPeriodStart,
-      currentPeriodEnd: event.currentPeriodEnd ?? subscription.aggregate.currentPeriodEnd,
+      ...optionalProperty(
+        "currentPeriodStart",
+        event.currentPeriodStart ?? subscription.aggregate.currentPeriodStart,
+      ),
+      ...optionalProperty(
+        "currentPeriodEnd",
+        event.currentPeriodEnd ?? subscription.aggregate.currentPeriodEnd,
+      ),
       metadata: {
         ...subscription.aggregate.metadata,
         ...subscriptionEventMetadata(event),
@@ -934,7 +967,7 @@ async function createPaymentOrderDocument(
   );
   const customer = await paymentCustomerSnapshot(input, checkout, event);
 
-  return {
+  return omitUndefined({
     id: orderId,
     type: "order",
     schemaVersion: 1,
@@ -954,18 +987,20 @@ async function createPaymentOrderDocument(
     currency: total.currency,
     totalAmount: total.amount,
     paidAt: ctx.now,
-    aggregate: createOrderAggregate({
-      customer,
-      checkout: checkout.aggregate,
-      lines,
-      providerPaymentId: event.providerPaymentId,
-      providerOrderId: event.providerOrderId,
-      invoiceUrl: event.invoiceUrl,
-      metadata: paymentOrderMetadata(event, checkout.id),
-    }),
+    aggregate: createOrderAggregate(
+      omitUndefined({
+        customer,
+        checkout: checkout.aggregate,
+        lines,
+        providerPaymentId: event.providerPaymentId,
+        providerOrderId: event.providerOrderId,
+        invoiceUrl: event.invoiceUrl,
+        metadata: paymentOrderMetadata(event, checkout.id),
+      }),
+    ),
     createdAt: ctx.now,
     updatedAt: ctx.now,
-  };
+  });
 }
 
 async function updatePaymentOrderFromEvent(
@@ -974,14 +1009,19 @@ async function updatePaymentOrderFromEvent(
   order: OrderDocument,
   event: MikaProviderPaymentEvent,
 ): Promise<OrderDocument> {
-  const updated = applyPaymentEventToOrder(order, event, ctx.now, {
-    invoiceUrl: event.invoiceUrl,
-    providerRefs: mergePaymentProviderRefs(order.aggregate.providerRefs, order, event),
-    metadata: {
-      ...order.aggregate.metadata,
-      ...paymentOrderMetadata(event, order.checkoutSessionId),
-    },
-  });
+  const updated = applyPaymentEventToOrder(
+    order,
+    event,
+    ctx.now,
+    omitUndefined({
+      invoiceUrl: event.invoiceUrl,
+      providerRefs: mergePaymentProviderRefs(order.aggregate.providerRefs, order, event),
+      metadata: {
+        ...order.aggregate.metadata,
+        ...paymentOrderMetadata(event, order.checkoutSessionId),
+      },
+    }),
+  );
 
   await input.repositories.ledger.put(updated);
 
@@ -1002,12 +1042,12 @@ function mergePaymentProviderRefs(
         (event.providerOrderId !== undefined && ref.orderId === event.providerOrderId)),
   );
   const existing = refs[index] ?? { provider: event.provider };
-  const merged = {
+  const merged = omitUndefined({
     ...existing,
     checkoutId: existing.checkoutId ?? providerCheckoutId,
     paymentId: existing.paymentId ?? event.providerPaymentId,
     orderId: existing.orderId ?? event.providerOrderId,
-  };
+  });
 
   return index >= 0
     ? refs.map((ref, refIndex) => (refIndex === index ? merged : ref))
@@ -1039,7 +1079,7 @@ async function paymentCustomerSnapshot(
       ? await input.repositories.account.findCustomerByEmailHash(payerEmailHash)
       : null);
 
-  return {
+  return omitUndefined({
     ...((customer?.customerId ?? checkoutCustomerId)
       ? { customerId: customer?.customerId ?? checkoutCustomerId }
       : {}),
@@ -1049,7 +1089,7 @@ async function paymentCustomerSnapshot(
     name: event.customer?.name ?? checkoutMetadataCustomer.name,
     company: event.customer?.company ?? checkoutMetadataCustomer.company,
     vatId: event.customer?.vatId ?? checkoutMetadataCustomer.vatId,
-  };
+  });
 }
 
 function paymentOrderMetadata(
@@ -1079,10 +1119,15 @@ async function markWebhookProcessedForOrder(
   now: ISODateTime,
   order: OrderDocument,
 ): Promise<WebhookDocument> {
-  return markWebhookProcessed(input, webhook, now, {
-    relatedCustomerId: order.customerId,
-    relatedOrderId: order.id,
-  });
+  return markWebhookProcessed(
+    input,
+    webhook,
+    now,
+    omitUndefined({
+      relatedCustomerId: order.customerId,
+      relatedOrderId: order.id,
+    }),
+  );
 }
 
 async function markWebhookProcessedForSubscription(
@@ -1091,10 +1136,15 @@ async function markWebhookProcessedForSubscription(
   now: ISODateTime,
   subscription: SubscriptionDocument,
 ): Promise<WebhookDocument> {
-  return markWebhookProcessed(input, webhook, now, {
-    relatedCustomerId: subscription.customerId,
-    relatedSubscriptionId: subscription.id,
-  });
+  return markWebhookProcessed(
+    input,
+    webhook,
+    now,
+    omitUndefined({
+      relatedCustomerId: subscription.customerId,
+      relatedSubscriptionId: subscription.id,
+    }),
+  );
 }
 
 async function markWebhookProcessed(

@@ -3,6 +3,7 @@
  * for replay, and the admin-facing replay entry point. Delegates the actual payment/subscription
  * business logic to ./payment once a webhook has been durably recorded.
  */
+import { omitUndefined } from "../../../internal/object";
 import type { MikaProviderWebhookEvent, MikaVerifiedWebhookPayload } from "../../../provider";
 import type { WebhookDocument } from "../../../types/documents";
 import type { JsonObject } from "../../../types/primitives";
@@ -84,12 +85,14 @@ export async function receiveWebhook(
   }
 
   const providerEventId = event.providerEventId ?? webhookInput.providerEventId;
-  const duplicate = await input.repositories.ops.findWebhookDuplicate({
-    provider: webhookInput.provider,
-    providerEventId,
-    eventType,
-    payloadHash: verified.payloadHash,
-  });
+  const duplicate = await input.repositories.ops.findWebhookDuplicate(
+    omitUndefined({
+      provider: webhookInput.provider,
+      providerEventId,
+      eventType,
+      payloadHash: verified.payloadHash,
+    }),
+  );
   if (duplicate) {
     if (!webhookDuplicateCanReprocess(event, duplicate)) {
       return webhookDuplicateResult(duplicate);
@@ -99,21 +102,29 @@ export async function receiveWebhook(
     return webhookReceiptResult(reprocessed, event);
   }
 
-  const webhook = createWebhookDocument(input, ctx, verified, event, {
-    eventType,
-    providerEventId,
-  });
+  const webhook = createWebhookDocument(
+    input,
+    ctx,
+    verified,
+    event,
+    omitUndefined({
+      eventType,
+      providerEventId,
+    }),
+  );
 
   try {
     await input.repositories.ops.put(webhook);
   } catch (error) {
     observeBackendError(input, "webhook.store", error, { provider: webhookInput.provider });
-    const replayedDuplicate = await input.repositories.ops.findWebhookDuplicate({
-      provider: webhookInput.provider,
-      providerEventId,
-      eventType,
-      payloadHash: verified.payloadHash,
-    });
+    const replayedDuplicate = await input.repositories.ops.findWebhookDuplicate(
+      omitUndefined({
+        provider: webhookInput.provider,
+        providerEventId,
+        eventType,
+        payloadHash: verified.payloadHash,
+      }),
+    );
     if (replayedDuplicate) return webhookDuplicateResult(replayedDuplicate);
 
     return providerFailed("Webhook could not be stored.");
@@ -266,7 +277,7 @@ function createWebhookDocument(
   },
 ): WebhookDocument {
   const id = input.createId("webhook");
-  const record = {
+  const record = omitUndefined({
     id,
     provider: event.provider,
     providerEventId: resolved.providerEventId,
@@ -277,9 +288,9 @@ function createWebhookDocument(
     receivedAt: ctx.now,
     rawPayloadJson: storedWebhookPayload(verified, event),
     normalizedPayloadJson: webhookEventToJson(event, { includeRaw: false }),
-  };
+  });
 
-  return {
+  return omitUndefined({
     id,
     type: "webhook",
     schemaVersion: 1,
@@ -292,7 +303,7 @@ function createWebhookDocument(
     record,
     createdAt: ctx.now,
     updatedAt: ctx.now,
-  };
+  });
 }
 
 function storedWebhookPayload(
@@ -385,7 +396,7 @@ function storedWebhookEvent(webhook: WebhookDocument): MikaProviderWebhookEvent 
   switch (stringChild(eventPayload, "kind")) {
     case "payment": {
       const paymentStatus = stringChild(eventPayload, "paymentStatus") ?? "failed";
-      return {
+      return omitUndefined({
         kind: "payment",
         paymentStatus,
         provider: webhook.provider,
@@ -400,13 +411,13 @@ function storedWebhookEvent(webhook: WebhookDocument): MikaProviderWebhookEvent 
         totals: totalsChild(eventPayload, "totals"),
         invoiceUrl: stringChild(eventPayload, "invoiceUrl"),
         raw: jsonChild(eventPayload, "raw"),
-      };
+      });
     }
     case "subscription": {
       const status = stringChild(eventPayload, "status");
       if (!isSubscriptionStatus(status)) return null;
 
-      return {
+      return omitUndefined({
         kind: "subscription",
         provider: webhook.provider,
         providerEventId: stringChild(eventPayload, "providerEventId") ?? webhook.providerEventId,
@@ -419,16 +430,16 @@ function storedWebhookEvent(webhook: WebhookDocument): MikaProviderWebhookEvent 
         currentPeriodEnd: isoChild(eventPayload, "currentPeriodEnd"),
         cancelAtPeriodEnd: booleanChild(eventPayload, "cancelAtPeriodEnd"),
         raw: jsonChild(eventPayload, "raw"),
-      };
+      });
     }
     case "unknown":
-      return {
+      return omitUndefined({
         kind: "unknown",
         provider: webhook.provider,
         providerEventId: stringChild(eventPayload, "providerEventId") ?? webhook.providerEventId,
         type,
         raw: jsonChild(eventPayload, "raw"),
-      };
+      });
     default:
       return null;
   }
@@ -438,11 +449,11 @@ function webhookDuplicateResult(duplicate: WebhookDocument): MikaApiResult<Webho
   return {
     ok: true,
     status: 200,
-    data: {
+    data: omitUndefined({
       id: duplicate.id,
       status: "duplicate",
       replayable: duplicate.status === "failed" ? true : undefined,
-    },
+    }),
   };
 }
 

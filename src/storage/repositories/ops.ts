@@ -27,6 +27,7 @@ import {
   accountDeleteRequestDocumentWithRecord,
   accountExportMatchesAccountDeleteIdentity,
 } from "./ops/account-delete-helpers";
+import { optionalProperty } from "../../internal/object";
 import type {
   AccountDeleteEmailRedactionRepositoryInput,
   AccountDeleteMaintenanceStepRepositoryInput,
@@ -367,15 +368,18 @@ export class OpsRepository {
       const steps = workflow.record.steps.map((step) => {
         if (step.name !== input.stepName || step.status === "completed") return step;
 
+        const {
+          completedAt: _completedAt,
+          failedAt: _failedAt,
+          nextAttemptAt: _nextAttemptAt,
+          lastError: _lastError,
+          ...runningStep
+        } = step;
         return {
-          ...step,
+          ...runningStep,
           status: "running" as const,
           startedAt: input.now,
-          failedAt: undefined,
-          completedAt: undefined,
           attemptCount: step.attemptCount + 1,
-          nextAttemptAt: undefined,
-          lastError: undefined,
         };
       });
 
@@ -399,15 +403,21 @@ export class OpsRepository {
       const steps = workflow.record.steps.map((step) => {
         if (step.name !== input.stepName || step.status === "completed") return step;
 
+        const {
+          failedAt: _failedAt,
+          nextAttemptAt: _nextAttemptAt,
+          lastError: _lastError,
+          ...completedStep
+        } = step;
         return {
-          ...step,
+          ...completedStep,
           status: "completed" as const,
           startedAt: step.startedAt ?? input.now,
           completedAt: input.now,
-          failedAt: undefined,
-          nextAttemptAt: undefined,
-          lastError: undefined,
-          ...(input.state ? { state: { ...step.state, ...input.state } } : {}),
+          ...optionalProperty(
+            "state",
+            input.state ? { ...step.state, ...input.state } : step.state,
+          ),
         };
       });
 

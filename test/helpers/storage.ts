@@ -1,6 +1,7 @@
 /**
  * In-memory {@link StorageCollection} implementation for repository and query tests.
  */
+import { optionalProperty } from "../../src/internal/object";
 import type {
   MikaIndex,
   PaginatedStorageResult,
@@ -132,7 +133,7 @@ function queryRecords<TDocument>(
 
   return {
     items: page,
-    cursor: hasMore ? String(nextOffset) : undefined,
+    ...optionalProperty("cursor", hasMore ? String(nextOffset) : undefined),
     hasMore,
   };
 }

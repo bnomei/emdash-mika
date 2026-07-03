@@ -3,6 +3,7 @@
  * hydration wrapper that lets cart/wishlist/checkout handlers resolve the caller's customerId
  * once and reuse it, instead of every handler re-deriving it from session/context independently.
  */
+import { omitUndefined } from "../../internal/object";
 import { formatSubjectRef } from "../subject-ref";
 import type { MikaRequestContext } from "../context";
 import type {
@@ -68,14 +69,15 @@ export async function resolveAccountIdentity(
 
   if (customerId) {
     const customer = await input.repositories.account.findCustomerById(customerId);
-    if (!customer || !customerIsCompatibleWithContext(customer, { ...ctx, userId })) return null;
+    if (!customer || !customerIsCompatibleWithContext(customer, omitUndefined({ ...ctx, userId })))
+      return null;
 
-    return {
+    return omitUndefined({
       customer,
       entitlements: (await input.repositories.account.listEntitlementsByCustomer(customerId)).items,
       userId: customer.userId,
       emailHash: customerEmailHash(customer),
-    };
+    });
   }
 
   if (userId) {
@@ -194,7 +196,7 @@ async function withEffectiveCustomer(
   ctx: MikaRequestContext,
 ): Promise<MikaRequestContext> {
   const customerId = await effectiveCustomerId(input, ctx);
-  return customerId === ctx.customerId ? ctx : { ...ctx, customerId };
+  return customerId === ctx.customerId ? ctx : omitUndefined({ ...ctx, customerId });
 }
 
 export function withHydratedCustomerHandler<TArgs extends readonly unknown[], TResult>(

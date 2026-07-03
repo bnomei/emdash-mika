@@ -3,6 +3,7 @@
  * the caller's active wishlist, and merging wishlist items for session-to-account wishlist
  * merges. Move-to-cart and save-for-later cross into the cart document helpers from ./cart.
  */
+import { omitUndefined } from "../../internal/object";
 import { createWishlistAggregate } from "../../model/builders";
 import type { CartLine, WishlistItem } from "../../types/aggregates";
 import type { WishlistDocument } from "../../types/documents";
@@ -100,13 +101,13 @@ export function createWishlistBackend(
         );
       }
 
-      const line: CartLine = {
+      const line: CartLine = omitUndefined({
         id: input.createId("cart_line"),
         item: item.item,
         quantity,
         addedAt: ctx.now,
         metadata: item.metadata,
-      };
+      });
       const itemsResult = await mergeCartLine(input, cart.aggregate.items, line);
       if (!itemsResult.ok) return itemsResult;
 
@@ -132,12 +133,12 @@ export function createWishlistBackend(
       }
 
       const document = await findOrCreateActiveWishlist(input, ctx);
-      const item: WishlistItem = {
+      const item: WishlistItem = omitUndefined({
         id: input.createId("wishlist_item"),
         item: line.item,
         addedAt: ctx.now,
         metadata: line.metadata,
-      };
+      });
       const wishlistItems = mergeWishlistItems(document.aggregate.items, [item]);
       const updatedWishlist = updateWishlistDocument(document, wishlistItems, ctx.now);
       const updatedCart = updateCartDocument(
@@ -255,7 +256,7 @@ function createWishlistDocument(
 ): WishlistDocument {
   const now = ctx.now;
 
-  return {
+  return omitUndefined({
     id: input.createId("wishlist"),
     type: "wishlist",
     schemaVersion: 1,
@@ -271,7 +272,7 @@ function createWishlistDocument(
     aggregate: createWishlistAggregate(),
     createdAt: now,
     updatedAt: now,
-  };
+  });
 }
 
 function updateWishlistDocument(
@@ -282,10 +283,9 @@ function updateWishlistDocument(
   return {
     ...wishlist,
     updatedAt,
-    aggregate: createWishlistAggregate({
-      items,
-      metadata: wishlist.aggregate.metadata,
-    }),
+    aggregate: createWishlistAggregate(
+      omitUndefined({ items, metadata: wishlist.aggregate.metadata }),
+    ),
   };
 }
 
