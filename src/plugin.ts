@@ -11,12 +11,20 @@ import {
   type PluginStorageConfig,
 } from "emdash";
 
+/** Host capabilities the Mika plugin requests, shared by the descriptor and the runtime plugin. */
+const MIKA_PLUGIN_CAPABILITIES = ["content:read", "email:send"] as const;
+
 import type { MikaBackendRepositories } from "./api/backend";
 import type { MikaEmailOutboxRunner } from "./api/email-outbox";
 import { createMikaMaintenanceRunner, type MikaMaintenanceRunResult } from "./api/maintenance";
 import { createMikaPluginRoutes } from "./api/route-handlers";
 import { MIKA_PLUGIN_ID } from "./api/routes";
-import { assertMikaApiWired, createMikaApi, type MikaApiOverrides } from "./api/server";
+import {
+  assertMikaApiWired,
+  createMikaApi,
+  isMikaApiWiringError,
+  type MikaApiOverrides,
+} from "./api/server";
 import type { MikaOperationPolicy } from "./api/operation-policy";
 import { mikaStorageConfig } from "./storage/collections";
 import { createISODateTime } from "./types/primitives";
@@ -139,8 +147,11 @@ export function mikaPlugin(
     format: "native",
     entrypoint,
     options: pluginOptions,
-    capabilities: ["content:read", "email:send"],
-    storage: mikaStorageConfig as never,
+    capabilities: [...MIKA_PLUGIN_CAPABILITIES],
+    // The descriptor omits the runtime-only composite indexes mikaStorageConfig carries (see the
+    // file header); cast to the descriptor's declared storage field so shape drift still surfaces,
+    // rather than the maximally-unsafe `as never`.
+    storage: mikaStorageConfig as unknown as PluginDescriptor["storage"],
   };
 }
 
@@ -162,7 +173,7 @@ export function createMikaPlugin(options: MikaCreatePluginOptions = {}) {
       assertMikaApiWired(api, Array.isArray(assertWired) ? { scope: assertWired } : {});
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (message.startsWith("Unknown Mika API wiring scope")) {
+      if (isMikaApiWiringError(error, "unknown_scope")) {
         throw new Error(
           `${message} Check the assertWired entries against MikaApi namespace and 'namespace.method' names.`,
         );
@@ -196,7 +207,7 @@ export function createMikaPlugin(options: MikaCreatePluginOptions = {}) {
   return definePlugin({
     id: MIKA_PLUGIN_ID,
     version: MIKA_PLUGIN_VERSION,
-    capabilities: ["content:read", "email:send"],
+    capabilities: [...MIKA_PLUGIN_CAPABILITIES],
     storage: mikaStorageConfig as PluginStorageConfig,
     routes: createMikaPluginRoutes(api, { operationPolicy: options.operationPolicy }),
     hooks: {
