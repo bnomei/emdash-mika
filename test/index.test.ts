@@ -4517,7 +4517,9 @@ describe("Mika Astro template contracts", () => {
     expect(checkoutSuccess).toContain('import { Link, Text } from "@cloudflare/kumo"');
     expect(checkoutCancel).toContain('Astro.url.searchParams.get("checkoutId")');
     expect(checkoutCancel).toContain('Astro.url.searchParams.get("token")');
-    expect(checkoutCancel).toContain("Mika.checkout.cancel({ checkoutId, token })");
+    expect(checkoutCancel).toContain(
+      "Mika.checkout.cancel({ checkoutId: createMikaId(checkoutId), token })",
+    );
     expect(checkoutCancel).toContain("Checkout cancel link is missing.");
     expect(checkoutCancel).toContain("No payment was confirmed by this return page.");
     expect(checkoutCancel).toContain(
