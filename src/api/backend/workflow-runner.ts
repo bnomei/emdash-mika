@@ -68,17 +68,25 @@ export class WorkflowRunner<TStep extends string> {
       return result;
     } catch (error) {
       const now = this.input.now();
-      this.workflow = this.requireLease(
-        await this.input.ops.failWorkflowStep({
-          workflowId: this.workflow.id,
-          leaseKey: this.leaseKey,
-          stepName: name,
-          now,
-          lastError: error instanceof Error ? error.message : this.input.stepFailureMessage,
-          nextAttemptAt: this.input.nextAttemptAt(now, this.workflow),
-        }),
-      );
-      this.workflowFailurePersisted = true;
+      try {
+        this.workflow = this.requireLease(
+          await this.input.ops.failWorkflowStep({
+            workflowId: this.workflow.id,
+            leaseKey: this.leaseKey,
+            stepName: name,
+            now,
+            lastError: error instanceof Error ? error.message : this.input.stepFailureMessage,
+            nextAttemptAt: this.input.nextAttemptAt(now, this.workflow),
+          }),
+        );
+        this.workflowFailurePersisted = true;
+      } catch (persistenceError) {
+        // Losing the lease mid-failure keeps its deliberate semantics: another runner owns the
+        // workflow now, so the lease error wins.
+        if (persistenceError instanceof WorkflowRunnerLeaseLostError) throw persistenceError;
+        // Any other persistence failure must not mask the original step error;
+        // failurePersisted stays false so the caller's runner.fail fallback still records it.
+      }
       throw error;
     }
   }
