@@ -10,21 +10,17 @@ export function mikaOperationRequestInit(
   operation: Pick<MikaApiOperation, "httpMethod" | "transport">,
   input: unknown,
 ): MikaRequestInit {
-  if (operation.transport === "none") {
-    return { method: operation.httpMethod };
+  // Exhaustive over operation.transport (the registry-derived union of transports operations
+  // actually use) with no default: an operation adopting a new transport becomes a noImplicitReturns
+  // build error here instead of silently falling through to the body shape.
+  switch (operation.transport) {
+    case "none":
+      return { method: operation.httpMethod };
+    case "search":
+      return { method: operation.httpMethod, search: input as MikaRequestInit["search"] };
+    case "body":
+      return { method: operation.httpMethod, body: input };
   }
-
-  if (operation.transport === "search") {
-    return {
-      method: operation.httpMethod,
-      search: input as MikaRequestInit["search"],
-    };
-  }
-
-  return {
-    method: operation.httpMethod,
-    body: input,
-  };
 }
 
 /**
@@ -45,10 +41,15 @@ export function parseMikaOperationInput(
     throw new Error(`Mika operation '${operation.name}' is missing an input schema.`);
   }
 
-  const rawInput =
-    operation.transport === "search"
-      ? searchParamsObject(new URL(requestUrl), operation.searchKeys ?? [])
-      : (input ?? {});
-
-  return parseMikaInput(schema as z.ZodType<unknown>, rawInput);
+  // The "none" early return above narrows transport to "search" | "body"; switch exhaustively so a
+  // future transport member is a noImplicitReturns build error rather than silently parsed as body.
+  switch (operation.transport) {
+    case "search":
+      return parseMikaInput(
+        schema as z.ZodType<unknown>,
+        searchParamsObject(new URL(requestUrl), operation.searchKeys ?? []),
+      );
+    case "body":
+      return parseMikaInput(schema as z.ZodType<unknown>, input ?? {});
+  }
 }
