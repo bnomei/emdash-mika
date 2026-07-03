@@ -73,10 +73,7 @@ export type MikaValidationResult<T> =
 /** Primitive string, branded id, quantity, and JSON object schemas shared across operations. */
 const requiredStringSchema = z.string().trim().min(1);
 /** Trimmed non-empty string, or undefined when the form field is empty. */
-const optionalStringSchema = z.preprocess(
-  emptyToUndefined,
-  z.string().trim().min(1).optional(),
-);
+const optionalStringSchema = z.preprocess(emptyToUndefined, z.string().trim().min(1).optional());
 
 /** Branded {@link MikaId} string validated through {@link createMikaId}. */
 const mikaIdSchema = brandedStringSchema(createMikaId, "MikaId");
@@ -85,19 +82,13 @@ const optionalMikaIdSchema = z.preprocess(emptyToUndefined, mikaIdSchema.optiona
 /** Branded {@link ISODateTime} string validated through {@link createISODateTime}. */
 const isoDateTimeSchema = brandedStringSchema(createISODateTime, "ISODateTime");
 /** Optional branded {@link ISODateTime}; empty form values become undefined. */
-const optionalISODateTimeSchema = z.preprocess(
-  emptyToUndefined,
-  isoDateTimeSchema.optional(),
-);
+const optionalISODateTimeSchema = z.preprocess(emptyToUndefined, isoDateTimeSchema.optional());
 /** Branded {@link CurrencyCode} string validated through {@link createCurrencyCode}. */
 const currencyCodeSchema = brandedStringSchema(createCurrencyCode, "CurrencyCode");
 /** Branded {@link ProviderName} string validated through {@link createProviderName}. */
 const providerNameSchema = brandedStringSchema(createProviderName, "ProviderName");
 /** Optional branded {@link ProviderName}; empty form values become undefined. */
-const optionalProviderNameSchema = z.preprocess(
-  emptyToUndefined,
-  providerNameSchema.optional(),
-);
+const optionalProviderNameSchema = z.preprocess(emptyToUndefined, providerNameSchema.optional());
 
 /** Positive integer quantity; empty form values default to 1. */
 const quantitySchema = z.preprocess(
@@ -132,10 +123,7 @@ const jsonObjectSchema = z.custom<JsonObject>(isJsonObject, {
   message: "Expected JSON object.",
 });
 /** Optional JSON object parsed from hidden form fields or request bodies. */
-const optionalJsonObjectSchema = z.preprocess(
-  parseJsonFormValue,
-  jsonObjectSchema.optional(),
-);
+const optionalJsonObjectSchema = z.preprocess(parseJsonFormValue, jsonObjectSchema.optional());
 /** Stock ledger movement reason accepted by admin stock adjustments. */
 export const stockMovementReasonSchema = z.enum([
   "manual_adjustment",

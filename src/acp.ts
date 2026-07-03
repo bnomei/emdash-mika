@@ -1886,11 +1886,7 @@ function acpFileAvailability(sellable: SellableDTO): MikaAcpFileUploadProductRow
 
   // acpAvailability only ever yields "out_of_stock" | "backorder" | "in_stock", so there is no
   // "preorder" arm to map here (the row's "pre_order" wire value stays in the type union).
-  return status === "backorder"
-    ? "backorder"
-    : status === "in_stock"
-      ? "in_stock"
-      : "out_of_stock";
+  return status === "backorder" ? "backorder" : status === "in_stock" ? "in_stock" : "out_of_stock";
 }
 
 function acpVariantOptions(
