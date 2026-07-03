@@ -386,46 +386,47 @@ export async function startCheckout(
         checkoutId,
         provider: providerName,
       });
-      await releaseCheckoutReservations(input, reserved.reservationIds, ctx.now);
-      if (claimedCart) {
-        await releaseCartCheckoutClaimQuietly(input, claimedCart.id, checkoutId, ctx.now);
-      }
+      await releaseCheckoutStartResources(
+        input,
+        reserved.reservationIds,
+        claimedCart,
+        checkoutId,
+        ctx.now,
+      );
       return null;
     }
   })();
+  const checkoutTotalAmount = Math.max(0, checkoutSubtotal - checkoutDiscountAmount);
   if (!providerSession) {
-    await emitBackendNotification(input, "checkout.payment_failed", ctx.now, {
-      ...(checkoutInput.customer?.email ? { toEmail: checkoutInput.customer.email } : {}),
-      ...(ctx.customerId ? { customerId: ctx.customerId } : {}),
-      ...(ctx.userId ? { userId: ctx.userId } : {}),
-      provider: providerName,
-      status: "failed",
-      error: "Checkout provider failed to create a session.",
-      total: {
-        amount: reserved.lines.reduce((sum, line) => sum + line.item.unitAmount * line.quantity, 0),
-        currency: resolved.currency,
-      },
-    });
+    await emitCheckoutStartFailedNotification(
+      input,
+      ctx,
+      checkoutInput,
+      providerName,
+      checkoutTotalAmount,
+      resolved.currency,
+      "Checkout provider failed to create a session.",
+    );
 
     return providerFailed("Checkout provider failed to create a session.");
   }
   if (providerSession.status === "failed") {
-    await releaseCheckoutReservations(input, reserved.reservationIds, ctx.now);
-    if (claimedCart) {
-      await releaseCartCheckoutClaimQuietly(input, claimedCart.id, checkoutId, ctx.now);
-    }
-    await emitBackendNotification(input, "checkout.payment_failed", ctx.now, {
-      ...(checkoutInput.customer?.email ? { toEmail: checkoutInput.customer.email } : {}),
-      ...(ctx.customerId ? { customerId: ctx.customerId } : {}),
-      ...(ctx.userId ? { userId: ctx.userId } : {}),
-      provider: providerName,
-      status: "failed",
-      error: "Checkout provider returned a failed session.",
-      total: {
-        amount: reserved.lines.reduce((sum, line) => sum + line.item.unitAmount * line.quantity, 0),
-        currency: resolved.currency,
-      },
-    });
+    await releaseCheckoutStartResources(
+      input,
+      reserved.reservationIds,
+      claimedCart,
+      checkoutId,
+      ctx.now,
+    );
+    await emitCheckoutStartFailedNotification(
+      input,
+      ctx,
+      checkoutInput,
+      providerName,
+      checkoutTotalAmount,
+      resolved.currency,
+      "Checkout provider returned a failed session.",
+    );
 
     return providerFailed("Checkout provider returned a failed session.");
   }
@@ -442,10 +443,13 @@ export async function startCheckout(
     }
   } catch (error) {
     observeBackendError(input, "checkout.extendReservations", error, { checkoutId });
-    await releaseCheckoutReservations(input, reserved.reservationIds, ctx.now);
-    if (claimedCart) {
-      await releaseCartCheckoutClaimQuietly(input, claimedCart.id, checkoutId, ctx.now);
-    }
+    await releaseCheckoutStartResources(
+      input,
+      reserved.reservationIds,
+      claimedCart,
+      checkoutId,
+      ctx.now,
+    );
 
     return checkoutPersistenceFailed();
   }
@@ -902,6 +906,45 @@ async function releaseCartCheckoutClaimQuietly(
     // Best effort: unlock the cart so another checkout attempt can proceed.
     observeBackendError(input, "checkout.releaseCartClaim", error, { cartId, checkoutId });
   }
+}
+
+/** Releases the reservations and any claimed cart held during a failed checkout.start attempt. */
+async function releaseCheckoutStartResources(
+  input: MikaBackendDependencies,
+  reservationIds: readonly MikaId[],
+  claimedCart: CartDocument | null,
+  checkoutId: MikaId,
+  now: ISODateTime,
+): Promise<void> {
+  await releaseCheckoutReservations(input, reservationIds, now);
+  if (claimedCart) {
+    await releaseCartCheckoutClaimQuietly(input, claimedCart.id, checkoutId, now);
+  }
+}
+
+/**
+ * Emits the checkout.payment_failed notification for a failed checkout.start. `totalAmount` is the
+ * amount that would have been charged (subtotal minus coupon discount) — the same figure passed to
+ * the provider — so the notification never reports the pre-discount subtotal.
+ */
+async function emitCheckoutStartFailedNotification(
+  input: MikaBackendDependencies,
+  ctx: MikaRequestContext,
+  checkoutInput: StartCheckoutInput,
+  providerName: ProviderName,
+  totalAmount: number,
+  currency: CurrencyCode,
+  error: string,
+): Promise<void> {
+  await emitBackendNotification(input, "checkout.payment_failed", ctx.now, {
+    ...(checkoutInput.customer?.email ? { toEmail: checkoutInput.customer.email } : {}),
+    ...(ctx.customerId ? { customerId: ctx.customerId } : {}),
+    ...(ctx.userId ? { userId: ctx.userId } : {}),
+    provider: providerName,
+    status: "failed",
+    error,
+    total: { amount: totalAmount, currency },
+  });
 }
 
 function checkoutMetadata(input: {
