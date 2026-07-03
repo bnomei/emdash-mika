@@ -20,7 +20,7 @@ import { assertMikaApiWired, createMikaApi, type MikaApiOverrides } from "./api/
 import type { MikaOperationPolicy } from "./api/operation-policy";
 import { mikaStorageConfig } from "./storage/collections";
 import { createISODateTime } from "./types/primitives";
-import type { MikaAcpSessionStore } from "./acp";
+import type { MikaAcpSessionStore } from "./api/acp-session";
 
 /** Stable EmDash plugin id registered for Mika routes and storage. */
 export { MIKA_PLUGIN_ID } from "./api/routes";

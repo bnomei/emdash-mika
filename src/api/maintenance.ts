@@ -19,7 +19,7 @@ import type {
   MikaAcpSessionCleanupInput,
   MikaAcpSessionCleanupResult,
   MikaAcpSessionStore,
-} from "../acp";
+} from "./acp-session";
 import { subjectHashCandidates } from "./subject-ref";
 import {
   createISODateTime,
