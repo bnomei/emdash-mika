@@ -25,6 +25,7 @@ import type { CartDocument, CheckoutDocument } from "../../types/documents";
 import type { StockItemRecord } from "../../types/operational";
 import { createISODateTime, createMikaId } from "../../types/primitives";
 import type {
+  CheckoutProviderStatus,
   CheckoutStatus,
   CurrencyCode,
   ISODateTime,
@@ -1455,17 +1456,30 @@ function checkoutDocumentStatus(status: CheckoutSessionDTO["status"]): CheckoutS
   return status === "pending" ? "created" : status === "binding_mismatch" ? "failed" : status;
 }
 
+const CHECKOUT_PROVIDER_STATUSES = [
+  "created",
+  "redirected",
+  "completed",
+  "cancelled",
+  "expired",
+  "failed",
+  "pending",
+  "binding_mismatch",
+] as const satisfies readonly CheckoutProviderStatus[];
+
+type AssertAllCheckoutProviderStatuses =
+  Exclude<CheckoutProviderStatus, (typeof CHECKOUT_PROVIDER_STATUSES)[number]> extends never
+    ? true
+    : never;
+const _assertAllCheckoutProviderStatuses: AssertAllCheckoutProviderStatuses = true;
+void _assertAllCheckoutProviderStatuses;
+
+function isCheckoutProviderStatus(value: string): value is CheckoutProviderStatus {
+  return (CHECKOUT_PROVIDER_STATUSES as readonly string[]).includes(value);
+}
+
 function checkoutSessionStatus(status: string): CheckoutSessionDTO["status"] {
-  return status === "created" ||
-    status === "redirected" ||
-    status === "pending" ||
-    status === "completed" ||
-    status === "cancelled" ||
-    status === "expired" ||
-    status === "failed" ||
-    status === "binding_mismatch"
-    ? status
-    : "failed";
+  return isCheckoutProviderStatus(status) ? status : "failed";
 }
 
 export async function createCheckoutPreview(

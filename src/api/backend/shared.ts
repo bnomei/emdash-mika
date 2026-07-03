@@ -218,16 +218,23 @@ function mikaIdChild(input: JsonObject, key: string): MikaId | undefined {
   return value ? createMikaId(value) : undefined;
 }
 
+const SUBSCRIPTION_STATUSES = [
+  "incomplete",
+  "trialing",
+  "active",
+  "past_due",
+  "cancel_at_period_end",
+  "cancelled",
+  "expired",
+] as const satisfies readonly SubscriptionStatus[];
+
+type AssertAllSubscriptionStatuses =
+  Exclude<SubscriptionStatus, (typeof SUBSCRIPTION_STATUSES)[number]> extends never ? true : never;
+const _assertAllSubscriptionStatuses: AssertAllSubscriptionStatuses = true;
+void _assertAllSubscriptionStatuses;
+
 export function isSubscriptionStatus(value: string | undefined): value is SubscriptionStatus {
-  return (
-    value === "incomplete" ||
-    value === "trialing" ||
-    value === "active" ||
-    value === "past_due" ||
-    value === "cancel_at_period_end" ||
-    value === "cancelled" ||
-    value === "expired"
-  );
+  return value !== undefined && (SUBSCRIPTION_STATUSES as readonly string[]).includes(value);
 }
 
 const FULFILLMENT_KINDS = [
