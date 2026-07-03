@@ -401,6 +401,8 @@ describe("Mika native plugin package", () => {
   });
 
   it("rejects non-JSON-safe descriptor option values at config time", () => {
+    const sparseAssertWired = Array<string>(1);
+
     expect(() =>
       mikaPlugin({ entrypoint: {} } as unknown as MikaDescriptorOptions),
     ).toThrow(/entrypoint/);
@@ -419,6 +421,9 @@ describe("Mika native plugin package", () => {
     ).toThrow(/maintenance\.schedule/);
     expect(() =>
       mikaPlugin({ assertWired: [1] } as unknown as MikaDescriptorOptions),
+    ).toThrow(/assertWired/);
+    expect(() =>
+      mikaPlugin({ assertWired: sparseAssertWired } as unknown as MikaDescriptorOptions),
     ).toThrow(/assertWired/);
   });
 

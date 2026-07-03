@@ -204,15 +204,24 @@ function assertDescriptorSafeOptions(options: MikaDescriptorOptions): void {
   if (
     descriptorOptions.assertWired !== undefined &&
     typeof descriptorOptions.assertWired !== "boolean" &&
-    !(
-      Array.isArray(descriptorOptions.assertWired) &&
-      descriptorOptions.assertWired.every((scope) => typeof scope === "string")
-    )
+    !isStringArray(descriptorOptions.assertWired)
   ) {
     throw new Error(
       "mikaPlugin() descriptor option assertWired must be a boolean or an array of strings.",
     );
   }
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  if (!Array.isArray(value)) return false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.hasOwn(value, index) || typeof value[index] !== "string") {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 /**
