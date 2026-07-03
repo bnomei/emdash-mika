@@ -33,11 +33,11 @@ import {
   fulfillPaidOrder,
   fulfillmentDocumentId,
   revokeOrderFulfillmentAccess,
-  updateOrderAfterRefund,
 } from "../fulfillment";
 import type { PaymentWebhookWorkflowStep, RunPaymentWebhookWorkflowStep } from "../fulfillment";
 import { isAnonymizedCustomer } from "../identity";
 import {
+  applyOrderRefund,
   applyPaymentEventToOrder,
   orderBlocksFulfillment,
   orderRefundedAmount,
@@ -78,7 +78,6 @@ export async function processStoredWebhook(
             webhook,
             ctx.now,
             "Refund webhook could not be processed.",
-            { strict: true },
           );
         }
       }
@@ -101,7 +100,6 @@ export async function processStoredWebhook(
           webhook,
           ctx.now,
           "Payment webhook is not in a paid state.",
-          { strict: true },
         );
         await emitCheckoutPaymentFailedNotification(input, ctx.now, failed, event);
 
@@ -122,7 +120,7 @@ export async function processStoredWebhook(
           webhook,
           ctx.now,
           "Payment webhook could not be processed.",
-          { strict: true, retryable: true },
+          { retryable: true },
         );
       }
     case "subscription":
@@ -142,7 +140,7 @@ export async function processStoredWebhook(
           webhook,
           ctx.now,
           "Subscription webhook could not be processed.",
-          { strict: true, retryable: true },
+          { retryable: true },
         );
       }
     case "unknown":
@@ -242,11 +240,10 @@ async function processPaymentReversalWebhook(
         webhook,
         ctx.now,
         "Refund webhook could not be linked to an order.",
-        { strict: true },
       );
     }
 
-    return markWebhookProcessed(input, webhook, ctx.now, {}, { strict: true });
+    return markWebhookProcessed(input, webhook, ctx.now, {});
   }
 
   if (order.paymentStatus === "refunded") {
@@ -262,7 +259,6 @@ async function processPaymentReversalWebhook(
       webhook,
       ctx.now,
       "Partial refund webhook is missing cumulative refund totals.",
-      { strict: true },
     );
   }
   const refundAmount =
@@ -270,7 +266,7 @@ async function processPaymentReversalWebhook(
       ? Math.max(0, cumulativeReversed - orderRefundedAmount(order))
       : undefined;
 
-  const updated = updateOrderAfterRefund(
+  const updated = applyOrderRefund(
     order,
     {
       orderId: order.id,
@@ -300,7 +296,6 @@ async function processCheckoutExpiredWebhook(
       webhook,
       ctx.now,
       "Expired checkout webhook could not be linked to a checkout.",
-      { strict: true },
     );
   }
 
@@ -373,7 +368,7 @@ async function processPaymentWebhook(
     if (!checkout) {
       if (event.providerSubscriptionId) {
         return runWorkflowStep("mark_webhook", () =>
-          markWebhookProcessed(input, webhook, ctx.now, {}, { strict: true }),
+          markWebhookProcessed(input, webhook, ctx.now, {}),
         );
       }
       return runWorkflowStep("mark_webhook", () =>
@@ -382,9 +377,6 @@ async function processPaymentWebhook(
           webhook,
           ctx.now,
           "Payment event could not be linked to a checkout.",
-          {
-            strict: true,
-          },
         ),
       );
     }
@@ -1079,16 +1071,10 @@ export async function markWebhookProcessedForOrder(
   now: ISODateTime,
   order: OrderDocument,
 ): Promise<WebhookDocument> {
-  return markWebhookProcessed(
-    input,
-    webhook,
-    now,
-    {
-      relatedCustomerId: order.customerId,
-      relatedOrderId: order.id,
-    },
-    { strict: true },
-  );
+  return markWebhookProcessed(input, webhook, now, {
+    relatedCustomerId: order.customerId,
+    relatedOrderId: order.id,
+  });
 }
 
 export async function markWebhookProcessedForSubscription(
@@ -1111,7 +1097,6 @@ export async function markWebhookProcessed(
     WebhookDocument["record"],
     "relatedCustomerId" | "relatedOrderId" | "relatedSubscriptionId"
   >,
-  options: { readonly strict?: boolean } = { strict: true },
 ): Promise<WebhookDocument> {
   const processed: WebhookDocument = {
     ...webhook,
@@ -1126,7 +1111,7 @@ export async function markWebhookProcessed(
     updatedAt: now,
   };
 
-  return putWebhook(input, processed, options);
+  return putWebhook(input, processed);
 }
 
 export async function markWebhookFailed(
@@ -1134,7 +1119,7 @@ export async function markWebhookFailed(
   webhook: WebhookDocument,
   now: ISODateTime,
   lastError: string,
-  options: { readonly strict?: boolean; readonly retryable?: boolean } = { strict: true },
+  options: { readonly retryable?: boolean } = {},
 ): Promise<WebhookDocument> {
   const failed: WebhookDocument = {
     ...webhook,
@@ -1149,7 +1134,7 @@ export async function markWebhookFailed(
     updatedAt: now,
   };
 
-  const persisted = await putWebhook(input, failed, options);
+  const persisted = await putWebhook(input, failed);
   await emitBackendNotification(input, "ops.webhook_failed", now, {
     webhookId: persisted.id,
     provider: persisted.provider,
@@ -1169,19 +1154,14 @@ export async function markWebhookFailed(
   return persisted;
 }
 
-export async function putWebhook(
+async function putWebhook(
   input: MikaBackendDependencies,
   webhook: WebhookDocument,
-  options: { readonly strict?: boolean },
 ): Promise<WebhookDocument> {
   try {
     await input.repositories.ops.put(webhook);
   } catch (error) {
-    if (options.strict) {
-      throw new Error(`Webhook '${webhook.id}' status could not be persisted.`, { cause: error });
-    }
-    // The webhook has already been accepted; callers still receive the in-memory state.
-    observeBackendError(input, "webhook.persistStatus", error, { webhookId: webhook.id });
+    throw new Error(`Webhook '${webhook.id}' status could not be persisted.`, { cause: error });
   }
 
   return webhook;
