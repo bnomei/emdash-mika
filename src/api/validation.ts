@@ -1,52 +1,10 @@
 /**
  * Zod input schemas and parsers for Mika operations, form posts, and search-param transports.
- * Re-exports `z` for co-located schema and handler definitions.
+ * Public operation `*Input` types are derived via `z.infer` from these schemas (source of truth).
+ * Wire DTOs stay hand-written in {@link ./types}. Re-exports `z` for co-located definitions.
  */
 import { z } from "astro/zod";
 
-import type {
-  AccountDeleteInput,
-  AccountExportDownloadInput,
-  AccountExportInput,
-  AccountExportStatusInput,
-  AccountPortalInput,
-  AddCartItemInput,
-  ApplyCouponInput,
-  CartQuoteInput,
-  CheckoutCustomerInput,
-  CheckoutPreviewInput,
-  CheckoutCancelInput,
-  CheckoutStatusInput,
-  ContentRefDTO,
-  DownloadIssueInput,
-  EmailResendInput,
-  EntitlementGrantInput,
-  EntitlementRevokeInput,
-  LicenseRevokeInput,
-  MagicLinkRequestInput,
-  MagicLinkVerifyInput,
-  MergeCartInput,
-  MergeWishlistInput,
-  MoveWishlistItemToCartInput,
-  OrderCancelInput,
-  OrderInvoiceInput,
-  OrderRefundInput,
-  ProviderHealthInput,
-  ProviderSyncInput,
-  ReleaseExpiredReservationsInput,
-  RemoveCartItemInput,
-  RemoveCouponInput,
-  RemoveWishlistItemInput,
-  SaveCartLineForLaterInput,
-  StockAdjustInput,
-  StartCheckoutInput,
-  SubscriptionActionInput,
-  UpdateCartItemInput,
-  WebhookReceiveInput,
-  WebhookReplayInput,
-  WishlistItemInput,
-} from "./types";
-import type { MikaAgentProofRef } from "./agent-types";
 import type { MikaApiResult } from "./types";
 import { omitUndefined } from "../internal/object";
 import {
@@ -140,15 +98,24 @@ const variantOptionsSchema = z.preprocess(
   z.record(z.string(), z.string()).optional(),
 );
 
-function exactOptionalObject<
-  T extends object,
-  TSchema extends z.ZodTypeAny & { readonly shape?: unknown } = z.ZodTypeAny & {
-    readonly shape?: unknown;
-  },
->(schema: TSchema): z.ZodType<T> & Pick<TSchema, "shape"> {
+/**
+ * Wraps an object-like Zod schema with {@link omitUndefined} so parsed optionals
+ * match exact-optional property contracts. Infers output from the schema (no hand type param).
+ * Preserves a `shape` getter for {@link schemaAcceptsIdempotencyKey}-style detection through
+ * the transform wrapper (ZodEffects has no shape of its own).
+ */
+function exactOptionalObject<TSchema extends z.ZodTypeAny & { readonly shape?: unknown }>(
+  schema: TSchema,
+): z.ZodType<
+  z.output<TSchema> extends object ? ReturnType<typeof omitUndefined<z.output<TSchema>>> : never
+> &
+  Pick<TSchema, "shape"> {
   const transformed = schema.transform((value) =>
-    omitUndefined(value as T),
-  ) as unknown as z.ZodType<T> & Pick<TSchema, "shape">;
+    omitUndefined(value as z.output<TSchema> & object),
+  ) as unknown as z.ZodType<
+    z.output<TSchema> extends object ? ReturnType<typeof omitUndefined<z.output<TSchema>>> : never
+  > &
+    Pick<TSchema, "shape">;
   Object.defineProperty(transformed, "shape", {
     configurable: true,
     get: () => schema.shape,
@@ -158,7 +125,7 @@ function exactOptionalObject<
 }
 
 /** Catalog content reference and stock availability lookup schemas. */
-export const contentRefInputSchema = exactOptionalObject<ContentRefDTO>(
+export const contentRefInputSchema = exactOptionalObject(
   z.object({
     collection: requiredStringSchema,
     id: requiredStringSchema,
@@ -172,7 +139,7 @@ export const stockAvailabilityInputSchema = z.object({
 }) satisfies z.ZodType<{ readonly sellableId: MikaId }>;
 
 /** Checkout session id and optional polling token for {@link CheckoutStatusInput}. */
-export const checkoutStatusInputSchema = exactOptionalObject<CheckoutStatusInput>(
+export const checkoutStatusInputSchema = exactOptionalObject(
   z.object({
     checkoutId: mikaIdSchema,
     token: optionalStringSchema,
@@ -180,7 +147,7 @@ export const checkoutStatusInputSchema = exactOptionalObject<CheckoutStatusInput
 );
 
 /** Checkout session id for abandoning an in-flight checkout. */
-export const checkoutCancelInputSchema = exactOptionalObject<CheckoutCancelInput>(
+export const checkoutCancelInputSchema = exactOptionalObject(
   z.object({
     checkoutId: mikaIdSchema,
     token: optionalStringSchema,
@@ -190,20 +157,18 @@ export const checkoutCancelInputSchema = exactOptionalObject<CheckoutCancelInput
 /** Export job id for polling account export readiness. */
 export const accountExportStatusInputSchema = z.object({
   exportId: mikaIdSchema,
-}) satisfies z.ZodType<AccountExportStatusInput>;
+});
 
 /**
  * Export id and optional download token for account export retrieval.
  *
  * Deliberately narrower than {@link AccountExportDownloadInput}: `consumeToken` is server-only —
  * the internal accountExportDownloadConsume operation force-sets it, and letting clients pass it
- * over the wire would let them opt out of single-use token consumption. `satisfies z.ZodType<T>`
- * cannot enforce the omission (optional fields satisfy one-way assignability), so
- * test/schema-contracts.ts pins the exact parsed shape.
+ * over the wire would let them opt out of single-use token consumption.
+ * test/schema-contracts.ts pins the exact parsed shape against
+ * `Omit<AccountExportDownloadInput, "consumeToken">`.
  */
-export const accountExportDownloadInputSchema = exactOptionalObject<
-  Omit<AccountExportDownloadInput, "consumeToken">
->(
+export const accountExportDownloadInputSchema = exactOptionalObject(
   z.object({
     exportId: mikaIdSchema,
     token: optionalStringSchema,
@@ -216,7 +181,7 @@ export const downloadResolveInputSchema = z.object({
 }) satisfies z.ZodType<{ readonly token: string }>;
 
 /** Order id and optional invoice token for customer invoice access. */
-export const orderInvoiceInputSchema = exactOptionalObject<OrderInvoiceInput>(
+export const orderInvoiceInputSchema = exactOptionalObject(
   z.object({
     orderId: mikaIdSchema,
     token: optionalStringSchema,
@@ -225,16 +190,14 @@ export const orderInvoiceInputSchema = exactOptionalObject<OrderInvoiceInput>(
 );
 
 /** Optional post-action redirect path shared by account export, delete, and portal inputs. */
-export const returnToInputSchema = exactOptionalObject<
-  AccountExportInput & AccountDeleteInput & AccountPortalInput
->(
+export const returnToInputSchema = exactOptionalObject(
   z.object({
     returnTo: optionalStringSchema,
   }),
 );
 
 /** Sellable, price, quantity, and variant fields for {@link AddCartItemInput}. */
-export const addCartItemInputSchema = exactOptionalObject<AddCartItemInput>(
+export const addCartItemInputSchema = exactOptionalObject(
   z.object({
     sellableId: mikaIdSchema,
     priceId: optionalMikaIdSchema,
@@ -256,12 +219,10 @@ const cartAddFormInputBaseSchema = z.object({
   returnTo: optionalStringSchema,
 });
 
-export const cartAddFormInputSchema = exactOptionalObject<
-  z.infer<typeof cartAddFormInputBaseSchema>
->(cartAddFormInputBaseSchema);
+export const cartAddFormInputSchema = exactOptionalObject(cartAddFormInputBaseSchema);
 
 /** Line id and target quantity for cart line quantity updates. */
-export const updateCartItemInputSchema = exactOptionalObject<UpdateCartItemInput>(
+export const updateCartItemInputSchema = exactOptionalObject(
   z.object({
     lineId: mikaIdSchema,
     quantity: requiredQuantitySchema,
@@ -270,7 +231,7 @@ export const updateCartItemInputSchema = exactOptionalObject<UpdateCartItemInput
 );
 
 /** Line id for removing a single cart line. */
-export const removeCartItemInputSchema = exactOptionalObject<RemoveCartItemInput>(
+export const removeCartItemInputSchema = exactOptionalObject(
   z.object({
     lineId: mikaIdSchema,
     returnTo: optionalStringSchema,
@@ -278,7 +239,7 @@ export const removeCartItemInputSchema = exactOptionalObject<RemoveCartItemInput
 );
 
 /** Anonymous session cart merged into the current or target cart. */
-export const mergeCartInputSchema = exactOptionalObject<MergeCartInput>(
+export const mergeCartInputSchema = exactOptionalObject(
   z.object({
     sourceSessionId: optionalStringSchema,
     targetCartId: optionalMikaIdSchema,
@@ -287,7 +248,7 @@ export const mergeCartInputSchema = exactOptionalObject<MergeCartInput>(
 );
 
 /** Coupon code applied to the active or specified cart. */
-export const applyCouponInputSchema = exactOptionalObject<ApplyCouponInput>(
+export const applyCouponInputSchema = exactOptionalObject(
   z.object({
     code: requiredStringSchema,
     cartId: optionalMikaIdSchema,
@@ -296,7 +257,7 @@ export const applyCouponInputSchema = exactOptionalObject<ApplyCouponInput>(
 );
 
 /** Clears the applied coupon from the active or specified cart. */
-export const removeCouponInputSchema = exactOptionalObject<RemoveCouponInput>(
+export const removeCouponInputSchema = exactOptionalObject(
   z.object({
     cartId: optionalMikaIdSchema,
     returnTo: optionalStringSchema,
@@ -304,7 +265,7 @@ export const removeCouponInputSchema = exactOptionalObject<RemoveCouponInput>(
 );
 
 /** Sellable and optional price for adding a wishlist item. */
-export const wishlistItemInputSchema = exactOptionalObject<WishlistItemInput>(
+export const wishlistItemInputSchema = exactOptionalObject(
   z.object({
     sellableId: mikaIdSchema,
     priceId: optionalMikaIdSchema,
@@ -313,7 +274,7 @@ export const wishlistItemInputSchema = exactOptionalObject<WishlistItemInput>(
 );
 
 /** Wishlist item id for removal. */
-export const removeWishlistItemInputSchema = exactOptionalObject<RemoveWishlistItemInput>(
+export const removeWishlistItemInputSchema = exactOptionalObject(
   z.object({
     itemId: mikaIdSchema,
     returnTo: optionalStringSchema,
@@ -321,7 +282,7 @@ export const removeWishlistItemInputSchema = exactOptionalObject<RemoveWishlistI
 );
 
 /** Wishlist item moved into the cart with optional quantity override. */
-export const moveWishlistItemToCartInputSchema = exactOptionalObject<MoveWishlistItemToCartInput>(
+export const moveWishlistItemToCartInputSchema = exactOptionalObject(
   z.object({
     itemId: mikaIdSchema,
     quantity: optionalQuantitySchema,
@@ -330,7 +291,7 @@ export const moveWishlistItemToCartInputSchema = exactOptionalObject<MoveWishlis
 );
 
 /** Cart line saved to the wishlist without deleting the sellable selection. */
-export const saveCartLineForLaterInputSchema = exactOptionalObject<SaveCartLineForLaterInput>(
+export const saveCartLineForLaterInputSchema = exactOptionalObject(
   z.object({
     lineId: mikaIdSchema,
     returnTo: optionalStringSchema,
@@ -338,7 +299,7 @@ export const saveCartLineForLaterInputSchema = exactOptionalObject<SaveCartLineF
 );
 
 /** Anonymous session wishlist merged into the current or target wishlist. */
-export const mergeWishlistInputSchema = exactOptionalObject<MergeWishlistInput>(
+export const mergeWishlistInputSchema = exactOptionalObject(
   z.object({
     sourceSessionId: optionalStringSchema,
     targetWishlistId: optionalMikaIdSchema,
@@ -357,12 +318,10 @@ const checkoutCustomerShape = {
   vatId: optionalStringSchema,
 } as const;
 
-const checkoutCustomerInputSchema = exactOptionalObject<CheckoutCustomerInput>(
-  z.object(checkoutCustomerShape),
-);
+const checkoutCustomerInputSchema = exactOptionalObject(z.object(checkoutCustomerShape));
 
 /** Quote, checkout start, preview, and HTML form transport schemas. */
-export const cartQuoteInputSchema = exactOptionalObject<CartQuoteInput>(
+export const cartQuoteInputSchema = exactOptionalObject(
   z.object({
     cartId: optionalMikaIdSchema,
     sellableId: optionalMikaIdSchema,
@@ -390,9 +349,7 @@ const startCheckoutInputBaseSchema = z.object({
   returnTo: optionalStringSchema,
 });
 
-export const startCheckoutInputSchema = exactOptionalObject<StartCheckoutInput>(
-  startCheckoutInputBaseSchema,
-);
+export const startCheckoutInputSchema = exactOptionalObject(startCheckoutInputBaseSchema);
 
 const proofRefBaseShape = {
   id: requiredStringSchema,
@@ -405,7 +362,7 @@ const proofRefBaseShape = {
 } as const;
 
 /** Discriminated agent proof references attached to checkout preview and sensitive operations. */
-export const agentProofRefSchema = exactOptionalObject<MikaAgentProofRef>(
+export const agentProofRefSchema = exactOptionalObject(
   z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("consent"),
@@ -436,7 +393,7 @@ export const agentProofRefSchema = exactOptionalObject<MikaAgentProofRef>(
 );
 
 /** Checkout handoff fields plus quote binding and agent proof refs for {@link CheckoutPreviewInput}. */
-export const checkoutPreviewInputSchema = exactOptionalObject<CheckoutPreviewInput>(
+export const checkoutPreviewInputSchema = exactOptionalObject(
   startCheckoutInputBaseSchema.extend({
     quoteId: optionalMikaIdSchema,
     proofRefs: z.array(agentProofRefSchema).optional(),
@@ -448,12 +405,10 @@ const checkoutStartFormInputBaseSchema = startCheckoutInputBaseSchema
   .omit({ customer: true })
   .extend(checkoutCustomerShape);
 
-export const checkoutStartFormInputSchema = exactOptionalObject<
-  z.infer<typeof checkoutStartFormInputBaseSchema>
->(checkoutStartFormInputBaseSchema);
+export const checkoutStartFormInputSchema = exactOptionalObject(checkoutStartFormInputBaseSchema);
 
 /** Account magic-link auth and subscription lifecycle action schemas. */
-export const magicLinkRequestInputSchema = exactOptionalObject<MagicLinkRequestInput>(
+export const magicLinkRequestInputSchema = exactOptionalObject(
   z.object({
     email: z.string().trim().email(),
     returnTo: optionalStringSchema,
@@ -461,7 +416,7 @@ export const magicLinkRequestInputSchema = exactOptionalObject<MagicLinkRequestI
 );
 
 /** One-time token and return path to complete magic-link authentication. */
-export const magicLinkVerifyInputSchema = exactOptionalObject<MagicLinkVerifyInput>(
+export const magicLinkVerifyInputSchema = exactOptionalObject(
   z.object({
     token: requiredStringSchema,
     returnTo: optionalStringSchema,
@@ -473,9 +428,7 @@ export const magicLinkVerifyInputSchema = exactOptionalObject<MagicLinkVerifyInp
  * Deliberately omits {@link SubscriptionActionInput}'s `priceId` — the backend only reads it for
  * plan changes, so cancel input never carries one (pinned in test/schema-contracts.ts).
  */
-export const subscriptionCancelInputSchema = exactOptionalObject<
-  Omit<SubscriptionActionInput, "priceId">
->(
+export const subscriptionCancelInputSchema = exactOptionalObject(
   z.object({
     subscriptionId: mikaIdSchema,
     returnTo: optionalStringSchema,
@@ -483,7 +436,7 @@ export const subscriptionCancelInputSchema = exactOptionalObject<
 );
 
 /** Subscription id and optional replacement price for plan changes. */
-export const subscriptionChangeInputSchema = exactOptionalObject<SubscriptionActionInput>(
+export const subscriptionChangeInputSchema = exactOptionalObject(
   z.object({
     subscriptionId: mikaIdSchema,
     priceId: optionalMikaIdSchema,
@@ -495,9 +448,7 @@ export const subscriptionChangeInputSchema = exactOptionalObject<SubscriptionAct
  * Subscription id for manual renewal or payment retry handoff.
  * Deliberately omits `priceId` for the same reason as {@link subscriptionCancelInputSchema}.
  */
-export const subscriptionRenewInputSchema = exactOptionalObject<
-  Omit<SubscriptionActionInput, "priceId">
->(
+export const subscriptionRenewInputSchema = exactOptionalObject(
   z.object({
     subscriptionId: mikaIdSchema,
     returnTo: optionalStringSchema,
@@ -505,7 +456,7 @@ export const subscriptionRenewInputSchema = exactOptionalObject<
 );
 
 /** Provider webhook ingest and replay schemas. */
-export const webhookReceiveInputSchema = exactOptionalObject<WebhookReceiveInput>(
+export const webhookReceiveInputSchema = exactOptionalObject(
   z.object({
     provider: providerNameSchema,
     eventType: optionalStringSchema,
@@ -515,14 +466,14 @@ export const webhookReceiveInputSchema = exactOptionalObject<WebhookReceiveInput
 );
 
 /** Admin provider health, catalog sync, stock, and order mutation schemas. */
-export const providerHealthInputSchema = exactOptionalObject<ProviderHealthInput>(
+export const providerHealthInputSchema = exactOptionalObject(
   z.object({
     provider: optionalProviderNameSchema,
   }),
 );
 
 /** Provider, sync mode, scope, and optional catalog entry for reconciliation. */
-export const providerSyncInputSchema = exactOptionalObject<ProviderSyncInput>(
+export const providerSyncInputSchema = exactOptionalObject(
   z
     .object({
       provider: optionalProviderNameSchema,
@@ -543,7 +494,7 @@ export const providerSyncInputSchema = exactOptionalObject<ProviderSyncInput>(
 );
 
 /** Stock item delta, reason, and idempotency metadata for admin inventory changes. */
-export const stockAdjustInputSchema = exactOptionalObject<StockAdjustInput>(
+export const stockAdjustInputSchema = exactOptionalObject(
   z.object({
     stockItemId: mikaIdSchema,
     quantityDelta: integerSchema,
@@ -555,16 +506,15 @@ export const stockAdjustInputSchema = exactOptionalObject<StockAdjustInput>(
 );
 
 /** Optional clock override for expired reservation maintenance sweeps. */
-export const releaseExpiredReservationsInputSchema =
-  exactOptionalObject<ReleaseExpiredReservationsInput>(
-    z.object({
-      now: optionalISODateTimeSchema,
-      idempotencyKey: optionalStringSchema,
-    }),
-  );
+export const releaseExpiredReservationsInputSchema = exactOptionalObject(
+  z.object({
+    now: optionalISODateTimeSchema,
+    idempotencyKey: optionalStringSchema,
+  }),
+);
 
 /** Stored webhook event identifier for admin replay. */
-export const webhookReplayInputSchema = exactOptionalObject<WebhookReplayInput>(
+export const webhookReplayInputSchema = exactOptionalObject(
   z.object({
     webhookId: mikaIdSchema,
     idempotencyKey: optionalStringSchema,
@@ -572,7 +522,7 @@ export const webhookReplayInputSchema = exactOptionalObject<WebhookReplayInput>(
 );
 
 /** Order, optional partial amount, reason, and idempotency key for refunds. */
-export const orderRefundInputSchema = exactOptionalObject<OrderRefundInput>(
+export const orderRefundInputSchema = exactOptionalObject(
   z.object({
     orderId: mikaIdSchema,
     amount: optionalAmountSchema,
@@ -582,7 +532,7 @@ export const orderRefundInputSchema = exactOptionalObject<OrderRefundInput>(
 );
 
 /** Order and optional reason with idempotency for cancellation. */
-export const orderCancelInputSchema = exactOptionalObject<OrderCancelInput>(
+export const orderCancelInputSchema = exactOptionalObject(
   z.object({
     orderId: mikaIdSchema,
     reason: optionalStringSchema,
@@ -591,7 +541,7 @@ export const orderCancelInputSchema = exactOptionalObject<OrderCancelInput>(
 );
 
 /** Entitlement key and customer identity for manual access grants. */
-export const entitlementGrantInputSchema = exactOptionalObject<EntitlementGrantInput>(
+export const entitlementGrantInputSchema = exactOptionalObject(
   z.object({
     entitlementKey: requiredStringSchema,
     customerId: optionalMikaIdSchema,
@@ -603,7 +553,7 @@ export const entitlementGrantInputSchema = exactOptionalObject<EntitlementGrantI
 );
 
 /** Entitlement or customer identifiers and reason for access revocation. */
-export const entitlementRevokeInputSchema = exactOptionalObject<EntitlementRevokeInput>(
+export const entitlementRevokeInputSchema = exactOptionalObject(
   z.object({
     entitlementId: optionalMikaIdSchema,
     entitlementKey: optionalStringSchema,
@@ -614,7 +564,7 @@ export const entitlementRevokeInputSchema = exactOptionalObject<EntitlementRevok
 );
 
 /** Queued email and idempotency key for delivery retry. */
-export const emailResendInputSchema = exactOptionalObject<EmailResendInput>(
+export const emailResendInputSchema = exactOptionalObject(
   z.object({
     emailId: mikaIdSchema,
     idempotencyKey: optionalStringSchema,
@@ -622,7 +572,7 @@ export const emailResendInputSchema = exactOptionalObject<EmailResendInput>(
 );
 
 /** License identifier and reason for key revocation. */
-export const licenseRevokeInputSchema = exactOptionalObject<LicenseRevokeInput>(
+export const licenseRevokeInputSchema = exactOptionalObject(
   z.object({
     licenseId: mikaIdSchema,
     reason: optionalStringSchema,
@@ -631,7 +581,7 @@ export const licenseRevokeInputSchema = exactOptionalObject<LicenseRevokeInput>(
 );
 
 /** Order or entitlement anchors and expiry for issuing download tokens. */
-export const downloadIssueInputSchema = exactOptionalObject<DownloadIssueInput>(
+export const downloadIssueInputSchema = exactOptionalObject(
   z.object({
     entitlementId: optionalMikaIdSchema,
     orderId: optionalMikaIdSchema,
@@ -640,6 +590,95 @@ export const downloadIssueInputSchema = exactOptionalObject<DownloadIssueInput>(
     idempotencyKey: optionalStringSchema,
   }),
 );
+
+// --- Public operation *Input types (Zod schemas are the source of truth) ---
+
+/** Sellable, price, quantity, and variant selection for a new cart line. */
+export type AddCartItemInput = z.infer<typeof addCartItemInputSchema>;
+/** Source session or cart to fold into the shopper's active cart. */
+export type MergeCartInput = z.infer<typeof mergeCartInputSchema>;
+/** Cart line identifier and target quantity for in-place line updates. */
+export type UpdateCartItemInput = z.infer<typeof updateCartItemInputSchema>;
+/** Cart line identifier to remove from the open cart. */
+export type RemoveCartItemInput = z.infer<typeof removeCartItemInputSchema>;
+/** Discount code and optional cart scope for coupon application. */
+export type ApplyCouponInput = z.infer<typeof applyCouponInputSchema>;
+/** Optional cart scope when clearing an applied coupon. */
+export type RemoveCouponInput = z.infer<typeof removeCouponInputSchema>;
+/** Optional buyer identity and tax fields collected during checkout. */
+export type CheckoutCustomerInput = z.infer<typeof checkoutCustomerInputSchema>;
+/** Cart or ad-hoc purchase details for a priced quote before checkout. */
+export type CartQuoteInput = z.infer<typeof cartQuoteInputSchema>;
+/** Sellable and optional price to save for later purchase. */
+export type WishlistItemInput = z.infer<typeof wishlistItemInputSchema>;
+/** Wishlist entry identifier to drop from the saved list. */
+export type RemoveWishlistItemInput = z.infer<typeof removeWishlistItemInputSchema>;
+/** Wishlist entry and quantity to transfer into the cart. */
+export type MoveWishlistItemToCartInput = z.infer<typeof moveWishlistItemToCartInputSchema>;
+/** Cart line to move off the cart into the wishlist. */
+export type SaveCartLineForLaterInput = z.infer<typeof saveCartLineForLaterInputSchema>;
+/** Source session or wishlist to merge into the active wishlist. */
+export type MergeWishlistInput = z.infer<typeof mergeWishlistInputSchema>;
+/** Cart or direct purchase handoff fields plus provider and redirect paths. */
+export type StartCheckoutInput = z.infer<typeof startCheckoutInputSchema>;
+/** Checkout handoff fields plus quote binding and agent proof references. */
+export type CheckoutPreviewInput = z.infer<typeof checkoutPreviewInputSchema>;
+/** Email address and post-login return path for passwordless sign-in. */
+export type MagicLinkRequestInput = z.infer<typeof magicLinkRequestInputSchema>;
+/** One-time token and return path to complete magic-link authentication. */
+export type MagicLinkVerifyInput = z.infer<typeof magicLinkVerifyInputSchema>;
+/** Post-provider-portal return path for billing self-service. */
+export type AccountPortalInput = z.infer<typeof returnToInputSchema>;
+/**
+ * Subscription identifier and optional plan change for lifecycle actions.
+ * Cancel/renew schemas deliberately omit `priceId` (see schema-contracts).
+ */
+export type SubscriptionActionInput = z.infer<typeof subscriptionChangeInputSchema>;
+/** Return path after requesting a personal data export. */
+export type AccountExportInput = z.infer<typeof returnToInputSchema>;
+/** Return path after initiating account deletion. */
+export type AccountDeleteInput = z.infer<typeof returnToInputSchema>;
+/** Export job identifier to poll async export readiness. */
+export type AccountExportStatusInput = z.infer<typeof accountExportStatusInputSchema>;
+/**
+ * Export job and optional access token for secure download.
+ * Extends the wire schema with server-only `consumeToken` (not accepted over the wire).
+ */
+export type AccountExportDownloadInput = z.infer<typeof accountExportDownloadInputSchema> & {
+  readonly consumeToken?: boolean;
+};
+/** Checkout session and optional status token for payment polling. */
+export type CheckoutStatusInput = z.infer<typeof checkoutStatusInputSchema>;
+/** Checkout session to abandon before completion. */
+export type CheckoutCancelInput = z.infer<typeof checkoutCancelInputSchema>;
+/** Order, optional invoice token, and return path for hosted invoice access. */
+export type OrderInvoiceInput = z.infer<typeof orderInvoiceInputSchema>;
+/** Raw provider webhook payload presented to `webhook.receive`. */
+export type WebhookReceiveInput = z.infer<typeof webhookReceiveInputSchema>;
+/** Optional provider filter for adapter capability health probes. */
+export type ProviderHealthInput = z.infer<typeof providerHealthInputSchema>;
+/** Provider, sync mode, scope, and optional catalog entry for reconciliation. */
+export type ProviderSyncInput = z.infer<typeof providerSyncInputSchema>;
+/** Stock item delta, reason, and idempotency metadata for admin inventory changes. */
+export type StockAdjustInput = z.infer<typeof stockAdjustInputSchema>;
+/** Optional clock override for expired reservation maintenance sweeps. */
+export type ReleaseExpiredReservationsInput = z.infer<typeof releaseExpiredReservationsInputSchema>;
+/** Stored webhook event identifier for admin replay. */
+export type WebhookReplayInput = z.infer<typeof webhookReplayInputSchema>;
+/** Order, optional partial amount, reason, and idempotency key for refunds. */
+export type OrderRefundInput = z.infer<typeof orderRefundInputSchema>;
+/** Order and optional reason with idempotency for cancellation. */
+export type OrderCancelInput = z.infer<typeof orderCancelInputSchema>;
+/** Entitlement key and customer identity for manual access grants. */
+export type EntitlementGrantInput = z.infer<typeof entitlementGrantInputSchema>;
+/** Entitlement or customer identifiers and reason for access revocation. */
+export type EntitlementRevokeInput = z.infer<typeof entitlementRevokeInputSchema>;
+/** Queued email and idempotency key for delivery retry. */
+export type EmailResendInput = z.infer<typeof emailResendInputSchema>;
+/** License identifier and reason for key revocation. */
+export type LicenseRevokeInput = z.infer<typeof licenseRevokeInputSchema>;
+/** Order or entitlement anchors and expiry for issuing download tokens. */
+export type DownloadIssueInput = z.infer<typeof downloadIssueInputSchema>;
 
 /** Parses unknown input; returns a 422 {@link MikaApiResult} envelope on schema failure. */
 export function parseMikaInput<T>(schema: z.ZodType<T>, input: unknown): MikaValidationResult<T> {

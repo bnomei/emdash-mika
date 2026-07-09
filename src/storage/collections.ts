@@ -2,6 +2,7 @@
  * Document collection configuration and query contracts for indexed storage backends.
  * Defines per-collection indexes used to resolve documents by aggregate and record fields.
  */
+import type { PluginDescriptor, PluginStorageConfig } from "emdash";
 import type { MikaStorageDocuments } from "../types/documents";
 
 type KeysOfUnion<TValue> = TValue extends TValue ? keyof TValue : never;
@@ -22,6 +23,60 @@ export interface MikaStorageCollectionConfig<TDocument = Record<string, unknown>
 export type MikaStorageConfig = {
   readonly [K in keyof MikaStorageDocuments]: MikaStorageCollectionConfig<MikaStorageDocuments[K]>;
 };
+
+/** EmDash descriptor storage shape (single-field indexes only — no composites). */
+export type MikaDescriptorStorageConfig = NonNullable<PluginDescriptor["storage"]>;
+
+/**
+ * Converts Mika's document-typed index config into EmDash runtime
+ * {@link PluginStorageConfig} (`Array<string | string[]>` including composites).
+ */
+export function toPluginStorageConfig(config: MikaStorageConfig): PluginStorageConfig {
+  const out: PluginStorageConfig = {};
+  for (const name of Object.keys(config) as Array<keyof MikaStorageConfig>) {
+    const collection = config[name];
+    out[name] = {
+      indexes: collection.indexes.map(normalizePluginIndex),
+      ...(collection.uniqueIndexes === undefined
+        ? {}
+        : { uniqueIndexes: collection.uniqueIndexes.map(normalizePluginIndex) }),
+    };
+  }
+  return out;
+}
+
+/**
+ * Descriptor-safe storage map for {@link PluginDescriptor.storage}.
+ * EmDash's descriptor declaration only accepts single-field `string[]` indexes;
+ * composite tuples are flattened to their member fields for declaration purposes.
+ * Runtime {@link toPluginStorageConfig} keeps full composite indexes.
+ */
+export function toDescriptorStorageConfig(config: MikaStorageConfig): MikaDescriptorStorageConfig {
+  const out: MikaDescriptorStorageConfig = {};
+  for (const name of Object.keys(config) as Array<keyof MikaStorageConfig>) {
+    const collection = config[name];
+    out[name] = {
+      indexes: flattenIndexFields(collection.indexes),
+      ...(collection.uniqueIndexes === undefined
+        ? {}
+        : { uniqueIndexes: flattenIndexFields(collection.uniqueIndexes) }),
+    };
+  }
+  return out;
+}
+
+function normalizePluginIndex(index: MikaIndex): string | string[] {
+  return typeof index === "string" ? index : [...index];
+}
+
+function flattenIndexFields(indexes: readonly MikaIndex[]): string[] {
+  const fields = new Set<string>();
+  for (const index of indexes) {
+    if (typeof index === "string") fields.add(index);
+    else for (const field of index) fields.add(field);
+  }
+  return [...fields];
+}
 
 /** Default index configuration for catalog, session, account, ledger, and ops documents. */
 export const mikaStorageConfig = {

@@ -2,14 +2,10 @@
  * EmDash plugin descriptor and runtime registration for Mika commerce routes, storage collections,
  * and scheduled maintenance (stock reservation release, email outbox, ephemeral purge).
  *
- * Descriptor storage config omits composite indexes that {@link mikaStorageConfig} applies at runtime.
+ * Descriptor storage uses {@link toDescriptorStorageConfig} (single-field indexes only).
+ * Runtime {@link definePlugin} uses {@link toPluginStorageConfig} (full composites).
  */
-import {
-  definePlugin,
-  type PluginContext,
-  type PluginDescriptor,
-  type PluginStorageConfig,
-} from "emdash";
+import { definePlugin, type PluginContext, type PluginDescriptor } from "emdash";
 import { optionalProperty } from "./internal/object";
 
 /** Host capabilities the Mika plugin requests, shared by the descriptor and the runtime plugin. */
@@ -27,7 +23,11 @@ import {
   type MikaApiOverrides,
 } from "./api/server";
 import type { MikaOperationPolicy } from "./api/operation-policy";
-import { mikaStorageConfig } from "./storage/collections";
+import {
+  mikaStorageConfig,
+  toDescriptorStorageConfig,
+  toPluginStorageConfig,
+} from "./storage/collections";
 import { createISODateTime } from "./types/primitives";
 import type { MikaAcpSessionStore } from "./api/acp-session";
 
@@ -158,10 +158,8 @@ export function mikaPlugin(
     entrypoint,
     options: pluginOptions,
     capabilities: [...MIKA_PLUGIN_CAPABILITIES],
-    // The descriptor omits the runtime-only composite indexes mikaStorageConfig carries (see the
-    // file header); cast to the descriptor's declared storage field so shape drift still surfaces,
-    // rather than the maximally-unsafe `as never`.
-    storage: mikaStorageConfig as unknown as NonNullable<PluginDescriptor["storage"]>,
+    // Descriptor declaration only accepts single-field indexes; composites flatten.
+    storage: toDescriptorStorageConfig(mikaStorageConfig),
   };
 }
 
@@ -281,7 +279,7 @@ export function createMikaPlugin(options: MikaCreatePluginOptions = {}) {
     id: MIKA_PLUGIN_ID,
     version: MIKA_PLUGIN_VERSION,
     capabilities: [...MIKA_PLUGIN_CAPABILITIES],
-    storage: mikaStorageConfig as PluginStorageConfig,
+    storage: toPluginStorageConfig(mikaStorageConfig),
     routes: createMikaPluginRoutes(api, {
       ...optionalProperty("operationPolicy", options.operationPolicy),
     }),
