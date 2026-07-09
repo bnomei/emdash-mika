@@ -222,18 +222,46 @@ type MikaApiMethodNameMap = {
   readonly [K in keyof MikaApi]: readonly (keyof MikaApi[K])[];
 };
 
+/** Methods present on {@link MikaApi} but missing from a candidate name map. */
 type MissingMikaApiMethods<TNames extends MikaApiMethodNameMap> = {
   [K in keyof MikaApi]: Exclude<keyof MikaApi[K], TNames[K][number]>;
 }[keyof MikaApi];
 
+/**
+ * Namespaces on a candidate map that are not on {@link MikaApi}.
+ * (Extra *methods* inside a known namespace are rejected by `extends MikaApiMethodNameMap`.)
+ */
+type ExcessMikaApiNamespaces<TNames extends MikaApiMethodNameMap> = Exclude<
+  keyof TNames,
+  keyof MikaApi
+>;
+
+/**
+ * Bidirectional pin: every {@link MikaApi} method appears in the name map, every map
+ * namespace is a {@link MikaApi} namespace, and every listed method is a real API key.
+ * Resolves to `never` when locked.
+ */
+type MikaApiMethodNameDrift<TNames extends MikaApiMethodNameMap> =
+  | MissingMikaApiMethods<TNames>
+  | ExcessMikaApiNamespaces<TNames>;
+
 function defineMikaApiMethodNames<const TNames extends MikaApiMethodNameMap>(
-  names: MissingMikaApiMethods<TNames> extends never ? TNames : never,
+  names: MikaApiMethodNameDrift<TNames> extends never ? TNames : never,
 ): TNames {
   return names;
 }
 
 /** Authoritative list of method names on each {@link MikaApi} namespace. */
 export const mikaApiMethodNames = defineMikaApiMethodNames(mikaOperationApiMethodNames);
+
+/**
+ * Compile-time pin: exposed registry ops (`mikaOperationApiMethodNames`) ↔ {@link MikaApi}.
+ * Fails typecheck when either surface gains a method/namespace the other lacks.
+ */
+type _AssertMikaApiMethodNamesPinned =
+  MikaApiMethodNameDrift<typeof mikaOperationApiMethodNames> extends never ? true : never;
+const _assertMikaApiMethodNamesPinned: _AssertMikaApiMethodNamesPinned = true;
+void _assertMikaApiMethodNamesPinned;
 
 type MikaApiNamespace = keyof typeof mikaApiMethodNames;
 const mikaNotImplementedApiMethod = Symbol("mika.notImplementedApiMethod");
