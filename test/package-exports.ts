@@ -45,9 +45,7 @@ import type {
   createMikaMaintenanceRunner as createMikaMaintenanceRunnerFromServerMaintenance,
   MikaMaintenanceRunner as MikaMaintenanceRunnerFromServerMaintenance,
 } from "@bnomei/emdash-mika/server/maintenance";
-import type {
-  MikaStockRepositoryPort as MikaStockRepositoryPortFromServerPorts,
-} from "@bnomei/emdash-mika/server/ports";
+import type { MikaStockRepositoryPort as MikaStockRepositoryPortFromServerPorts } from "@bnomei/emdash-mika/server/ports";
 import type {
   assertMikaApiWired,
   CreateMikaBackendApiInput,

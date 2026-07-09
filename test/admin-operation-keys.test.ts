@@ -22,8 +22,9 @@ describe("admin operationKey registry pin", () => {
     const keys = Object.keys(mikaAdminActionRuntimeDefinitions).sort();
     expect(keys.length).toBeGreaterThan(0);
     for (const key of keys) {
-      expect(mikaAdminActionRuntimeDefinitions[key as keyof typeof mikaAdminActionRuntimeDefinitions])
-        .toBeDefined();
+      expect(
+        mikaAdminActionRuntimeDefinitions[key as keyof typeof mikaAdminActionRuntimeDefinitions],
+      ).toBeDefined();
     }
   });
 });

@@ -79,11 +79,11 @@ npm install @bnomei/emdash-mika
 
 ### Peer requirements
 
-| Peer | Range | Notes |
-| ---- | ----- | ----- |
-| **astro** | `^7.0.0` | **Required** for the schema stack (`astro/zod` in validation and Actions). Hosts that only import `/server` still need Astro installed so Zod resolves from the same major as Actions. Developed and CI-tested on **Astro 7 only** (Vite 8, Rust compiler). Do not use reserved `src/fetch.ts` for app code under Astro 7 advanced routing. Cart/account/checkout routes must not use route caching (session/cookie variance). |
-| **emdash** | `>=0.22.0 <1.0.0` | Required for native plugin registration. |
-| react / react-dom / stripe / kumo / phosphor | optional | Only when using the matching subpath (`/react`, `/stripe`, templates with Kumo). |
+| Peer                                         | Range             | Notes                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| -------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **astro**                                    | `^7.0.0`          | **Required** for the schema stack (`astro/zod` in validation and Actions). Hosts that only import `/server` still need Astro installed so Zod resolves from the same major as Actions. Developed and CI-tested on **Astro 7 only** (Vite 8, Rust compiler). Do not use reserved `src/fetch.ts` for app code under Astro 7 advanced routing. Cart/account/checkout routes must not use route caching (session/cookie variance). |
+| **emdash**                                   | `>=0.22.0 <1.0.0` | Required for native plugin registration.                                                                                                                                                                                                                                                                                                                                                                                       |
+| react / react-dom / stripe / kumo / phosphor | optional          | Only when using the matching subpath (`/react`, `/stripe`, templates with Kumo).                                                                                                                                                                                                                                                                                                                                               |
 
 ## Three host faces
 
@@ -91,11 +91,11 @@ Hosts interact with Mika through three complementary faces. Pick the face that
 matches the trust boundary; do not expand the browser client to authenticated
 mutations.
 
-| Face | Package surface | When to use |
-| ---- | --------------- | ----------- |
-| **1. Backend API** | `@bnomei/emdash-mika/server` — `MikaApi`, `createMikaBackendApi()`, overrides | Compose commerce behavior once (repos, providers, notifications). Injected into the EmDash plugin entrypoint and shared by routes/actions. |
-| **2. In-process** | `@bnomei/emdash-mika/astro` (`createMika`) and `@bnomei/emdash-mika/astro-actions` (`createMikaActions`) | Astro pages and form/JSON Actions on the server. Same `MikaApi` instance; no extra HTTP hop. |
-| **3. HTTP** | `@bnomei/emdash-mika/client` (`createMikaClient` — public catalog/stock only) and `createMikaServerClient` on `/server` (full operation facade) | Browser-safe public reads, or server-to-plugin HTTP when you need the route surface without importing the full backend graph. |
+| Face               | Package surface                                                                                                                                 | When to use                                                                                                                                |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **1. Backend API** | `@bnomei/emdash-mika/server` — `MikaApi`, `createMikaBackendApi()`, overrides                                                                   | Compose commerce behavior once (repos, providers, notifications). Injected into the EmDash plugin entrypoint and shared by routes/actions. |
+| **2. In-process**  | `@bnomei/emdash-mika/astro` (`createMika`) and `@bnomei/emdash-mika/astro-actions` (`createMikaActions`)                                        | Astro pages and form/JSON Actions on the server. Same `MikaApi` instance; no extra HTTP hop.                                               |
+| **3. HTTP**        | `@bnomei/emdash-mika/client` (`createMikaClient` — public catalog/stock only) and `createMikaServerClient` on `/server` (full operation facade) | Browser-safe public reads, or server-to-plugin HTTP when you need the route surface without importing the full backend graph.              |
 
 Supporting entrypoints stay projections of the same semantic core: `/agent`
 (manifest), `/acp` (ACP feed/handlers), `/admin`, `/provider`, `/stripe`,
@@ -176,7 +176,9 @@ export function createPlugin(options: MikaCreatePluginOptions = {}) {
         // stock is usually already required for commerce; pass the same ports
         // you wired into createMikaBackendApi for email/ephemeral/account-delete
       },
-      emailOutboxRunner: createMikaEmailOutboxRunner({ /* host sender + repos */ }),
+      emailOutboxRunner: createMikaEmailOutboxRunner({
+        /* host sender + repos */
+      }),
     },
   });
 }

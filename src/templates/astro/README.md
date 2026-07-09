@@ -12,6 +12,16 @@ add carts, wishlists, checkout handoff, accounts, downloads, stock-aware
 variants, and agent-readable commerce metadata without adopting a full commerce
 platform.
 
+## Astro 7 host notes
+
+- Templates are developed against **Astro 7** (Vite 8, Rust compiler).
+- Do **not** name host app files `src/fetch.ts` — reserved under advanced routing.
+- Do **not** enable route caching on cart, account, checkout, or magic-link pages
+  (session/cookie variance); cache only static marketing content.
+- Prefer `compressHTML: 'jsx'` awareness: whitespace between inline elements can
+  matter for layout with the stricter compiler.
+- Branch storefront control flow on `result.error.code`, never `error.message`.
+
 ## Copying and upgrading
 
 These are copy-only files, not a package import: paste them into the host

@@ -260,6 +260,13 @@ function schemaAcceptsIdempotencyKey(schema: z.ZodType | undefined): boolean {
   );
 }
 
+/**
+ * Dynamic dispatch for ops that omit an explicit `call` binding.
+ * The `as unknown as Record` cast is intentionally localized here — prefer an
+ * explicit `call: (api, ctx, input) => api.<ns>.<method>(…)` on money-moving
+ * definitions so they stay fully typed. Do not introduce additional
+ * `as unknown as MikaApi` casts elsewhere.
+ */
 function createDefaultMikaOperationCall(
   operation: Pick<
     MikaApiOperationBaseDefinition,
