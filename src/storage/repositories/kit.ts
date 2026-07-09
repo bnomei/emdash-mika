@@ -82,6 +82,9 @@ async function listByType<TDocument extends TypedDocument, TType extends Documen
   options?: TypeScopedQueryOptions<DocumentOfType<TDocument, TType>>,
 ): Promise<DocumentList<DocumentOfType<TDocument, TType>>> {
   const { where, ...rest } = options ?? {};
+  // EmDash StorageQueryOptions is not generic over narrowed document unions; the
+  // runtime where clause is type-scoped via withDocumentType, then items are
+  // re-validated below. This is the sole kit-level query cast (F2.2).
   const result = await collection.query({
     ...rest,
     where: withDocumentType<TDocument, TType>(
