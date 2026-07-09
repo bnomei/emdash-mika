@@ -9,6 +9,8 @@ Start here:
 
 - [First release slice](./release-slice.md): what to ship first so the package
   shows the right amount of commerce behavior.
+- [Unstyled kit (no Kumo)](./unstyled-kit.md): minimal forms without Cloudflare
+  Kumo / React peers.
 - [Astro storefront](./astro-storefront.md): product page, actions, cart,
   wishlist, checkout, account, and download copy path.
 - [Backend and provider wiring](./backend-provider.md): how to connect Mika to
