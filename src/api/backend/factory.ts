@@ -146,7 +146,7 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
               ok: false,
               status: 409,
               error: {
-                code: "CONFLICT",
+                code: "STOCK_CONFLICT",
                 message: `Stock adjustment for '${adjustment.stockItemId}' would undercut active reservations.`,
               },
             };
@@ -157,7 +157,7 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
               ok: false,
               status: 409,
               error: {
-                code: "CONFLICT",
+                code: "IDEMPOTENCY_MISMATCH",
                 message: `Stock adjustment idempotency key was reused for a different stock item.`,
               },
             };

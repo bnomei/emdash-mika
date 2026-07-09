@@ -119,7 +119,11 @@ export function checkoutIdempotencyInProgress(): MikaApiFailure {
 }
 
 export function checkoutIdempotencyInputMismatch(): MikaApiFailure {
-  return apiFailure(409, "CONFLICT", "Checkout idempotency key was reused with different input.");
+  return apiFailure(
+    409,
+    "IDEMPOTENCY_MISMATCH",
+    "Checkout idempotency key was reused with different input.",
+  );
 }
 
 export function checkoutPersistenceFailed(): MikaApiFailure {
@@ -155,7 +159,7 @@ export function webhookInvalid(message: string): MikaApiFailure {
 export function webhookProcessingDeferred(webhookId: MikaId): MikaApiFailure {
   return apiFailure(
     409,
-    "CONFLICT",
+    "WEBHOOK_DEFERRED",
     `Webhook '${webhookId}' is awaiting fulfillment and was not processed; retry delivery.`,
   );
 }
@@ -163,7 +167,7 @@ export function webhookProcessingDeferred(webhookId: MikaId): MikaApiFailure {
 export function adminIdempotencyInputMismatch(action: string): MikaApiFailure {
   return apiFailure(
     409,
-    "CONFLICT",
+    "IDEMPOTENCY_MISMATCH",
     `Admin action '${action}' idempotency key was reused with different input.`,
   );
 }

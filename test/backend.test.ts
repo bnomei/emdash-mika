@@ -3831,7 +3831,7 @@ describe("backend test Kysely stock database harness", () => {
         ok: false,
         status: 409,
         error: {
-          code: "CONFLICT",
+          code: "IDEMPOTENCY_MISMATCH",
           message: "Stock adjustment idempotency key was reused for a different stock item.",
         },
       });
@@ -3892,7 +3892,7 @@ describe("backend test Kysely stock database harness", () => {
         ok: false,
         status: 409,
         error: {
-          code: "CONFLICT",
+          code: "STOCK_CONFLICT",
           message: `Stock adjustment for '${stockItem.id}' would undercut active reservations.`,
         },
       });
@@ -9928,7 +9928,7 @@ describe("backend API composition", () => {
     expect(differentTarget).toMatchObject({
       ok: false,
       status: 409,
-      error: { code: "CONFLICT" },
+      error: { code: "IDEMPOTENCY_MISMATCH" },
     });
 
     const differentAmount = await api.admin.orderRefund({
@@ -9939,7 +9939,7 @@ describe("backend API composition", () => {
     expect(differentAmount).toMatchObject({
       ok: false,
       status: 409,
-      error: { code: "CONFLICT" },
+      error: { code: "IDEMPOTENCY_MISMATCH" },
     });
 
     expect(fake.getCalls().refundPayment).toEqual([
@@ -11367,7 +11367,7 @@ describe("backend API composition", () => {
       ok: false,
       status: 409,
       error: {
-        code: "CONFLICT",
+        code: "WEBHOOK_DEFERRED",
         message:
           "Webhook 'webhook_2' is awaiting fulfillment and was not processed; retry delivery.",
       },
@@ -11703,7 +11703,7 @@ describe("backend API composition", () => {
     await expect(receiveWebhook(api, "payment-active-lease", stripe)).resolves.toMatchObject({
       ok: false,
       status: 409,
-      error: { code: "CONFLICT" },
+      error: { code: "WEBHOOK_DEFERRED" },
     });
 
     await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(0);
@@ -12065,7 +12065,7 @@ describe("backend API composition", () => {
     await expect(receiveWebhook(api, "payment-stuck-first", stripe)).resolves.toMatchObject({
       ok: false,
       status: 409,
-      error: { code: "CONFLICT" },
+      error: { code: "WEBHOOK_DEFERRED" },
     });
     await expect(opsCollection.get("webhook_1")).resolves.toMatchObject({ status: "received" });
     await expect(ledgerCollection.count({ type: "order" })).resolves.toBe(0);
@@ -13379,7 +13379,7 @@ describe("backend API composition", () => {
       ok: false,
       status: 409,
       error: {
-        code: "CONFLICT",
+        code: "WEBHOOK_DEFERRED",
         message:
           "Webhook 'webhook_2' is awaiting fulfillment and was not processed; retry delivery.",
       },
@@ -13704,7 +13704,7 @@ describe("backend API composition", () => {
       ok: false,
       status: 409,
       error: {
-        code: "CONFLICT",
+        code: "WEBHOOK_DEFERRED",
         message:
           "Webhook 'webhook_2' is awaiting fulfillment and was not processed; retry delivery.",
       },
@@ -19603,7 +19603,11 @@ describe("backend API composition", () => {
       sellableId: sellable.id,
       quantity: 1,
     });
-    expect(attacker).toMatchObject({ ok: false, status: 409, error: { code: "CONFLICT" } });
+    expect(attacker).toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "IDEMPOTENCY_MISMATCH" },
+    });
     if (attacker.ok) throw new Error("Expected cross-session replay to be rejected.");
     await expect(
       repositories.session.findById(createTestMikaId("checkout", 2)),
@@ -19667,7 +19671,7 @@ describe("backend API composition", () => {
       ok: false,
       status: 409,
       error: {
-        code: "CONFLICT",
+        code: "IDEMPOTENCY_MISMATCH",
         message: "Checkout idempotency key was reused with different input.",
       },
     });
