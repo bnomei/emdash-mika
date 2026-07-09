@@ -2,7 +2,7 @@
 // mika-template-version: 0.0.0
 import { Link, Text } from "@cloudflare/kumo";
 import { createMika } from "@bnomei/emdash-mika/astro";
-import { createMikaId } from "@bnomei/emdash-mika/types";
+import { createCheckoutSessionId } from "@bnomei/emdash-mika/types";
 import { api } from "../../lib/mika-api";
 import MikaKumoPage from "../../components/MikaKumoPage.astro";
 import { mikaTemplateCurrentCartItemCount } from "../../lib/cart";
@@ -14,7 +14,7 @@ const checkoutId = Astro.url.searchParams.get("checkoutId");
 const token = Astro.url.searchParams.get("token") ?? undefined;
 const Mika = createMika(Astro, { api });
 const result = checkoutId
-  ? await Mika.checkout.cancel({ checkoutId: createMikaId(checkoutId), token })
+  ? await Mika.checkout.cancel({ checkoutId: createCheckoutSessionId(checkoutId), token })
   : null;
 const checkout = result?.ok ? result.data : null;
 const status = checkout?.status ?? "cancelled";

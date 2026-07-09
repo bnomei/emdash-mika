@@ -39,12 +39,14 @@ import type {
   AvailabilityDTO,
   CartDTO,
   CheckoutSessionDTO,
+  CheckoutStatusInput,
   ContentRefDTO,
   DownloadResolutionDTO,
   MikaApiResult,
   SellableDTO,
   WishlistDTO,
 } from "./api/types";
+import type { SellableId } from "./types/primitives";
 
 /** Configuration for the Astro Actions tree: API overrides, guards, and operation policy. */
 export interface MikaActionsOptions {
@@ -101,7 +103,7 @@ export interface MikaActions {
     readonly sellables: MikaJsonActionClient<ContentRefDTO, readonly SellableDTO[]>;
   };
   readonly stock: {
-    readonly availability: MikaJsonActionClient<{ readonly sellableId: string }, AvailabilityDTO>;
+    readonly availability: MikaJsonActionClient<{ readonly sellableId: SellableId }, AvailabilityDTO>;
   };
   readonly cart: {
     readonly add: MikaFormActionClient<CartDTO>;
@@ -120,10 +122,7 @@ export interface MikaActions {
   };
   readonly checkout: {
     readonly start: MikaFormActionClient<CheckoutSessionDTO>;
-    readonly status: MikaJsonActionClient<
-      { readonly checkoutId: string; readonly token?: string },
-      CheckoutSessionDTO
-    >;
+    readonly status: MikaJsonActionClient<CheckoutStatusInput, CheckoutSessionDTO>;
   };
   readonly magicLink: {
     readonly request: MikaFormActionClient<{ readonly sent: boolean }>;
