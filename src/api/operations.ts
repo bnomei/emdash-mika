@@ -17,6 +17,11 @@ import type {
 } from "./agent-types";
 import { agentOperationMetadata } from "./operation-agent-metadata";
 import {
+  mikaPluginRoutePaths,
+  publicMikaPluginRouteNames as purePublicMikaPluginRouteNames,
+  type MikaPluginRouteName,
+} from "./route-paths";
+import {
   accountExportDownloadInputSchema,
   accountExportStatusInputSchema,
   addCartItemInputSchema,
@@ -1117,8 +1122,12 @@ type MikaOperationPluginRoutes = {
   readonly [TRoute in MikaRouteOnlyDefinition as TRoute["routeKey"]]: TRoute["routePath"];
 };
 
-/** Route key to path segment map consumed by {@link mikaPluginRoute}. */
-export const mikaOperationPluginRoutes = collectMikaPluginRoutes() as MikaOperationPluginRoutes;
+/**
+ * Route key to path segment map. Pure SSOT lives in {@link ./route-paths}; this re-export
+ * keeps server-side callers stable while asserting IR alignment at module load.
+ */
+export const mikaOperationPluginRoutes = mikaPluginRoutePaths as typeof mikaPluginRoutePaths &
+  MikaOperationPluginRoutes;
 
 /** Route key union for operations marked `public: true`. */
 export type MikaOperationPublicRouteName = Extract<
@@ -1127,12 +1136,10 @@ export type MikaOperationPublicRouteName = Extract<
 >["routeKey"];
 
 /** Route keys marked `public: true` (no session required). */
-export const mikaOperationPublicRouteNames = mikaRoutedOperationDefinitions
-  .filter(
-    (operation): operation is Extract<MikaApiOperation, { readonly public: true }> =>
-      operation.public,
-  )
-  .map((operation) => operation.routeKey) as readonly MikaOperationPublicRouteName[];
+export const mikaOperationPublicRouteNames =
+  purePublicMikaPluginRouteNames as readonly MikaOperationPublicRouteName[];
+
+assertMikaPluginRoutesConsistent();
 
 /** Type mapping namespaces to registered API method name lists. */
 type MikaApiExposedOperation = Exclude<MikaApiOperation, { readonly apiMethod: false }>;
@@ -1248,21 +1255,22 @@ export function callMikaOperation(
   return call(api, ctx, input);
 }
 
-function collectMikaPluginRoutes(): Record<string, string> {
-  const routes: Record<string, string> = {};
+/**
+ * Ensures operation IR route keys/paths and public flags match the pure {@link mikaPluginRoutePaths}
+ * map (browser-safe SSOT). Throws at module load on drift or duplicate path:method pairs.
+ */
+function assertMikaPluginRoutesConsistent(): void {
   const routeMethods = new Set<string>();
+  const coveredKeys = new Set<string>();
 
   for (const route of Object.values(mikaRouteOnlyDefinitions)) {
-    routes[route.routeKey] = route.routePath;
+    assertRoutePathMatchesMap(route.routeKey, route.routePath);
+    coveredKeys.add(route.routeKey);
   }
 
   for (const operation of mikaRoutedOperationDefinitions) {
-    const existingPath = routes[operation.routeKey];
-    if (existingPath && existingPath !== operation.routePath) {
-      throw new Error(
-        `Mika route key '${operation.routeKey}' maps to both '${existingPath}' and '${operation.routePath}'.`,
-      );
-    }
+    assertRoutePathMatchesMap(operation.routeKey, operation.routePath);
+    coveredKeys.add(operation.routeKey);
 
     const routeMethod = `${operation.routePath}:${operation.httpMethod}`;
     if (routeMethods.has(routeMethod)) {
@@ -1271,10 +1279,46 @@ function collectMikaPluginRoutes(): Record<string, string> {
       );
     }
     routeMethods.add(routeMethod);
-    routes[operation.routeKey] = operation.routePath;
   }
 
-  return routes;
+  for (const routeKey of Object.keys(mikaPluginRoutePaths) as MikaPluginRouteName[]) {
+    if (!coveredKeys.has(routeKey)) {
+      throw new Error(
+        `Mika route path map key '${routeKey}' is missing from operation/route-only definitions.`,
+      );
+    }
+  }
+
+  const derivedPublic = [
+    ...new Set(
+      mikaRoutedOperationDefinitions
+        .filter((operation) => operation.public)
+        .map((operation) => operation.routeKey),
+    ),
+  ].sort();
+  const expectedPublic = [...purePublicMikaPluginRouteNames].sort();
+  if (
+    derivedPublic.length !== expectedPublic.length ||
+    derivedPublic.some((key, index) => key !== expectedPublic[index])
+  ) {
+    throw new Error(
+      `Mika public route names drifted (IR: ${derivedPublic.join(", ") || "(none)"}; map: ${expectedPublic.join(", ")}).`,
+    );
+  }
+}
+
+function assertRoutePathMatchesMap(routeKey: string, routePath: string): void {
+  if (!(routeKey in mikaPluginRoutePaths)) {
+    throw new Error(
+      `Mika route key '${routeKey}' is missing from the pure route path map (route-paths.ts).`,
+    );
+  }
+  const expectedPath = mikaPluginRoutePaths[routeKey as MikaPluginRouteName];
+  if (expectedPath !== routePath) {
+    throw new Error(
+      `Mika route key '${routeKey}' maps to '${routePath}' in IR but '${expectedPath}' in route-paths.ts.`,
+    );
+  }
 }
 
 function collectMikaRouteOperationsByPath(): ReadonlyMap<string, readonly MikaApiOperation[]> {

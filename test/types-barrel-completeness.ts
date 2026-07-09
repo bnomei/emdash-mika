@@ -92,7 +92,10 @@ type AssertEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : ne
 
 type PublicOperationInputPairs = {
   AccountDeleteInput: AssertEqual<ApiAccountDeleteInput, AccountDeleteInput>;
-  AccountExportDownloadInput: AssertEqual<ApiAccountExportDownloadInput, AccountExportDownloadInput>;
+  AccountExportDownloadInput: AssertEqual<
+    ApiAccountExportDownloadInput,
+    AccountExportDownloadInput
+  >;
   AccountExportInput: AssertEqual<ApiAccountExportInput, AccountExportInput>;
   AccountExportStatusInput: AssertEqual<ApiAccountExportStatusInput, AccountExportStatusInput>;
   AccountPortalInput: AssertEqual<ApiAccountPortalInput, AccountPortalInput>;

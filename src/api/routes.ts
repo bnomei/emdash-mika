@@ -1,26 +1,30 @@
 /**
  * EmDash plugin URL helpers: route key to path mapping and absolute URL construction.
+ *
+ * Depends only on the Zod-free {@link ./route-paths} map so browser `/client` never
+ * evaluates the full operation IR or `astro/zod`.
  */
 import { optionalProperty } from "../internal/object";
-import { mikaOperationPluginRoutes, mikaOperationPublicRouteNames } from "./operations";
+import {
+  mikaPluginRoutePaths,
+  publicMikaPluginRouteNames as purePublicMikaPluginRouteNames,
+  type MikaPluginRouteName,
+  type MikaPublicPluginRouteName,
+} from "./route-paths";
 
 /** Default EmDash plugin identifier for Mika. */
 export const MIKA_PLUGIN_ID = "mika";
 /** Base path prefix for EmDash plugin API routes. */
 const EMDASH_PLUGIN_API_BASE = "/_emdash/api/plugins";
 
-/** Re-exported operation route map keyed by stable route names. */
-export const mikaPluginRoutes = mikaOperationPluginRoutes;
+/** Re-exported pure route map keyed by stable route names. */
+export const mikaPluginRoutes = mikaPluginRoutePaths;
 
-/** Union of stable plugin route keys from the operation route map. */
-export type MikaPluginRouteName = keyof typeof mikaPluginRoutes;
+export type { MikaPluginRouteName, MikaPublicPluginRouteName };
 
 /** Route names exposed without authentication requirements. */
 export const publicMikaPluginRouteNames =
-  mikaOperationPublicRouteNames satisfies readonly MikaPluginRouteName[];
-
-/** Route keys for operations that do not require authentication. */
-export type MikaPublicPluginRouteName = (typeof publicMikaPluginRouteNames)[number];
+  purePublicMikaPluginRouteNames satisfies readonly MikaPluginRouteName[];
 
 /** Options for resolving a plugin route to a URL string. */
 export interface MikaRouteOptions {
