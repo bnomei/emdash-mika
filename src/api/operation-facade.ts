@@ -228,6 +228,38 @@ export type MikaServerOperationFacade = MikaOperationFacade &
   MikaOperationWebhookFacade &
   MikaOperationAdminFacade;
 
+/**
+ * Bidirectional pin: hand {@link MikaServerOperationFacade} namespaces/methods match
+ * registry-derived {@link mikaOperationFacadeSpec} (from ops with `apiMethod !== false`).
+ */
+type MikaFacadeSpecMethodDrift = {
+  readonly [K in keyof MikaOperationFacadeSpec]: Exclude<
+    keyof MikaOperationFacadeSpec[K],
+    K extends keyof MikaServerOperationFacade ? keyof MikaServerOperationFacade[K] : never
+  >;
+}[keyof MikaOperationFacadeSpec];
+
+type MikaFacadeInterfaceMethodDrift = {
+  readonly [K in keyof MikaServerOperationFacade]: Exclude<
+    keyof MikaServerOperationFacade[K],
+    K extends keyof MikaOperationFacadeSpec ? keyof MikaOperationFacadeSpec[K] : never
+  >;
+}[keyof MikaServerOperationFacade];
+
+type MikaFacadeNamespaceDrift =
+  | Exclude<keyof MikaOperationFacadeSpec, keyof MikaServerOperationFacade>
+  | Exclude<keyof MikaServerOperationFacade, keyof MikaOperationFacadeSpec>;
+
+type MikaFacadeRegistryDrift =
+  | MikaFacadeSpecMethodDrift
+  | MikaFacadeInterfaceMethodDrift
+  | MikaFacadeNamespaceDrift;
+
+type _AssertMikaFacadePinnedToRegistry =
+  MikaFacadeRegistryDrift extends never ? true : MikaFacadeRegistryDrift;
+const _assertMikaFacadePinnedToRegistry: _AssertMikaFacadePinnedToRegistry = true;
+void _assertMikaFacadePinnedToRegistry;
+
 type MikaOperationFacadeForOptions<TOptions extends MikaOperationFacadeOptions | undefined> =
   MikaOperationFacade &
     (TOptions extends { readonly includeWebhook: true } ? MikaOperationWebhookFacade : {}) &
