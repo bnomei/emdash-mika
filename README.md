@@ -77,6 +77,11 @@ package.
 npm install @bnomei/emdash-mika
 ```
 
+Published package contents are `dist/` plus copyable `src/templates` (see
+`package.json` `files`). Declaration maps (`.d.mts.map`) are emitted for monorepo
+/ path-mapped consumers that resolve into this repo’s `src/`; they do **not**
+provide jump-to-source for plain npm installs of the published tarball alone.
+
 ### Peer requirements
 
 | Peer                                         | Range             | Notes                                                                                                                                                                                                                                                                                                                                                                                                                          |
