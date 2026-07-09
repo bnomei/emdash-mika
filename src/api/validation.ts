@@ -2,22 +2,42 @@
  * Zod input schemas and parsers for Mika operations, form posts, and search-param transports.
  * Public operation `*Input` types are derived via `z.infer` from these schemas (source of truth).
  * Wire DTOs stay hand-written in {@link ./types}. Re-exports `z` for co-located definitions.
+ *
+ * ## Intentional divergences (wire schema vs public / server type)
+ *
+ * | Schema | Public type | Difference | Why | Test pin |
+ * | ------ | ----------- | ---------- | --- | -------- |
+ * | `accountExportDownloadInputSchema` | `AccountExportDownloadInput` | schema omits `consumeToken` | server-only force-consume | schema-contracts |
+ * | `subscriptionCancelInputSchema` | `Omit<SubscriptionActionInput,"priceId">` | no `priceId` | only used on change | schema-contracts |
+ * | `subscriptionRenewInputSchema` | same as cancel | no `priceId` | same | schema-contracts |
+ * | form schemas (`cartAddForm*`, `checkoutStartForm*`) | not public `*Input` | form transport fields | HTML posts | operations normalizers |
  */
+
 import { z } from "astro/zod";
 
 import type { MikaApiResult } from "./types";
 import { omitUndefined } from "../internal/object";
 import {
+  createCartId,
+  createCheckoutSessionId,
   createCurrencyCode,
   createISODateTime,
   createMikaId,
+  createOrderId,
+  createPriceId,
   createProviderName,
+  createSellableId,
   isJsonObject,
+  type CartId,
+  type CheckoutSessionId,
   type CurrencyCode,
   type ISODateTime,
   type JsonObject,
   type MikaId,
+  type OrderId,
+  type PriceId,
   type ProviderName,
+  type SellableId,
   type StockMovementReason,
 } from "../types/primitives";
 
@@ -38,6 +58,18 @@ const optionalStringSchema = z.preprocess(emptyToUndefined, z.string().trim().mi
 const mikaIdSchema = brandedStringSchema(createMikaId, "MikaId");
 /** Optional branded {@link MikaId}; empty form values become undefined. */
 const optionalMikaIdSchema = z.preprocess(emptyToUndefined, mikaIdSchema.optional());
+/**
+ * Entity id schemas — mint nominal brands at the wire/form boundary.
+ * Prefer these over {@link mikaIdSchema} on money paths (migration is gradual).
+ */
+export const sellableIdSchema = brandedStringSchema(createSellableId, "SellableId");
+export const priceIdSchema = brandedStringSchema(createPriceId, "PriceId");
+export const cartIdSchema = brandedStringSchema(createCartId, "CartId");
+export const checkoutSessionIdSchema = brandedStringSchema(
+  createCheckoutSessionId,
+  "CheckoutSessionId",
+);
+export const orderIdSchema = brandedStringSchema(createOrderId, "OrderId");
 /** Branded {@link ISODateTime} string validated through {@link createISODateTime}. */
 const isoDateTimeSchema = brandedStringSchema(createISODateTime, "ISODateTime");
 /** Optional branded {@link ISODateTime}; empty form values become undefined. */
@@ -727,7 +759,18 @@ function validationFailure(error: z.ZodError): MikaApiResult<never> {
   };
 }
 
-function brandedStringSchema<T extends MikaId | ISODateTime | CurrencyCode | ProviderName>(
+type BrandedString =
+  | MikaId
+  | SellableId
+  | PriceId
+  | CartId
+  | CheckoutSessionId
+  | OrderId
+  | ISODateTime
+  | CurrencyCode
+  | ProviderName;
+
+function brandedStringSchema<T extends BrandedString>(
   create: (value: string) => T,
   label: string,
 ): z.ZodType<T> {

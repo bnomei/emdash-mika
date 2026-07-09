@@ -267,16 +267,30 @@ const expectedOperationContracts = [
   ["adminDownloadIssue", "admin", "downloadIssue", ""],
 ] as const;
 import {
+  createCartId,
   createCurrencyCode,
   createISODateTime,
   createMikaId,
+  createOrderId,
+  createPriceId,
   createProviderName,
+  createSellableId,
   isISODateTime,
+  type CartId,
   type CurrencyCode,
   type ISODateTime,
   type MikaId,
+  type OrderId,
+  type PriceId,
   type ProviderName,
+  type SellableId,
 } from "../src/types/primitives";
+import {
+  cartIdSchema,
+  orderIdSchema,
+  priceIdSchema,
+  sellableIdSchema,
+} from "../src/api/validation";
 import { decodeJsonObject } from "../src/storage/json";
 import type {
   createMikaActions,
@@ -4249,6 +4263,19 @@ describe("public types", () => {
     expectTypeOf<ReturnType<typeof createCurrencyCode>>().toEqualTypeOf<CurrencyCode>();
     expectTypeOf<ReturnType<typeof createProviderName>>().toEqualTypeOf<ProviderName>();
     expectTypeOf<ReturnType<typeof createISODateTime>>().toEqualTypeOf<ISODateTime>();
+    // Entity brands: nominal unique-symbol phantoms (F1.1).
+    expectTypeOf<ReturnType<typeof createSellableId>>().toEqualTypeOf<SellableId>();
+    expectTypeOf<ReturnType<typeof createPriceId>>().toEqualTypeOf<PriceId>();
+    expectTypeOf<ReturnType<typeof createCartId>>().toEqualTypeOf<CartId>();
+    expectTypeOf<ReturnType<typeof createOrderId>>().toEqualTypeOf<OrderId>();
+    expectTypeOf<SellableId>().not.toMatchTypeOf<CartId>();
+    expectTypeOf<CartId>().not.toMatchTypeOf<SellableId>();
+    expectTypeOf<PriceId>().not.toMatchTypeOf<OrderId>();
+    expectTypeOf<OrderId>().not.toMatchTypeOf<PriceId>();
+    expectTypeOf<MikaId>().not.toMatchTypeOf<SellableId>();
+    expectTypeOf<MikaId>().not.toMatchTypeOf<CartId>();
+    expectTypeOf<SellableId>().toMatchTypeOf<MikaId>();
+    expectTypeOf<CartId>().toMatchTypeOf<MikaId>();
   });
 
   it("keeps package subpath imports aligned with public entries", () => {
@@ -4303,6 +4330,35 @@ describe("public types", () => {
     expectTypeOf<typeof PackageCreateMikaStripeProvider>().toEqualTypeOf<
       typeof createMikaStripeProvider
     >();
+  });
+});
+
+describe("entity id brands", () => {
+  it("mints entity brands with createMikaId validation parity", () => {
+    expect(createSellableId(" sellable_1 ")).toBe("sellable_1");
+    expect(createPriceId("price_1")).toBe("price_1");
+    expect(createCartId("cart_1")).toBe("cart_1");
+    expect(createOrderId("order_1")).toBe("order_1");
+    expect(() => createSellableId("")).toThrow(TypeError);
+    expect(() => createCartId("   ")).toThrow(TypeError);
+  });
+
+  it("Zod entity schemas mint branded ids, not bare strings", () => {
+    const sellableId = sellableIdSchema.parse("sellable_1");
+    const priceId = priceIdSchema.parse("price_1");
+    const cartId = cartIdSchema.parse("cart_1");
+    const orderId = orderIdSchema.parse("order_1");
+
+    expect(sellableId).toBe("sellable_1");
+    expect(priceId).toBe("price_1");
+    expect(cartId).toBe("cart_1");
+    expect(orderId).toBe("order_1");
+    expectTypeOf(sellableId).toEqualTypeOf<SellableId>();
+    expectTypeOf(priceId).toEqualTypeOf<PriceId>();
+    expectTypeOf(cartId).toEqualTypeOf<CartId>();
+    expectTypeOf(orderId).toEqualTypeOf<OrderId>();
+    expectTypeOf(sellableId).not.toEqualTypeOf<string>();
+    expectTypeOf(sellableId).not.toEqualTypeOf<CartId>();
   });
 });
 

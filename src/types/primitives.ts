@@ -3,6 +3,11 @@
  * Runtime constructors and type guards enforce contracts at storage and API boundaries.
  */
 declare const mikaIdBrand: unique symbol;
+declare const sellableIdBrand: unique symbol;
+declare const priceIdBrand: unique symbol;
+declare const cartIdBrand: unique symbol;
+declare const checkoutSessionIdBrand: unique symbol;
+declare const orderIdBrand: unique symbol;
 declare const isoDateTimeBrand: unique symbol;
 declare const currencyCodeBrand: unique symbol;
 declare const providerNameBrand: unique symbol;
@@ -10,15 +15,27 @@ declare const providerNameBrand: unique symbol;
 /**
  * Generic branded id for persisted documents and records.
  * Prefer entity-specific brands ({@link SellableId}, {@link CartId}, …) at money boundaries.
+ *
+ * Entity brands use **required** unique-symbol phantoms so:
+ * - entity brands are assignable *to* {@link MikaId} (supertype escape hatch);
+ * - bare {@link MikaId} is *not* assignable to an entity brand (mint via `create*`);
+ * - entity brands are incompatible with each other (`SellableId` ↛ `CartId`).
+ *
+ * Mint only at parse/storage trust boundaries (`createSellableId`, Zod schemas, …).
+ * Call-site migration of DTO/input fields is a separate step.
  */
 export type MikaId = string & { readonly [mikaIdBrand]: "MikaId" };
 
-/** Entity brands — assignable to/from {@link MikaId} via constructors at trust boundaries. */
-export type SellableId = MikaId & { readonly __mikaEntity?: "SellableId" };
-export type PriceId = MikaId & { readonly __mikaEntity?: "PriceId" };
-export type CartId = MikaId & { readonly __mikaEntity?: "CartId" };
-export type CheckoutSessionId = MikaId & { readonly __mikaEntity?: "CheckoutSessionId" };
-export type OrderId = MikaId & { readonly __mikaEntity?: "OrderId" };
+/** Catalog sellable document id. Incompatible with other entity brands. */
+export type SellableId = MikaId & { readonly [sellableIdBrand]: "SellableId" };
+/** Catalog price document id. Incompatible with other entity brands. */
+export type PriceId = MikaId & { readonly [priceIdBrand]: "PriceId" };
+/** Cart aggregate document id. Incompatible with other entity brands. */
+export type CartId = MikaId & { readonly [cartIdBrand]: "CartId" };
+/** Checkout session document id. Incompatible with other entity brands. */
+export type CheckoutSessionId = MikaId & { readonly [checkoutSessionIdBrand]: "CheckoutSessionId" };
+/** Order document id. Incompatible with other entity brands. */
+export type OrderId = MikaId & { readonly [orderIdBrand]: "OrderId" };
 /** Branded ISO-8601 timestamp used for lifecycle and lease expiry fields. */
 export type ISODateTime = string & { readonly [isoDateTimeBrand]: "ISODateTime" };
 /** Branded ISO 4217 currency code carried on money and cart totals. */
@@ -45,7 +62,10 @@ export function createMikaId(value: string): MikaId {
   return nonEmptyTrimmed(value, "MikaId") as MikaId;
 }
 
-/** Entity id constructors (mint at parse/storage boundaries). */
+/**
+ * Entity id constructors — same non-empty trim validation as {@link createMikaId},
+ * minting a nominal brand. Use at parse/storage boundaries only.
+ */
 export function createSellableId(value: string): SellableId {
   return createMikaId(value) as SellableId;
 }
