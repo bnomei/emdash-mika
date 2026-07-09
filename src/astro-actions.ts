@@ -214,18 +214,53 @@ export function createMikaActions(options: MikaActionsOptions = {}): MikaActions
 }
 
 /**
- * Zero-runtime drift guard for the `as MikaActions` cast in createMikaActions: asserts the derived
- * mikaActionTreeSpec structurally covers every namespace/method declared on the hand-written
- * MikaActions interface, with action-definition keys at the leaves. Adding or renaming a MikaActions
- * member without a matching tree entry collapses this to `never` and fails the build.
+ * Bidirectional drift guards for the `as MikaActions` cast in createMikaActions.
+ *
+ * 1. Tree covers every hand-written {@link MikaActions} namespace/method (action keys at leaves).
+ * 2. Hand interface covers every tree namespace/method (no orphan registry actions on the client).
+ * 3. Namespace sets match exactly.
+ *
+ * Runtime {@link validateMikaActionTreeSpec} still enforces full action-definition coverage.
  */
-type MikaActionsTreeCoverage = typeof mikaActionTreeSpec extends {
+type MikaActionsTreeSpec = typeof mikaActionTreeSpec;
+
+type MikaActionsTreeCoversInterface = MikaActionsTreeSpec extends {
   readonly [TNamespace in keyof MikaActions]: {
     readonly [TMethod in keyof MikaActions[TNamespace]]: MikaActionDefinitionKey;
   };
 }
   ? true
   : never;
+
+type MikaActionsInterfaceMethodDrift = {
+  readonly [K in keyof MikaActions]: Exclude<
+    keyof MikaActions[K],
+    K extends keyof MikaActionsTreeSpec ? keyof MikaActionsTreeSpec[K] : never
+  >;
+}[keyof MikaActions];
+
+type MikaActionsTreeMethodDrift = {
+  readonly [K in keyof MikaActionsTreeSpec]: Exclude<
+    keyof MikaActionsTreeSpec[K],
+    K extends keyof MikaActions ? keyof MikaActions[K] : never
+  >;
+}[keyof MikaActionsTreeSpec];
+
+type MikaActionsNamespaceDrift =
+  | Exclude<keyof MikaActions, keyof MikaActionsTreeSpec>
+  | Exclude<keyof MikaActionsTreeSpec, keyof MikaActions>;
+
+type MikaActionsRegistryDrift =
+  | MikaActionsInterfaceMethodDrift
+  | MikaActionsTreeMethodDrift
+  | MikaActionsNamespaceDrift;
+
+type MikaActionsTreeCoverage = MikaActionsTreeCoversInterface extends true
+  ? MikaActionsRegistryDrift extends never
+    ? true
+    : never
+  : never;
+
 const _mikaActionsTreeCoverage: MikaActionsTreeCoverage = true;
 void _mikaActionsTreeCoverage;
 
