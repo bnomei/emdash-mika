@@ -23,5 +23,6 @@ jobs:
       - run: npm run check
       - run: npm run typecheck
       - run: npm test
+      - run: npm run templates:check
       - run: npm run pack:check
       - run: npm run types:check
