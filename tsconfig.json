@@ -7,30 +7,74 @@
     "emitDeclarationOnly": false,
     "erasableSyntaxOnly": true,
     "exactOptionalPropertyTypes": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2024",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "paths": {
-      "@bnomei/emdash-mika": ["./src/index.ts"],
-      "@bnomei/emdash-mika/acp": ["./src/acp.ts"],
-      "@bnomei/emdash-mika/agent": ["./src/agent.ts"],
-      "@bnomei/emdash-mika/admin": ["./src/admin.ts"],
-      "@bnomei/emdash-mika/astro": ["./src/astro.ts"],
-      "@bnomei/emdash-mika/astro-actions": ["./src/astro-actions.ts"],
-      "@bnomei/emdash-mika/client": ["./src/api/client.ts"],
-      "@bnomei/emdash-mika/email": ["./src/email.ts"],
-      "@bnomei/emdash-mika/provider": ["./src/provider.ts"],
-      "@bnomei/emdash-mika/react": ["./src/react.ts"],
-      "@bnomei/emdash-mika/server": ["./src/server.ts"],
-      "@bnomei/emdash-mika/server/ports": ["./src/server/ports.ts"],
-      "@bnomei/emdash-mika/server/maintenance": ["./src/server/maintenance.ts"],
-      "@bnomei/emdash-mika/server/email": ["./src/server/email.ts"],
-      "@bnomei/emdash-mika/stripe": ["./src/stripe.ts"],
-      "@bnomei/emdash-mika/types": ["./src/types/index.ts"],
-      "@bnomei/emdash-mika/types/primitives": ["./src/types/primitives-entry.ts"],
-      "@bnomei/emdash-mika/types/aggregates": ["./src/types/aggregates.ts"],
-      "@bnomei/emdash-mika/types/documents": ["./src/types/documents.ts"],
-      "@bnomei/emdash-mika/types/operational": ["./src/types/operational.ts"]
+      "@bnomei/emdash-mika": [
+        "./src/index.ts"
+      ],
+      "@bnomei/emdash-mika/acp": [
+        "./src/acp.ts"
+      ],
+      "@bnomei/emdash-mika/agent": [
+        "./src/agent.ts"
+      ],
+      "@bnomei/emdash-mika/admin": [
+        "./src/admin.ts"
+      ],
+      "@bnomei/emdash-mika/astro": [
+        "./src/astro.ts"
+      ],
+      "@bnomei/emdash-mika/astro-actions": [
+        "./src/astro-actions.ts"
+      ],
+      "@bnomei/emdash-mika/client": [
+        "./src/api/client.ts"
+      ],
+      "@bnomei/emdash-mika/email": [
+        "./src/email.ts"
+      ],
+      "@bnomei/emdash-mika/provider": [
+        "./src/provider.ts"
+      ],
+      "@bnomei/emdash-mika/react": [
+        "./src/react.ts"
+      ],
+      "@bnomei/emdash-mika/server": [
+        "./src/server.ts"
+      ],
+      "@bnomei/emdash-mika/server/ports": [
+        "./src/server/ports.ts"
+      ],
+      "@bnomei/emdash-mika/server/maintenance": [
+        "./src/server/maintenance.ts"
+      ],
+      "@bnomei/emdash-mika/server/email": [
+        "./src/server/email.ts"
+      ],
+      "@bnomei/emdash-mika/stripe": [
+        "./src/stripe.ts"
+      ],
+      "@bnomei/emdash-mika/types": [
+        "./src/types/index.ts"
+      ],
+      "@bnomei/emdash-mika/types/primitives": [
+        "./src/types/primitives-entry.ts"
+      ],
+      "@bnomei/emdash-mika/types/aggregates": [
+        "./src/types/aggregates.ts"
+      ],
+      "@bnomei/emdash-mika/types/documents": [
+        "./src/types/documents.ts"
+      ],
+      "@bnomei/emdash-mika/types/operational": [
+        "./src/types/operational.ts"
+      ]
     },
     "noEmit": true,
     "noFallthroughCasesInSwitch": true,
@@ -45,9 +89,17 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "strict": true,
-    "target": "ES2022",
+    "target": "ES2024",
     "verbatimModuleSyntax": true
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"],
-  "exclude": ["dist", "node_modules", "src/templates/**/*.astro"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "vite.config.ts"
+  ],
+  "exclude": [
+    "dist",
+    "node_modules",
+    "src/templates/**/*.astro"
+  ]
 }
