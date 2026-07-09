@@ -22,8 +22,8 @@ import type {
 } from "../../types/aggregates";
 import type { CartDocument, CheckoutDocument, WishlistDocument } from "../../types/documents";
 import type { StockItemRecord } from "../../types/operational";
-import { createMikaId } from "../../types/primitives";
-import type { CurrencyCode, ISODateTime, MikaId } from "../../types/primitives";
+import { createSellableId } from "../../types/primitives";
+import type { CurrencyCode, ISODateTime, MikaId, SellableId } from "../../types/primitives";
 import type { MikaRequestContext } from "../context";
 import type {
   AddCartItemInput,
@@ -449,7 +449,7 @@ async function quoteInputLine(
 
   return {
     line: omitUndefined({
-      sellableId: quoteInput.sellableId ?? createMikaId("sellable_missing"),
+      sellableId: quoteInput.sellableId ?? createSellableId("sellable_missing"),
       priceId: price?.id ?? quoteInput.priceId,
       title: sellable?.titleSnapshot,
       sku: price?.sku ?? sellable?.sku,
@@ -585,7 +585,7 @@ export async function wishlistDocumentToDTO(
 
 async function loadAvailabilityBySellableId(
   input: MikaCartWishlistBackendInput,
-  sellableIds: readonly MikaId[],
+  sellableIds: readonly SellableId[],
 ) {
   const uniqueSellableIds = [...new Set(sellableIds)];
   const stockRecords = await Promise.all(
@@ -607,13 +607,13 @@ async function loadAvailabilityBySellableId(
             ]
           : [],
       )
-      .filter((entry): entry is readonly [MikaId, NonNullable<(typeof entry)[1]>] =>
+      .filter((entry): entry is readonly [SellableId, NonNullable<(typeof entry)[1]>] =>
         Boolean(entry[1]),
       ),
   );
 }
 
-function stockAvailabilitySellable(sellableId: MikaId): SellableDefinition {
+function stockAvailabilitySellable(sellableId: SellableId): SellableDefinition {
   return {
     id: sellableId,
     active: true,

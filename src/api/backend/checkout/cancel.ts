@@ -2,7 +2,7 @@
  * Checkout cancellation.
  */
 import type { CheckoutDocument } from "../../../types/documents";
-import { createMikaId, type MikaId } from "../../../types/primitives";
+import { type MikaId } from "../../../types/primitives";
 import type { MikaRequestContext } from "../../context";
 import type { CheckoutCancelInput, CheckoutSessionDTO, MikaApiResult } from "../../types";
 import { invalidCheckout } from "../errors";
@@ -18,7 +18,7 @@ export async function cancelCheckout(
   ctx: MikaRequestContext,
   cancelInput: CheckoutCancelInput,
 ): Promise<MikaApiResult<CheckoutSessionDTO>> {
-  const checkoutId = createMikaId(cancelInput.checkoutId);
+  const checkoutId = cancelInput.checkoutId;
   const document = await input.repositories.session.findCheckoutById(checkoutId);
   if (!document) return invalidCheckout("checkoutId", checkoutId);
 

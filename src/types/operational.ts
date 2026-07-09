@@ -3,12 +3,16 @@
  * Covers stock, reservations, ephemeral state, workflows, and background processing.
  */
 import type {
+  CartId,
+  CheckoutSessionId,
   EmailStatus,
   EntitlementStatus,
   ISODateTime,
   JsonObject,
   MikaId,
+  OrderId,
   ProviderName,
+  SellableId,
   StockMovementReason,
   StockPolicy,
   StockReservationStatus,
@@ -20,7 +24,7 @@ import type {
 /** Atomic stock item state keyed by sellable with policy and quantity counters. */
 export interface StockItemRecord {
   readonly id: MikaId;
-  readonly sellableId: MikaId;
+  readonly sellableId: SellableId;
   readonly policy: StockPolicy;
   readonly quantityOnHand: number;
   readonly quantityReserved: number;
@@ -40,8 +44,8 @@ export interface StockItemRecord {
 export interface StockReservationRecord {
   readonly id: MikaId;
   readonly stockItemId: MikaId;
-  readonly cartId?: MikaId;
-  readonly checkoutSessionId?: MikaId;
+  readonly cartId?: CartId;
+  readonly checkoutSessionId?: CheckoutSessionId;
   readonly customerId?: MikaId;
   readonly sessionId?: string;
   readonly quantity: number;
@@ -62,7 +66,7 @@ export interface StockMovementRecord {
   readonly id: MikaId;
   readonly stockItemId: MikaId;
   readonly reservationId?: MikaId;
-  readonly orderId?: MikaId;
+  readonly orderId?: OrderId;
   readonly orderLineId?: MikaId;
   readonly adminAuditId?: MikaId;
   readonly idempotencyKey?: string;
@@ -85,11 +89,11 @@ export interface StockEventRecord {
   readonly status: StockEventStatus;
   readonly reason?: StockMovementReason;
   readonly reservationEventId?: MikaId;
-  readonly cartId?: MikaId;
-  readonly checkoutSessionId?: MikaId;
+  readonly cartId?: CartId;
+  readonly checkoutSessionId?: CheckoutSessionId;
   readonly customerId?: MikaId;
   readonly sessionId?: string;
-  readonly orderId?: MikaId;
+  readonly orderId?: OrderId;
   readonly orderLineId?: MikaId;
   readonly adminAuditId?: MikaId;
   readonly idempotencyKey?: string;

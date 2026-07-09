@@ -7,7 +7,14 @@
 import type { AdminAuditDocument, CatalogItemDocument } from "../../types/documents";
 import type { PriceDefinition, SellableDefinition } from "../../types/aggregates";
 import type { StockEventRecord, StockItemRecord } from "../../types/operational";
-import type { ISODateTime, JsonObject, MikaId } from "../../types/primitives";
+import type {
+  CartId,
+  CheckoutSessionId,
+  ISODateTime,
+  JsonObject,
+  MikaId,
+  OrderId,
+} from "../../types/primitives";
 
 /** Catalog item, sellable, and price tuple resolved from provider price lookup. */
 export interface CatalogProviderPriceMatch {
@@ -23,8 +30,8 @@ export interface ReserveStockRepositoryInput {
   readonly quantity: number;
   readonly expiresAt: ISODateTime;
   readonly now: ISODateTime;
-  readonly cartId?: MikaId;
-  readonly checkoutSessionId?: MikaId;
+  readonly cartId?: CartId;
+  readonly checkoutSessionId?: CheckoutSessionId;
   readonly customerId?: MikaId;
   readonly sessionId?: string;
   readonly idempotencyKey?: string;
@@ -66,7 +73,7 @@ export interface ReleaseReservedStockRepositoryInput {
 export interface ConsumeReservedStockRepositoryInput {
   readonly reservationEventId: MikaId;
   readonly now: ISODateTime;
-  readonly orderId?: MikaId;
+  readonly orderId?: OrderId;
   readonly orderLineId?: MikaId;
 }
 

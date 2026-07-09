@@ -24,6 +24,8 @@ import type {
   WishlistItem,
 } from "../types/aggregates";
 import type {
+  CartId,
+  CheckoutSessionId,
   ContentRef,
   CurrencyCode,
   ISODateTime,
@@ -32,13 +34,14 @@ import type {
   Money,
   ProviderName,
   PurchaseMode,
+  SellableId,
 } from "../types/primitives";
 import { omitUndefined } from "../internal/object";
 
 /** Input for projecting catalog sellables to API DTOs with optional stock context. */
 export interface CatalogSellableDTOInput {
   readonly catalog: CatalogCommerceAggregate;
-  readonly stockBySellableId?: ReadonlyMap<MikaId, StockItemRecord>;
+  readonly stockBySellableId?: ReadonlyMap<SellableId, StockItemRecord>;
   readonly includeInactive?: boolean;
 }
 
@@ -70,11 +73,11 @@ export function createCartAggregate(input: {
 
 /** Projects a cart aggregate and document metadata to a cart DTO. */
 export function cartToDTO(input: {
-  readonly id: MikaId;
+  readonly id: CartId;
   readonly status: CartDTO["status"];
   readonly cart: CartAggregate;
-  readonly availabilityBySellableId?: ReadonlyMap<MikaId, AvailabilityDTO>;
-  readonly checkoutSessionId?: MikaId;
+  readonly availabilityBySellableId?: ReadonlyMap<SellableId, AvailabilityDTO>;
+  readonly checkoutSessionId?: CheckoutSessionId;
 }): CartDTO {
   const totals =
     input.cart.totals ?? calculateTotals(input.cart.currency, input.cart.items, input.cart.coupon);
@@ -176,7 +179,7 @@ export function createWishlistAggregate(
 export function wishlistToDTO(input: {
   readonly id: MikaId;
   readonly wishlist: WishlistAggregate;
-  readonly availabilityBySellableId?: ReadonlyMap<MikaId, AvailabilityDTO>;
+  readonly availabilityBySellableId?: ReadonlyMap<SellableId, AvailabilityDTO>;
 }): WishlistDTO {
   return {
     id: input.id,
@@ -338,7 +341,7 @@ export function orderLineFromCheckoutLine(input: {
 function sellableToDTO(
   catalog: CatalogCommerceAggregate,
   sellable: SellableDefinition,
-  stockBySellableId?: ReadonlyMap<MikaId, StockItemRecord>,
+  stockBySellableId?: ReadonlyMap<SellableId, StockItemRecord>,
   includeInactive = false,
 ): SellableDTO {
   const fallbackTitle = catalog.titleSnapshot ?? sellable.id;
@@ -360,7 +363,7 @@ function sellableToDTO(
   });
 }
 
-function priceToDTO(sellableId: MikaId, price: PriceDefinition): PriceDTO {
+function priceToDTO(sellableId: SellableId, price: PriceDefinition): PriceDTO {
   return omitUndefined({
     id: price.id,
     sellableId,

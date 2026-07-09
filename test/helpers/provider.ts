@@ -25,6 +25,7 @@ import type {
   MikaVerifiedWebhookPayload,
 } from "../../src/provider";
 import {
+  createCheckoutSessionId,
   createISODateTime,
   createMikaId,
   createProviderName,
@@ -319,7 +320,7 @@ function createCheckoutSession(
   overrides: Partial<MikaProviderCheckoutSession> = {},
 ): MikaProviderCheckoutSession {
   return {
-    id: createMikaId("checkout_fake"),
+    id: createCheckoutSessionId("checkout_fake"),
     status: "created",
     mode: input?.mode ?? "payment",
     provider,

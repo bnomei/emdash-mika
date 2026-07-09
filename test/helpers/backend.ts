@@ -10,14 +10,24 @@ import type { MikaDb } from "../../src/storage/repositories";
 import type { MikaDatabase } from "../../src/storage/schema";
 import type { ContentRefDTO, PriceDTO, SellableDTO } from "../../src/api/types";
 import {
+  createCartId,
+  createCheckoutSessionId,
   createCurrencyCode,
   createISODateTime,
   createMikaId,
+  createOrderId,
+  createPriceId,
   createProviderName,
+  createSellableId,
+  type CartId,
+  type CheckoutSessionId,
   type CurrencyCode,
   type ISODateTime,
   type MikaId,
+  type OrderId,
+  type PriceId,
   type ProviderName,
+  type SellableId,
 } from "../../src/types/primitives";
 
 /** Fixed ISO timestamp shared across backend tests. */
@@ -60,6 +70,26 @@ export function createTestClock(now: Date | string = TEST_NOW_DATE): TestClock {
 
 export function createTestMikaId(prefix = "test", index = 1): MikaId {
   return createMikaId(`${prefix}_${index}`);
+}
+
+export function createTestSellableId(index = 1): SellableId {
+  return createSellableId(`sellable_${index}`);
+}
+
+export function createTestPriceId(index = 1): PriceId {
+  return createPriceId(`price_${index}`);
+}
+
+export function createTestCartId(index = 1): CartId {
+  return createCartId(`cart_${index}`);
+}
+
+export function createTestCheckoutSessionId(index = 1): CheckoutSessionId {
+  return createCheckoutSessionId(`checkout_${index}`);
+}
+
+export function createTestOrderId(index = 1): OrderId {
+  return createOrderId(`order_${index}`);
 }
 
 export function createTestProviderName(provider = "fake"): ProviderName {
@@ -134,10 +164,10 @@ export function createTestContentRef(overrides: Partial<ContentRefDTO> = {}): Co
 }
 
 export function createTestPriceDTO(overrides: Partial<PriceDTO> = {}): PriceDTO {
-  const sellableId = overrides.sellableId ?? createTestMikaId("sellable", 1);
+  const sellableId = overrides.sellableId ?? createTestSellableId(1);
 
   return {
-    id: createTestMikaId("price", 1),
+    id: createTestPriceId(1),
     sellableId,
     amount: 1200,
     currency: TEST_CURRENCY,
@@ -149,7 +179,7 @@ export function createTestPriceDTO(overrides: Partial<PriceDTO> = {}): PriceDTO 
 }
 
 export function createTestSellableDTO(overrides: Partial<SellableDTO> = {}): SellableDTO {
-  const id = overrides.id ?? createTestMikaId("sellable", 1);
+  const id = overrides.id ?? createTestSellableId(1);
   const prices = overrides.prices ?? [createTestPriceDTO({ sellableId: id })];
 
   return {

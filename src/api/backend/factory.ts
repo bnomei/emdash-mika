@@ -1,6 +1,6 @@
 /** Wires the per-cluster backend modules into the full {@link MikaApi} implementation. */
 import { catalogSellablesToDTO, stockAvailabilityToDTO } from "../../model/builders";
-import { createMikaId } from "../../types/primitives";
+import { createSellableId } from "../../types/primitives";
 import { createMikaAdminBackend } from "../backend-admin";
 import { createMikaApi, type MikaApi } from "../server";
 import {
@@ -77,7 +77,7 @@ export function createMikaBackendApi(input: CreateMikaBackendApiInput): MikaApi 
     },
     stock: {
       availability: async ({ sellableId }) => {
-        const id = createMikaId(sellableId);
+        const id = createSellableId(sellableId);
         const catalog = await input.repositories.catalog.findItemBySellableId(id);
         const sellable = catalog?.aggregate.sellables.find((item) => item.id === id);
         if (!sellable?.active) return sellableNotFound(id);

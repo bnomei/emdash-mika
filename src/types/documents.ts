@@ -25,13 +25,16 @@ import type {
   WebhookEventRecord,
 } from "./operational";
 import type {
+  CartId,
   CartStatus,
   CheckoutProviderStatus,
+  CheckoutSessionId,
   CheckoutStatus,
   CurrencyCode,
   ISODateTime,
   MikaId,
   MikaSchemaVersion,
+  OrderId,
   OrderStatus,
   PaymentStatus,
   ProviderName,
@@ -116,7 +119,9 @@ export type CartDocument = AggregateDocument<
     readonly version: number;
   },
   CartAggregate
->;
+> & {
+  readonly id: CartId;
+};
 
 /** Session collection document for a wishlist aggregate. */
 export type WishlistDocument = AggregateDocument<
@@ -135,7 +140,7 @@ export type WishlistDocument = AggregateDocument<
 export type CheckoutDocument = AggregateDocument<
   "checkout",
   {
-    readonly cartId?: MikaId;
+    readonly cartId?: CartId;
     readonly sessionId?: string;
     readonly customerId?: MikaId;
     readonly provider: ProviderName;
@@ -144,13 +149,15 @@ export type CheckoutDocument = AggregateDocument<
     readonly checkoutIdempotencyInputHash?: string;
     readonly providerStatus?: CheckoutProviderStatus;
     readonly redirectUrl?: string;
-    readonly orderId?: MikaId;
+    readonly orderId?: OrderId;
     readonly failureReason?: string;
     readonly status: CheckoutStatus;
     readonly expiresAt?: ISODateTime;
   },
   CheckoutAggregate
->;
+> & {
+  readonly id: CheckoutSessionId;
+};
 
 /** Account collection document for a customer aggregate. */
 export type CustomerDocument = AggregateDocument<
@@ -211,7 +218,7 @@ export type OrderDocument = AggregateDocument<
     readonly providerCheckoutId?: string;
     readonly providerPaymentId?: string;
     readonly providerOrderId?: string;
-    readonly checkoutSessionId?: MikaId;
+    readonly checkoutSessionId?: CheckoutSessionId;
     readonly status: OrderStatus;
     readonly paymentStatus: PaymentStatus;
     readonly currency: CurrencyCode;
@@ -219,7 +226,9 @@ export type OrderDocument = AggregateDocument<
     readonly paidAt?: ISODateTime;
   },
   OrderAggregate
->;
+> & {
+  readonly id: OrderId;
+};
 
 /** Ops collection document for a webhook event record. */
 export type WebhookDocument = RecordBackedDocument<

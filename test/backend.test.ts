@@ -103,26 +103,36 @@ import {
   createCurrencyCode,
   createISODateTime,
   createMikaId,
+  createOrderId,
   createProviderName,
+  createSellableId,
+  createCheckoutSessionId,
   isJsonObject,
   isJsonValue,
   type ISODateTime,
   type JsonObject,
   type MikaId,
+  type OrderId,
+  type PriceId,
 } from "../src/types/primitives";
 import {
   TEST_CURRENCY,
   TEST_NOW,
   TEST_PROVIDER,
+  createTestCartId,
+  createTestCheckoutSessionId,
   createTestClock,
   createTestContentRef,
   createTestCurrencyCode,
   createTestHash,
   createTestMikaDb,
   createTestMikaId,
+  createTestOrderId,
+  createTestPriceId,
   createTestProviderName,
   createTestRequestContext,
   createTestSellableDTO,
+  createTestSellableId,
 } from "./helpers/backend";
 import { createFakeMikaProvider } from "./helpers/provider";
 import { expectMethodBackedProviderCapabilities } from "./helpers/provider-contract";
@@ -512,7 +522,7 @@ describe("backend test storage helpers", () => {
     for (let index = 1; index <= orderCount; index += 1) {
       await ledger.put(
         createOrderDocument({
-          id: createTestMikaId("order", index),
+          id: createTestOrderId(index),
           customerId,
           orderNumber: `M-${1000 + index}`,
           providerPaymentId: `payment_${index}`,
@@ -1031,7 +1041,7 @@ describe("backend test storage helpers", () => {
         templateKey: "order_confirmation",
         attemptCount: 0,
         nextAttemptAt: TEST_NOW,
-        orderId: createTestMikaId("order", 1),
+        orderId: createTestOrderId(1),
         metadata: {},
       },
     });
@@ -1922,11 +1932,11 @@ describe("backend repository characterization", () => {
     const repository = new CatalogRepository(collection);
     const contentRef = createTestContentRef();
     const inactiveSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 2),
+      id: createTestSellableId(2),
       active: false,
       prices: [
         createPriceDefinition({
-          id: createTestMikaId("price", 2),
+          id: createTestPriceId(2),
           active: false,
           titleSnapshot: "Inactive price",
         }),
@@ -1941,8 +1951,8 @@ describe("backend repository characterization", () => {
         contentRef: createTestContentRef({ id: "other-product" }),
         sellables: [
           createSellableDefinition({
-            id: createTestMikaId("sellable", 3),
-            prices: [createPriceDefinition({ id: createTestMikaId("price", 3) })],
+            id: createTestSellableId(3),
+            prices: [createPriceDefinition({ id: createTestPriceId(3) })],
           }),
         ],
       }),
@@ -1956,23 +1966,23 @@ describe("backend repository characterization", () => {
     await expect(
       repository.findItemByContent(createTestContentRef({ id: "missing-product" })),
     ).resolves.toBeNull();
-    await expect(repository.findPriceById(createTestMikaId("price", 2))).resolves.toMatchObject({
+    await expect(repository.findPriceById(createTestPriceId(2))).resolves.toMatchObject({
       catalog: { id: firstCatalog.id },
       sellable: { id: inactiveSellable.id, active: false },
       price: { id: "price_2", active: false },
     });
-    await expect(repository.findPriceById(createTestMikaId("price", 404))).resolves.toBeNull();
+    await expect(repository.findPriceById(createTestPriceId(404))).resolves.toBeNull();
   });
 
   it("finds checkout idempotency keys through indexed fields with metadata fallback", async () => {
     const collection = createStorageCollection("session");
     const repository = new SessionRepository(collection);
     const noMetadataCheckout = createCheckoutDocument({
-      id: createTestMikaId("checkout", 1),
+      id: createTestCheckoutSessionId(1),
       providerCheckoutId: "provider_checkout_1",
     });
     const metadataIdempotentCheckout = createCheckoutDocument({
-      id: createTestMikaId("checkout", 2),
+      id: createTestCheckoutSessionId(2),
       providerCheckoutId: "provider_checkout_2",
       metadata: {
         checkoutIdempotencyKey: "checkout_metadata_replay_key",
@@ -1980,13 +1990,13 @@ describe("backend repository characterization", () => {
       },
     });
     const indexedIdempotentCheckout = createCheckoutDocument({
-      id: createTestMikaId("checkout", 4),
+      id: createTestCheckoutSessionId(4),
       providerCheckoutId: "provider_checkout_4",
       checkoutIdempotencyKey: "checkout_replay_key",
       checkoutIdempotencyInputHash: "hash_2",
     });
     const sanitizedCheckout = createCheckoutDocument({
-      id: createTestMikaId("checkout", 3),
+      id: createTestCheckoutSessionId(3),
       providerCheckoutId: "provider_checkout_3",
       metadata: {
         checkoutProviderStatus: "created",
@@ -2017,14 +2027,14 @@ describe("backend repository characterization", () => {
     const collection = createStorageCollection("session");
     const repository = new SessionRepository(collection);
     const target = createCheckoutDocument({
-      id: createTestMikaId("checkout", 101),
+      id: createTestCheckoutSessionId(101),
       metadata: { checkoutIdempotencyKey: "checkout_metadata_cursor_key" },
     });
 
     for (let index = 1; index <= 100; index += 1) {
       await repository.put(
         createCheckoutDocument({
-          id: createTestMikaId("checkout", index),
+          id: createTestCheckoutSessionId(index),
           providerCheckoutId: `provider_checkout_${index}`,
         }),
       );
@@ -2039,7 +2049,7 @@ describe("backend repository characterization", () => {
   it("putCheckoutIfStatus refuses to overwrite a concurrently-settled checkout", async () => {
     const collection = createStorageCollection("session");
     const repository = new SessionRepository(collection);
-    const checkoutId = createTestMikaId("checkout", 501);
+    const checkoutId = createTestCheckoutSessionId(501);
 
     // A live checkout in an allowed status: the optimistic cancel write lands.
     await repository.put(createCheckoutDocument({ id: checkoutId, status: "created" }));
@@ -2055,7 +2065,7 @@ describe("backend repository characterization", () => {
     ).resolves.toMatchObject({ status: "cancelled" });
 
     // Simulate a payment webhook settling the checkout (completed + orderId) in the race window.
-    const orderId = createTestMikaId("order", 501);
+    const orderId = createTestOrderId(501);
     await repository.put(createCheckoutDocument({ id: checkoutId, status: "completed", orderId }));
 
     // A stale cancel must be rejected, not clobber the settled checkout.
@@ -2080,11 +2090,11 @@ describe("backend repository characterization", () => {
     const repository = new CatalogRepository(collection);
     const provider = createTestProviderName("stripe");
     const targetPrice = createPriceDefinition({
-      id: createTestMikaId("price", 101),
+      id: createTestPriceId(101),
       providerRefs: [{ provider, priceId: "price_cursor_101" }],
     });
     const targetSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 101),
+      id: createTestSellableId(101),
       prices: [targetPrice],
     });
     const targetCatalog = {
@@ -2101,8 +2111,8 @@ describe("backend repository characterization", () => {
           contentRef: createTestContentRef({ id: `cursor-product-${index}` }),
           sellables: [
             createSellableDefinition({
-              id: createTestMikaId("sellable", index),
-              prices: [createPriceDefinition({ id: createTestMikaId("price", index) })],
+              id: createTestSellableId(index),
+              prices: [createPriceDefinition({ id: createTestPriceId(index) })],
             }),
           ],
         }),
@@ -2149,7 +2159,7 @@ describe("backend repository characterization", () => {
       },
     });
     const secondOrder = createOrderDocument({
-      id: createTestMikaId("order", 2),
+      id: createTestOrderId(2),
       orderNumber: "M-1002",
       providerPaymentId: "payment_2",
       providerOrderId: "provider_order_2",
@@ -2179,7 +2189,7 @@ describe("backend repository characterization", () => {
     const collection = createStorageCollection("ledger");
     const repository = new LedgerRepository(collection);
     const target = createOrderDocument({
-      id: createTestMikaId("order", 101),
+      id: createTestOrderId(101),
       orderNumber: "M-1101",
       providerPaymentId: "payment_101",
       providerOrderId: "provider_order_101",
@@ -2197,7 +2207,7 @@ describe("backend repository characterization", () => {
     for (let index = 1; index <= 100; index += 1) {
       await repository.put(
         createOrderDocument({
-          id: createTestMikaId("order", index),
+          id: createTestOrderId(index),
           orderNumber: `M-${1000 + index}`,
           providerPaymentId: `payment_${index}`,
           providerOrderId: `provider_order_${index}`,
@@ -2236,7 +2246,7 @@ describe("backend test Kysely stock database harness", () => {
     const repository = new StockRepository(db);
     const stockItem: StockItemRecord = {
       id: createTestMikaId("stock", 1),
-      sellableId: createTestMikaId("sellable", 1),
+      sellableId: createTestSellableId(1),
       policy: "finite",
       quantityOnHand: 10,
       quantityReserved: 2,
@@ -2255,7 +2265,7 @@ describe("backend test Kysely stock database harness", () => {
 
       await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toEqual(stockItem);
       await expect(
-        repository.findBySellableId(createTestMikaId("sellable", 2)),
+        repository.findBySellableId(createTestSellableId(2)),
       ).resolves.toBeNull();
     } finally {
       await rollbackMikaInitialMigration(db);
@@ -2326,8 +2336,8 @@ describe("backend test Kysely stock database harness", () => {
         stockItemId: stockItem.id,
         quantity: 3,
         expiresAt: clock.isoAt(15 * 60_000),
-        cartId: createTestMikaId("cart", 1),
-        checkoutSessionId: createTestMikaId("checkout", 1),
+        cartId: createTestCartId(1),
+        checkoutSessionId: createTestCheckoutSessionId(1),
         sessionId: "session_reserve_1",
         idempotencyKey: "reserve_success_1",
         metadata: { source: "backend-test" },
@@ -2520,28 +2530,28 @@ describe("backend test Kysely stock database harness", () => {
     const cases = [
       createStockRecord({
         id: createTestMikaId("stock", 11),
-        sellableId: createTestMikaId("sellable", 11),
+        sellableId: createTestSellableId(11),
         quantityOnHand: 1,
         quantityReserved: 1,
         allowBackorder: true,
       }),
       createStockRecord({
         id: createTestMikaId("stock", 12),
-        sellableId: createTestMikaId("sellable", 12),
+        sellableId: createTestSellableId(12),
         policy: "backorder",
         quantityOnHand: 0,
         quantityReserved: 0,
       }),
       createStockRecord({
         id: createTestMikaId("stock", 13),
-        sellableId: createTestMikaId("sellable", 13),
+        sellableId: createTestSellableId(13),
         policy: "untracked",
         quantityOnHand: 0,
         quantityReserved: 0,
       }),
       createStockRecord({
         id: createTestMikaId("stock", 14),
-        sellableId: createTestMikaId("sellable", 14),
+        sellableId: createTestSellableId(14),
         policy: "manual",
         quantityOnHand: 0,
         quantityReserved: 0,
@@ -2736,7 +2746,7 @@ describe("backend test Kysely stock database harness", () => {
       await expect(
         service.consume({
           reservationEventId: reservation.event.id,
-          orderId: createTestMikaId("order", 1),
+          orderId: createTestOrderId(1),
           orderLineId: createTestMikaId("order_line", 1),
           now: clock.isoAt(60_000),
         }),
@@ -3039,7 +3049,7 @@ describe("backend test Kysely stock database harness", () => {
           await expect(
             service.consume({
               reservationEventId: expiredReservation.event.id,
-              orderId: createTestMikaId("order", 1),
+              orderId: createTestOrderId(1),
               orderLineId: createTestMikaId("order_line", 1),
               now: clock.isoAt(90_000),
             }),
@@ -3053,7 +3063,7 @@ describe("backend test Kysely stock database harness", () => {
           await expect(
             service.consume({
               reservationEventId: expiredReservation.event.id,
-              orderId: createTestMikaId("order", 1),
+              orderId: createTestOrderId(1),
               orderLineId: createTestMikaId("order_line", 1),
               now: clock.isoAt(120_000),
             }),
@@ -3106,7 +3116,7 @@ describe("backend test Kysely stock database harness", () => {
           await expect(
             service.consume({
               reservationEventId: expiredReservation.event.id,
-              orderId: createTestMikaId("order", 1),
+              orderId: createTestOrderId(1),
               orderLineId: createTestMikaId("order_line", 1),
               now: clock.isoAt(90_000),
             }),
@@ -3229,7 +3239,7 @@ describe("backend test Kysely stock database harness", () => {
             await expect(
               service.consume({
                 reservationEventId: reservation.event.id,
-                orderId: createTestMikaId("order", 1),
+                orderId: createTestOrderId(1),
                 orderLineId: createTestMikaId("order_line", 1),
                 now: clock.isoAt(60_000),
               }),
@@ -3798,13 +3808,13 @@ describe("backend test Kysely stock database harness", () => {
     );
     const firstStockItem = createStockRecord({
       id: createTestMikaId("stock", 1),
-      sellableId: createTestMikaId("sellable", 1),
+      sellableId: createTestSellableId(1),
       quantityOnHand: 5,
       quantityReserved: 0,
     });
     const secondStockItem = createStockRecord({
       id: createTestMikaId("stock", 2),
-      sellableId: createTestMikaId("sellable", 2),
+      sellableId: createTestSellableId(2),
       quantityOnHand: 7,
       quantityReserved: 0,
     });
@@ -4005,17 +4015,17 @@ describe("backend test provider helpers", () => {
       providerCustomerId: "customer_1",
       returnUrl: "https://shop.example.test/account",
     };
-    const invoiceInput = { orderId: createMikaId("order_1"), providerPaymentId: "payment_1" };
+    const invoiceInput = { orderId: createOrderId("order_1"), providerPaymentId: "payment_1" };
     const subscriptionInput = {
       subscriptionId: createMikaId("subscription_1"),
       providerSubscriptionId: "provider_subscription_1",
     };
     const refundInput = {
-      orderId: createMikaId("order_1"),
+      orderId: createOrderId("order_1"),
       providerPaymentId: "payment_1",
       amount: 500,
     };
-    const orderCancelInput = { orderId: createMikaId("order_1"), reason: "customer_request" };
+    const orderCancelInput = { orderId: createOrderId("order_1"), reason: "customer_request" };
     const syncInput = { mode: "dry_run" } as const;
     const webhookInput = createWebhookInput(createProviderName("stripe"));
 
@@ -4195,7 +4205,7 @@ describe("backend API composition", () => {
       data: [sellable],
     });
     await expect(
-      api.stock.availability({ sellableId: createTestMikaId("sellable", 1) }),
+      api.stock.availability({ sellableId: createTestSellableId(1) }),
     ).resolves.toMatchObject({
       ok: false,
       status: 404,
@@ -5572,7 +5582,7 @@ describe("backend API composition", () => {
         expiresAt: createTestClock().isoAt(60_000),
         data: {
           downloadRef: "download:order_1:order_line_1",
-          orderId: createTestMikaId("order", 1),
+          orderId: createTestOrderId(1),
           orderLineId: createTestMikaId("order_line", 1),
           entitlementId: createTestMikaId("entitlement", 1),
           licenseId: createTestMikaId("license", 1),
@@ -5622,7 +5632,7 @@ describe("backend API composition", () => {
         expiresAt: createTestClock().isoAt(60_000),
         data: {
           downloadRef: "download:order_1:order_line_1",
-          orderId: createTestMikaId("order", 1),
+          orderId: createTestOrderId(1),
           orderLineId: createTestMikaId("order_line", 1),
           entitlementId: createTestMikaId("entitlement", 1),
           licenseId: createTestMikaId("license", 1),
@@ -5675,7 +5685,7 @@ describe("backend API composition", () => {
         expiresAt: createTestClock().isoAt(60_000),
         data: {
           downloadRef: "download:order_1:order_line_1",
-          orderId: createTestMikaId("order", 1),
+          orderId: createTestOrderId(1),
           orderLineId: createTestMikaId("order_line", 1),
           entitlementId: createTestMikaId("entitlement", 1),
           licenseId: createTestMikaId("license", 1),
@@ -5881,7 +5891,7 @@ describe("backend API composition", () => {
         expiresAt: createTestClock().isoAt(60_000),
         data: {
           downloadRef: "download:order_1:order_line_1",
-          orderId: createTestMikaId("order", 1),
+          orderId: createTestOrderId(1),
           orderLineId: createTestMikaId("order_line", 1),
           entitlementId: createTestMikaId("entitlement", 1),
           licenseId: createTestMikaId("license", 1),
@@ -6011,7 +6021,7 @@ describe("backend API composition", () => {
             schemaVersion: 1,
             currency: TEST_CURRENCY,
             items: [],
-            metadata: { checkoutSessionId: createTestMikaId("checkout", 1) },
+            metadata: { checkoutSessionId: createTestCheckoutSessionId(1) },
           },
         }),
       );
@@ -7538,7 +7548,7 @@ describe("backend API composition", () => {
         action: "change" as const,
         optionalMethod: "changeSubscription" as const,
         message: "Provider change failed.",
-        priceId: createTestMikaId("price", 2),
+        priceId: createTestPriceId(2),
         expectedProviderPriceId: "price_failure",
         seed: async (repositories: MikaBackendRepositories) => {
           await repositories.catalog.put(
@@ -7548,7 +7558,7 @@ describe("backend API composition", () => {
                 createSellableDefinition({
                   prices: [
                     createPriceDefinition({
-                      id: createTestMikaId("price", 2),
+                      id: createTestPriceId(2),
                       mode: "subscription",
                       providerRefs: [
                         {
@@ -7564,7 +7574,7 @@ describe("backend API composition", () => {
             }),
           );
         },
-        run: (api: MikaApi, subscriptionId: MikaId, priceId?: MikaId) =>
+        run: (api: MikaApi, subscriptionId: MikaId, priceId?: PriceId) =>
           api.subscription.change(createTestRequestContext(), {
             subscriptionId,
             ...optionalProperty("priceId", priceId),
@@ -7711,7 +7721,7 @@ describe("backend API composition", () => {
   it("runs subscription provider actions and updates stored subscription state", async () => {
     const contentRef = createTestContentRef();
     const replacementPrice = createPriceDefinition({
-      id: createTestMikaId("price", 2),
+      id: createTestPriceId(2),
       titleSnapshot: "Pro subscription",
       providerRefs: [{ provider: TEST_PROVIDER, productId: "prod_sub", priceId: "price_pro" }],
       mode: "subscription",
@@ -7891,23 +7901,23 @@ describe("backend API composition", () => {
   it("rejects a subscription change to a price outside the current plan (different sellable, one-time, or foreign currency)", async () => {
     const contentRef = createTestContentRef();
     const ownSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 1),
+      id: createTestSellableId(1),
       prices: [
         createPriceDefinition({
-          id: createTestMikaId("price", 1),
+          id: createTestPriceId(1),
           mode: "subscription",
           fulfillmentKind: "entitlement",
           providerRefs: [{ provider: TEST_PROVIDER, productId: "prod_sub", priceId: "price_self" }],
         }),
         createPriceDefinition({
-          id: createTestMikaId("price", 3),
+          id: createTestPriceId(3),
           mode: "payment",
           providerRefs: [
             { provider: TEST_PROVIDER, productId: "prod_sub", priceId: "price_onetime" },
           ],
         }),
         createPriceDefinition({
-          id: createTestMikaId("price", 4),
+          id: createTestPriceId(4),
           mode: "subscription",
           fulfillmentKind: "entitlement",
           currency: createCurrencyCode("USD"),
@@ -7916,10 +7926,10 @@ describe("backend API composition", () => {
       ],
     });
     const crossSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 2),
+      id: createTestSellableId(2),
       prices: [
         createPriceDefinition({
-          id: createTestMikaId("price", 2),
+          id: createTestPriceId(2),
           mode: "subscription",
           fulfillmentKind: "entitlement",
           providerRefs: [
@@ -7930,9 +7940,9 @@ describe("backend API composition", () => {
     });
 
     const cases = [
-      { label: "different sellable (cross-product)", priceId: createTestMikaId("price", 2) },
-      { label: "one-time payment-mode price", priceId: createTestMikaId("price", 3) },
-      { label: "foreign-currency price", priceId: createTestMikaId("price", 4) },
+      { label: "different sellable (cross-product)", priceId: createTestPriceId(2) },
+      { label: "one-time payment-mode price", priceId: createTestPriceId(3) },
+      { label: "foreign-currency price", priceId: createTestPriceId(4) },
     ];
 
     for (const target of cases) {
@@ -8629,7 +8639,7 @@ describe("backend API composition", () => {
     );
 
     await expect(
-      api.admin.orderRefund({ orderId: createTestMikaId("order", 404) }),
+      api.admin.orderRefund({ orderId: createTestOrderId(404) }),
     ).resolves.toMatchObject({
       ok: false,
       status: 404,
@@ -8639,7 +8649,7 @@ describe("backend API composition", () => {
       },
     });
     await expect(
-      api.admin.orderCancel({ orderId: createTestMikaId("order", 404) }),
+      api.admin.orderCancel({ orderId: createTestOrderId(404) }),
     ).resolves.toMatchObject({
       ok: false,
       status: 404,
@@ -8649,7 +8659,7 @@ describe("backend API composition", () => {
       },
     });
     await expect(
-      api.order.invoice(createTestRequestContext(), { orderId: createTestMikaId("order", 404) }),
+      api.order.invoice(createTestRequestContext(), { orderId: createTestOrderId(404) }),
     ).resolves.toMatchObject({
       ok: false,
       status: 404,
@@ -8828,7 +8838,7 @@ describe("backend API composition", () => {
     });
     const refundOrder = createOrderDocument();
     const cancelTarget = createOrderDocument({
-      id: createTestMikaId("order", 2),
+      id: createTestOrderId(2),
       orderNumber: "M-1002",
       providerPaymentId: "payment_cancel",
       providerOrderId: "provider_order_cancel",
@@ -9108,7 +9118,7 @@ describe("backend API composition", () => {
             id: createTestMikaId("order_line", 2),
             item: createPurchasableSnapshot({
               fulfillmentKind: "license",
-              sellableId: createTestMikaId("sellable", 2),
+              sellableId: createTestSellableId(2),
             }),
             quantity: 1,
             subtotalAmount: 600,
@@ -9898,7 +9908,7 @@ describe("backend API composition", () => {
     });
     const orderA = createOrderDocument();
     const orderB = createOrderDocument({
-      id: createTestMikaId("order", 2),
+      id: createTestOrderId(2),
       orderNumber: "M-1002",
       providerPaymentId: "payment_2",
       providerOrderId: "provider_order_2",
@@ -10192,7 +10202,7 @@ describe("backend API composition", () => {
     });
     const refundTarget = createOrderDocument();
     const cancelTarget = createOrderDocument({
-      id: createTestMikaId("order", 2),
+      id: createTestOrderId(2),
       orderNumber: "M-1002",
       providerPaymentId: "payment_cancel",
       providerOrderId: "provider_order_cancel",
@@ -10512,7 +10522,7 @@ describe("backend API composition", () => {
       },
     });
     await expect(
-      api.admin.downloadIssue({ orderId: createTestMikaId("order", 404) }),
+      api.admin.downloadIssue({ orderId: createTestOrderId(404) }),
     ).resolves.toMatchObject({
       ok: false,
       status: 404,
@@ -11210,7 +11220,7 @@ describe("backend API composition", () => {
       },
     });
     await expect(
-      repositories.session.findById(createTestMikaId("checkout", 1)),
+      repositories.session.findById(createTestCheckoutSessionId(1)),
     ).resolves.toMatchObject({
       type: "checkout",
       status: "completed",
@@ -12106,7 +12116,7 @@ describe("backend API composition", () => {
       {
         name: "cancelled",
         order: createOrderDocument({
-          id: createTestMikaId("order", 2),
+          id: createTestOrderId(2),
           orderNumber: "M-1002",
           status: "cancelled",
           paymentStatus: "paid",
@@ -12308,10 +12318,10 @@ describe("backend API composition", () => {
     const ledgerCollection = createStorageCollection("ledger");
     const opsCollection = createStorageCollection("ops");
     const firstSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 1),
+      id: createTestSellableId(1),
       prices: [
         createPriceDefinition({
-          id: createTestMikaId("price", 1),
+          id: createTestPriceId(1),
           fulfillmentKind: "entitlement",
           entitlementKey: "course:first",
           providerRefs: [{ provider: stripe, productId: "prod_first", priceId: "price_first" }],
@@ -12319,10 +12329,10 @@ describe("backend API composition", () => {
       ],
     });
     const secondSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 2),
+      id: createTestSellableId(2),
       prices: [
         createPriceDefinition({
-          id: createTestMikaId("price", 2),
+          id: createTestPriceId(2),
           fulfillmentKind: "entitlement",
           entitlementKey: "course:second",
           providerRefs: [{ provider: stripe, productId: "prod_second", priceId: "price_second" }],
@@ -12437,10 +12447,10 @@ describe("backend API composition", () => {
     const ledgerCollection = createStorageCollection("ledger");
     const opsCollection = createStorageCollection("ops");
     const sellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 1),
+      id: createTestSellableId(1),
       prices: [
         createPriceDefinition({
-          id: createTestMikaId("price", 1),
+          id: createTestPriceId(1),
           fulfillmentKind: "entitlement",
           entitlementKey: "course:final-write",
           providerRefs: [{ provider: stripe, productId: "prod_final", priceId: "price_final" }],
@@ -12543,10 +12553,10 @@ describe("backend API composition", () => {
     const ledgerCollection = createStorageCollection("ledger");
     const opsCollection = createStorageCollection("ops");
     const sellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 1),
+      id: createTestSellableId(1),
       prices: [
         createPriceDefinition({
-          id: createTestMikaId("price", 1),
+          id: createTestPriceId(1),
           fulfillmentKind: "download",
           providerRefs: [
             { provider: stripe, productId: "prod_download", priceId: "price_download" },
@@ -12631,7 +12641,7 @@ describe("backend API composition", () => {
       data: { id: "webhook_1", status: "received" },
     });
     await expect(
-      repositories.ledger.findOrderById(createTestMikaId("order", 1)),
+      repositories.ledger.findOrderById(createTestOrderId(1)),
     ).resolves.toMatchObject({
       aggregate: {
         lines: [{ downloadRefs: ["download:order_1:order_line_1"] }],
@@ -12681,10 +12691,10 @@ describe("backend API composition", () => {
     const ledgerCollection = createStorageCollection("ledger");
     const opsCollection = createStorageCollection("ops");
     const entitlementSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 1),
+      id: createTestSellableId(1),
       prices: [
         createPriceDefinition({
-          id: createTestMikaId("price", 1),
+          id: createTestPriceId(1),
           fulfillmentKind: "entitlement",
           entitlementKey: "course:test-product",
           providerRefs: [{ provider: stripe, productId: "prod_ent", priceId: "price_ent" }],
@@ -12692,20 +12702,20 @@ describe("backend API composition", () => {
       ],
     });
     const licenseSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 2),
+      id: createTestSellableId(2),
       prices: [
         createPriceDefinition({
-          id: createTestMikaId("price", 2),
+          id: createTestPriceId(2),
           fulfillmentKind: "license",
           providerRefs: [{ provider: stripe, productId: "prod_license", priceId: "price_license" }],
         }),
       ],
     });
     const downloadSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 3),
+      id: createTestSellableId(3),
       prices: [
         createPriceDefinition({
-          id: createTestMikaId("price", 3),
+          id: createTestPriceId(3),
           fulfillmentKind: "download",
           providerRefs: [
             { provider: stripe, productId: "prod_download", priceId: "price_download" },
@@ -13008,20 +13018,20 @@ describe("backend API composition", () => {
     const ledgerCollection = createStorageCollection("ledger");
     const opsCollection = createStorageCollection("ops");
     const licenseSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 1),
+      id: createTestSellableId(1),
       prices: [
         createPriceDefinition({
-          id: createTestMikaId("price", 1),
+          id: createTestPriceId(1),
           fulfillmentKind: "license",
           providerRefs: [{ provider: stripe, productId: "prod_license", priceId: "price_license" }],
         }),
       ],
     });
     const downloadSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 2),
+      id: createTestSellableId(2),
       prices: [
         createPriceDefinition({
-          id: createTestMikaId("price", 2),
+          id: createTestPriceId(2),
           fulfillmentKind: "download",
           providerRefs: [
             { provider: stripe, productId: "prod_download", priceId: "price_download" },
@@ -13194,7 +13204,7 @@ describe("backend API composition", () => {
           createPutAttempts += 1;
           concurrentOrder = {
             ...document,
-            id: createTestMikaId("order", 99),
+            id: createTestOrderId(99),
             orderNumber: "order_99",
           };
           await baseLedger.put(concurrentOrder);
@@ -13287,7 +13297,7 @@ describe("backend API composition", () => {
       },
     });
     await expect(
-      repositories.session.findById(createTestMikaId("checkout", 1)),
+      repositories.session.findById(createTestCheckoutSessionId(1)),
     ).resolves.toMatchObject({
       type: "checkout",
       status: "completed",
@@ -13418,7 +13428,7 @@ describe("backend API composition", () => {
     const subscriptionSellable = createSellableDefinition({
       prices: [
         createPriceDefinition({
-          id: createTestMikaId("price", 1),
+          id: createTestPriceId(1),
           mode: "subscription",
           fulfillmentKind: "entitlement",
           entitlementKey: "course:subscription-product",
@@ -13633,7 +13643,7 @@ describe("backend API composition", () => {
     const subscriptionSellable = createSellableDefinition({
       prices: [
         createPriceDefinition({
-          id: createTestMikaId("price", 1),
+          id: createTestPriceId(1),
           mode: "subscription",
           fulfillmentKind: "entitlement",
           entitlementKey: "course:subscription-lock",
@@ -13751,7 +13761,7 @@ describe("backend API composition", () => {
     const subscriptionSellable = createSellableDefinition({
       prices: [
         createPriceDefinition({
-          id: createTestMikaId("price", 1),
+          id: createTestPriceId(1),
           mode: "subscription",
           fulfillmentKind: "entitlement",
           entitlementKey: "course:subscription-product",
@@ -14103,7 +14113,7 @@ describe("backend API composition", () => {
       account: new AccountRepository(accountCollection),
     };
     const basicPrice = createPriceDefinition({
-      id: createTestMikaId("price", 1),
+      id: createTestPriceId(1),
       titleSnapshot: "Basic subscription",
       mode: "subscription",
       fulfillmentKind: "entitlement",
@@ -14111,7 +14121,7 @@ describe("backend API composition", () => {
       providerRefs: [{ provider: stripe, productId: "prod_sub", priceId: "price_basic" }],
     });
     const proPrice = createPriceDefinition({
-      id: createTestMikaId("price", 2),
+      id: createTestPriceId(2),
       titleSnapshot: "Pro subscription",
       mode: "subscription",
       fulfillmentKind: "entitlement",
@@ -14506,7 +14516,7 @@ describe("backend API composition", () => {
     const subscriptionSellable = createSellableDefinition({
       prices: [
         createPriceDefinition({
-          id: createTestMikaId("price", 1),
+          id: createTestPriceId(1),
           mode: "subscription",
           fulfillmentKind: "entitlement",
           entitlementKey: "course:replay-product",
@@ -14904,7 +14914,7 @@ describe("backend API composition", () => {
       ctx,
       {
         sellableId: sellable.id,
-        priceId: createTestMikaId("price", 1),
+        priceId: createTestPriceId(1),
         quantity: 2,
       },
     );
@@ -15012,8 +15022,8 @@ describe("backend API composition", () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition({
       prices: [
-        createPriceDefinition({ id: createTestMikaId("price", 1) }),
-        createPriceDefinition({ id: createTestMikaId("price", 2) }),
+        createPriceDefinition({ id: createTestPriceId(1) }),
+        createPriceDefinition({ id: createTestPriceId(2) }),
       ],
     });
     const repositories = createTestBackendRepositories({
@@ -15041,7 +15051,7 @@ describe("backend API composition", () => {
     await expect(
       api.cart.add(ctx, {
         sellableId: sellable.id,
-        priceId: createTestMikaId("price", 1),
+        priceId: createTestPriceId(1),
         quantity: 2,
       }),
     ).resolves.toMatchObject({ ok: true, status: 200 });
@@ -15049,7 +15059,7 @@ describe("backend API composition", () => {
     await expect(
       api.cart.add(ctx, {
         sellableId: sellable.id,
-        priceId: createTestMikaId("price", 2),
+        priceId: createTestPriceId(2),
         quantity: 1,
       }),
     ).resolves.toMatchObject({
@@ -15104,9 +15114,9 @@ describe("backend API composition", () => {
   it("returns stock availability for each stock status", async () => {
     const cases = [
       {
-        id: createTestMikaId("sellable", 1),
+        id: createTestSellableId(1),
         stock: createStockRecord({
-          sellableId: createTestMikaId("sellable", 1),
+          sellableId: createTestSellableId(1),
           quantityOnHand: 8,
           quantityReserved: 3,
           lowStockThreshold: 2,
@@ -15119,9 +15129,9 @@ describe("backend API composition", () => {
         },
       },
       {
-        id: createTestMikaId("sellable", 2),
+        id: createTestSellableId(2),
         stock: createStockRecord({
-          sellableId: createTestMikaId("sellable", 2),
+          sellableId: createTestSellableId(2),
           quantityOnHand: 5,
           quantityReserved: 3,
           lowStockThreshold: 2,
@@ -15134,9 +15144,9 @@ describe("backend API composition", () => {
         },
       },
       {
-        id: createTestMikaId("sellable", 3),
+        id: createTestSellableId(3),
         stock: createStockRecord({
-          sellableId: createTestMikaId("sellable", 3),
+          sellableId: createTestSellableId(3),
           quantityOnHand: 3,
           quantityReserved: 3,
           lowStockThreshold: 2,
@@ -15149,9 +15159,9 @@ describe("backend API composition", () => {
         },
       },
       {
-        id: createTestMikaId("sellable", 4),
+        id: createTestSellableId(4),
         stock: createStockRecord({
-          sellableId: createTestMikaId("sellable", 4),
+          sellableId: createTestSellableId(4),
           quantityOnHand: 0,
           quantityReserved: 0,
           allowBackorder: true,
@@ -15164,9 +15174,9 @@ describe("backend API composition", () => {
         },
       },
       {
-        id: createTestMikaId("sellable", 5),
+        id: createTestSellableId(5),
         stock: createStockRecord({
-          sellableId: createTestMikaId("sellable", 5),
+          sellableId: createTestSellableId(5),
           policy: "untracked",
         }),
         expected: {
@@ -15175,9 +15185,9 @@ describe("backend API composition", () => {
         },
       },
       {
-        id: createTestMikaId("sellable", 6),
+        id: createTestSellableId(6),
         stock: createStockRecord({
-          sellableId: createTestMikaId("sellable", 6),
+          sellableId: createTestSellableId(6),
           policy: "manual",
         }),
         expected: {
@@ -15209,8 +15219,8 @@ describe("backend API composition", () => {
   });
 
   it("honors stock availability overrides", async () => {
-    const forcedOut = createTestMikaId("sellable", 1);
-    const forcedAvailable = createTestMikaId("sellable", 2);
+    const forcedOut = createTestSellableId(1);
+    const forcedAvailable = createTestSellableId(2);
     const repositories = createTestBackendRepositories({
       stockBySellableId: new Map([
         [
@@ -15267,7 +15277,7 @@ describe("backend API composition", () => {
   });
 
   it("returns not found for an inactive (delisted) sellable on public availability", async () => {
-    const sellableId = createTestMikaId("sellable", 1);
+    const sellableId = createTestSellableId(1);
     const repositories = createTestBackendRepositories({
       stockBySellableId: new Map([
         [sellableId, createStockRecord({ sellableId, quantityOnHand: 9, quantityReserved: 0 })],
@@ -15292,7 +15302,7 @@ describe("backend API composition", () => {
     const api = createMikaBackendApi(createTestBackendDependencies());
 
     await expect(
-      api.stock.availability({ sellableId: createTestMikaId("sellable", 404) }),
+      api.stock.availability({ sellableId: createTestSellableId(404) }),
     ).resolves.toEqual({
       ok: false,
       status: 404,
@@ -15305,9 +15315,9 @@ describe("backend API composition", () => {
 
   it("filters inactive catalog sellables", async () => {
     const contentRef = createTestContentRef();
-    const activeSellable = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
+    const activeSellable = createSellableDefinition({ id: createTestSellableId(1) });
     const inactiveSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 2),
+      id: createTestSellableId(2),
       active: false,
     });
     const repositories = createTestBackendRepositories();
@@ -15329,8 +15339,8 @@ describe("backend API composition", () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition({
       prices: [
-        createPriceDefinition({ id: createTestMikaId("price", 1), active: false }),
-        createPriceDefinition({ id: createTestMikaId("price", 2), active: true }),
+        createPriceDefinition({ id: createTestPriceId(1), active: false }),
+        createPriceDefinition({ id: createTestPriceId(2), active: true }),
       ],
     });
     const repositories = createTestBackendRepositories();
@@ -15406,7 +15416,7 @@ describe("backend API composition", () => {
     await expect(
       api.cart.add(ctx, {
         sellableId: sellable.id,
-        priceId: createTestMikaId("price", 1),
+        priceId: createTestPriceId(1),
         quantity: 1,
       }),
     ).resolves.toMatchObject({
@@ -15419,7 +15429,7 @@ describe("backend API composition", () => {
     await expect(
       api.cart.add(ctx, {
         sellableId: sellable.id,
-        priceId: createTestMikaId("price", 1),
+        priceId: createTestPriceId(1),
         quantity: 2,
       }),
     ).resolves.toMatchObject({
@@ -15440,8 +15450,8 @@ describe("backend API composition", () => {
 
   it("rejects a concurrent cart write instead of silently discarding it (CAS, not blind put)", async () => {
     const contentRef = createTestContentRef();
-    const sellableA = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
-    const sellableB = createSellableDefinition({ id: createTestMikaId("sellable", 2) });
+    const sellableA = createSellableDefinition({ id: createTestSellableId(1) });
+    const sellableB = createSellableDefinition({ id: createTestSellableId(2) });
     const repositories = createTestBackendRepositories({
       stockBySellableId: new Map([
         [
@@ -15544,9 +15554,9 @@ describe("backend API composition", () => {
     // same timestamp value, so nothing would look "changed". version is a counter incremented on
     // every write, so it can never collide like this even when writers share a timestamp.
     const contentRef = createTestContentRef();
-    const sellableA = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
-    const sellableB = createSellableDefinition({ id: createTestMikaId("sellable", 2) });
-    const sellableC = createSellableDefinition({ id: createTestMikaId("sellable", 3) });
+    const sellableA = createSellableDefinition({ id: createTestSellableId(1) });
+    const sellableB = createSellableDefinition({ id: createTestSellableId(2) });
+    const sellableC = createSellableDefinition({ id: createTestSellableId(3) });
     const repositories = createTestBackendRepositories({
       stockBySellableId: new Map([
         [
@@ -15630,7 +15640,7 @@ describe("backend API composition", () => {
     // forever. The repository must treat a missing version as "nothing to compare" and allow the
     // write, and nextCartVersion must recover a real counter (1) rather than propagating NaN.
     const contentRef = createTestContentRef();
-    const sellable = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
+    const sellable = createSellableDefinition({ id: createTestSellableId(1) });
     const repositories = createTestBackendRepositories({
       stockBySellableId: new Map([
         [
@@ -15675,7 +15685,7 @@ describe("backend API composition", () => {
     // 409), making every pre-existing cart permanently uncheckoutable with zero concurrency
     // involved. The claim must always be attempted; the repository handles the undefined version.
     const contentRef = createTestContentRef();
-    const sellable = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
+    const sellable = createSellableDefinition({ id: createTestSellableId(1) });
     const repositories = createTestBackendRepositories({
       stockBySellableId: new Map([
         [
@@ -15709,8 +15719,8 @@ describe("backend API composition", () => {
     // its own new cart document; findOpenCartBySession only ever returns one of them afterward, so
     // whichever line landed in the other document becomes invisible to the caller.
     const contentRef = createTestContentRef();
-    const sellableA = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
-    const sellableB = createSellableDefinition({ id: createTestMikaId("sellable", 2) });
+    const sellableA = createSellableDefinition({ id: createTestSellableId(1) });
+    const sellableB = createSellableDefinition({ id: createTestSellableId(2) });
     const repositories = createTestBackendRepositories({
       stockBySellableId: new Map([
         [
@@ -15864,12 +15874,12 @@ describe("backend API composition", () => {
 
     await api.cart.add(guestCtx, {
       sellableId: sellable.id,
-      priceId: createTestMikaId("price", 1),
+      priceId: createTestPriceId(1),
       quantity: 2,
     });
     const customerCart = await api.cart.add(priorCustomerCtx, {
       sellableId: sellable.id,
-      priceId: createTestMikaId("price", 1),
+      priceId: createTestPriceId(1),
       quantity: 1,
     });
     if (!customerCart.ok) throw new Error("expected customer cart");
@@ -15986,9 +15996,9 @@ describe("backend API composition", () => {
     // silently left behind on a session id the caller may never revisit again (e.g. login
     // regenerates the session id, so there's no natural "merge again later").
     const contentRef = createTestContentRef();
-    const sellableA = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
-    const sellableB = createSellableDefinition({ id: createTestMikaId("sellable", 2) });
-    const sellableC = createSellableDefinition({ id: createTestMikaId("sellable", 3) });
+    const sellableA = createSellableDefinition({ id: createTestSellableId(1) });
+    const sellableB = createSellableDefinition({ id: createTestSellableId(2) });
+    const sellableC = createSellableDefinition({ id: createTestSellableId(3) });
     const repositories = createTestBackendRepositories();
     await repositories.catalog.put(
       createCatalogItemDocument({ contentRef, sellables: [sellableA, sellableB, sellableC] }),
@@ -16093,8 +16103,8 @@ describe("backend API composition", () => {
     // items at its original quantity, so the retry must merge only the *increase*, not the new
     // total (which would double count) and not nothing (which would silently drop the increase).
     const contentRef = createTestContentRef();
-    const sellableA = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
-    const sellableB = createSellableDefinition({ id: createTestMikaId("sellable", 2) });
+    const sellableA = createSellableDefinition({ id: createTestSellableId(1) });
+    const sellableB = createSellableDefinition({ id: createTestSellableId(2) });
     const repositories = createTestBackendRepositories({
       stockBySellableId: new Map([
         [
@@ -16207,8 +16217,8 @@ describe("backend API composition", () => {
     // quantity isn't "nothing to recover" — it's target silently holding more than the customer
     // actually asked for, and it becomes permanent once source is marked "abandoned".
     const contentRef = createTestContentRef();
-    const sellableA = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
-    const sellableB = createSellableDefinition({ id: createTestMikaId("sellable", 2) });
+    const sellableA = createSellableDefinition({ id: createTestSellableId(1) });
+    const sellableB = createSellableDefinition({ id: createTestSellableId(2) });
     const repositories = createTestBackendRepositories({
       stockBySellableId: new Map([
         [
@@ -16316,8 +16326,8 @@ describe("backend API composition", () => {
     // A line removed entirely from source concurrently is the extreme case of a decrease: target
     // must drop it too, not keep the stale quantity the customer explicitly deleted.
     const contentRef = createTestContentRef();
-    const sellableA = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
-    const sellableB = createSellableDefinition({ id: createTestMikaId("sellable", 2) });
+    const sellableA = createSellableDefinition({ id: createTestSellableId(1) });
+    const sellableB = createSellableDefinition({ id: createTestSellableId(2) });
     const repositories = createTestBackendRepositories({
       stockBySellableId: new Map([
         [
@@ -16427,14 +16437,14 @@ describe("backend API composition", () => {
     // decrease and the legitimate increase) with no self-correction, since a later merge attempt
     // still sees target's stale contribution and fails the same way forever.
     const contentRef = createTestContentRef();
-    const priceA = createPriceDefinition({ id: createTestMikaId("price", 1) });
-    const priceB = createPriceDefinition({ id: createTestMikaId("price", 2) });
+    const priceA = createPriceDefinition({ id: createTestPriceId(1) });
+    const priceB = createPriceDefinition({ id: createTestPriceId(2) });
     const sellableX = createSellableDefinition({
-      id: createTestMikaId("sellable", 1),
+      id: createTestSellableId(1),
       prices: [priceA, priceB],
       maxPerOrder: 6,
     });
-    const sellableY = createSellableDefinition({ id: createTestMikaId("sellable", 2) });
+    const sellableY = createSellableDefinition({ id: createTestSellableId(2) });
     const repositories = createTestBackendRepositories({
       stockBySellableId: new Map([
         [
@@ -16570,7 +16580,7 @@ describe("backend API composition", () => {
     const fake = createFakeMikaProvider({
       overrides: {
         createCheckoutSession: async () => ({
-          id: createMikaId("checkout_fake"),
+          id: createCheckoutSessionId("checkout_fake"),
           status: "created",
           mode: "payment",
           provider: TEST_PROVIDER,
@@ -16653,12 +16663,12 @@ describe("backend API composition", () => {
 
     await api.cart.add(victimCtx, {
       sellableId: sellable.id,
-      priceId: createTestMikaId("price", 1),
+      priceId: createTestPriceId(1),
       quantity: 2,
     });
     await api.cart.add(attackerCtx, {
       sellableId: sellable.id,
-      priceId: createTestMikaId("price", 1),
+      priceId: createTestPriceId(1),
       quantity: 1,
     });
 
@@ -17202,7 +17212,7 @@ describe("backend API composition", () => {
       status: "open",
     });
     await expect(
-      repositories.session.findCheckoutById(createTestMikaId("checkout", 1)),
+      repositories.session.findCheckoutById(createTestCheckoutSessionId(1)),
     ).resolves.toBeNull();
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
       quantityReserved: 0,
@@ -17968,7 +17978,7 @@ describe("backend API composition", () => {
     }
     await expect(repositories.session.findById(preview.data.id!)).resolves.toBeNull();
     await expect(
-      repositories.session.findById(createTestMikaId("checkout", 1)),
+      repositories.session.findById(createTestCheckoutSessionId(1)),
     ).resolves.toBeNull();
     expect(Object.values(fake.getCalls()).flat()).toEqual([]);
   });
@@ -18189,7 +18199,7 @@ describe("backend API composition", () => {
       repositories,
       provider: fake,
       providerCheckoutCalls: 0,
-      checkoutId: createTestMikaId("checkout", 1),
+      checkoutId: createTestCheckoutSessionId(1),
       checkoutStatus: null,
     });
   });
@@ -18233,7 +18243,7 @@ describe("backend API composition", () => {
     });
     expect(fake.getCalls().createCheckoutSession).toEqual([]);
     await expect(
-      repositories.session.findById(createTestMikaId("checkout", 1)),
+      repositories.session.findById(createTestCheckoutSessionId(1)),
     ).resolves.toBeNull();
     await expectCheckoutFailureInvariant({
       repositories,
@@ -18241,7 +18251,7 @@ describe("backend API composition", () => {
       providerCheckoutCalls: 0,
       stockSellableId: sellable.id,
       quantityReserved: 1,
-      checkoutId: createTestMikaId("checkout", 1),
+      checkoutId: createTestCheckoutSessionId(1),
       checkoutStatus: null,
     });
   });
@@ -18249,8 +18259,8 @@ describe("backend API composition", () => {
   it("validates split cart lines against aggregate maxPerOrder at quote and checkout start", async () => {
     const contentRef = createTestContentRef();
     const prices = [
-      createPriceDefinition({ id: createTestMikaId("price", 1) }),
-      createPriceDefinition({ id: createTestMikaId("price", 2) }),
+      createPriceDefinition({ id: createTestPriceId(1) }),
+      createPriceDefinition({ id: createTestPriceId(2) }),
     ];
     const unrestrictedSellable = createSellableDefinition({ prices });
     const limitedSellable = { ...unrestrictedSellable, maxPerOrder: 5 };
@@ -18269,7 +18279,7 @@ describe("backend API composition", () => {
 
     const first = await api.cart.add(ctx, {
       sellableId: unrestrictedSellable.id,
-      priceId: createTestMikaId("price", 1),
+      priceId: createTestPriceId(1),
       quantity: 3,
     });
     if (!first.ok) {
@@ -18278,7 +18288,7 @@ describe("backend API composition", () => {
     await expect(
       api.cart.add(ctx, {
         sellableId: unrestrictedSellable.id,
-        priceId: createTestMikaId("price", 2),
+        priceId: createTestPriceId(2),
         quantity: 3,
       }),
     ).resolves.toMatchObject({ ok: true, status: 200 });
@@ -18332,7 +18342,7 @@ describe("backend API composition", () => {
     const checkout = await api.checkout.start(ctx, { cartId: added.data.id });
     if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
 
-    const checkoutDocument = await repositories.session.findById(createTestMikaId("checkout", 1));
+    const checkoutDocument = await repositories.session.findById(createTestCheckoutSessionId(1));
     expect(checkoutDocument).toMatchObject({
       expiresAt: createISODateTime("2026-01-01T01:00:00.000Z"),
     });
@@ -18422,7 +18432,7 @@ describe("backend API composition", () => {
     const fake = createFakeMikaProvider({
       overrides: {
         createCheckoutSession: async () => ({
-          id: createMikaId("checkout_fake"),
+          id: createCheckoutSessionId("checkout_fake"),
           status: "created",
           mode: "payment",
           provider: TEST_PROVIDER,
@@ -18460,7 +18470,7 @@ describe("backend API composition", () => {
       quantityReserved: 2,
     });
 
-    const checkoutDoc = await repositories.session.findCheckoutById(createMikaId("checkout_1"));
+    const checkoutDoc = await repositories.session.findCheckoutById(createCheckoutSessionId("checkout_1"));
     if (!checkoutDoc) throw new Error("Expected checkout document.");
     await repositories.session.put({ ...checkoutDoc, status: "failed" });
 
@@ -18531,7 +18541,7 @@ describe("backend API composition", () => {
       providerCheckoutCalls: 0,
       stockSellableId: sellable.id,
       quantityReserved: 0,
-      checkoutId: createTestMikaId("checkout", 1),
+      checkoutId: createTestCheckoutSessionId(1),
       checkoutStatus: null,
     });
   });
@@ -18588,7 +18598,7 @@ describe("backend API composition", () => {
       quantityReserved: 0,
     });
     await expect(
-      repositories.session.findById(createTestMikaId("checkout", 1)),
+      repositories.session.findById(createTestCheckoutSessionId(1)),
     ).resolves.toBeNull();
     await expect(repositories.session.findById(added.data.id)).resolves.toMatchObject({
       type: "cart",
@@ -18602,7 +18612,7 @@ describe("backend API composition", () => {
       quantityReserved: 0,
       cartId: added.data.id,
       cartStatus: "open",
-      checkoutId: createTestMikaId("checkout", 1),
+      checkoutId: createTestCheckoutSessionId(1),
       checkoutStatus: null,
     });
     expect(notificationIntents).toEqual([
@@ -18622,12 +18632,12 @@ describe("backend API composition", () => {
   it("releases prefix reservations when checkout reservation creation throws mid-loop", async () => {
     const contentRef = createTestContentRef();
     const sellableA = createSellableDefinition({
-      id: createTestMikaId("sellable", 1),
-      prices: [createPriceDefinition({ id: createTestMikaId("price", 1) })],
+      id: createTestSellableId(1),
+      prices: [createPriceDefinition({ id: createTestPriceId(1) })],
     });
     const sellableB = createSellableDefinition({
-      id: createTestMikaId("sellable", 2),
-      prices: [createPriceDefinition({ id: createTestMikaId("price", 2) })],
+      id: createTestSellableId(2),
+      prices: [createPriceDefinition({ id: createTestPriceId(2) })],
     });
     const repositories = createTestBackendRepositories({
       stockBySellableId: new Map([
@@ -18691,7 +18701,7 @@ describe("backend API composition", () => {
       repositories.stock.findEventById(createTestMikaId("stock_event", 1)),
     ).resolves.toMatchObject({ status: "released" });
     await expect(
-      repositories.session.findById(createTestMikaId("checkout", 1)),
+      repositories.session.findById(createTestCheckoutSessionId(1)),
     ).resolves.toBeNull();
   });
 
@@ -18709,7 +18719,7 @@ describe("backend API composition", () => {
     const fake = createFakeMikaProvider({
       overrides: {
         createCheckoutSession: async () => ({
-          id: createMikaId("checkout_failed_provider"),
+          id: createCheckoutSessionId("checkout_failed_provider"),
           status: "failed",
           mode: "payment",
           provider: TEST_PROVIDER,
@@ -18752,7 +18762,7 @@ describe("backend API composition", () => {
       status: "open",
     });
     await expect(
-      repositories.session.findById(createTestMikaId("checkout", 1)),
+      repositories.session.findById(createTestCheckoutSessionId(1)),
     ).resolves.toBeNull();
   });
 
@@ -18833,7 +18843,7 @@ describe("backend API composition", () => {
         },
       ],
     });
-    const persistedCheckout = await repositories.session.findById(createTestMikaId("checkout", 1));
+    const persistedCheckout = await repositories.session.findById(createTestCheckoutSessionId(1));
     expect(persistedCheckout).toMatchObject({
       type: "checkout",
       cartId: added.data.id,
@@ -19007,7 +19017,7 @@ describe("backend API composition", () => {
         "https://shop.example.test/checkout/cancel?checkoutId=checkout_1&token=checkout_status_token_1",
     });
     await expect(
-      repositories.session.findById(createTestMikaId("checkout", 1)),
+      repositories.session.findById(createTestCheckoutSessionId(1)),
     ).resolves.toMatchObject({
       type: "checkout",
       aggregate: {
@@ -19034,7 +19044,7 @@ describe("backend API composition", () => {
     const fake = createFakeMikaProvider({
       overrides: {
         createCheckoutSession: async () => ({
-          id: createMikaId("checkout_fake"),
+          id: createCheckoutSessionId("checkout_fake"),
           status: "cancelled",
           mode: "payment",
           provider: TEST_PROVIDER,
@@ -19112,7 +19122,7 @@ describe("backend API composition", () => {
     });
 
     const cancelled = await api.checkout.cancel(ctx, {
-      checkoutId: createTestMikaId("checkout", 1),
+      checkoutId: createTestCheckoutSessionId(1),
     });
     expect(cancelled).toMatchObject({
       ok: true,
@@ -19232,7 +19242,7 @@ describe("backend API composition", () => {
         ...document,
         status: "completed",
         providerStatus: "completed",
-        orderId: createTestMikaId("order", 1),
+        orderId: createTestOrderId(1),
         updatedAt: ctx.now,
       };
       await repositories.session.put(completed);
@@ -19295,7 +19305,7 @@ describe("backend API composition", () => {
     const checkout = await api.checkout.start(ctx, { sellableId: sellable.id, quantity: 1 });
     if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
     const storedCheckout = await repositories.session.findCheckoutById(
-      createTestMikaId("checkout", 1),
+      createTestCheckoutSessionId(1),
     );
     expect(storedCheckout?.cartId).toBeUndefined();
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
@@ -19303,7 +19313,7 @@ describe("backend API composition", () => {
     });
 
     const cancelled = await api.checkout.cancel(ctx, {
-      checkoutId: createTestMikaId("checkout", 1),
+      checkoutId: createTestCheckoutSessionId(1),
     });
     expect(cancelled).toMatchObject({ ok: true, data: { status: "cancelled" } });
 
@@ -19340,7 +19350,7 @@ describe("backend API composition", () => {
     if (!checkout.ok) throw new Error("Expected checkout.start to succeed.");
 
     const reservationId = createTestMikaId("stock_event", 1);
-    await api.checkout.cancel(ctx, { checkoutId: createTestMikaId("checkout", 1) });
+    await api.checkout.cancel(ctx, { checkoutId: createTestCheckoutSessionId(1) });
 
     await expect(repositories.stock.findEventById(reservationId)).resolves.toMatchObject({
       status: "expired",
@@ -19352,7 +19362,7 @@ describe("backend API composition", () => {
     await expect(
       createMikaStockLifecycleService(deps).consume({
         reservationEventId: reservationId,
-        orderId: createTestMikaId("order", 1),
+        orderId: createTestOrderId(1),
         orderLineId: createTestMikaId("order_line", 1),
       }),
     ).resolves.toMatchObject({ status: "consumed", event: { status: "consumed" } });
@@ -19382,7 +19392,7 @@ describe("backend API composition", () => {
           }
 
           return {
-            id: createMikaId("checkout_fake"),
+            id: createCheckoutSessionId("checkout_fake"),
             status: "created",
             mode: "payment",
             provider: TEST_PROVIDER,
@@ -19449,7 +19459,7 @@ describe("backend API composition", () => {
       status: "checkout_pending",
     });
     await expect(
-      repositories.session.findById(createTestMikaId("checkout", 2)),
+      repositories.session.findById(createTestCheckoutSessionId(2)),
     ).resolves.toBeNull();
     await expect(
       repositories.session.findCheckoutByIdempotencyKey("checkout_replay_1"),
@@ -19478,7 +19488,7 @@ describe("backend API composition", () => {
           }
 
           return {
-            id: createMikaId("checkout_fake"),
+            id: createCheckoutSessionId("checkout_fake"),
             status: "created",
             mode: "payment",
             provider: TEST_PROVIDER,
@@ -19531,7 +19541,7 @@ describe("backend API composition", () => {
 
     expect(fake.getCalls().createCheckoutSession).toHaveLength(1);
     await expect(
-      repositories.session.findCheckoutById(createTestMikaId("checkout", 1)),
+      repositories.session.findCheckoutById(createTestCheckoutSessionId(1)),
     ).resolves.toMatchObject({
       status: "expired",
       providerStatus: "expired",
@@ -19560,7 +19570,7 @@ describe("backend API composition", () => {
     const fake = createFakeMikaProvider({
       overrides: {
         createCheckoutSession: async () => ({
-          id: createMikaId("checkout_fake"),
+          id: createCheckoutSessionId("checkout_fake"),
           status: "created",
           mode: "payment",
           provider: TEST_PROVIDER,
@@ -19610,7 +19620,7 @@ describe("backend API composition", () => {
     });
     if (attacker.ok) throw new Error("Expected cross-session replay to be rejected.");
     await expect(
-      repositories.session.findById(createTestMikaId("checkout", 2)),
+      repositories.session.findById(createTestCheckoutSessionId(2)),
     ).resolves.toBeNull();
   });
 
@@ -19969,7 +19979,7 @@ describe("backend API composition", () => {
       },
     });
 
-    const stored = await repositories.session.findCheckoutById(createTestMikaId("checkout", 1));
+    const stored = await repositories.session.findCheckoutById(createTestCheckoutSessionId(1));
     expect(stored?.aggregate.metadata).toMatchObject({
       publicNote: "keep",
       checkoutProviderStatus: "created",
@@ -20087,14 +20097,14 @@ describe("backend API composition", () => {
 
     await repositories.session.put(
       createCheckoutDocument({
-        id: createTestMikaId("checkout", 1),
+        id: createTestCheckoutSessionId(1),
         sessionId: "session_1",
         expiresAt: createTestClock().isoAt(-1),
       }),
     );
     await repositories.session.put(
       createCheckoutDocument({
-        id: createTestMikaId("checkout", 2),
+        id: createTestCheckoutSessionId(2),
         sessionId: "session_1",
         providerCheckoutId: "provider_checkout_actual",
         bindingProviderCheckoutId: "provider_checkout_stale",
@@ -20103,7 +20113,7 @@ describe("backend API composition", () => {
 
     await expect(
       api.checkout.status(createTestRequestContext(), {
-        checkoutId: createTestMikaId("checkout", 404),
+        checkoutId: createTestCheckoutSessionId(404),
       }),
     ).resolves.toMatchObject({
       ok: false,
@@ -20115,7 +20125,7 @@ describe("backend API composition", () => {
     });
     await expect(
       api.checkout.status(createTestRequestContext(), {
-        checkoutId: createTestMikaId("checkout", 1),
+        checkoutId: createTestCheckoutSessionId(1),
       }),
     ).resolves.toMatchObject({
       ok: false,
@@ -20124,7 +20134,7 @@ describe("backend API composition", () => {
     });
     await expect(
       api.checkout.status(createTestRequestContext(), {
-        checkoutId: createTestMikaId("checkout", 2),
+        checkoutId: createTestCheckoutSessionId(2),
       }),
     ).resolves.toMatchObject({
       ok: false,
@@ -20139,12 +20149,12 @@ describe("backend API composition", () => {
 
     await repositories.session.put(
       createCheckoutDocument({
-        id: createTestMikaId("checkout", 1),
+        id: createTestCheckoutSessionId(1),
         sessionId: "session_1",
         providerCheckoutId: "provider_checkout_1",
         status: "completed",
         providerStatus: "completed",
-        orderId: createTestMikaId("order", 1),
+        orderId: createTestOrderId(1),
         redirectUrl: "https://checkout.example.test/complete",
         expiresAt: createTestClock().isoAt(-1),
         metadata: {
@@ -20156,7 +20166,7 @@ describe("backend API composition", () => {
     );
     await repositories.session.put(
       createCheckoutDocument({
-        id: createTestMikaId("checkout", 2),
+        id: createTestCheckoutSessionId(2),
         sessionId: "session_1",
         providerCheckoutId: "provider_checkout_2",
         status: "failed",
@@ -20166,7 +20176,7 @@ describe("backend API composition", () => {
     );
     await repositories.session.put(
       createCheckoutDocument({
-        id: createTestMikaId("checkout", 3),
+        id: createTestCheckoutSessionId(3),
         sessionId: "session_1",
         providerCheckoutId: "provider_checkout_3",
         status: "cancelled",
@@ -20181,7 +20191,7 @@ describe("backend API composition", () => {
 
     await expect(
       api.checkout.status(createTestRequestContext(), {
-        checkoutId: createTestMikaId("checkout", 1),
+        checkoutId: createTestCheckoutSessionId(1),
       }),
     ).resolves.toMatchObject({
       ok: true,
@@ -20198,7 +20208,7 @@ describe("backend API composition", () => {
     });
     await expect(
       api.checkout.status(createTestRequestContext(), {
-        checkoutId: createTestMikaId("checkout", 2),
+        checkoutId: createTestCheckoutSessionId(2),
       }),
     ).resolves.toMatchObject({
       ok: true,
@@ -20212,7 +20222,7 @@ describe("backend API composition", () => {
     });
     await expect(
       api.checkout.status(createTestRequestContext(), {
-        checkoutId: createTestMikaId("checkout", 3),
+        checkoutId: createTestCheckoutSessionId(3),
       }),
     ).resolves.toMatchObject({
       ok: true,
@@ -20225,7 +20235,7 @@ describe("backend API composition", () => {
       },
     });
     const cancelledStatus = await api.checkout.status(createTestRequestContext(), {
-      checkoutId: createTestMikaId("checkout", 3),
+      checkoutId: createTestCheckoutSessionId(3),
     });
     expect(cancelledStatus).toMatchObject({
       ok: true,
@@ -20242,7 +20252,7 @@ describe("backend API composition", () => {
     expect(cancelledStatus.effects).toBeUndefined();
 
     const cancelledAgain = await api.checkout.cancel(createTestRequestContext(), {
-      checkoutId: createTestMikaId("checkout", 3),
+      checkoutId: createTestCheckoutSessionId(3),
     });
     expect(cancelledAgain).toMatchObject({
       ok: true,
@@ -20314,7 +20324,7 @@ describe("backend API composition", () => {
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
       quantityReserved: 0,
     });
-    const failedCheckout = await repositories.session.findById(createTestMikaId("checkout", 1));
+    const failedCheckout = await repositories.session.findById(createTestCheckoutSessionId(1));
     expect(failedCheckout).toMatchObject({
       type: "checkout",
       status: "failed",
@@ -20355,7 +20365,7 @@ describe("backend API composition", () => {
       quantityReserved: 0,
       cartId: added.data.id,
       cartStatus: "open",
-      checkoutId: createTestMikaId("checkout", 1),
+      checkoutId: createTestCheckoutSessionId(1),
       checkoutStatus: "failed",
     });
   });
@@ -20383,7 +20393,7 @@ describe("backend API composition", () => {
     });
 
     await expect(
-      api.cart.merge(ctx, { targetCartId: createTestMikaId("cart", 404) }),
+      api.cart.merge(ctx, { targetCartId: createTestCartId(404) }),
     ).resolves.toMatchObject({
       ok: false,
       status: 404,
@@ -20424,28 +20434,28 @@ describe("backend API composition", () => {
   it("rejects inactive sellables, inactive prices, currency mismatches, max quantity, and unavailable stock before creating a cart", async () => {
     const contentRef = createTestContentRef();
     const inactiveSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 1),
+      id: createTestSellableId(1),
       active: false,
     });
     const inactivePriceSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 2),
-      prices: [createPriceDefinition({ id: createTestMikaId("price", 2), active: false })],
+      id: createTestSellableId(2),
+      prices: [createPriceDefinition({ id: createTestPriceId(2), active: false })],
     });
     const usdSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 3),
+      id: createTestSellableId(3),
       prices: [
         createPriceDefinition({
-          id: createTestMikaId("price", 3),
+          id: createTestPriceId(3),
           currency: createTestCurrencyCode("USD"),
         }),
       ],
     });
     const limitedSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 4),
+      id: createTestSellableId(4),
       maxPerOrder: 2,
     });
     const outOfStockSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 5),
+      id: createTestSellableId(5),
     });
     const repositories = createTestBackendRepositories({
       stockBySellableId: new Map([
@@ -20486,7 +20496,7 @@ describe("backend API composition", () => {
     await expect(
       api.cart.add(ctx, {
         sellableId: inactivePriceSellable.id,
-        priceId: createTestMikaId("price", 2),
+        priceId: createTestPriceId(2),
       }),
     ).resolves.toMatchObject({
       ok: false,
@@ -20494,7 +20504,7 @@ describe("backend API composition", () => {
       error: { code: "PRICE_INACTIVE" },
     });
     await expect(
-      api.cart.add(ctx, { sellableId: usdSellable.id, priceId: createTestMikaId("price", 3) }),
+      api.cart.add(ctx, { sellableId: usdSellable.id, priceId: createTestPriceId(3) }),
     ).resolves.toMatchObject({
       ok: false,
       status: 422,
@@ -20522,11 +20532,11 @@ describe("backend API composition", () => {
 
   it("rejects omitted priceId when a sellable has multiple active prices in the cart currency", async () => {
     const firstPrice = createPriceDefinition({
-      id: createTestMikaId("price", 1),
+      id: createTestPriceId(1),
       amount: 1200,
     });
     const secondPrice = createPriceDefinition({
-      id: createTestMikaId("price", 2),
+      id: createTestPriceId(2),
       amount: 900,
     });
     const sellable = createSellableDefinition({
@@ -20621,7 +20631,7 @@ describe("backend API composition", () => {
     await expect(
       api.wishlist.add(ctx, {
         sellableId: sellable.id,
-        priceId: createTestMikaId("price", 1),
+        priceId: createTestPriceId(1),
       }),
     ).resolves.toMatchObject({
       ok: true,
@@ -20662,18 +20672,18 @@ describe("backend API composition", () => {
   it("rejects inactive sellables, inactive prices, and currency mismatches before creating a wishlist", async () => {
     const contentRef = createTestContentRef();
     const inactiveSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 1),
+      id: createTestSellableId(1),
       active: false,
     });
     const inactivePriceSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 2),
-      prices: [createPriceDefinition({ id: createTestMikaId("price", 2), active: false })],
+      id: createTestSellableId(2),
+      prices: [createPriceDefinition({ id: createTestPriceId(2), active: false })],
     });
     const usdSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 3),
+      id: createTestSellableId(3),
       prices: [
         createPriceDefinition({
-          id: createTestMikaId("price", 3),
+          id: createTestPriceId(3),
           currency: createTestCurrencyCode("USD"),
         }),
       ],
@@ -20702,7 +20712,7 @@ describe("backend API composition", () => {
     await expect(
       api.wishlist.add(ctx, {
         sellableId: inactivePriceSellable.id,
-        priceId: createTestMikaId("price", 2),
+        priceId: createTestPriceId(2),
       }),
     ).resolves.toMatchObject({
       ok: false,
@@ -20712,7 +20722,7 @@ describe("backend API composition", () => {
     await expect(
       api.wishlist.add(ctx, {
         sellableId: usdSellable.id,
-        priceId: createTestMikaId("price", 3),
+        priceId: createTestPriceId(3),
       }),
     ).resolves.toMatchObject({
       ok: false,
@@ -20803,13 +20813,13 @@ describe("backend API composition", () => {
   it("merges wishlists with deterministic duplicate handling", async () => {
     const contentRef = createTestContentRef();
     const duplicateSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 1),
+      id: createTestSellableId(1),
     });
     const sourceOnlySellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 2),
+      id: createTestSellableId(2),
       sku: "TEST-SKU-2",
       titleSnapshot: "Source only sellable",
-      prices: [createPriceDefinition({ id: createTestMikaId("price", 2) })],
+      prices: [createPriceDefinition({ id: createTestPriceId(2) })],
     });
     const repositories = createTestBackendRepositories();
     await repositories.catalog.put(
@@ -20883,12 +20893,12 @@ describe("backend API composition", () => {
 
   it("refuses to merge a source wishlist the caller does not own (cross-session IDOR)", async () => {
     const contentRef = createTestContentRef();
-    const victimSellable = createSellableDefinition({ id: createTestMikaId("sellable", 1) });
+    const victimSellable = createSellableDefinition({ id: createTestSellableId(1) });
     const attackerSellable = createSellableDefinition({
-      id: createTestMikaId("sellable", 2),
+      id: createTestSellableId(2),
       sku: "TEST-SKU-2",
       titleSnapshot: "Attacker sellable",
-      prices: [createPriceDefinition({ id: createTestMikaId("price", 2) })],
+      prices: [createPriceDefinition({ id: createTestPriceId(2) })],
     });
     const repositories = createTestBackendRepositories();
     await repositories.catalog.put(
@@ -21083,7 +21093,7 @@ describe("backend fixture helpers", () => {
     expect(clock.iso).toBe(TEST_NOW);
     expect(clock.now.toISOString()).toBe("2026-01-01T00:00:00.000Z");
     expect(clock.isoAt(60_000)).toBe("2026-01-01T00:01:00.000Z");
-    expect(createTestMikaId("order", 7)).toBe("order_7");
+    expect(createTestOrderId(7)).toBe("order_7");
     expect(createTestProviderName("stripe")).toBe("stripe");
     expect(createTestCurrencyCode("USD")).toBe("USD");
     expect(TEST_PROVIDER).toBe("fake");
@@ -21142,8 +21152,8 @@ describe("backend fixture helpers", () => {
       title: "Special product",
       prices: [
         {
-          id: createTestMikaId("price", 2),
-          sellableId: createTestMikaId("sellable", 1),
+          id: createTestPriceId(2),
+          sellableId: createTestSellableId(1),
           amount: 2500,
           currency: createTestCurrencyCode("USD"),
           mode: "subscription",
@@ -22314,7 +22324,7 @@ function createProviderAccountDocument(
 function createOrderDocument(overrides: TestOverrides<OrderDocument> = {}): OrderDocument {
   const safeOverrides = omitUndefined(overrides);
   const hasOverride = (key: keyof OrderDocument) => Object.hasOwn(overrides, key);
-  const orderId = safeOverrides.id ?? createTestMikaId("order", 1);
+  const orderId = safeOverrides.id ?? createTestOrderId(1);
   const aggregate =
     safeOverrides.aggregate ??
     ({
@@ -22468,7 +22478,7 @@ function createSubscriptionDocument(
 
 function createCartDocument(overrides: TestOverrides<CartDocument> = {}): CartDocument {
   const safeOverrides = omitUndefined(overrides);
-  const id = safeOverrides.id ?? createTestMikaId("cart", 1);
+  const id = safeOverrides.id ?? createTestCartId(1);
 
   return {
     id,
@@ -22533,7 +22543,7 @@ function createEntitlementDocument(
       "orderId",
       hasRecordOverride("orderId")
         ? recordOverrides?.orderId
-        : (safeRecordOverrides.orderId ?? createTestMikaId("order", 1)),
+        : (safeRecordOverrides.orderId ?? createTestOrderId(1)),
     ),
     ...optionalProperty(
       "currentPeriodEnd",
@@ -22570,7 +22580,7 @@ function createLicenseDocument(
   const orderId = optionalOverride(
     recordOverrides,
     "orderId",
-    optionalOverride(documentOverrides, "orderId", createTestMikaId("order", 1)),
+    optionalOverride(documentOverrides, "orderId", createTestOrderId(1)),
   );
   const orderLineId = optionalOverride(
     recordOverrides,
@@ -22621,7 +22631,7 @@ function createEmailDocument(overrides: TestDocumentOverrides<EmailDocument> = {
   const orderId = optionalOverride(
     recordOverrides,
     "orderId",
-    optionalOverride(documentOverrides, "orderId", createTestMikaId("order", 1)),
+    optionalOverride(documentOverrides, "orderId", createTestOrderId(1)),
   );
   const tokenId = optionalOverride(
     recordOverrides,
@@ -22746,8 +22756,8 @@ function createPurchasableSnapshot(
 ): OrderDocument["aggregate"]["lines"][number]["item"] {
   return {
     content: createTestContentRef(),
-    sellableId: createTestMikaId("sellable", 1),
-    priceId: createTestMikaId("price", 1),
+    sellableId: createTestSellableId(1),
+    priceId: createTestPriceId(1),
     sku: "TEST-SKU-1",
     titleSnapshot: "Test sellable",
     variantOptions: [],
@@ -22784,7 +22794,7 @@ function createCatalogItemDocument(input: {
 
 function createSellableDefinition(overrides: Partial<SellableDefinition> = {}): SellableDefinition {
   return {
-    id: createTestMikaId("sellable", 1),
+    id: createTestSellableId(1),
     sku: "TEST-SKU-1",
     titleSnapshot: "Test sellable",
     variantOptions: [],
@@ -22797,7 +22807,7 @@ function createSellableDefinition(overrides: Partial<SellableDefinition> = {}): 
 
 function createPriceDefinition(overrides: Partial<PriceDefinition> = {}): PriceDefinition {
   return {
-    id: createTestMikaId("price", 1),
+    id: createTestPriceId(1),
     providerRefs: [],
     amount: 1200,
     currency: TEST_CURRENCY,
@@ -22809,7 +22819,7 @@ function createPriceDefinition(overrides: Partial<PriceDefinition> = {}): PriceD
 }
 
 function createStockRecord(overrides: Partial<StockItemRecord> = {}): StockItemRecord {
-  const sellableId = overrides.sellableId ?? createTestMikaId("sellable", 1);
+  const sellableId = overrides.sellableId ?? createTestSellableId(1);
 
   return {
     id: createTestMikaId("stock", 1),
@@ -22836,14 +22846,14 @@ function createCheckoutDocument(
     readonly checkoutIdempotencyInputHash?: string;
     readonly providerStatus?: CheckoutDocument["providerStatus"];
     readonly redirectUrl?: string;
-    readonly orderId?: MikaId;
+    readonly orderId?: OrderId;
     readonly failureReason?: string;
     readonly bindingProviderCheckoutId?: string;
     readonly expiresAt?: CheckoutDocument["expiresAt"];
     readonly metadata?: CheckoutDocument["aggregate"]["metadata"];
   } = {},
 ): CheckoutDocument {
-  const id = overrides.id ?? createTestMikaId("checkout", 1);
+  const id = overrides.id ?? createTestCheckoutSessionId(1);
   const providerCheckoutId = overrides.providerCheckoutId ?? "provider_checkout_fake";
 
   return omitUndefined({
@@ -22893,7 +22903,7 @@ function createCheckoutInput(
     provider: createProviderName("fake"),
     lines: [
       {
-        sellableId: createMikaId("sellable_1"),
+        sellableId: createSellableId("sellable_1"),
         contentRef: { collection: "products", id: "product_1" },
         title: "Test product",
         quantity: 1,

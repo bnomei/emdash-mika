@@ -23,7 +23,15 @@ import {
   MIKA_DELEGATED_PAYMENT_TOKEN_METADATA_KEY,
 } from "../provider";
 import { omitUndefined } from "../internal/object";
-import { createMikaId, createProviderName, type MikaId } from "../types/primitives";
+import {
+  createCartId,
+  createCheckoutSessionId,
+  createPriceId,
+  createProviderName,
+  createSellableId,
+  type PriceId,
+  type SellableId,
+} from "../types/primitives";
 import type {
   MikaAcpAddress,
   MikaAcpBuyer,
@@ -557,7 +565,7 @@ export async function handleAcpComplete(
     const completedBase: Omit<MikaAcpSessionRecord, "version"> = omitUndefined({
       ...record,
       buyer: body.data.buyer ?? record.buyer,
-      checkoutId: checkout.data.id,
+      checkoutId: createCheckoutSessionId(checkout.data.id),
       status: checkout.data.status === "completed" ? "completed" : "ready_for_payment",
       paymentAuthorizationId: proofId,
       quoteInputHash: preview.data.inputHash,
@@ -931,7 +939,7 @@ export async function reconcileAcpCart(
     ok: true,
     record: {
       ...record,
-      cartId: cart.id,
+      cartId: createCartId(cart.id),
       currency: cart.currency,
       items,
       status: acpStatusFromCart(cart, record),
@@ -959,8 +967,8 @@ export async function restoreAcpCart(
     const restored = await options.api.cart.add(
       ctx,
       omitUndefined({
-        sellableId: line.sellableId,
-        priceId: line.priceId,
+        sellableId: createSellableId(line.sellableId),
+        priceId: line.priceId ? createPriceId(line.priceId) : undefined,
         quantity: line.quantity,
       }),
     );
@@ -1164,14 +1172,14 @@ export function createStaticSession(sessionID: string): MikaSessionAccess {
 }
 
 export function parseAcpItemId(id: string): {
-  readonly sellableId: MikaId;
-  readonly priceId?: MikaId;
+  readonly sellableId: SellableId;
+  readonly priceId?: PriceId;
 } {
   const [sellableId, priceId] = id.split(":");
   if (!sellableId) throw new Error("ACP item id must include a sellable id.");
 
   return {
-    sellableId: createMikaId(sellableId),
-    ...(priceId ? { priceId: createMikaId(priceId) } : {}),
+    sellableId: createSellableId(sellableId),
+    ...(priceId ? { priceId: createPriceId(priceId) } : {}),
   };
 }

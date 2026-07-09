@@ -9,7 +9,14 @@ import { encodeJson } from "../json";
 import { omitUndefined } from "../../internal/object";
 import type { MikaInsertable, MikaSelectable, MikaUpdateable } from "../schema";
 import type { StockEventRecord, StockItemRecord } from "../../types/operational";
-import { createISODateTime, createMikaId } from "../../types/primitives";
+import {
+  createCartId,
+  createCheckoutSessionId,
+  createISODateTime,
+  createMikaId,
+  createOrderId,
+  createSellableId,
+} from "../../types/primitives";
 import type { ISODateTime, MikaId } from "../../types/primitives";
 import { affected, parseMetadata, undef, type MikaDbExecutor } from "./db-shared";
 import type {
@@ -660,7 +667,7 @@ function stockItemInsertRow(record: StockItemRecord): MikaInsertable<"mika_stock
 function mapStockItem(row: MikaSelectable<"mika_stock_items">): StockItemRecord {
   return omitUndefined({
     id: createMikaId(row.id),
-    sellableId: createMikaId(row.sellable_id),
+    sellableId: createSellableId(row.sellable_id),
     policy: row.policy,
     quantityOnHand: row.quantity_on_hand,
     quantityReserved: row.quantity_reserved,
@@ -720,11 +727,11 @@ function mapStockEvent(row: MikaSelectable<"mika_stock_events">): StockEventReco
     status: row.status,
     reason: undef(row.reason),
     reservationEventId: mikaIdOrUndefined(row.reservation_event_id),
-    cartId: mikaIdOrUndefined(row.cart_id),
-    checkoutSessionId: mikaIdOrUndefined(row.checkout_session_id),
+    cartId: cartIdOrUndefined(row.cart_id),
+    checkoutSessionId: checkoutSessionIdOrUndefined(row.checkout_session_id),
     customerId: mikaIdOrUndefined(row.customer_id),
     sessionId: undef(row.session_id),
-    orderId: mikaIdOrUndefined(row.order_id),
+    orderId: orderIdOrUndefined(row.order_id),
     orderLineId: mikaIdOrUndefined(row.order_line_id),
     adminAuditId: mikaIdOrUndefined(row.admin_audit_id),
     idempotencyKey: undef(row.idempotency_key),
@@ -742,6 +749,18 @@ function isoOrUndefined(value: string | null): ReturnType<typeof createISODateTi
 
 function mikaIdOrUndefined(value: string | null): MikaId | undefined {
   return value === null ? undefined : createMikaId(value);
+}
+
+function cartIdOrUndefined(value: string | null) {
+  return value === null ? undefined : createCartId(value);
+}
+
+function checkoutSessionIdOrUndefined(value: string | null) {
+  return value === null ? undefined : createCheckoutSessionId(value);
+}
+
+function orderIdOrUndefined(value: string | null) {
+  return value === null ? undefined : createOrderId(value);
 }
 
 function boolOrUndefined(value: 0 | 1 | null): boolean | undefined {

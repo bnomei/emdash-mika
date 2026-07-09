@@ -4,17 +4,22 @@
  * {@link ./validation} and re-exported here for a single import surface.
  */
 import type {
+  CartId,
   CartStatus,
   CheckoutProviderStatus,
+  CheckoutSessionId,
   CurrencyCode,
   EntitlementStatus,
   FulfillmentKind,
   ISODateTime,
   MikaId,
+  OrderId,
   OrderStatus,
   PaymentStatus,
+  PriceId,
   ProviderName,
   PurchaseMode,
+  SellableId,
   SubscriptionStatus,
 } from "../types/primitives";
 import type { MikaAgentProofKind, MikaAgentProofRef } from "./agent-types";
@@ -175,7 +180,7 @@ export type AvailabilityStatus =
 
 /** Stock availability snapshot for a sellable at read time. */
 export interface AvailabilityDTO {
-  readonly sellableId: MikaId;
+  readonly sellableId: SellableId;
   readonly status: AvailabilityStatus;
   readonly availableQuantity?: number;
   readonly maxPerOrder?: number;
@@ -185,8 +190,8 @@ export interface AvailabilityDTO {
 
 /** Active sellable price with currency, billing mode, and fulfillment kind. */
 export interface PriceDTO {
-  readonly id: MikaId;
-  readonly sellableId: MikaId;
+  readonly id: PriceId;
+  readonly sellableId: SellableId;
   readonly amount: number;
   readonly currency: CurrencyCode;
   readonly mode: PurchaseMode;
@@ -198,7 +203,7 @@ export interface PriceDTO {
 
 /** Purchasable variant with prices and optional live availability. */
 export interface SellableDTO {
-  readonly id: MikaId;
+  readonly id: SellableId;
   readonly contentRef: ContentRefDTO;
   readonly sku?: string;
   readonly title: string;
@@ -214,8 +219,8 @@ export interface SellableDTO {
 /** Priced cart row with sellable snapshot, quantity, and live availability. */
 export interface CartLineDTO {
   readonly id: MikaId;
-  readonly sellableId: MikaId;
-  readonly priceId?: MikaId;
+  readonly sellableId: SellableId;
+  readonly priceId?: PriceId;
   readonly title: string;
   readonly sku?: string;
   readonly variantOptions: readonly VariantOptionValueDTO[];
@@ -228,7 +233,7 @@ export interface CartLineDTO {
 
 /** Session- or customer-bound cart with priced lines and checkout linkage. */
 export interface CartDTO {
-  readonly id: MikaId;
+  readonly id: CartId;
   readonly status: CartStatus;
   readonly currency: CurrencyCode;
   readonly items: readonly CartLineDTO[];
@@ -238,7 +243,7 @@ export interface CartDTO {
   readonly tax?: MoneyDTO;
   readonly shipping?: MoneyDTO;
   readonly total: MoneyDTO;
-  readonly checkoutSessionId?: MikaId;
+  readonly checkoutSessionId?: CheckoutSessionId;
   readonly errors?: readonly MikaError[];
 }
 
@@ -253,8 +258,8 @@ export interface AppliedCouponDTO {
 /** Saved sellable snapshot with add time and current availability. */
 export interface WishlistItemDTO {
   readonly id: MikaId;
-  readonly sellableId: MikaId;
-  readonly priceId?: MikaId;
+  readonly sellableId: SellableId;
+  readonly priceId?: PriceId;
   readonly title: string;
   readonly sku?: string;
   readonly variantOptions: readonly VariantOptionValueDTO[];
@@ -277,7 +282,7 @@ export type CheckoutStatusDTO = CheckoutProviderStatus;
 
 /** Provider checkout session created from cart handoff. */
 export interface CheckoutSessionDTO {
-  readonly id: MikaId;
+  readonly id: CheckoutSessionId;
   readonly status: CheckoutStatusDTO;
   readonly mode: PurchaseMode;
   readonly provider: ProviderName;
@@ -285,7 +290,7 @@ export interface CheckoutSessionDTO {
   readonly statusToken?: string;
   readonly expiresAt?: ISODateTime;
   readonly paymentPending?: boolean;
-  readonly orderId?: MikaId;
+  readonly orderId?: OrderId;
   readonly errors?: readonly MikaError[];
 }
 
@@ -295,8 +300,8 @@ export type CartQuoteStatusDTO = "valid" | "changed" | "expired" | "unavailable"
 /** Quote row with pricing snapshot, quantity, and validation warnings. */
 export interface CartQuoteLineDTO {
   readonly lineId?: MikaId;
-  readonly sellableId: MikaId;
-  readonly priceId?: MikaId;
+  readonly sellableId: SellableId;
+  readonly priceId?: PriceId;
   readonly title?: string;
   readonly sku?: string;
   readonly variantOptions?: readonly VariantOptionValueDTO[];
@@ -319,7 +324,7 @@ export interface CartQuoteAdjustmentDTO {
 /** Priced cart snapshot with validation status before checkout. */
 export interface CartQuoteDTO {
   readonly id?: MikaId;
-  readonly cartId?: MikaId;
+  readonly cartId?: CartId;
   readonly status: CartQuoteStatusDTO;
   readonly currency: CurrencyCode;
   readonly items: readonly CartQuoteLineDTO[];
@@ -382,7 +387,7 @@ export interface CustomerDTO {
 
 /** Compact order row for account history and order lists. */
 export interface OrderSummaryDTO {
-  readonly id: MikaId;
+  readonly id: OrderId;
   readonly orderNumber: string;
   readonly status: OrderStatus;
   readonly paymentStatus: PaymentStatus;
@@ -453,7 +458,7 @@ export interface AccountDTO {
 
 /** Hosted invoice URL and expiry for an order. */
 export interface OrderInvoiceDTO {
-  readonly orderId: MikaId;
+  readonly orderId: OrderId;
   readonly href?: string;
   readonly expiresAt?: ISODateTime;
 }

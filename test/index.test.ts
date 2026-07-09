@@ -268,6 +268,7 @@ const expectedOperationContracts = [
 ] as const;
 import {
   createCartId,
+  createCheckoutSessionId,
   createCurrencyCode,
   createISODateTime,
   createMikaId,
@@ -971,7 +972,7 @@ describe("Mika Astro helpers", () => {
     );
 
     await expect(
-      Mika.cart.add({ sellableId: createMikaId("sellable_1"), quantity: 2 }),
+      Mika.cart.add({ sellableId: createSellableId("sellable_1"), quantity: 2 }),
     ).resolves.toMatchObject({
       ok: true,
       status: 200,
@@ -983,7 +984,7 @@ describe("Mika Astro helpers", () => {
         sessionId: "session_direct_policy",
         locale: "en-IE",
         input: {
-          sellableId: createMikaId("sellable_1"),
+          sellableId: createSellableId("sellable_1"),
           quantity: 2,
         },
       },
@@ -1020,7 +1021,7 @@ describe("Mika Astro helpers", () => {
     );
 
     await expect(
-      Mika.cart.add({ sellableId: createMikaId("sellable_1"), quantity: 1 }),
+      Mika.cart.add({ sellableId: createSellableId("sellable_1"), quantity: 1 }),
     ).resolves.toEqual({
       ok: false,
       status: 403,
@@ -1047,19 +1048,19 @@ describe("Mika Astro helpers", () => {
   it("marks out-of-stock purchase options as disabled", () => {
     const [option] = createMikaPurchaseOptions([
       {
-        id: id("sellable_1"),
+        id: createSellableId("sellable_1"),
         contentRef: { collection: "products", id: "ring" },
         title: "Ring",
         active: true,
         variantOptions: [],
         availability: {
-          sellableId: id("sellable_1"),
+          sellableId: createSellableId("sellable_1"),
           status: "out_of_stock",
         },
         prices: [
           {
-            id: id("price_1"),
-            sellableId: id("sellable_1"),
+            id: createPriceId("price_1"),
+            sellableId: createSellableId("sellable_1"),
             amount: 2500,
             currency: currency("EUR"),
             mode: "payment",
@@ -1082,7 +1083,7 @@ describe("Mika Astro helpers", () => {
   it("builds a purchase model for variant and price controls", () => {
     const model = createMikaPurchaseModel([
       {
-        id: id("sellable_1"),
+        id: createSellableId("sellable_1"),
         contentRef: { collection: "products", id: "ring" },
         title: "Ring",
         active: true,
@@ -1095,14 +1096,14 @@ describe("Mika Astro helpers", () => {
           },
         ],
         availability: {
-          sellableId: id("sellable_1"),
+          sellableId: createSellableId("sellable_1"),
           status: "available",
           availableQuantity: 3,
         },
         prices: [
           {
-            id: id("price_1"),
-            sellableId: id("sellable_1"),
+            id: createPriceId("price_1"),
+            sellableId: createSellableId("sellable_1"),
             amount: 2500,
             currency: currency("EUR"),
             mode: "payment",
@@ -1112,7 +1113,7 @@ describe("Mika Astro helpers", () => {
         ],
       },
       {
-        id: id("sellable_2"),
+        id: createSellableId("sellable_2"),
         contentRef: { collection: "products", id: "ring" },
         title: "Ring",
         active: true,
@@ -1125,13 +1126,13 @@ describe("Mika Astro helpers", () => {
           },
         ],
         availability: {
-          sellableId: id("sellable_2"),
+          sellableId: createSellableId("sellable_2"),
           status: "out_of_stock",
         },
         prices: [
           {
-            id: id("price_2"),
-            sellableId: id("sellable_2"),
+            id: createPriceId("price_2"),
+            sellableId: createSellableId("sellable_2"),
             amount: 3500,
             currency: currency("EUR"),
             mode: "payment",
@@ -1169,7 +1170,7 @@ describe("Mika Astro helpers", () => {
   it("derives purchase quantity caps from availability", () => {
     expect(
       mikaMaxPurchaseQuantity({
-        sellableId: id("sellable_1"),
+        sellableId: createSellableId("sellable_1"),
         status: "low_stock",
         availableQuantity: 2,
         maxPerOrder: 5,
@@ -1177,7 +1178,7 @@ describe("Mika Astro helpers", () => {
     ).toBe(2);
     expect(
       mikaMaxPurchaseQuantity({
-        sellableId: id("sellable_1"),
+        sellableId: createSellableId("sellable_1"),
         status: "untracked",
         maxPerOrder: 3,
       }),
@@ -1792,7 +1793,7 @@ describe("Mika client", () => {
           add: async () => ({
             ok: true,
             status: 200,
-            data: { id: id("cart_1") } as CartDTO,
+            data: { id: createCartId("cart_1") } as CartDTO,
           }),
         },
       } satisfies MikaApiOverrides),
@@ -1947,8 +1948,8 @@ describe("Mika client", () => {
     });
 
     expect(mikaActionDefinitions.cartAdd.normalize?.(cartInput)).toEqual({
-      sellableId: id("sellable_1"),
-      priceId: id("price_1"),
+      sellableId: createSellableId("sellable_1"),
+      priceId: createPriceId("price_1"),
       variantKey: undefined,
       variantOptions: undefined,
       quantity: 2,
@@ -1956,7 +1957,7 @@ describe("Mika client", () => {
     });
     expect(mikaActionDefinitions.checkoutStart.normalize?.(checkoutInput)).toEqual({
       cartId: undefined,
-      sellableId: id("sellable_1"),
+      sellableId: createSellableId("sellable_1"),
       priceId: undefined,
       quantity: 1,
       provider: undefined,
@@ -1980,15 +1981,15 @@ describe("Mika client", () => {
       updateCartItemInputSchema.safeParse({ lineId: "cart_line_1", quantity: "" }).success,
     ).toBe(false);
     expect(updateCartItemInputSchema.parse({ lineId: "cart_line_1", quantity: "2" })).toEqual({
-      lineId: id("cart_line_1"),
+      lineId: createCartId("cart_line_1"),
       quantity: 2,
     });
     expect(cartQuoteInputSchema.parse({ cartId: "cart_1", couponCode: "" })).toMatchObject({
-      cartId: id("cart_1"),
+      cartId: createCartId("cart_1"),
       couponCode: "",
     });
     expect(startCheckoutInputSchema.parse({ cartId: "cart_1", couponCode: "" })).toMatchObject({
-      cartId: id("cart_1"),
+      cartId: createCartId("cart_1"),
       couponCode: "",
     });
   });
@@ -2180,14 +2181,14 @@ describe("Mika client", () => {
         expectedUrl: "https://shop.test/_emdash/api/plugins/mika/cart",
       },
       {
-        run: () => client.cart.add({ sellableId: createMikaId("sellable_1"), quantity: 2 }),
+        run: () => client.cart.add({ sellableId: createSellableId("sellable_1"), quantity: 2 }),
         operation: mikaOperationDefinitions.cartAdd,
         expectedUrl: "https://shop.test/_emdash/api/plugins/mika/cart/items",
         expectedBody: JSON.stringify({ sellableId: "sellable_1", quantity: 2 }),
       },
       {
         run: () =>
-          client.checkout.status({ checkoutId: id("checkout_1"), token: "status_token_1" }),
+          client.checkout.status({ checkoutId: createCheckoutSessionId("checkout_1"), token: "status_token_1" }),
         operation: mikaOperationDefinitions.checkoutStatus,
         expectedUrl:
           "https://shop.test/_emdash/api/plugins/mika/checkout/status?checkoutId=checkout_1&token=status_token_1",
@@ -2561,11 +2562,11 @@ describe("Mika client", () => {
         cart: {
           update: async () => {
             updateCalled = true;
-            return { ok: true, status: 200, data: { id: id("cart_1") } as CartDTO };
+            return { ok: true, status: 200, data: { id: createCartId("cart_1") } as CartDTO };
           },
           applyCoupon: async () => {
             applyCouponCalled = true;
-            return { ok: true, status: 200, data: { id: id("cart_1") } as CartDTO };
+            return { ok: true, status: 200, data: { id: createCartId("cart_1") } as CartDTO };
           },
         },
       } satisfies MikaApiOverrides),
@@ -2612,7 +2613,7 @@ describe("Mika client", () => {
         cart: {
           add: async (_ctx, input) => {
             observed = input;
-            return { ok: true, status: 200, data: { id: id("cart_1") } as CartDTO };
+            return { ok: true, status: 200, data: { id: createCartId("cart_1") } as CartDTO };
           },
         },
       } satisfies MikaApiOverrides),
@@ -2626,8 +2627,8 @@ describe("Mika client", () => {
     });
 
     expect(observed).toMatchObject({
-      sellableId: id("sellable_1"),
-      priceId: id("price_1"),
+      sellableId: createSellableId("sellable_1"),
+      priceId: createPriceId("price_1"),
       quantity: 2,
     });
   });
@@ -2668,7 +2669,7 @@ describe("Mika client", () => {
         cart: {
           add: async () => {
             apiCalled = true;
-            return { ok: true, status: 200, data: { id: id("cart_1") } as CartDTO };
+            return { ok: true, status: 200, data: { id: createCartId("cart_1") } as CartDTO };
           },
         },
       } satisfies MikaApiOverrides),
@@ -2715,7 +2716,7 @@ describe("Mika client", () => {
             ok: true,
             status: 200,
             data: {
-              id: id("cart_1"),
+              id: createCartId("cart_1"),
               items: [{ sellableId: input.sellableId }],
             } as unknown as CartDTO,
           }),
@@ -2737,7 +2738,7 @@ describe("Mika client", () => {
         operation: "cart.add",
         sessionId: "session_policy_1",
         input: {
-          sellableId: id("sellable_1"),
+          sellableId: createSellableId("sellable_1"),
           quantity: 2,
         },
       },
@@ -3263,8 +3264,8 @@ describe("Mika client", () => {
       severity: "success",
     });
     expect(apiInput).toEqual({
-      orderId: id("order_1"),
-      orderLineId: id("order_line_1"),
+      orderId: createOrderId("order_1"),
+      orderLineId: createOrderId("order_line_1"),
       idempotencyKey: "download_issue_invocation_1",
     });
   });
@@ -3324,7 +3325,7 @@ describe("Mika client", () => {
         cart: {
           add: async () => {
             called = true;
-            return { ok: true, status: 200, data: { id: id("cart_1") } as CartDTO };
+            return { ok: true, status: 200, data: { id: createCartId("cart_1") } as CartDTO };
           },
         },
       } satisfies MikaApiOverrides),
@@ -3404,7 +3405,7 @@ describe("Mika client", () => {
     });
 
     await client.order.invoice({
-      orderId: id("order_1"),
+      orderId: createOrderId("order_1"),
       token: "invoice_token_1",
       returnTo: "/account/orders",
     });
@@ -3436,7 +3437,7 @@ describe("Mika client", () => {
       },
     });
 
-    await client.cart.quote({ cartId: id("cart_1"), couponCode: "SAVE10" });
+    await client.cart.quote({ cartId: createCartId("cart_1"), couponCode: "SAVE10" });
     await client.checkout.preview({
       quoteId: id("quote_1"),
       proofRefs: [{ kind: "receipt", id: "receipt_1", inputHash: "hash_1" }],
@@ -3482,11 +3483,11 @@ describe("Mika client", () => {
     });
 
     await client.cart.get();
-    await client.checkout.status({ checkoutId: id("checkout_1"), token: "status_token_1" });
-    await client.cart.update({ lineId: id("cart_line_1"), quantity: 2 });
-    await client.cart.remove({ lineId: id("cart_line_1") });
+    await client.checkout.status({ checkoutId: createCheckoutSessionId("checkout_1"), token: "status_token_1" });
+    await client.cart.update({ lineId: createCartId("cart_line_1"), quantity: 2 });
+    await client.cart.remove({ lineId: createCartId("cart_line_1") });
     await client.cart.applyCoupon({ code: "SAVE10" });
-    await client.cart.removeCoupon({ cartId: id("cart_1") });
+    await client.cart.removeCoupon({ cartId: createCartId("cart_1") });
 
     expect(requests).toEqual([
       {
@@ -3566,7 +3567,7 @@ describe("Mika model mappers", () => {
         titleSnapshot: "Ring",
         sellables: [
           {
-            id: id("sellable_1"),
+            id: createSellableId("sellable_1"),
             titleSnapshot: "Silver Ring",
             variantKey: "finish:silver",
             variantOptions: [{ option: "finish", value: "silver", label: "Silver" }],
@@ -3582,7 +3583,7 @@ describe("Mika model mappers", () => {
             maxPerOrder: 2,
             prices: [
               {
-                id: id("price_1"),
+                id: createPriceId("price_1"),
                 providerRefs: [],
                 amount: 2500,
                 currency: currency("EUR"),
@@ -3596,10 +3597,10 @@ describe("Mika model mappers", () => {
       },
       stockBySellableId: new Map([
         [
-          id("sellable_1"),
+          createSellableId("sellable_1"),
           {
             id: id("stock_1"),
-            sellableId: id("sellable_1"),
+            sellableId: createSellableId("sellable_1"),
             policy: "finite",
             quantityOnHand: 5,
             quantityReserved: 4,
@@ -3675,13 +3676,13 @@ describe("Mika provider contracts", () => {
       id: provider("fake"),
       capabilities: () => ["hosted_checkout"],
       createCheckoutSession: async () => ({
-        id: id("checkout_1"),
+        id: createCheckoutSessionId("checkout_1"),
         status: "created",
         mode: "payment",
         provider: provider("fake"),
       }),
       retrieveCheckoutSession: async () => ({
-        id: id("checkout_1"),
+        id: createCheckoutSessionId("checkout_1"),
         status: "completed",
         mode: "payment",
         provider: provider("fake"),
@@ -4410,8 +4411,10 @@ describe("Mika Astro template contracts", () => {
     expect(source).toContain('from "astro:actions"');
     expect(source).not.toContain("createMikaClient");
     expect(source).toContain("normalizeMikaActionInput");
-    expect(source).not.toContain("const purchaseSellableId = parsePurchaseMikaId");
-    expect(operationDefinitionsSource).toContain("const purchaseSellableId = parsePurchaseMikaId");
+    expect(source).not.toContain("const purchaseSellableId = parsePurchaseSellableId");
+    expect(operationDefinitionsSource).toContain(
+      "const purchaseSellableId = parsePurchaseSellableId",
+    );
     expect(operationDefinitionsSource).toContain("normalizeCheckoutStartActionInput");
   });
 

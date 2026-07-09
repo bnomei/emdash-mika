@@ -22,6 +22,7 @@ import type {
   ISODateTime,
   JsonObject,
   MikaId,
+  OrderId,
   PaymentStatus,
   ProviderName,
   PurchaseMode,
@@ -155,7 +156,7 @@ export interface MikaProviderPortalSession {
 
 /** Lookup keys for resolving a hosted invoice URL from a Mika order and provider payment ids. */
 export interface MikaProviderInvoiceInput {
-  readonly orderId: MikaId;
+  readonly orderId: OrderId;
   readonly providerPaymentId?: string;
   readonly providerOrderId?: string;
 }
@@ -171,7 +172,7 @@ export interface MikaProviderSubscriptionActionInput {
 
 /** Refund request scoped to a Mika order with optional partial amount and provider payment id. */
 export interface MikaProviderRefundInput {
-  readonly orderId: MikaId;
+  readonly orderId: OrderId;
   readonly providerPaymentId?: string;
   readonly amount?: number;
   readonly reason?: string;
@@ -181,7 +182,7 @@ export interface MikaProviderRefundInput {
 
 /** Cancel request for a provider-side order or payment intent tied to a Mika order. */
 export interface MikaProviderOrderCancelInput {
-  readonly orderId: MikaId;
+  readonly orderId: OrderId;
   readonly providerPaymentId?: string;
   readonly providerOrderId?: string;
   readonly reason?: string;

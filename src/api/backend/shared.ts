@@ -5,7 +5,13 @@
  */
 import { omitUndefined } from "../../internal/object";
 import type { MikaProviderLineItem, MikaProviderPaymentEvent } from "../../provider";
-import { createCurrencyCode, createISODateTime, createMikaId } from "../../types/primitives";
+import {
+  createCurrencyCode,
+  createISODateTime,
+  createMikaId,
+  createPriceId,
+  createSellableId,
+} from "../../types/primitives";
 import type {
   CurrencyCode,
   FulfillmentKind,
@@ -217,9 +223,9 @@ function variantOptionChildren(
   });
 }
 
-function mikaIdChild(input: JsonObject, key: string): MikaId | undefined {
+function priceIdChild(input: JsonObject, key: string): ReturnType<typeof createPriceId> | undefined {
   const value = stringChild(input, key);
-  return value ? createMikaId(value) : undefined;
+  return value ? createPriceId(value) : undefined;
 }
 
 const SUBSCRIPTION_STATUSES = [
@@ -300,8 +306,8 @@ export function providerLineChildren(
 
     return [
       omitUndefined({
-        sellableId: createMikaId(sellableId),
-        priceId: mikaIdChild(line, "priceId"),
+        sellableId: createSellableId(sellableId),
+        priceId: priceIdChild(line, "priceId"),
         contentRef: contentRefChild(line, "contentRef") ?? { collection: "", id: "" },
         sku: stringChild(line, "sku"),
         title,

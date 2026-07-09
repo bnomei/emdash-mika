@@ -37,10 +37,15 @@ import {
   type MikaStripeClient,
 } from "../src/stripe";
 import {
+  createCartId,
+  createCheckoutSessionId,
   createCurrencyCode,
   createISODateTime,
   createMikaId,
+  createOrderId,
+  createPriceId,
   createProviderName,
+  createSellableId,
   type JsonObject,
 } from "../src/types/primitives";
 import { createTestSellableDTO } from "./helpers/backend";
@@ -53,12 +58,12 @@ import {
 describe("Mika ACP projection", () => {
   it("builds API product feeds and file-upload rows from Mika sellables", () => {
     const sellable = createTestSellableDTO({
-      id: createMikaId("sellable_print"),
+      id: createSellableId("sellable_print"),
       title: "Limited print",
       imageRef: "https://shop.example.test/print.jpg",
       variantOptions: [{ option: "size", value: "A3", label: "Size" }],
       availability: {
-        sellableId: createMikaId("sellable_print"),
+        sellableId: createSellableId("sellable_print"),
         status: "available",
         availableQuantity: 4,
       },
@@ -130,10 +135,10 @@ describe("Mika ACP projection", () => {
 
   it("advertises a sold-out backorder sellable as available/backorder, not out_of_stock", async () => {
     const sellable = createTestSellableDTO({
-      id: createMikaId("sellable_backorder"),
+      id: createSellableId("sellable_backorder"),
       title: "Backorder poster",
       availability: {
-        sellableId: createMikaId("sellable_backorder"),
+        sellableId: createSellableId("sellable_backorder"),
         status: "backorder",
         availableQuantity: 0,
       },
@@ -193,11 +198,11 @@ describe("Mika ACP projection", () => {
 
   it("skips zero-variant products instead of failing the whole ACP product feed", () => {
     const active = createTestSellableDTO({
-      id: createMikaId("sellable_active"),
+      id: createSellableId("sellable_active"),
       title: "Active print",
     });
     const pausedBase = createTestSellableDTO({
-      id: createMikaId("sellable_paused"),
+      id: createSellableId("sellable_paused"),
       title: "Paused print",
     });
     const paused = {
@@ -2265,7 +2270,7 @@ describe("Mika ACP projection", () => {
             await firstGate;
 
             return ok<CheckoutSessionDTO>({
-              id: createMikaId("checkout_a_failed"),
+              id: createCheckoutSessionId("checkout_a_failed"),
               status: "failed",
               mode: "payment",
               provider: createProviderName("stripe"),
@@ -2603,7 +2608,7 @@ describe("Mika Stripe provider", () => {
       };
       const provider = createMikaStripeProvider({ stripe });
       const result = await provider.refundPayment?.({
-        orderId: createMikaId("order_1"),
+        orderId: createOrderId("order_1"),
         providerPaymentId: "pi_test_1",
       });
 
@@ -2633,7 +2638,7 @@ describe("Mika Stripe provider", () => {
 
     await expect(
       provider.refundPayment?.({
-        orderId: createMikaId("order_1"),
+        orderId: createOrderId("order_1"),
         providerPaymentId: "pi_test_1",
       }),
     ).resolves.toMatchObject({
@@ -2656,7 +2661,7 @@ describe("Mika Stripe provider", () => {
     };
     const provider = createMikaStripeProvider({ stripe });
     await provider.refundPayment?.({
-      orderId: createMikaId("order_1"),
+      orderId: createOrderId("order_1"),
       providerPaymentId: "pi_test_1",
       idempotencyKey: "refund-1",
     });
@@ -2697,8 +2702,8 @@ describe("Mika Stripe provider", () => {
         cancelUrl: "https://shop.example.test/cancel",
         lines: [
           {
-            sellableId: createMikaId("sellable_1"),
-            priceId: createMikaId("price_1"),
+            sellableId: createSellableId("sellable_1"),
+            priceId: createPriceId("price_1"),
             contentRef: { collection: "products", id: "print" },
             title: "Limited print",
             providerPriceId: "price_stripe_123",
@@ -2753,8 +2758,8 @@ describe("Mika Stripe provider", () => {
       cancelUrl: "https://shop.example.test/cancel",
       lines: [
         {
-          sellableId: createMikaId("sellable_sub"),
-          priceId: createMikaId("price_sub"),
+          sellableId: createSellableId("sellable_sub"),
+          priceId: createPriceId("price_sub"),
           contentRef: { collection: "products", id: "membership" },
           title: "Annual membership",
           quantity: 1,
@@ -2804,8 +2809,8 @@ describe("Mika Stripe provider", () => {
         total: { amount: 2400, currency: createCurrencyCode("EUR") },
         lines: [
           {
-            sellableId: createMikaId("sellable_1"),
-            priceId: createMikaId("price_1"),
+            sellableId: createSellableId("sellable_1"),
+            priceId: createPriceId("price_1"),
             contentRef: { collection: "products", id: "print" },
             title: "Limited print",
             quantity: 2,
@@ -2868,8 +2873,8 @@ describe("Mika Stripe provider", () => {
       discount: { amount: 240, currency: createCurrencyCode("EUR") },
       lines: [
         {
-          sellableId: createMikaId("sellable_1"),
-          priceId: createMikaId("price_1"),
+          sellableId: createSellableId("sellable_1"),
+          priceId: createPriceId("price_1"),
           contentRef: { collection: "products", id: "print" },
           title: "Limited print",
           providerPriceId: "price_stripe_123",
@@ -2919,8 +2924,8 @@ describe("Mika Stripe provider", () => {
         discount: { amount: 240, currency: createCurrencyCode("EUR") },
         lines: [
           {
-            sellableId: createMikaId("sellable_1"),
-            priceId: createMikaId("price_1"),
+            sellableId: createSellableId("sellable_1"),
+            priceId: createPriceId("price_1"),
             contentRef: { collection: "products", id: "print" },
             title: "Limited print",
             providerPriceId: "price_stripe_123",
@@ -2959,8 +2964,8 @@ describe("Mika Stripe provider", () => {
       total: { amount: 2460, currency: createCurrencyCode("EUR") },
       lines: [
         {
-          sellableId: createMikaId("sellable_1"),
-          priceId: createMikaId("price_1"),
+          sellableId: createSellableId("sellable_1"),
+          priceId: createPriceId("price_1"),
           contentRef: { collection: "products", id: "print" },
           title: "Limited print",
           quantity: 2,
@@ -2996,7 +3001,7 @@ describe("Mika Stripe provider", () => {
     const provider = createMikaStripeProvider({ stripe });
 
     await expect(
-      provider.getInvoiceUrl?.({ orderId: createMikaId("order_1"), providerPaymentId: "pi_123" }),
+      provider.getInvoiceUrl?.({ orderId: createOrderId("order_1"), providerPaymentId: "pi_123" }),
     ).resolves.toEqual({
       orderId: "order_1",
       href: "https://invoice.stripe.test/in_456",
@@ -3022,7 +3027,7 @@ describe("Mika Stripe provider", () => {
     const provider = createMikaStripeProvider({ stripe });
 
     await expect(
-      provider.getInvoiceUrl?.({ orderId: createMikaId("order_1"), providerPaymentId: "pi_123" }),
+      provider.getInvoiceUrl?.({ orderId: createOrderId("order_1"), providerPaymentId: "pi_123" }),
     ).resolves.toEqual({ orderId: "order_1" });
     expect(invoiceCalls).toEqual([]);
   });
@@ -3040,7 +3045,7 @@ describe("Mika Stripe provider", () => {
     const provider = createMikaStripeProvider({ stripe });
 
     await expect(
-      provider.getInvoiceUrl?.({ orderId: createMikaId("order_1"), providerPaymentId: "in_789" }),
+      provider.getInvoiceUrl?.({ orderId: createOrderId("order_1"), providerPaymentId: "in_789" }),
     ).resolves.toEqual({
       orderId: "order_1",
       href: "https://invoice.stripe.test/in_789",
@@ -3100,7 +3105,7 @@ describe("Mika Stripe provider", () => {
 
     await expect(
       provider.cancelOrder?.({
-        orderId: createMikaId("order_1"),
+        orderId: createOrderId("order_1"),
         providerOrderId: "pi_succeeded",
       }),
     ).resolves.toMatchObject({
@@ -3156,7 +3161,7 @@ describe("Mika Stripe provider", () => {
 
     await expect(
       provider.cancelOrder?.({
-        orderId: createMikaId("order_1"),
+        orderId: createOrderId("order_1"),
         providerPaymentId: "pi_payment",
         providerOrderId: "in_invoice",
       }),
@@ -3784,11 +3789,11 @@ function createAcpTestApi(input: {
 }): MikaApi {
   const checkoutSessionStatus = input.checkoutSessionStatus ?? "completed";
   const checkoutSession = (): CheckoutSessionDTO => ({
-    id: createMikaId("checkout_1"),
+    id: createCheckoutSessionId("checkout_1"),
     status: checkoutSessionStatus,
     mode: "payment",
     provider: createProviderName("stripe"),
-    ...(checkoutSessionStatus === "completed" ? { orderId: createMikaId("order_1") } : {}),
+    ...(checkoutSessionStatus === "completed" ? { orderId: createOrderId("order_1") } : {}),
   });
   const api = {
     cart: {
@@ -3829,8 +3834,8 @@ function createAcpTestApi(input: {
         if (override) return override;
 
         return ok({
-          id: createMikaId("checkout_preview_1"),
-          quoteId: createMikaId("cart_quote_1"),
+          id: createCheckoutSessionId("checkout_preview_1"),
+          quoteId: createCartId("cart_quote_1"),
           status: "requires_payment_authorization",
           mode: "payment",
           provider: createProviderName("stripe"),
@@ -3876,8 +3881,8 @@ function createCartLine(input: {
 }): CartDTO["items"][number] {
   return {
     id: createMikaId(input.id),
-    sellableId: createMikaId(input.sellableId),
-    ...optionalProperty("priceId", input.priceId ? createMikaId(input.priceId) : undefined),
+    sellableId: createSellableId(input.sellableId),
+    ...optionalProperty("priceId", input.priceId ? createPriceId(input.priceId) : undefined),
     title: "Limited print",
     sku: "PRINT-A3",
     variantOptions: [],
@@ -3893,7 +3898,7 @@ function createCart(items: CartDTO["items"]): CartDTO {
   const money = { amount: total, currency: createCurrencyCode("EUR") };
 
   return {
-    id: createMikaId("cart_1"),
+    id: createCartId("cart_1"),
     status: "open",
     currency: createCurrencyCode("EUR"),
     items,
@@ -3904,7 +3909,7 @@ function createCart(items: CartDTO["items"]): CartDTO {
 
 function cartToQuote(cart: CartDTO): CartQuoteDTO {
   return {
-    id: createMikaId("cart_quote_1"),
+    id: createCartId("cart_quote_1"),
     cartId: cart.id,
     status: cart.items.length > 0 ? "valid" : "unavailable",
     currency: cart.currency,

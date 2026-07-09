@@ -11,7 +11,7 @@ import { findSessionRepositoryOpenCartBySessionAnyCurrency } from "../../storage
 import type { CartLine, SellableDefinition } from "../../types/aggregates";
 import type { CartDocument } from "../../types/documents";
 import type { StockItemRecord } from "../../types/operational";
-import { createISODateTime } from "../../types/primitives";
+import { createCartId, createISODateTime } from "../../types/primitives";
 import type { CurrencyCode, MikaId } from "../../types/primitives";
 import type { MikaRequestContext } from "../context";
 import type { MikaApi } from "../server";
@@ -547,7 +547,7 @@ export function createCartDocument(
   const now = ctx.now;
 
   return omitUndefined({
-    id: input.createId("cart"),
+    id: createCartId(input.createId("cart")),
     type: "cart",
     schemaVersion: 1,
     sessionId: ctx.sessionId,

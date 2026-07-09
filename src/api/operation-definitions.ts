@@ -2,7 +2,7 @@
  * Operation and route-only definition catalogs (const maps + form-action normalizers).
  */
 import { omitUndefined } from "../internal/object";
-import { createMikaId } from "../types/primitives";
+import { createPriceId, createSellableId } from "../types/primitives";
 import { normalizeMikaCheckoutCustomer, parseMikaPurchaseField } from "./form-contracts";
 import { mikaPluginRoutePaths } from "./route-paths";
 import { agentOperationMetadata } from "./operation-agent-metadata";
@@ -85,8 +85,8 @@ type CheckoutStartOperationInput = z.infer<typeof startCheckoutInputSchema>;
 
 function normalizeCartAddActionInput(input: CartAddFormInput): CartAddOperationInput {
   const purchase = parseMikaPurchaseField(input.purchase);
-  const purchaseSellableId = parsePurchaseMikaId(purchase.sellableId, "sellableId");
-  const purchasePriceId = parsePurchaseMikaId(purchase.priceId, "priceId");
+  const purchaseSellableId = parsePurchaseSellableId(purchase.sellableId);
+  const purchasePriceId = parsePurchasePriceId(purchase.priceId);
   const sellableId = purchaseSellableId ?? input.sellableId;
   const priceId = purchasePriceId ?? input.priceId;
 
@@ -124,13 +124,23 @@ function normalizeCheckoutStartActionInput(
   });
 }
 
-function parsePurchaseMikaId(value: string | null | undefined, field: string) {
+function parsePurchaseSellableId(value: string | null | undefined) {
   if (!value) return undefined;
 
   try {
-    return createMikaId(value);
+    return createSellableId(value);
   } catch {
-    throw new MikaActionInputError(`${field} is invalid.`);
+    throw new MikaActionInputError("sellableId is invalid.");
+  }
+}
+
+function parsePurchasePriceId(value: string | null | undefined) {
+  if (!value) return undefined;
+
+  try {
+    return createPriceId(value);
+  } catch {
+    throw new MikaActionInputError("priceId is invalid.");
   }
 }
 

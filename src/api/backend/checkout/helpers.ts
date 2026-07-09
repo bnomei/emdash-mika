@@ -12,7 +12,7 @@ import {
 import { omitUndefined } from "../../../internal/object";
 import type { CheckoutLine } from "../../../types/aggregates";
 import type { CheckoutDocument } from "../../../types/documents";
-import { createISODateTime } from "../../../types/primitives";
+import { createISODateTime, createOrderId } from "../../../types/primitives";
 import type {
   CheckoutProviderStatus,
   CheckoutStatus,
@@ -218,7 +218,11 @@ export function checkoutDocumentSuccessResult(
     ? rawRedirectUrl
     : undefined;
   const orderId =
-    document.orderId ?? metadataMikaId(document.aggregate.metadata, "checkoutOrderId");
+    document.orderId ??
+    (() => {
+      const raw = metadataMikaId(document.aggregate.metadata, "checkoutOrderId");
+      return raw ? createOrderId(raw) : undefined;
+    })();
 
   return {
     ok: true,

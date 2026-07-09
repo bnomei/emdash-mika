@@ -14,7 +14,12 @@ import {
   type SubscriptionDocument,
   type WebhookDocument,
 } from "../../../../types/documents";
-import { type ISODateTime, type JsonObject, type MikaId } from "../../../../types/primitives";
+import {
+  createOrderId,
+  type ISODateTime,
+  type JsonObject,
+  type MikaId,
+} from "../../../../types/primitives";
 import { type MikaRequestContext } from "../../../context";
 import { checkoutCustomerFromMetadata } from "../../checkout";
 import { emitBackendNotification, observeBackendError } from "../../errors";
@@ -167,7 +172,7 @@ export async function createPaymentOrderDocument(
   checkout: CheckoutDocument,
   event: MikaProviderPaymentEvent,
 ): Promise<OrderDocument> {
-  const orderId = input.createId("order");
+  const orderId = createOrderId(input.createId("order"));
   const total = checkout.aggregate.totals.total;
   const lines = checkout.aggregate.lines.map((line) =>
     orderLineFromCheckoutLine({

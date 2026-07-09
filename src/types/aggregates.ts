@@ -4,6 +4,7 @@
  */
 import type {
   AggregatePayload,
+  CartId,
   CartStatus,
   CheckoutStatus,
   ContentRef,
@@ -15,8 +16,10 @@ import type {
   Money,
   OrderStatus,
   PaymentStatus,
+  PriceId,
   ProviderName,
   PurchaseMode,
+  SellableId,
   StockPolicy,
   SubscriptionStatus,
   Timestamped,
@@ -51,7 +54,7 @@ export interface ProviderProductRef {
 
 /** Purchasable price variant with fulfillment and provider bindings. */
 export interface PriceDefinition {
-  readonly id: MikaId;
+  readonly id: PriceId;
   readonly sku?: string;
   readonly titleSnapshot?: string;
   readonly providerRefs: readonly ProviderProductRef[];
@@ -68,7 +71,7 @@ export interface PriceDefinition {
 
 /** Catalog sellable with variant metadata, stock linkage, and price list. */
 export interface SellableDefinition {
-  readonly id: MikaId;
+  readonly id: SellableId;
   readonly sku?: string;
   readonly titleSnapshot?: string;
   readonly variantKey?: string;
@@ -96,8 +99,8 @@ export interface CatalogCommerceAggregate extends AggregatePayload {
 /** Immutable purchasable snapshot frozen at cart, checkout, or order time. */
 export interface PurchasableSnapshot {
   readonly content: ContentRef;
-  readonly sellableId: MikaId;
-  readonly priceId?: MikaId;
+  readonly sellableId: SellableId;
+  readonly priceId?: PriceId;
   readonly sku?: string;
   readonly titleSnapshot: string;
   readonly variantKey?: string;
@@ -341,7 +344,7 @@ export interface WishlistRecord extends AggregateRecord<WishlistAggregate> {
 
 /** Indexed checkout session record fields mirrored on checkout documents. */
 export interface CheckoutSessionRecord extends AggregateRecord<CheckoutAggregate> {
-  readonly cartId?: MikaId;
+  readonly cartId?: CartId;
   readonly customerId?: MikaId;
   readonly provider: ProviderName;
   readonly providerCheckoutId?: string;

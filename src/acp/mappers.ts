@@ -17,10 +17,12 @@ import type {
 import {
   createCurrencyCode,
   createISODateTime,
-  createMikaId,
+  createPriceId,
+  createSellableId,
   type ISODateTime,
-  type MikaId,
+  type PriceId,
   type ProviderName,
+  type SellableId,
 } from "../types/primitives";
 import type {
   MikaAcpBuyer,
@@ -152,15 +154,15 @@ export function acpCheckoutSessionFromState(input: {
 }
 
 export function parseAcpItemId(id: string): {
-  readonly sellableId: MikaId;
-  readonly priceId?: MikaId;
+  readonly sellableId: SellableId;
+  readonly priceId?: PriceId;
 } {
   const [sellableId, priceId] = id.split(":");
   if (!sellableId) throw new Error("ACP item id must include a sellable id.");
 
   return {
-    sellableId: createMikaId(sellableId),
-    ...(priceId ? { priceId: createMikaId(priceId) } : {}),
+    sellableId: createSellableId(sellableId),
+    ...(priceId ? { priceId: createPriceId(priceId) } : {}),
   };
 }
 

@@ -9,7 +9,7 @@ import {
   type WebhookDocument,
   type WorkflowDocument,
 } from "../../../../types/documents";
-import { type ISODateTime, type MikaId } from "../../../../types/primitives";
+import { createOrderId, type ISODateTime, type MikaId } from "../../../../types/primitives";
 import { type MikaRequestContext } from "../../../context";
 import { expireCheckoutDocument } from "../../checkout";
 import { emitBackendNotification } from "../../errors";
@@ -79,7 +79,7 @@ export async function processPaymentReversalWebhook(
   const updated = applyOrderRefund(
     order,
     {
-      orderId: order.id,
+      orderId: createOrderId(order.id),
       reason: event.type,
       ...(refundAmount !== undefined ? { amount: refundAmount } : {}),
     },

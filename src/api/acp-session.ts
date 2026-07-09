@@ -4,7 +4,13 @@
  * session-store vocabulary without referencing the full ACP handler entry. acp.ts re-exports every
  * name here, so the public `/acp` surface is unchanged.
  */
-import type { CurrencyCode, ISODateTime, MikaId, ProviderName } from "../types/primitives";
+import type {
+  CartId,
+  CheckoutSessionId,
+  CurrencyCode,
+  ISODateTime,
+  ProviderName,
+} from "../types/primitives";
 
 /** Buyer contact fields carried through the ACP checkout session lifecycle. */
 export interface MikaAcpBuyer {
@@ -116,8 +122,8 @@ export interface MikaAcpSessionRecord {
   readonly id: string;
   /** Isolated Mika session id used for cart and checkout API calls. */
   readonly sessionId: string;
-  readonly cartId?: MikaId;
-  readonly checkoutId?: MikaId;
+  readonly cartId?: CartId;
+  readonly checkoutId?: CheckoutSessionId;
   readonly status: MikaAcpCheckoutSessionStatus;
   readonly buyer?: MikaAcpBuyer;
   readonly items: readonly MikaAcpItem[];

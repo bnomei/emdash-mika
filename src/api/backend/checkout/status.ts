@@ -2,7 +2,7 @@
  * Checkout status lookup and document expiry.
  */
 import type { CheckoutDocument } from "../../../types/documents";
-import { createMikaId, type ISODateTime, type MikaId } from "../../../types/primitives";
+import { type ISODateTime, type MikaId } from "../../../types/primitives";
 import type { MikaRequestContext } from "../../context";
 import type { CheckoutSessionDTO, CheckoutStatusInput, MikaApiResult } from "../../types";
 import { invalidCheckout } from "../errors";
@@ -24,7 +24,7 @@ export async function checkoutStatus(
   ctx: MikaRequestContext,
   statusInput: CheckoutStatusInput,
 ): Promise<MikaApiResult<CheckoutSessionDTO>> {
-  const checkoutId = createMikaId(statusInput.checkoutId);
+  const checkoutId = statusInput.checkoutId;
   const document = await input.repositories.session.findCheckoutById(checkoutId);
   if (!document) return invalidCheckout("checkoutId", checkoutId);
 

@@ -70,6 +70,14 @@ export const checkoutSessionIdSchema = brandedStringSchema(
   "CheckoutSessionId",
 );
 export const orderIdSchema = brandedStringSchema(createOrderId, "OrderId");
+/** Optional branded {@link SellableId}; empty form values become undefined. */
+const optionalSellableIdSchema = z.preprocess(emptyToUndefined, sellableIdSchema.optional());
+/** Optional branded {@link PriceId}; empty form values become undefined. */
+const optionalPriceIdSchema = z.preprocess(emptyToUndefined, priceIdSchema.optional());
+/** Optional branded {@link CartId}; empty form values become undefined. */
+const optionalCartIdSchema = z.preprocess(emptyToUndefined, cartIdSchema.optional());
+/** Optional branded {@link OrderId}; empty form values become undefined. */
+const optionalOrderIdSchema = z.preprocess(emptyToUndefined, orderIdSchema.optional());
 /** Branded {@link ISODateTime} string validated through {@link createISODateTime}. */
 const isoDateTimeSchema = brandedStringSchema(createISODateTime, "ISODateTime");
 /** Optional branded {@link ISODateTime}; empty form values become undefined. */
@@ -167,13 +175,13 @@ export const contentRefInputSchema = exactOptionalObject(
 
 /** Sellable id for on-hand stock availability lookups. */
 export const stockAvailabilityInputSchema = z.object({
-  sellableId: mikaIdSchema,
-}) satisfies z.ZodType<{ readonly sellableId: MikaId }>;
+  sellableId: sellableIdSchema,
+}) satisfies z.ZodType<{ readonly sellableId: SellableId }>;
 
 /** Checkout session id and optional polling token for {@link CheckoutStatusInput}. */
 export const checkoutStatusInputSchema = exactOptionalObject(
   z.object({
-    checkoutId: mikaIdSchema,
+    checkoutId: checkoutSessionIdSchema,
     token: optionalStringSchema,
   }),
 );
@@ -181,7 +189,7 @@ export const checkoutStatusInputSchema = exactOptionalObject(
 /** Checkout session id for abandoning an in-flight checkout. */
 export const checkoutCancelInputSchema = exactOptionalObject(
   z.object({
-    checkoutId: mikaIdSchema,
+    checkoutId: checkoutSessionIdSchema,
     token: optionalStringSchema,
   }),
 );
@@ -215,7 +223,7 @@ export const downloadResolveInputSchema = z.object({
 /** Order id and optional invoice token for customer invoice access. */
 export const orderInvoiceInputSchema = exactOptionalObject(
   z.object({
-    orderId: mikaIdSchema,
+    orderId: orderIdSchema,
     token: optionalStringSchema,
     returnTo: optionalStringSchema,
   }),
@@ -231,8 +239,8 @@ export const returnToInputSchema = exactOptionalObject(
 /** Sellable, price, quantity, and variant fields for {@link AddCartItemInput}. */
 export const addCartItemInputSchema = exactOptionalObject(
   z.object({
-    sellableId: mikaIdSchema,
-    priceId: optionalMikaIdSchema,
+    sellableId: sellableIdSchema,
+    priceId: optionalPriceIdSchema,
     quantity: optionalQuantitySchema,
     variantKey: optionalStringSchema,
     variantOptions: variantOptionsSchema,
@@ -242,8 +250,8 @@ export const addCartItemInputSchema = exactOptionalObject(
 
 /** HTML form transport for add-to-cart posts, including purchase mode shortcuts. */
 const cartAddFormInputBaseSchema = z.object({
-  sellableId: optionalMikaIdSchema,
-  priceId: optionalMikaIdSchema,
+  sellableId: optionalSellableIdSchema,
+  priceId: optionalPriceIdSchema,
   purchase: optionalStringSchema,
   variantKey: optionalStringSchema,
   variantOptions: variantOptionsSchema,
@@ -274,7 +282,7 @@ export const removeCartItemInputSchema = exactOptionalObject(
 export const mergeCartInputSchema = exactOptionalObject(
   z.object({
     sourceSessionId: optionalStringSchema,
-    targetCartId: optionalMikaIdSchema,
+    targetCartId: optionalCartIdSchema,
     returnTo: optionalStringSchema,
   }),
 );
@@ -283,7 +291,7 @@ export const mergeCartInputSchema = exactOptionalObject(
 export const applyCouponInputSchema = exactOptionalObject(
   z.object({
     code: requiredStringSchema,
-    cartId: optionalMikaIdSchema,
+    cartId: optionalCartIdSchema,
     returnTo: optionalStringSchema,
   }),
 );
@@ -291,7 +299,7 @@ export const applyCouponInputSchema = exactOptionalObject(
 /** Clears the applied coupon from the active or specified cart. */
 export const removeCouponInputSchema = exactOptionalObject(
   z.object({
-    cartId: optionalMikaIdSchema,
+    cartId: optionalCartIdSchema,
     returnTo: optionalStringSchema,
   }),
 );
@@ -299,8 +307,8 @@ export const removeCouponInputSchema = exactOptionalObject(
 /** Sellable and optional price for adding a wishlist item. */
 export const wishlistItemInputSchema = exactOptionalObject(
   z.object({
-    sellableId: mikaIdSchema,
-    priceId: optionalMikaIdSchema,
+    sellableId: sellableIdSchema,
+    priceId: optionalPriceIdSchema,
     returnTo: optionalStringSchema,
   }),
 );
@@ -355,9 +363,9 @@ const checkoutCustomerInputSchema = exactOptionalObject(z.object(checkoutCustome
 /** Quote, checkout start, preview, and HTML form transport schemas. */
 export const cartQuoteInputSchema = exactOptionalObject(
   z.object({
-    cartId: optionalMikaIdSchema,
-    sellableId: optionalMikaIdSchema,
-    priceId: optionalMikaIdSchema,
+    cartId: optionalCartIdSchema,
+    sellableId: optionalSellableIdSchema,
+    priceId: optionalPriceIdSchema,
     quantity: optionalQuantitySchema,
     couponCode: optionalCouponCodeSchema,
     customer: checkoutCustomerInputSchema.optional(),
@@ -368,9 +376,9 @@ export const cartQuoteInputSchema = exactOptionalObject(
 
 /** Cart or direct purchase handoff fields for {@link StartCheckoutInput}. */
 const startCheckoutInputBaseSchema = z.object({
-  cartId: optionalMikaIdSchema,
-  sellableId: optionalMikaIdSchema,
-  priceId: optionalMikaIdSchema,
+  cartId: optionalCartIdSchema,
+  sellableId: optionalSellableIdSchema,
+  priceId: optionalPriceIdSchema,
   quantity: optionalQuantitySchema,
   provider: optionalProviderNameSchema,
   couponCode: optionalCouponCodeSchema,
@@ -471,7 +479,7 @@ export const subscriptionCancelInputSchema = exactOptionalObject(
 export const subscriptionChangeInputSchema = exactOptionalObject(
   z.object({
     subscriptionId: mikaIdSchema,
-    priceId: optionalMikaIdSchema,
+    priceId: optionalPriceIdSchema,
     returnTo: optionalStringSchema,
   }),
 );
@@ -556,7 +564,7 @@ export const webhookReplayInputSchema = exactOptionalObject(
 /** Order, optional partial amount, reason, and idempotency key for refunds. */
 export const orderRefundInputSchema = exactOptionalObject(
   z.object({
-    orderId: mikaIdSchema,
+    orderId: orderIdSchema,
     amount: optionalAmountSchema,
     reason: optionalStringSchema,
     idempotencyKey: optionalStringSchema,
@@ -566,7 +574,7 @@ export const orderRefundInputSchema = exactOptionalObject(
 /** Order and optional reason with idempotency for cancellation. */
 export const orderCancelInputSchema = exactOptionalObject(
   z.object({
-    orderId: mikaIdSchema,
+    orderId: orderIdSchema,
     reason: optionalStringSchema,
     idempotencyKey: optionalStringSchema,
   }),
@@ -616,7 +624,7 @@ export const licenseRevokeInputSchema = exactOptionalObject(
 export const downloadIssueInputSchema = exactOptionalObject(
   z.object({
     entitlementId: optionalMikaIdSchema,
-    orderId: optionalMikaIdSchema,
+    orderId: optionalOrderIdSchema,
     orderLineId: optionalMikaIdSchema,
     expiresAt: optionalISODateTimeSchema,
     idempotencyKey: optionalStringSchema,

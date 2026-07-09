@@ -17,13 +17,15 @@ import {
 import type { CheckoutLine, CouponSnapshot } from "../../../types/aggregates";
 import type { CartDocument, CheckoutDocument } from "../../../types/documents";
 import type { StockItemRecord } from "../../../types/operational";
-import type {
-  CurrencyCode,
-  ISODateTime,
-  JsonObject,
-  MikaId,
-  ProviderName,
-  PurchaseMode,
+import {
+  createCheckoutSessionId,
+  type CheckoutSessionId,
+  type CurrencyCode,
+  type ISODateTime,
+  type JsonObject,
+  type MikaId,
+  type ProviderName,
+  type PurchaseMode,
 } from "../../../types/primitives";
 import type { MikaRequestContext } from "../../context";
 import type { CheckoutSessionDTO, MikaApiResult, StartCheckoutInput } from "../../types";
@@ -272,7 +274,7 @@ export async function startCheckout(
     return validationFailed("url", "Checkout requires a request URL.");
   }
 
-  const checkoutId = input.createId("checkout");
+  const checkoutId = createCheckoutSessionId(input.createId("checkout"));
   const expiresAt = checkoutExpiresAt(input, ctx);
   const statusToken = input.createId("checkout_status_token");
   // Optimistic cart claim serializes concurrent checkout starts; release on any downstream failure.
@@ -724,7 +726,7 @@ export async function resolveCheckoutStartLine(
 export async function reserveCheckoutLines(
   input: MikaBackendDependencies,
   ctx: MikaRequestContext,
-  checkoutId: MikaId,
+  checkoutId: CheckoutSessionId,
   checkout: CheckoutStartResolution,
   expiresAt: ISODateTime,
 ): Promise<

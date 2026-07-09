@@ -10,7 +10,14 @@ import type {
   ReleaseReservedStockRepositoryResult,
   ReserveStockRepositoryResult,
 } from "../../storage/repositories";
-import type { ISODateTime, JsonObject, MikaId } from "../../types/primitives";
+import type {
+  CartId,
+  CheckoutSessionId,
+  ISODateTime,
+  JsonObject,
+  MikaId,
+  OrderId,
+} from "../../types/primitives";
 import type { StockAdjustInput } from "../types";
 import { currentBackendISODateTime } from "./shared";
 import type { MikaBackendDependencies, MikaBackendRepositories } from "./ports";
@@ -28,8 +35,8 @@ export interface ReserveStockInput {
   readonly quantity: number;
   readonly expiresAt: ISODateTime;
   readonly now?: ISODateTime;
-  readonly cartId?: MikaId;
-  readonly checkoutSessionId?: MikaId;
+  readonly cartId?: CartId;
+  readonly checkoutSessionId?: CheckoutSessionId;
   readonly customerId?: MikaId;
   readonly sessionId?: string;
   readonly idempotencyKey?: string;
@@ -55,7 +62,7 @@ export type ExpireReservedStockResult = ExpireReservedStockRepositoryResult;
 export interface ConsumeReservedStockInput {
   readonly reservationEventId: MikaId;
   readonly now?: ISODateTime;
-  readonly orderId?: MikaId;
+  readonly orderId?: OrderId;
   readonly orderLineId?: MikaId;
 }
 
