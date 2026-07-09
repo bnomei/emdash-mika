@@ -361,7 +361,9 @@ export const MIKA_TO_ACP_ERROR_CODES = {
   PAYMENT_PENDING: "payment_pending",
   PROVIDER_UNSUPPORTED: "provider_unsupported",
   PROVIDER_FAILED: "provider_failed",
-  CONFLICT: "request_not_idempotent",
+  // Generic CAS/concurrency conflicts stay "conflict"; only explicit idempotency
+  // mismatches use ACP request_not_idempotent.
+  CONFLICT: "conflict",
   IDEMPOTENCY_MISMATCH: "request_not_idempotent",
   WEBHOOK_DEFERRED: "webhook_deferred",
   INTERNAL: "internal",

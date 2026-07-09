@@ -51,11 +51,13 @@ Templates assume the same three faces as the package README:
 
 1. **Backend** — `lib/mika-api.ts` exports a host-owned `MikaApi` / overrides
    (typically `createMikaBackendApi` from `@bnomei/emdash-mika/server`).
-2. **In-process** — `actions/mika.ts` builds `createMikaActions({ api })`; pages
-   use `createMika(Astro, { api })` from `@bnomei/emdash-mika/astro` for
+2. **In-process** — `actions/index.ts` builds `createMikaActions({ api })`
+   (with `actions/mika.ts` as a thin re-export); pages use
+   `createMika(Astro, { api })` from `@bnomei/emdash-mika/astro` for
    request-scoped helpers.
 3. **HTTP** — optional browser `createMikaClient` for public catalog/stock only;
-   server plugin routes and `createMikaServerClient` cover authenticated ops.
+   server plugin routes and `createMikaServerClient` from
+   `@bnomei/emdash-mika/server` cover authenticated ops.
 
 `lib/mika-plugin.ts` is the EmDash entrypoint that injects that same `api` into
 `createMikaPlugin`. Leave `api` empty only while scaffolding — construction
@@ -379,7 +381,7 @@ middleware. Mika keeps sessions optional so the templates still work on sites
 that use durable carts, provider checkouts, or deployments without an Astro
 session driver.
 
-Supported template installs target Astro 6 or 7, matching Mika's peer
+Supported template installs target **Astro 7**, matching Mika's peer
 dependency range. The session examples rely on Astro's server-side Sessions
 API but remain optional for hosts that use durable carts or another session
 driver.

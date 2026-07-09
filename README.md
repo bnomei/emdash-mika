@@ -99,16 +99,10 @@ mutations.
 
 Supporting entrypoints stay projections of the same semantic core: `/agent`
 (manifest), `/acp` (ACP feed/handlers), `/admin`, `/provider`, `/stripe`,
-`/email`, `/types`. The root package export is **descriptor-only**
-(`mikaPlugin`); live `api` wiring never belongs on the JSON-safe root.
-
-### Errors
-
-Branch on `error.code` from {@link MikaApiResult} failures — never parse
-`error.message` for control flow. Codes are stable and additive
-(`MIKA_ERROR_CODES` on `@bnomei/emdash-mika/types`). New codes include
-`IDEMPOTENCY_MISMATCH`, `WEBHOOK_DEFERRED`, and `STOCK_CONFLICT` for
-callers that previously over-used generic `CONFLICT`.
+`/email`, `/types` (plus `/types/primitives`), and discoverability re-exports
+`/server/ports`, `/server/maintenance`, `/server/email`. The root package export
+is **descriptor-only** (`mikaPlugin`); live `api` wiring never belongs on the
+JSON-safe root.
 
 Create a host entrypoint module that merges the live backend api:
 
@@ -153,7 +147,15 @@ otherwise — unwired methods would answer `501` on every route at runtime. Pass
 `assertWired: ["cart", "checkout.start"]` to assert a subset, or
 `assertWired: false` to accept partial wiring.
 
-### Maintenance wiring
+## Errors
+
+Branch on `error.code` from failed {@link MikaApiResult} envelopes — never parse
+`error.message` for control flow. Codes are stable and additive
+(`MIKA_ERROR_CODES` on `@bnomei/emdash-mika/types`). New codes include
+`IDEMPOTENCY_MISMATCH`, `WEBHOOK_DEFERRED`, and `STOCK_CONFLICT` for
+callers that previously over-used generic `CONFLICT`.
+
+## Maintenance wiring
 
 The default EmDash maintenance cron only **releases expired stock reservations**
 unless the host injects more ports:

@@ -232,12 +232,21 @@ export type MikaServerOperationFacade = MikaOperationFacade &
  * Bidirectional pin: hand {@link MikaServerOperationFacade} namespaces/methods match
  * registry-derived {@link mikaOperationFacadeSpec} (from ops with `apiMethod !== false`).
  */
-type MikaFacadeRegistryDrift = {
-  readonly [K in keyof MikaOperationFacadeSpec]: Exclude<
-    keyof MikaOperationFacadeSpec[K],
-    K extends keyof MikaServerOperationFacade ? keyof MikaServerOperationFacade[K] : never
-  >;
-}[keyof MikaOperationFacadeSpec];
+type MikaFacadeRegistryDrift =
+  | {
+      readonly [K in keyof MikaOperationFacadeSpec]: Exclude<
+        keyof MikaOperationFacadeSpec[K],
+        K extends keyof MikaServerOperationFacade ? keyof MikaServerOperationFacade[K] : never
+      >;
+    }[keyof MikaOperationFacadeSpec]
+  | {
+      readonly [K in keyof MikaServerOperationFacade]: Exclude<
+        keyof MikaServerOperationFacade[K],
+        K extends keyof MikaOperationFacadeSpec ? keyof MikaOperationFacadeSpec[K] : never
+      >;
+    }[keyof MikaServerOperationFacade]
+  | Exclude<keyof MikaOperationFacadeSpec, keyof MikaServerOperationFacade>
+  | Exclude<keyof MikaServerOperationFacade, keyof MikaOperationFacadeSpec>;
 
 type _AssertMikaFacadePinnedToRegistry = MikaFacadeRegistryDrift extends never
   ? true

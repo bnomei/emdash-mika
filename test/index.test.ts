@@ -4413,7 +4413,7 @@ describe("Mika Astro template contracts", () => {
     expect(source).toContain("actions.mika.cart.add.queryString");
     expect(source).toContain('defineAction({ accept: "form", input })');
     expect(source).toContain('defineAction({ accept: "json", input })');
-    expect(source).toContain("Supported template installs target Astro 6 or 7");
+    expect(source).toContain("Supported template installs target **Astro 7**");
   });
 
   it("keeps the root README package and template surfaces aligned", () => {

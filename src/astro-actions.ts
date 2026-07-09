@@ -232,12 +232,21 @@ type MikaActionsTreeCoversInterface = MikaActionsTreeSpec extends {
   ? true
   : never;
 
-type MikaActionsRegistryDrift = {
-  readonly [K in keyof MikaActions]: Exclude<
-    keyof MikaActions[K],
-    K extends keyof MikaActionsTreeSpec ? keyof MikaActionsTreeSpec[K] : never
-  >;
-}[keyof MikaActions];
+type MikaActionsRegistryDrift =
+  | {
+      readonly [K in keyof MikaActions]: Exclude<
+        keyof MikaActions[K],
+        K extends keyof MikaActionsTreeSpec ? keyof MikaActionsTreeSpec[K] : never
+      >;
+    }[keyof MikaActions]
+  | {
+      readonly [K in keyof MikaActionsTreeSpec]: Exclude<
+        keyof MikaActionsTreeSpec[K],
+        K extends keyof MikaActions ? keyof MikaActions[K] : never
+      >;
+    }[keyof MikaActionsTreeSpec]
+  | Exclude<keyof MikaActions, keyof MikaActionsTreeSpec>
+  | Exclude<keyof MikaActionsTreeSpec, keyof MikaActions>;
 
 type MikaActionsTreeCoverage = MikaActionsTreeCoversInterface extends true
   ? MikaActionsRegistryDrift extends never
