@@ -81,7 +81,7 @@ npm install @bnomei/emdash-mika
 
 | Peer | Range | Notes |
 | ---- | ----- | ----- |
-| **astro** | `^7.0.0` | **Required** for the schema stack (`astro/zod` in validation and Actions). Hosts that only import `/server` still need Astro installed so Zod resolves from the same major as Actions. Developed and CI-tested on Astro 7 (Vite 8, Rust compiler). |
+| **astro** | `^7.0.0` | **Required** for the schema stack (`astro/zod` in validation and Actions). Hosts that only import `/server` still need Astro installed so Zod resolves from the same major as Actions. Developed and CI-tested on **Astro 7 only** (Vite 8, Rust compiler). Do not use reserved `src/fetch.ts` for app code under Astro 7 advanced routing. Cart/account/checkout routes must not use route caching (session/cookie variance). |
 | **emdash** | `>=0.22.0 <1.0.0` | Required for native plugin registration. |
 | react / react-dom / stripe / kumo / phosphor | optional | Only when using the matching subpath (`/react`, `/stripe`, templates with Kumo). |
 
@@ -101,6 +101,14 @@ Supporting entrypoints stay projections of the same semantic core: `/agent`
 (manifest), `/acp` (ACP feed/handlers), `/admin`, `/provider`, `/stripe`,
 `/email`, `/types`. The root package export is **descriptor-only**
 (`mikaPlugin`); live `api` wiring never belongs on the JSON-safe root.
+
+### Errors
+
+Branch on `error.code` from {@link MikaApiResult} failures — never parse
+`error.message` for control flow. Codes are stable and additive
+(`MIKA_ERROR_CODES` on `@bnomei/emdash-mika/types`). New codes include
+`IDEMPOTENCY_MISMATCH`, `WEBHOOK_DEFERRED`, and `STOCK_CONFLICT` for
+callers that previously over-used generic `CONFLICT`.
 
 Create a host entrypoint module that merges the live backend api:
 

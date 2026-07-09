@@ -2224,8 +2224,16 @@ describe("Mika client", () => {
   });
 
   it("keeps dynamic operation dispatch centralized", () => {
-    const operationsSource = readFileSync(
+    const operationsBarrelSource = readFileSync(
       new URL("../src/api/operations.ts", import.meta.url),
+      "utf8",
+    );
+    const operationDefineSource = readFileSync(
+      new URL("../src/api/operation-define.ts", import.meta.url),
+      "utf8",
+    );
+    const operationCollectSource = readFileSync(
+      new URL("../src/api/operation-collect.ts", import.meta.url),
       "utf8",
     );
     const operationRunnerSource = readFileSync(
@@ -2241,13 +2249,17 @@ describe("Mika client", () => {
       "utf8",
     );
 
-    expect(operationsSource).toContain("z.infer<TSchema>");
-    expect(operationsSource).toContain("export function callMikaOperation");
-    expect(operationsSource).toContain("MikaApiOperationData<TOperation>");
+    expect(operationDefineSource).toContain("z.infer<TSchema>");
+    expect(operationCollectSource).toContain("export function callMikaOperation");
+    expect(operationCollectSource).toContain("MikaApiOperationData<TOperation>");
+    expect(operationDefineSource).toContain("export type MikaApiOperationData");
+    expect(operationsBarrelSource).toContain('from "./operation-collect"');
+    expect(operationsBarrelSource).toContain("callMikaOperation");
     expect(operationRunnerSource).toContain("export async function runMikaOperation");
     expect(operationRunnerSource).toContain("runMikaOperationPolicy(operationPolicy");
     expect(operationRunnerSource).toContain("callMikaOperation(operation, api, ctx, input)");
-    expect(operationsSource).not.toContain("input: never");
+    expect(operationDefineSource).not.toContain("input: never");
+    expect(operationCollectSource).not.toContain("input: never");
     // Both route dispatch sites call runMikaOperation directly inside a full-body try/catch
     // that observes the error and converts it into the shared 500 envelope.
     expect(routeHandlersSource.match(/await runMikaOperation\(\{/g)).toHaveLength(2);
@@ -4331,8 +4343,8 @@ describe("createISODateTime canonicalization", () => {
 describe("Mika Astro template contracts", () => {
   it("keeps Astro Actions on the request-bound API instead of private JSON routes", () => {
     const source = readFileSync(new URL("../src/astro-actions.ts", import.meta.url), "utf8");
-    const operationsSource = readFileSync(
-      new URL("../src/api/operations.ts", import.meta.url),
+    const operationDefinitionsSource = readFileSync(
+      new URL("../src/api/operation-definitions.ts", import.meta.url),
       "utf8",
     );
 
@@ -4342,8 +4354,8 @@ describe("Mika Astro template contracts", () => {
     expect(source).not.toContain("createMikaClient");
     expect(source).toContain("normalizeMikaActionInput");
     expect(source).not.toContain("const purchaseSellableId = parsePurchaseMikaId");
-    expect(operationsSource).toContain("const purchaseSellableId = parsePurchaseMikaId");
-    expect(operationsSource).toContain("normalizeCheckoutStartActionInput");
+    expect(operationDefinitionsSource).toContain("const purchaseSellableId = parsePurchaseMikaId");
+    expect(operationDefinitionsSource).toContain("normalizeCheckoutStartActionInput");
   });
 
   it("keeps package sources off Astro's internal action runtime path", () => {

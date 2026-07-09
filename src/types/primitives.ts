@@ -7,8 +7,18 @@ declare const isoDateTimeBrand: unique symbol;
 declare const currencyCodeBrand: unique symbol;
 declare const providerNameBrand: unique symbol;
 
-/** Branded id for every persisted document, aggregate, and operational record. */
+/**
+ * Generic branded id for persisted documents and records.
+ * Prefer entity-specific brands ({@link SellableId}, {@link CartId}, …) at money boundaries.
+ */
 export type MikaId = string & { readonly [mikaIdBrand]: "MikaId" };
+
+/** Entity brands — assignable to/from {@link MikaId} via constructors at trust boundaries. */
+export type SellableId = MikaId & { readonly __mikaEntity?: "SellableId" };
+export type PriceId = MikaId & { readonly __mikaEntity?: "PriceId" };
+export type CartId = MikaId & { readonly __mikaEntity?: "CartId" };
+export type CheckoutSessionId = MikaId & { readonly __mikaEntity?: "CheckoutSessionId" };
+export type OrderId = MikaId & { readonly __mikaEntity?: "OrderId" };
 /** Branded ISO-8601 timestamp used for lifecycle and lease expiry fields. */
 export type ISODateTime = string & { readonly [isoDateTimeBrand]: "ISODateTime" };
 /** Branded ISO 4217 currency code carried on money and cart totals. */
@@ -33,6 +43,23 @@ const ISO_DATE_TIME_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T/;
 /** Constructs a branded id from a non-empty trimmed string. */
 export function createMikaId(value: string): MikaId {
   return nonEmptyTrimmed(value, "MikaId") as MikaId;
+}
+
+/** Entity id constructors (mint at parse/storage boundaries). */
+export function createSellableId(value: string): SellableId {
+  return createMikaId(value) as SellableId;
+}
+export function createPriceId(value: string): PriceId {
+  return createMikaId(value) as PriceId;
+}
+export function createCartId(value: string): CartId {
+  return createMikaId(value) as CartId;
+}
+export function createCheckoutSessionId(value: string): CheckoutSessionId {
+  return createMikaId(value) as CheckoutSessionId;
+}
+export function createOrderId(value: string): OrderId {
+  return createMikaId(value) as OrderId;
 }
 
 /** Constructs a branded, canonical-UTC (`Z`) ISO datetime after parse validation. */

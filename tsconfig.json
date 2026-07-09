@@ -3,7 +3,7 @@
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,
     "declaration": true,
-    "declarationMap": false,
+    "declarationMap": true,
     "emitDeclarationOnly": false,
     "erasableSyntaxOnly": true,
     "exactOptionalPropertyTypes": true,

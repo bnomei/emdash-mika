@@ -47,6 +47,12 @@ export const MIKA_ERROR_CODES = [
   "DOWNLOAD_REVOKED",
   "WEBHOOK_INVALID",
   "CONFLICT",
+  /** Idempotency key reused with a different request payload. */
+  "IDEMPOTENCY_MISMATCH",
+  /** Webhook accepted for deferred processing (not a hard failure). */
+  "WEBHOOK_DEFERRED",
+  /** Stock CAS undercut concurrent reservation or adjustment. */
+  "STOCK_CONFLICT",
   "INTERNAL",
   "NOT_IMPLEMENTED",
 ] as const;

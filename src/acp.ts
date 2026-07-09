@@ -2282,8 +2282,46 @@ function resultMessage(result: MikaApiResult<unknown>): string {
   return result.ok ? "OK" : result.error.message;
 }
 
+/**
+ * Explicit Mika → ACP error-code allowlist. Prefer stable ACP wire codes over
+ * auto-lowercasing every future {@link MikaErrorCode} (which would leak new
+ * internal codes onto the ACP surface without review).
+ */
+const MIKA_TO_ACP_ERROR_CODES = {
+  OUT_OF_STOCK: "out_of_stock",
+  STOCK_CONFLICT: "out_of_stock",
+  VALIDATION_FAILED: "validation_failed",
+  NOT_FOUND: "not_found",
+  SELLABLE_NOT_FOUND: "sellable_not_found",
+  SELLABLE_INACTIVE: "sellable_inactive",
+  PRICE_INACTIVE: "price_inactive",
+  VARIANT_INVALID: "variant_invalid",
+  MAX_PER_ORDER_EXCEEDED: "max_per_order_exceeded",
+  CHECKOUT_EMPTY: "checkout_empty",
+  CHECKOUT_EXPIRED: "checkout_expired",
+  CHECKOUT_BINDING_MISMATCH: "checkout_binding_mismatch",
+  TOKEN_INVALID: "token_invalid",
+  TOKEN_EXPIRED: "token_expired",
+  TOKEN_USED: "token_used",
+  DOWNLOAD_REVOKED: "download_revoked",
+  WEBHOOK_INVALID: "webhook_invalid",
+  AUTH_REQUIRED: "unauthorized",
+  FORBIDDEN: "unauthorized",
+  CSRF_INVALID: "unauthorized",
+  RATE_LIMITED: "rate_limited",
+  METHOD_NOT_ALLOWED: "method_not_allowed",
+  PAYMENT_PENDING: "payment_pending",
+  PROVIDER_UNSUPPORTED: "provider_unsupported",
+  PROVIDER_FAILED: "provider_failed",
+  CONFLICT: "request_not_idempotent",
+  IDEMPOTENCY_MISMATCH: "request_not_idempotent",
+  WEBHOOK_DEFERRED: "webhook_deferred",
+  INTERNAL: "internal",
+  NOT_IMPLEMENTED: "not_implemented",
+} as const satisfies Record<MikaErrorCode, MikaAcpError["code"]>;
+
 function acpErrorCodeFromMika(error: MikaError): MikaAcpError["code"] {
-  return error.code.toLowerCase() as Lowercase<MikaErrorCode>;
+  return MIKA_TO_ACP_ERROR_CODES[error.code];
 }
 
 function acpErrorFromResult(
