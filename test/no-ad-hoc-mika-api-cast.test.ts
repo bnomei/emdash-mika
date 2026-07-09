@@ -11,7 +11,9 @@ const ALLOWLIST = new Set(["api/operation-define.ts"]);
 
 const FORBIDDEN = [
   /as\s+unknown\s+as\s+MikaApi\b/,
+  /as\s+any\s+as\s+MikaApi\b/,
   /as\s+unknown\s+as\s+Record<string,\s*Record<string,\s*unknown>>/,
+  /as\s+any\s+as\s+Record<string,\s*Record<string,\s*unknown>>/,
 ];
 
 function walkTsFiles(dir: string, out: string[] = []): string[] {

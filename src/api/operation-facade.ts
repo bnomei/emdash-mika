@@ -49,6 +49,7 @@ import type {
   WishlistItemInput,
   MikaApiResult,
 } from "./types";
+import type { SellableId } from "../types/primitives";
 
 type MikaOperationKey = keyof typeof mikaOperationDefinitions;
 type MikaOperationDefinitionMap = typeof mikaOperationDefinitions;
@@ -138,7 +139,7 @@ export interface MikaOperationFacade {
     ): MikaFacadeResult<"catalog", "sellables">;
   };
   readonly stock: {
-    availability(sellableId: string): MikaFacadeResult<"stock", "availability">;
+    availability(sellableId: SellableId): MikaFacadeResult<"stock", "availability">;
   };
   readonly cart: {
     get(): MikaFacadeResult<"cart", "get">;
@@ -292,7 +293,7 @@ export function createMikaOperationFacade<
         }),
     },
     stock: {
-      availability: (sellableId: string) =>
+      availability: (sellableId: SellableId) =>
         invoke(mikaOperationFacadeSpec.stock.availability, { sellableId }),
     },
     cart: {

@@ -53,7 +53,12 @@ import type {
   WebhookReplayInput as ApiWebhookReplayInput,
   WishlistItemInput as ApiWishlistItemInput,
 } from "../src/api/types";
-import type { AddCartItemInput as ValidationAddCartItemInput } from "../src/api/validation";
+import type {
+  AddCartItemInput as ValidationAddCartItemInput,
+  CheckoutStatusInput as ValidationCheckoutStatusInput,
+  OrderRefundInput as ValidationOrderRefundInput,
+  StartCheckoutInput as ValidationStartCheckoutInput,
+} from "../src/api/validation";
 import type {
   AccountDeleteInput,
   AccountExportDownloadInput,
@@ -153,7 +158,13 @@ type AllTrue<T extends Record<string, true>> = T;
 
 export type TypesBarrelCompleteness = AllTrue<PublicOperationInputPairs>;
 
-/** Guard: validation remains the SoT for a representative Input (z.infer re-export path). */
-type _ValidationSoT = AssertEqual<ValidationAddCartItemInput, ApiAddCartItemInput>;
+/**
+ * Guard: validation remains the SoT for representative Inputs (z.infer re-export path).
+ * Sample cart, checkout, and admin money-path inputs so a single-schema drift is less likely.
+ */
+type _ValidationSoT = AssertEqual<ValidationAddCartItemInput, ApiAddCartItemInput> &
+  AssertEqual<ValidationStartCheckoutInput, ApiStartCheckoutInput> &
+  AssertEqual<ValidationCheckoutStatusInput, ApiCheckoutStatusInput> &
+  AssertEqual<ValidationOrderRefundInput, ApiOrderRefundInput>;
 export type TypesBarrelValidationSoT = _ValidationSoT;
 

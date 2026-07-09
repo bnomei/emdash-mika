@@ -4,6 +4,18 @@
  * Browser-safe source of truth for URL construction (`/client`, {@link ./routes}).
  * Operation schemas, dispatch, and agent metadata stay in {@link ./operations}; that
  * module asserts IR route keys/paths stay aligned with this map at load time.
+ *
+ * ## Adding a route
+ *
+ * 1. Add a key + path segment here (`mikaPluginRoutePaths`).
+ * 2. On the operation IR: set `routeKey` and `routePath: mikaPluginRoutePaths.<key>`
+ *    (never a raw path string) in {@link ./operation-definitions}.
+ * 3. If the route is browser-public, expose it via {@link ./routes} / client surfaces.
+ * 4. Verify: load-time `assertMikaPluginRoutesConsistent`, full suite, and client purity
+ *    greps (`dist/api/client.mjs` must not pull operations or `astro/zod`).
+ *
+ * Do **not** import this module from code that already imports operation schemas into the
+ * browser bundle — keep `/client` on the pure map only.
  */
 
 /** Stable plugin route key to relative path segment (no plugin id / api base prefix). */

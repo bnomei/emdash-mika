@@ -4,6 +4,7 @@
  */
 import { optionalProperty } from "../internal/object";
 import type { AvailabilityDTO, MikaApiResult, SellableDTO } from "./types";
+import type { SellableId } from "../types/primitives";
 import { createMikaPluginRouteBuilder } from "./routes";
 import type { MikaPublicPluginRouteName } from "./routes";
 import { requestMika, type MikaRequestInit } from "./request";
@@ -49,7 +50,7 @@ export interface MikaClient {
     ): Promise<MikaApiResult<readonly SellableDTO[]>>;
   };
   readonly stock: {
-    availability(sellableId: string): Promise<MikaApiResult<AvailabilityDTO>>;
+    availability(sellableId: SellableId): Promise<MikaApiResult<AvailabilityDTO>>;
   };
 }
 

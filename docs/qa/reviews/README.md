@@ -32,6 +32,8 @@ QA index: [../README.md](../README.md).
 | ------ | ------ | ---- |
 | [F0.1-fef5462.md](./F0.1-fef5462.md) | `fef5462` | F0.1 prepublish `templates:check` |
 | [F0.2-b4fc9ae.md](./F0.2-b4fc9ae.md) | `b4fc9ae` | F0.2 emit additive error codes |
-| *(wave reviews below / concurrent)* | `babb83b`+ | F0.3–F0.5, F1–F4 |
+| [F0.3-F0.5-F2.3-pins.md](./F0.3-F0.5-F2.3-pins.md) | `babb83b` / `d912a6a` / `11b59ae` | F0.3–F0.5 + F2.3 pins |
+| [F1.1-F1.3-brands.md](./F1.1-F1.3-brands.md) | `55dcbb5`–`e6718fd` | F1 brands wave + autofix |
+| [F2-F4-maintainability-docs.md](./F2-F4-maintainability-docs.md) | `021c19c`–`8cdb2e2` | F2–F4 maintainability/docs + autofix |
 
 **Note:** `/docs` may be gitignored in some clones; force-add reviews when the team wants them in git. New agents should start at [ROADMAP-followup.md](../ROADMAP-followup.md).

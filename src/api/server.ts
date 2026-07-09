@@ -59,6 +59,7 @@ import type {
   WishlistDTO,
   WishlistItemInput,
 } from "./types";
+import type { SellableId } from "../types/primitives";
 import type { MikaRequestContext } from "./context";
 import { mikaOperationApiMethodNames } from "./operations";
 
@@ -72,7 +73,9 @@ export interface MikaApi {
   };
   /** On-hand stock availability for a sellable id. */
   readonly stock: {
-    availability(input: { readonly sellableId: string }): Promise<MikaApiResult<AvailabilityDTO>>;
+    availability(input: {
+      readonly sellableId: SellableId;
+    }): Promise<MikaApiResult<AvailabilityDTO>>;
   };
   /** Session-bound cart mutations: lines, coupons, and anonymous-session merge. */
   readonly cart: {

@@ -37,6 +37,7 @@ import {
   providerLineToJson,
   stringChild,
   totalsChild,
+  assertNever,
 } from "../shared";
 import { markWebhookFailed, processStoredWebhook } from "./payment";
 import { isReplayableWebhookStatus } from "./status";
@@ -375,6 +376,8 @@ function webhookEventToJson(
         type: event.type,
         raw: options.includeRaw ? event.raw : undefined,
       });
+    default:
+      return assertNever(event);
   }
 }
 

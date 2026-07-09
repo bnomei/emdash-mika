@@ -19,6 +19,7 @@ import type { CartDocument, CheckoutDocument } from "../../../types/documents";
 import type { StockItemRecord } from "../../../types/operational";
 import {
   createCheckoutSessionId,
+  type CartId,
   type CheckoutSessionId,
   type CurrencyCode,
   type ISODateTime,
@@ -797,7 +798,7 @@ export async function persistCheckoutStart(
   checkoutDocument: CheckoutDocument,
   statusToken: string,
   cart: CartDocument | null,
-  checkoutId: MikaId,
+  checkoutId: CheckoutSessionId,
   lines: readonly CheckoutLine[],
   reservationIds: readonly MikaId[],
 ): Promise<{ readonly ok: true } | MikaApiFailure> {
@@ -889,8 +890,8 @@ export async function releaseCheckoutReservations(
 
 export async function releaseCartCheckoutClaimQuietly(
   input: MikaBackendDependencies,
-  cartId: MikaId,
-  checkoutId: MikaId,
+  cartId: CartId,
+  checkoutId: CheckoutSessionId,
   now: ISODateTime,
 ): Promise<void> {
   try {
@@ -906,7 +907,7 @@ export async function releaseCheckoutStartResources(
   input: MikaBackendDependencies,
   reservationIds: readonly MikaId[],
   claimedCart: CartDocument | null,
-  checkoutId: MikaId,
+  checkoutId: CheckoutSessionId,
   now: ISODateTime,
 ): Promise<void> {
   await releaseCheckoutReservations(input, reservationIds, now);

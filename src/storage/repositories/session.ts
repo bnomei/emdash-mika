@@ -12,13 +12,19 @@ import type {
   SessionDocument,
   WishlistDocument,
 } from "../../types/documents";
-import type { CheckoutStatus, ISODateTime, MikaId } from "../../types/primitives";
+import type {
+  CartId,
+  CheckoutSessionId,
+  CheckoutStatus,
+  ISODateTime,
+  MikaId,
+} from "../../types/primitives";
 import { optionalProperty } from "../../internal/object";
 import { nextCartVersion } from "../../model/cart-version";
 
 function cartWithCheckoutClaim(
   cart: CartDocument,
-  checkoutId: MikaId,
+  checkoutId: CheckoutSessionId,
   claimExpiresAt: ISODateTime,
   now: ISODateTime,
 ): CartDocument {
@@ -164,8 +170,8 @@ export class SessionRepository {
   }
 
   async claimCartForCheckout(input: {
-    readonly cartId: MikaId;
-    readonly checkoutId: MikaId;
+    readonly cartId: CartId;
+    readonly checkoutId: CheckoutSessionId;
     readonly expectedVersion: number | undefined;
     readonly claimExpiresAt: ISODateTime;
     readonly now: ISODateTime;
@@ -185,8 +191,8 @@ export class SessionRepository {
   }
 
   async releaseCartCheckoutClaim(input: {
-    readonly cartId: MikaId;
-    readonly checkoutId: MikaId;
+    readonly cartId: CartId;
+    readonly checkoutId: CheckoutSessionId;
     readonly now: ISODateTime;
   }): Promise<CartDocument | null> {
     const updated = await this.documents.update(input.cartId, (current) => {

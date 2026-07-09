@@ -6,6 +6,7 @@ import type {
   AggregatePayload,
   CartId,
   CartStatus,
+  CheckoutSessionId,
   CheckoutStatus,
   ContentRef,
   CurrencyCode,
@@ -361,7 +362,7 @@ export interface OrderRecord extends AggregateRecord<OrderAggregate> {
   readonly providerCheckoutId?: string;
   readonly providerPaymentId?: string;
   readonly providerOrderId?: string;
-  readonly checkoutSessionId?: MikaId;
+  readonly checkoutSessionId?: CheckoutSessionId;
   readonly status: OrderStatus;
   readonly paymentStatus: PaymentStatus;
   readonly currency: CurrencyCode;

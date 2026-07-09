@@ -19,6 +19,7 @@ Example product block without Kumo:
 
 ```astro
 ---
+import { actions } from "astro:actions";
 import { createMika } from "@bnomei/emdash-mika/astro";
 import { api } from "../lib/mika-api";
 const Mika = createMika(Astro, { api });
@@ -26,7 +27,7 @@ const sellables = await Mika.catalog.sellables("products", Astro.params.id ?? ""
 ---
 {sellables.ok &&
   sellables.data.map((s) => (
-    <form method="POST" action={Mika.actions.cart.add}>
+    <form method="POST" action={actions.mika.cart.add}>
       <input type="hidden" name="sellableId" value={s.id} />
       <button type="submit">Add to cart</button>
     </form>

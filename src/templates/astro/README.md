@@ -76,6 +76,8 @@ Use the focused examples for setup detail:
   ports, provider adapters, email delivery, and maintenance.
 - [Agent-ready storefront](./examples/agent-ready-storefront.md): JSON-LD,
   `llms.txt`, `.well-known/mika-agent.json`, and protected agent boundaries.
+- [Unstyled kit (no Kumo)](./examples/unstyled-kit.md): minimal plain Astro
+  forms without Cloudflare Kumo / Phosphor peers.
 
 ## Directory Map
 

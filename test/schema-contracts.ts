@@ -54,7 +54,7 @@ import type {
   WishlistItemInput,
 } from "../src/api/types";
 import type { MikaAgentProofRef } from "../src/api/agent-types";
-import type { MikaId, StockMovementReason } from "../src/types/primitives";
+import type { SellableId, StockMovementReason } from "../src/types/primitives";
 import {
   z,
   accountExportDownloadInputSchema,
@@ -118,7 +118,7 @@ export const contentRefInputSchemaContract: AssertExactKeys<
 > = true;
 export const stockAvailabilityInputSchemaContract: AssertExactKeys<
   z.infer<typeof stockAvailabilityInputSchema>,
-  { readonly sellableId: MikaId }
+  { readonly sellableId: SellableId }
 > = true;
 export const checkoutStatusInputSchemaContract: AssertExactKeys<
   z.infer<typeof checkoutStatusInputSchema>,

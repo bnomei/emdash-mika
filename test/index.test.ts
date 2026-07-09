@@ -4886,7 +4886,7 @@ describe("Mika Astro template contracts", () => {
     expect(checkoutCancel).toContain('Astro.url.searchParams.get("checkoutId")');
     expect(checkoutCancel).toContain('Astro.url.searchParams.get("token")');
     expect(checkoutCancel).toContain(
-      "Mika.checkout.cancel({ checkoutId: createMikaId(checkoutId), token })",
+      "Mika.checkout.cancel({ checkoutId: createCheckoutSessionId(checkoutId), token })",
     );
     expect(checkoutCancel).toContain("Checkout cancel link is missing.");
     expect(checkoutCancel).toContain("No payment was confirmed by this return page.");

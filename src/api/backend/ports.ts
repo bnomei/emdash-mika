@@ -57,6 +57,8 @@ import type {
   WorkflowDocument,
 } from "../../types/documents";
 import type {
+  CartId,
+  CheckoutSessionId,
   CheckoutStatus,
   ContentRef,
   CurrencyCode,
@@ -120,16 +122,16 @@ export interface MikaSessionRepositoryPort {
    * rather than always rejecting it.
    */
   claimCartForCheckout(input: {
-    readonly cartId: MikaId;
-    readonly checkoutId: MikaId;
+    readonly cartId: CartId;
+    readonly checkoutId: CheckoutSessionId;
     readonly expectedVersion: number | undefined;
     readonly claimExpiresAt: ISODateTime;
     readonly now: ISODateTime;
   }): Promise<CartDocument | null>;
   /** Clears a checkout claim when start fails or the session is abandoned. */
   releaseCartCheckoutClaim(input: {
-    readonly cartId: MikaId;
-    readonly checkoutId: MikaId;
+    readonly cartId: CartId;
+    readonly checkoutId: CheckoutSessionId;
     readonly now: ISODateTime;
   }): Promise<CartDocument | null>;
   /**
