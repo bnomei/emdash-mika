@@ -77,6 +77,14 @@ package.
 npm install @bnomei/emdash-mika
 ```
 
+### Peer requirements
+
+| Peer | Range | Notes |
+| ---- | ----- | ----- |
+| **astro** | `^7.0.0` | **Required** for the schema stack (`astro/zod` in validation and Actions). Hosts that only import `/server` still need Astro installed so Zod resolves from the same major as Actions. Developed and CI-tested on Astro 7 (Vite 8, Rust compiler). |
+| **emdash** | `>=0.22.0 <1.0.0` | Required for native plugin registration. |
+| react / react-dom / stripe / kumo / phosphor | optional | Only when using the matching subpath (`/react`, `/stripe`, templates with Kumo). |
+
 ## Three host faces
 
 Hosts interact with Mika through three complementary faces. Pick the face that
@@ -136,6 +144,38 @@ Plugin construction asserts every `MikaApi` method is wired and throws
 otherwise — unwired methods would answer `501` on every route at runtime. Pass
 `assertWired: ["cart", "checkout.start"]` to assert a subset, or
 `assertWired: false` to accept partial wiring.
+
+### Maintenance wiring
+
+The default EmDash maintenance cron only **releases expired stock reservations**
+unless the host injects more ports:
+
+```ts
+// src/lib/mika-plugin.ts
+import {
+  createMikaPlugin,
+  createMikaEmailOutboxRunner,
+  type MikaCreatePluginOptions,
+} from "@bnomei/emdash-mika/server";
+import { api } from "./mika-api";
+
+export function createPlugin(options: MikaCreatePluginOptions = {}) {
+  return createMikaPlugin({
+    ...options,
+    api,
+    maintenance: {
+      repositories: {
+        // stock is usually already required for commerce; pass the same ports
+        // you wired into createMikaBackendApi for email/ephemeral/account-delete
+      },
+      emailOutboxRunner: createMikaEmailOutboxRunner({ /* host sender + repos */ }),
+    },
+  });
+}
+```
+
+Without those injects, outbox drain, ephemeral purge, and account-delete batches
+report `skipped` in maintenance results (stock release still runs).
 
 The entrypoint module exists because the EmDash host JSON-serializes descriptor
 options into a generated module — function values like a live `api` or

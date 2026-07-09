@@ -38,6 +38,17 @@ import type { MikaEmailInput, renderMikaEmail } from "@bnomei/emdash-mika/email"
 import type { createMikaProviderRegistry, MikaProviderAdapter } from "@bnomei/emdash-mika/provider";
 import type { MikaProvider } from "@bnomei/emdash-mika/react";
 import type {
+  createMikaEmailOutboxRunner as createMikaEmailOutboxRunnerFromServerEmail,
+  MikaEmailOutboxRunner as MikaEmailOutboxRunnerFromServerEmail,
+} from "@bnomei/emdash-mika/server/email";
+import type {
+  createMikaMaintenanceRunner as createMikaMaintenanceRunnerFromServerMaintenance,
+  MikaMaintenanceRunner as MikaMaintenanceRunnerFromServerMaintenance,
+} from "@bnomei/emdash-mika/server/maintenance";
+import type {
+  MikaStockRepositoryPort as MikaStockRepositoryPortFromServerPorts,
+} from "@bnomei/emdash-mika/server/ports";
+import type {
   assertMikaApiWired,
   CreateMikaBackendApiInput,
   createPlugin,
@@ -160,6 +171,12 @@ export type PackageEntryContract = {
   readonly backend: typeof createMikaBackendApi;
   readonly emailOutboxRunnerFactory: typeof createMikaEmailOutboxRunner;
   readonly maintenanceRunnerFactory: typeof createMikaMaintenanceRunner;
+  /** Additive `/server/*` discoverability subpaths re-export the same symbols. */
+  readonly serverPortsStock: MikaStockRepositoryPortFromServerPorts;
+  readonly serverMaintenanceRunner: MikaMaintenanceRunnerFromServerMaintenance;
+  readonly serverMaintenanceFactory: typeof createMikaMaintenanceRunnerFromServerMaintenance;
+  readonly serverEmailRunner: MikaEmailOutboxRunnerFromServerEmail;
+  readonly serverEmailFactory: typeof createMikaEmailOutboxRunnerFromServerEmail;
   readonly emdashEmailSenderFactory: typeof createEmDashMikaEmailSender;
   readonly emailOutboxRunner: MikaEmailOutboxRunner;
   readonly maintenanceRunner: MikaMaintenanceRunner;

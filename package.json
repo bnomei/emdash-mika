@@ -78,6 +78,18 @@
       "types": "./dist/server.d.mts",
       "import": "./dist/server.mjs"
     },
+    "./server/ports": {
+      "types": "./dist/server/ports.d.mts",
+      "import": "./dist/server/ports.mjs"
+    },
+    "./server/maintenance": {
+      "types": "./dist/server/maintenance.d.mts",
+      "import": "./dist/server/maintenance.mjs"
+    },
+    "./server/email": {
+      "types": "./dist/server/email.d.mts",
+      "import": "./dist/server/email.mjs"
+    },
     "./stripe": {
       "types": "./dist/stripe.d.mts",
       "import": "./dist/stripe.mjs"
@@ -105,7 +117,7 @@
   },
   "scripts": {
     "build": "npm run build:pack -- --clean",
-    "build:pack": "vp pack src/index.ts src/acp.ts src/agent.ts src/admin.ts src/astro.ts src/astro-actions.ts src/api/client.ts src/email.ts src/provider.ts src/react.ts src/server.ts src/stripe.ts src/types/index.ts src/types/aggregates.ts src/types/documents.ts src/types/operational.ts --format esm --dts --tsconfig tsconfig.json --deps.never-bundle astro/zod --deps.never-bundle react --deps.never-bundle stripe",
+    "build:pack": "vp pack src/index.ts src/acp.ts src/agent.ts src/admin.ts src/astro.ts src/astro-actions.ts src/api/client.ts src/email.ts src/provider.ts src/react.ts src/server.ts src/server/ports.ts src/server/maintenance.ts src/server/email.ts src/stripe.ts src/types/index.ts src/types/aggregates.ts src/types/documents.ts src/types/operational.ts --format esm --dts --tsconfig tsconfig.json --deps.never-bundle astro/zod --deps.never-bundle react --deps.never-bundle stripe",
     "check": "vp check .",
     "pack:check": "npm run build:pack -- --clean --publint",
     "prepack": "npm run build",
@@ -136,7 +148,7 @@
   "peerDependencies": {
     "@cloudflare/kumo": "^2.5.2",
     "@phosphor-icons/react": "^2.1.10",
-    "astro": "^6.0.0 || ^7.0.0",
+    "astro": "^7.0.0",
     "emdash": ">=0.22.0 <1.0.0",
     "react": "^18.3.0 || ^19.0.0",
     "react-dom": "^18.3.0 || ^19.0.0",
