@@ -105,9 +105,11 @@ import type { EphemeralRecord, StockItemRecord } from "@bnomei/emdash-mika/types
 import type {
   CartDTO,
   CartQuoteDTO,
+  CheckoutCancelInput,
+  CheckoutPreviewDTO,
+  CheckoutStatusInput,
   createMikaId,
   CurrencyCode,
-  CheckoutPreviewDTO,
   DownloadDTO,
   ISODateTime,
   MikaId,
@@ -187,6 +189,9 @@ export type PackageEntryContract = {
   readonly stripeProvider: typeof createMikaStripeProvider;
   readonly stripeClient: MikaStripeClient;
   readonly result: MikaApiResult<CartDTO | CartQuoteDTO | CheckoutPreviewDTO | ProviderHealthDTO>;
+  /** Public operation inputs previously missing from the `/types` barrel. */
+  readonly checkoutCancelInput: CheckoutCancelInput;
+  readonly checkoutStatusInput: CheckoutStatusInput;
   readonly errorCodes: typeof MIKA_ERROR_CODES;
   readonly providerCapabilities: typeof MIKA_PROVIDER_CAPABILITIES;
   readonly actor: MikaActorContext;
