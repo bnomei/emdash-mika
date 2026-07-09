@@ -4044,6 +4044,7 @@ describe("public types", () => {
         "./types/aggregates",
         "./types/documents",
         "./types/operational",
+        "./types/primitives",
       ].sort(),
     );
     expect(exportsMap).not.toHaveProperty("./api");
