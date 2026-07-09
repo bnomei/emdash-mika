@@ -77,6 +77,23 @@ package.
 npm install @bnomei/emdash-mika
 ```
 
+## Three host faces
+
+Hosts interact with Mika through three complementary faces. Pick the face that
+matches the trust boundary; do not expand the browser client to authenticated
+mutations.
+
+| Face | Package surface | When to use |
+| ---- | --------------- | ----------- |
+| **1. Backend API** | `@bnomei/emdash-mika/server` — `MikaApi`, `createMikaBackendApi()`, overrides | Compose commerce behavior once (repos, providers, notifications). Injected into the EmDash plugin entrypoint and shared by routes/actions. |
+| **2. In-process** | `@bnomei/emdash-mika/astro` (`createMika`) and `@bnomei/emdash-mika/astro-actions` (`createMikaActions`) | Astro pages and form/JSON Actions on the server. Same `MikaApi` instance; no extra HTTP hop. |
+| **3. HTTP** | `@bnomei/emdash-mika/client` (`createMikaClient` — public catalog/stock only) and `createMikaServerClient` on `/server` (full operation facade) | Browser-safe public reads, or server-to-plugin HTTP when you need the route surface without importing the full backend graph. |
+
+Supporting entrypoints stay projections of the same semantic core: `/agent`
+(manifest), `/acp` (ACP feed/handlers), `/admin`, `/provider`, `/stripe`,
+`/email`, `/types`. The root package export is **descriptor-only**
+(`mikaPlugin`); live `api` wiring never belongs on the JSON-safe root.
+
 Create a host entrypoint module that merges the live backend api:
 
 ```ts

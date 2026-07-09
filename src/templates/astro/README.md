@@ -35,6 +35,22 @@ reconciled a diff, update it (or leave it stale, it's informational, not
 enforced against your copy) — it only has to be accurate in this repo's own
 copies, not in what a host does with them.
 
+## Three host faces (wiring map)
+
+Templates assume the same three faces as the package README:
+
+1. **Backend** — `lib/mika-api.ts` exports a host-owned `MikaApi` / overrides
+   (typically `createMikaBackendApi` from `@bnomei/emdash-mika/server`).
+2. **In-process** — `actions/mika.ts` builds `createMikaActions({ api })`; pages
+   use `createMika(Astro, { api })` from `@bnomei/emdash-mika/astro` for
+   request-scoped helpers.
+3. **HTTP** — optional browser `createMikaClient` for public catalog/stock only;
+   server plugin routes and `createMikaServerClient` cover authenticated ops.
+
+`lib/mika-plugin.ts` is the EmDash entrypoint that injects that same `api` into
+`createMikaPlugin`. Leave `api` empty only while scaffolding — construction
+fails loudly via `assertMikaApiWired` instead of answering 501 on every route.
+
 ## Examples
 
 Use the focused examples for setup detail:
