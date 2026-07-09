@@ -1,6 +1,6 @@
 # ROADMAP follow-up — next cleanup cards
 
-**Status:** planning deck for the **next** cleanup campaign  
+**Status:** F0–F4 campaign **closed** (shipped or explicitly deferred) 2026-07-09  
 **Parent:** [ROADMAP.md](./ROADMAP.md) (P0–P3 hygiene largely shipped on `review-fixes`)  
 **Created:** 2026-07-09  
 **Basis:** manual ROADMAP audit + commit reviews under [reviews/](./reviews/)
@@ -94,8 +94,8 @@ prepublishOnly: check && typecheck && test && pack:check && types:check
 2. Confirm script still points at `test/fixtures/astro-template-check`.
 
 **Acceptance**  
-- [ ] `prepublishOnly` and CI both include `templates:check` in the same relative order.  
-- [ ] `npm run templates:check` alone still green.
+- [x] `prepublishOnly` and CI both include `templates:check` in the same relative order.  
+- [x] `npm run templates:check` alone still green.
 
 **Do not**  
 - Add `emdash()` to the fixture (excluded from this deck).
@@ -136,10 +136,10 @@ Fast + `templates:check`.
 5. Confirm ACP map: `CONFLICT` → `conflict`, `IDEMPOTENCY_MISMATCH` → `request_not_idempotent`, `STOCK_CONFLICT` → `out_of_stock` (already intended after review-followup).
 
 **Acceptance**  
-- [ ] No remaining emit of `CONFLICT` for pure idempotency-payload mismatch.  
-- [ ] At least one stock path emits `STOCK_CONFLICT` where CAS undercuts.  
-- [ ] Tests cover new codes.  
-- [ ] Existing clients that only check status 409 still work (status unchanged unless intentionally changed).
+- [x] No remaining emit of `CONFLICT` for pure idempotency-payload mismatch.  
+- [x] At least one stock path emits `STOCK_CONFLICT` where CAS undercuts.  
+- [x] Tests cover new codes.  
+- [x] Existing clients that only check status 409 still work (status unchanged unless intentionally changed).
 
 **Do not**  
 - Remove `CONFLICT` from the enum.  
@@ -168,8 +168,8 @@ Second test only loops keys of `mikaAdminActionRuntimeDefinitions` and asserts d
 3. Prefer `Object.hasOwn` over `in` for registry membership if still using `in`.
 
 **Acceptance**  
-- [ ] Missing admin id without runtime entry fails the test.  
-- [ ] Extra runtime key not in admin definitions fails (or is explicitly allowlisted with comment).
+- [x] Missing admin id without runtime entry fails the test.  
+- [x] Extra runtime key not in admin definitions fails (or is explicitly allowlisted with comment).
 
 **Verify**  
 Fast.
@@ -194,8 +194,8 @@ Subpath exists; package-exports samples other type subpaths but not primitives.
 3. Optional: README already mentions it; keep consistent.
 
 **Acceptance**  
-- [ ] `types:check` / package-exports fails if subpath breaks.  
-- [ ] Sampled symbols match public surface (not internal-only).
+- [x] `types:check` / package-exports fails if subpath breaks.  
+- [x] Sampled symbols match public surface (not internal-only).
 
 **Verify**  
 `npm run types:check` + pack if needed.
@@ -220,8 +220,8 @@ Hand list of 39 inputs: new `*Input` omitted from the list still typechecks. Com
 3. Optional: one package-path import sample for a random Input (not only source paths).
 
 **Acceptance**  
-- [ ] Adding a new exported Input type without listing it either fails automatically or is impossible by construction.  
-- [ ] Existing 39+ inputs still pin equal to `api/types` re-exports.
+- [x] Adding a new exported Input type without listing it either fails automatically or is impossible by construction.  
+- [x] Existing 39+ inputs still pin equal to `api/types` re-exports.
 
 **Verify**  
 Fast + `tsc -p test/tsconfig.json`.
@@ -257,9 +257,9 @@ Current brands are `MikaId & { __mikaEntity?: "…" }` — optional phantom fiel
 5. Unit tests for cross-assign failure (`SellableId` ↛ `CartId` at compile time — use `expectTypeOf` or a types-only assert file).
 
 **Acceptance**  
-- [ ] `SellableId` is not assignable to `CartId` (and vice versa) under `strict`.  
-- [ ] Schemas mint branded values, not bare strings.  
-- [ ] Public exports updated.
+- [x] `SellableId` is not assignable to `CartId` (and vice versa) under `strict`.  
+- [x] Schemas mint branded values, not bare strings.  
+- [x] Public exports updated.
 
 **Do not**  
 - Migrate all call sites in this card (that is F1.2).  
@@ -293,10 +293,10 @@ Constructors alone do not stop `refund(orderId: cart.id)`.
 7. Leave low-risk metadata / provider external ids as `string` or `MikaId` until needed.
 
 **Acceptance**  
-- [ ] Money-path public Inputs/DTOs use entity brands.  
-- [ ] Backend money functions take branded params at internal boundaries.  
-- [ ] Wire/ACP still parse `string` → brand at edge.  
-- [ ] Full test suite green; no silent `as Brand` sprinkled outside mint helpers.
+- [x] Money-path public Inputs/DTOs use entity brands.  
+- [x] Backend money functions take branded params at internal boundaries.  
+- [x] Wire/ACP still parse `string` → brand at edge.  
+- [x] Full test suite green; no silent `as Brand` sprinkled outside mint helpers.
 
 **Do not**  
 - Brand protocol wire JSON field types as brands without parse.  
@@ -326,9 +326,9 @@ Hand `MikaActions` still widens some JSON clients to `string` (e.g. sellableId/c
 3. Ensure `MikaActions` interface stays pinned to tree (bidirectional assert must remain).
 
 **Acceptance**  
-- [ ] JSON action input types match operation inputs for ids.  
-- [ ] Form actions still accept form posts.  
-- [ ] Bidirectional `MikaActions` pin still green.
+- [x] JSON action input types match operation inputs for ids.  
+- [x] Form actions still accept form posts.  
+- [x] Bidirectional `MikaActions` pin still green.
 
 **Verify**  
 Full + `templates:check`.
@@ -357,8 +357,8 @@ Full + `templates:check`.
 3. Prefer maps with `satisfies Record<Union, …>` where data-driven.
 
 **Acceptance**  
-- [ ] New union member without handler fails typecheck in each touched switch.  
-- [ ] No behavior change for existing members.
+- [x] New union member without handler fails typecheck in each touched switch.  
+- [x] No behavior change for existing members.
 
 **Verify**  
 Fast + targeted tests if any.
@@ -383,8 +383,8 @@ Fast + targeted tests if any.
 3. Document when a cast is still required (EmDash storage API limits).
 
 **Acceptance**  
-- [ ] No new casts; net cast count down or each remaining cast has a one-line justification.  
-- [ ] Repository tests still green.
+- [x] No new casts; net cast count down or each remaining cast has a one-line justification.  
+- [x] Repository tests still green.
 
 **Verify**  
 Fast.
@@ -409,8 +409,8 @@ Dispatch cast is localized; nothing stops reintroduction.
 3. Document in comment near the allowlisted cast.
 
 **Acceptance**  
-- [ ] Introducing a new forbidden cast fails `npm run check`.  
-- [ ] Existing allowlisted cast still builds.
+- [x] Introducing a new forbidden cast fails `npm run check`.  
+- [x] Existing allowlisted cast still builds.
 
 **Verify**  
 `npm run check`.
@@ -435,9 +435,9 @@ Still ~1k LOC; review/agent context pain.
 Split only along existing seams (e.g. ACP complete vs update vs cancel; checkout claim vs provider create vs persist). **Behavior-identical** only.
 
 **Acceptance**  
-- [ ] Public barrels unchanged (`/acp`, backend factory imports).  
-- [ ] Full suite green.  
-- [ ] No logic edits in the same commit.
+- [x] Public barrels unchanged (`/acp`, backend factory imports).  
+- [x] Full suite green.  
+- [x] No logic edits in the same commit.
 
 **Do not**  
 - Mix with F0.2 or F1.2 behavior.
@@ -465,8 +465,8 @@ Paths live in pure map **and** IR `routePath` strings; assert runs only when col
 3. Document “add route” steps in a short comment on `route-paths.ts`.
 
 **Acceptance**  
-- [ ] Cannot add IR route with wrong path without type or assert failure.  
-- [ ] Client purity preserved (`routes` never imports operations).
+- [x] Cannot add IR route with wrong path without type or assert failure.  
+- [x] Client purity preserved (`routes` never imports operations).
 
 **Verify**  
 Full + client purity greps.
@@ -499,8 +499,8 @@ Still `transform` + `as unknown as` + shape reattach for EOPT + idempotencyKey d
 4. Re-run schema-contracts + full suite.
 
 **Acceptance**  
-- [ ] Either cast surface reduced with contracts green, **or** explicit defer note in this file + parent ROADMAP.  
-- [ ] `schemaAcceptsIdempotencyKey` still works without `_def` internals.
+- [x] Either cast surface reduced with contracts green, **or** explicit defer note in this file + parent ROADMAP.  
+- [x] `schemaAcceptsIdempotencyKey` still works without `_def` internals.
 
 **Verify**  
 Full.
@@ -524,8 +524,8 @@ Full.
 3. If too costly, document abort criteria and stop.
 
 **Acceptance**  
-- [ ] Types packages declare cleanly under pilot config, **or** written decision to abandon.  
-- [ ] Pack/types:check still green for main pipeline.
+- [x] Types packages declare cleanly under pilot config, **or** written decision to abandon.  
+- [x] Pack/types:check still green for main pipeline.
 
 **Verify**  
 `types:check` + pack.
@@ -547,8 +547,8 @@ Full.
 3. Note any downlevel issues in commit body.
 
 **Acceptance**  
-- [ ] Full gate green.  
-- [ ] No accidental reliance on unshipped runtime APIs without engines bump.
+- [x] Full gate green.  
+- [x] No accidental reliance on unshipped runtime APIs without engines bump.
 
 **Verify**  
 Full.
@@ -573,8 +573,8 @@ Sharper “kit not theme” for hosts who do not want Cloudflare Kumo.
 3. Keep mika-template-version markers.
 
 **Acceptance**  
-- [ ] Host can copy a non-Kumo path without phosphor/kumo peers.  
-- [ ] Existing Kumo path unchanged.
+- [x] Host can copy a non-Kumo path without phosphor/kumo peers.  
+- [x] Existing Kumo path unchanged.
 
 **Verify**  
 `templates:check` still green for existing fixture (no emdash fixture required).
@@ -596,8 +596,8 @@ Sharper “kit not theme” for hosts who do not want Cloudflare Kumo.
 3. Link to live ROADMAP / this follow-up for current work.
 
 **Acceptance**  
-- [ ] Reader can tell live vs historical in ≤30s.  
-- [ ] No contradictory “must implement” language for already-shipped items.
+- [x] Reader can tell live vs historical in ≤30s.  
+- [x] No contradictory “must implement” language for already-shipped items.
 
 **Verify**  
 Docs-only.
@@ -622,8 +622,8 @@ Maps point at `src/` paths; package `files` may not include `src` → jump-to-so
 3. Align expectation in README “types” blurb if needed.
 
 **Acceptance**  
-- [ ] Documented true consumer behavior.  
-- [ ] No false claim of npm jump-to-source if `src` is unpublished.
+- [x] Documented true consumer behavior.  
+- [x] No false claim of npm jump-to-source if `src` is unpublished.
 
 **Verify**  
 `npm pack --dry-run` + notes.
@@ -648,8 +648,8 @@ Only a few divergences are documented (`consumeToken`, subscription cancel/renew
 3. Keep next to schemas or single canonical section linked from schemas.
 
 **Acceptance**  
-- [ ] Complete vs schema-contracts special cases.  
-- [ ] No silent divergence without a row.
+- [x] Complete vs schema-contracts special cases.  
+- [x] No silent divergence without a row.
 
 **Verify**  
 Docs + existing schema-contracts.
@@ -675,7 +675,7 @@ Not product code; prevents the next campaign from lying to itself.
 3. Point “open engineering work” to **this** follow-up file.
 
 **Acceptance**  
-- [ ] Counting open checkboxes no longer mixes policy with tasks.
+- [x] Counting open checkboxes no longer mixes policy with tasks.
 
 ---
 
@@ -692,7 +692,7 @@ Not product code; prevents the next campaign from lying to itself.
 3. Optional: force-add policy if the team wants reviews in git (team decision).
 
 **Acceptance**  
-- [ ] New agent finds follow-up cards from `docs/qa/README.md` in one hop.
+- [x] New agent finds follow-up cards from `docs/qa/README.md` in one hop.
 
 ---
 
@@ -714,20 +714,27 @@ Not product code; prevents the next campaign from lying to itself.
 
 | Date | Card | Commit | Notes |
 | ---- | ---- | ------ | ----- |
-| | | | |
-
 | 2026-07-09 | F0.1 | `fef5462` | prepublish templates:check |
 | 2026-07-09 | F0.2 | `b4fc9ae` | emit additive error codes |
-| 2026-07-09 | F0.3–F0.5 | `babb83b` / `d912a6a` | admin pin, primitives export, barrel |
+| 2026-07-09 | F0.3–F0.4 | `babb83b` | admin pin, primitives export |
+| 2026-07-09 | F0.5 | `d912a6a` | barrel SoT sample pin |
 | 2026-07-09 | F1.1 | `55dcbb5` | unique-symbol brands + Zod mint |
+| 2026-07-09 | F1.2 | `d5047dd` | money-path brand migration |
+| 2026-07-09 | F1.3 | `e6718fd` | JSON action branded inputs |
 | 2026-07-09 | F2.1 | `021c19c` | assertNever payment kinds |
+| 2026-07-09 | F2.2 | `ec53344` | kit cast documentation |
 | 2026-07-09 | F2.3 | `11b59ae` | cast allowlist test |
+| 2026-07-09 | F2.4 | **DEFER** | residual megafiles until feature forces split |
 | 2026-07-09 | F2.5 | `8b3cba9` | IR routePath from map |
-| 2026-07-09 | F3.3 | (pending) | ES2024 |
-| 2026-07-09 | F3.6 | `87f4d47` | declarationMap reality |
-| 2026-07-09 | F3.1 | **DEFER** | exactOptionalObject cast retained until Zod/astro upgrade leverage |
-| 2026-07-09 | F3.2 | **DEFER** | isolatedDeclarations abandoned for ops/inference hubs; types-only pilot not worth split tsconfig now |
-| 2026-07-09 | F2.4 | **DEFER** | acp/handlers + checkout/start remain ~1k LOC until feature forces split |
+| 2026-07-09 | F3.1 | **DEFER** | exactOptionalObject until Zod/astro leverage |
+| 2026-07-09 | F3.2 | **DEFER** | isolatedDeclarations abandoned for now |
+| 2026-07-09 | F3.3 | `d4e46b8` | ES2024 target/lib |
+| 2026-07-09 | F3.4 | `983c78a` | unstyled kit path |
+| 2026-07-09 | F3.5 | `1b79712` | commerce-research historical banners |
+| 2026-07-09 | F3.6 | `87f4d47` | declarationMap npm reality |
+| 2026-07-09 | F3.7 | `228db22` | Input divergences matrix |
+| 2026-07-09 | F4.1 | `c5cc155` | parent ROADMAP policy hygiene |
+| 2026-07-09 | F4.2 | `8cdb2e2` | reviews + follow-up discoverability |
 
 ---
 
