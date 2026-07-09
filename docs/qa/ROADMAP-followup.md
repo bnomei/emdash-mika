@@ -735,6 +735,7 @@ Not product code; prevents the next campaign from lying to itself.
 | 2026-07-09 | F3.7 | `228db22` | Input divergences matrix |
 | 2026-07-09 | F4.1 | `c5cc155` | parent ROADMAP policy hygiene |
 | 2026-07-09 | F4.2 | `8cdb2e2` | reviews + follow-up discoverability |
+| 2026-07-09 | review+autofix | `1432e5b` | F0–F4 agent reviews + fix all actionable findings; residual brand ports deferred |
 
 ---
 
