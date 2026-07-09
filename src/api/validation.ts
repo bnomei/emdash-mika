@@ -5,12 +5,21 @@
  *
  * ## Intentional divergences (wire schema vs public / server type)
  *
+ * Complete vs `test/schema-contracts.ts` special cases. Add a row when a public
+ * `*Input` is not exact `z.infer` of its schema (or the schema is form-only).
+ *
  * | Schema | Public type | Difference | Why | Test pin |
  * | ------ | ----------- | ---------- | --- | -------- |
- * | `accountExportDownloadInputSchema` | `AccountExportDownloadInput` | schema omits `consumeToken` | server-only force-consume | schema-contracts |
- * | `subscriptionCancelInputSchema` | `Omit<SubscriptionActionInput,"priceId">` | no `priceId` | only used on change | schema-contracts |
+ * | `accountExportDownloadInputSchema` | `AccountExportDownloadInput` | schema omits `consumeToken` | server-only force-consume after auth | schema-contracts (`Omit<…,"consumeToken">`) |
+ * | `subscriptionCancelInputSchema` | `Omit<SubscriptionActionInput,"priceId">` | no `priceId` | backend only reads price on change | schema-contracts |
  * | `subscriptionRenewInputSchema` | same as cancel | no `priceId` | same | schema-contracts |
- * | form schemas (`cartAddForm*`, `checkoutStartForm*`) | not public `*Input` | form transport fields | HTML posts | operations normalizers |
+ * | `returnToInputSchema` | shared by export/delete/portal inputs | one schema, three public types | same optional return path field | schema-contracts (`AccountExportInput & …`) |
+ * | `stockAvailabilityInputSchema` | `{ sellableId: SellableId }` (not a named `*Input`) | catalog helper, not full op input | availability probe | schema-contracts |
+ * | `downloadResolveInputSchema` | `{ token: string }` | token-only public probe | download redirect | schema-contracts |
+ * | form schemas (`cartAddForm*`, `checkoutStartForm*`, …) | not public `*Input` | flattened HTML transport / purchase shortcuts | normalizers → API inputs | operations action defs |
+ * | All money-path id fields | branded entity ids | wire is string; mint at parse | prevent id mixups | entity-id-brands + schema-contracts |
+ *
+ * Non-divergences: every other public `*Input` is exact key-set `z.infer` of its schema.
  */
 
 import { z } from "astro/zod";
