@@ -1,9 +1,16 @@
 /**
  * Compile-time completeness: every public operation `*Input` exported from
- * `src/api/types.ts` must be re-exported from the `/types` barrel with the same type.
+ * `src/api/types.ts` (and validation SoT) must be re-exported from the `/types`
+ * barrel with the same type.
+ *
+ * When adding a public `*Input`:
+ * 1. export type from validation via z.infer
+ * 2. re-export from api/types.ts and src/types/index.ts
+ * 3. extend BOTH import blocks and the PublicOperationInputPairs map below
+ *
+ * A missing map entry is a type error only if listed — keep the three lists in lockstep.
  *
  * Never executed; typechecked by `tsc -p test/tsconfig.json` as part of `npm run test`.
- * When adding a public `*Input` on the wire surface, extend both import lists and the map.
  */
 import type {
   AccountDeleteInput as ApiAccountDeleteInput,
@@ -144,3 +151,8 @@ type PublicOperationInputPairs = {
 type AllTrue<T extends Record<string, true>> = T;
 
 export type TypesBarrelCompleteness = AllTrue<PublicOperationInputPairs>;
+
+/** Guard: validation remains the SoT for a representative Input (z.infer re-export path). */
+import type { AddCartItemInput as ValidationAddCartItemInput } from "../src/api/validation";
+type _ValidationSoT = AssertEqual<ValidationAddCartItemInput, ApiAddCartItemInput>;
+export type TypesBarrelValidationSoT = _ValidationSoT;

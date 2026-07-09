@@ -130,6 +130,11 @@ import type {
   ProviderHealthDTO,
   SellableDTO,
 } from "@bnomei/emdash-mika/types";
+import type {
+  createSellableId,
+  MikaId as MikaIdFromPrimitives,
+  SellableId,
+} from "@bnomei/emdash-mika/types/primitives";
 
 export type PackageEntryContract = {
   readonly root: typeof mikaPlugin;
@@ -169,6 +174,10 @@ export type PackageEntryContract = {
   readonly backend: typeof createMikaBackendApi;
   readonly emailOutboxRunnerFactory: typeof createMikaEmailOutboxRunner;
   readonly maintenanceRunnerFactory: typeof createMikaMaintenanceRunner;
+  /** Additive `/types/primitives` samples. */
+  readonly primitivesId: MikaIdFromPrimitives;
+  readonly primitivesSellableId: SellableId;
+  readonly primitivesSellableFactory: typeof createSellableId;
   /** Additive `/server/*` discoverability subpaths re-export the same symbols. */
   readonly serverPortsStock: MikaStockRepositoryPortFromServerPorts;
   readonly serverMaintenanceRunner: MikaMaintenanceRunnerFromServerMaintenance;
