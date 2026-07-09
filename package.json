@@ -125,7 +125,7 @@
     "check": "vp check .",
     "pack:check": "npm run build:pack -- --clean --publint",
     "prepack": "npm run build",
-    "prepublishOnly": "npm run check && npm run typecheck && npm run test && npm run pack:check && npm run types:check",
+    "prepublishOnly": "npm run check && npm run typecheck && npm run test && npm run templates:check && npm run pack:check && npm run types:check",
     "templates:check": "astro check --root test/fixtures/astro-template-check",
     "test": "vp test run test/*.test.ts && tsc -p test/tsconfig.json",
     "typecheck": "tsc --noEmit",
