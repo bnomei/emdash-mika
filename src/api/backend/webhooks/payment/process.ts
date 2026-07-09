@@ -4,6 +4,7 @@
 import { type MikaProviderWebhookEvent } from "../../../../provider";
 import { type WebhookDocument } from "../../../../types/documents";
 import { type MikaRequestContext } from "../../../context";
+import { assertNever } from "../../shared";
 import { type MikaBackendDependencies } from "../../ports";
 import { WorkflowRunnerLeaseLostError } from "../../workflow-runner";
 import {
@@ -114,5 +115,7 @@ export async function processStoredWebhook(
       }
     case "unknown":
       return webhook;
+    default:
+      return assertNever(event);
   }
 }
