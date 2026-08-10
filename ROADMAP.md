@@ -33,15 +33,15 @@ The demo proves that a complete application can be built on Mika. It does not ne
 
 ## Product boundary
 
-| Mika must own | The host or AI-generated glue owns |
-| --- | --- |
-| Semantic DTOs, operations, errors, and lifecycle rules | Content schema and product mapping |
-| Correct concurrency and state-transition semantics | Database and storage implementation |
-| Typed extension points | Tax, shipping, inventory, and fraud vendors |
-| Faithful Stripe and ACP projections | Authentication, authorization, and business policy |
-| Deterministic tests and conformance fixtures | Private asset storage and signed download URLs |
-| Package, docs, and demo release proof | Raw license-key generation and delivery |
-| Clear ownership and security guidance | Storefront UI and project-specific workflows |
+| Mika must own                                          | The host or AI-generated glue owns                 |
+| ------------------------------------------------------ | -------------------------------------------------- |
+| Semantic DTOs, operations, errors, and lifecycle rules | Content schema and product mapping                 |
+| Correct concurrency and state-transition semantics     | Database and storage implementation                |
+| Typed extension points                                 | Tax, shipping, inventory, and fraud vendors        |
+| Faithful Stripe and ACP projections                    | Authentication, authorization, and business policy |
+| Deterministic tests and conformance fixtures           | Private asset storage and signed download URLs     |
+| Package, docs, and demo release proof                  | Raw license-key generation and delivery            |
+| Clear ownership and security guidance                  | Storefront UI and project-specific workflows       |
 
 ## Ship criteria
 
