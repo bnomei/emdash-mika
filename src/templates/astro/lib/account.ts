@@ -1,4 +1,4 @@
-// mika-template-version: 0.0.0
+// mika-template-version: 0.1.0
 /**
  * Account view helpers for the copyable Astro storefront template.
  * Keeps host-provided license rows separate from Mika's core account DTO.

@@ -1,6 +1,6 @@
 {
   "name": "@bnomei/emdash-mika",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Agent-ready commerce primitives for content-led storefronts.",
   "keywords": [
     "agentic-commerce",
@@ -126,6 +126,7 @@
     "pack:check": "npm run build:pack -- --clean --publint",
     "prepack": "npm run build",
     "prepublishOnly": "npm run check && npm run typecheck && npm run test && npm run templates:check && npm run pack:check && npm run types:check",
+    "release:check": "node scripts/check-release.mjs",
     "templates:check": "astro check --root test/fixtures/astro-template-check",
     "test": "vp test run test/*.test.ts && tsc -p test/tsconfig.json",
     "typecheck": "tsc --noEmit",

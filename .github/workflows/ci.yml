@@ -26,3 +26,40 @@ jobs:
       - run: npm run templates:check
       - run: npm run pack:check
       - run: npm run types:check
+
+  release-candidate:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: emdash-mika
+      - uses: actions/checkout@v4
+        with:
+          repository: bnomei/emdash-mika-template
+          ref: b5d45f6fc0822706e820f6c5df844acd9f268a5f
+          path: emdash-mika-template
+      - uses: actions/checkout@v4
+        with:
+          repository: bnomei/emdash-mika-docs
+          ref: 9ce93d27688e225a342b68a98f4cc2fd95f683c3
+          path: emdash-mika-docs
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+          cache-dependency-path: |
+            emdash-mika/package-lock.json
+            emdash-mika-template/package-lock.json
+            emdash-mika-docs/package-lock.json
+      - run: npm install --global npm@11.16.0
+      - run: test "$(node --version)" = "v22.13.0" && test "$(npm --version)" = "11.16.0"
+      - run: npm ci
+        working-directory: emdash-mika
+      - run: npm ci
+        working-directory: emdash-mika-template
+      - run: npm ci
+        working-directory: emdash-mika-docs
+      - run: npm run release:check
+        working-directory: emdash-mika

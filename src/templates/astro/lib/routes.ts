@@ -1,4 +1,4 @@
-// mika-template-version: 0.0.0
+// mika-template-version: 0.1.0
 /**
  * Canonical storefront paths for the copyable Astro template.
  * Shared by pages, forms, and checkout redirect builders.
