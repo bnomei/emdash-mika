@@ -167,4 +167,3 @@ type _ValidationSoT = AssertEqual<ValidationAddCartItemInput, ApiAddCartItemInpu
   AssertEqual<ValidationCheckoutStatusInput, ApiCheckoutStatusInput> &
   AssertEqual<ValidationOrderRefundInput, ApiOrderRefundInput>;
 export type TypesBarrelValidationSoT = _ValidationSoT;
-

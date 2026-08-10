@@ -2188,7 +2188,10 @@ describe("Mika client", () => {
       },
       {
         run: () =>
-          client.checkout.status({ checkoutId: createCheckoutSessionId("checkout_1"), token: "status_token_1" }),
+          client.checkout.status({
+            checkoutId: createCheckoutSessionId("checkout_1"),
+            token: "status_token_1",
+          }),
         operation: mikaOperationDefinitions.checkoutStatus,
         expectedUrl:
           "https://shop.test/_emdash/api/plugins/mika/checkout/status?checkoutId=checkout_1&token=status_token_1",
@@ -3570,7 +3573,10 @@ describe("Mika client", () => {
     });
 
     await client.cart.get();
-    await client.checkout.status({ checkoutId: createCheckoutSessionId("checkout_1"), token: "status_token_1" });
+    await client.checkout.status({
+      checkoutId: createCheckoutSessionId("checkout_1"),
+      token: "status_token_1",
+    });
     await client.cart.update({ lineId: createCartId("cart_line_1"), quantity: 2 });
     await client.cart.remove({ lineId: createCartId("cart_line_1") });
     await client.cart.applyCoupon({ code: "SAVE10" });

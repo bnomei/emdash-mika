@@ -103,7 +103,10 @@ export interface MikaActions {
     readonly sellables: MikaJsonActionClient<ContentRefDTO, readonly SellableDTO[]>;
   };
   readonly stock: {
-    readonly availability: MikaJsonActionClient<{ readonly sellableId: SellableId }, AvailabilityDTO>;
+    readonly availability: MikaJsonActionClient<
+      { readonly sellableId: SellableId },
+      AvailabilityDTO
+    >;
   };
   readonly cart: {
     readonly add: MikaFormActionClient<CartDTO>;

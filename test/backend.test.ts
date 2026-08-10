@@ -2267,9 +2267,7 @@ describe("backend test Kysely stock database harness", () => {
       await repository.putItem(stockItem);
 
       await expect(repository.findBySellableId(stockItem.sellableId)).resolves.toEqual(stockItem);
-      await expect(
-        repository.findBySellableId(createTestSellableId(2)),
-      ).resolves.toBeNull();
+      await expect(repository.findBySellableId(createTestSellableId(2))).resolves.toBeNull();
     } finally {
       await rollbackMikaInitialMigration(db);
       await db.destroy();
@@ -8643,26 +8641,26 @@ describe("backend API composition", () => {
       }),
     );
 
-    await expect(
-      api.admin.orderRefund({ orderId: createTestOrderId(404) }),
-    ).resolves.toMatchObject({
-      ok: false,
-      status: 404,
-      error: {
-        code: "NOT_FOUND",
-        fieldErrors: { orderId: "Order was not found." },
+    await expect(api.admin.orderRefund({ orderId: createTestOrderId(404) })).resolves.toMatchObject(
+      {
+        ok: false,
+        status: 404,
+        error: {
+          code: "NOT_FOUND",
+          fieldErrors: { orderId: "Order was not found." },
+        },
       },
-    });
-    await expect(
-      api.admin.orderCancel({ orderId: createTestOrderId(404) }),
-    ).resolves.toMatchObject({
-      ok: false,
-      status: 404,
-      error: {
-        code: "NOT_FOUND",
-        fieldErrors: { orderId: "Order was not found." },
+    );
+    await expect(api.admin.orderCancel({ orderId: createTestOrderId(404) })).resolves.toMatchObject(
+      {
+        ok: false,
+        status: 404,
+        error: {
+          code: "NOT_FOUND",
+          fieldErrors: { orderId: "Order was not found." },
+        },
       },
-    });
+    );
     await expect(
       api.order.invoice(createTestRequestContext(), { orderId: createTestOrderId(404) }),
     ).resolves.toMatchObject({
@@ -12645,9 +12643,7 @@ describe("backend API composition", () => {
       status: 200,
       data: { id: "webhook_1", status: "received" },
     });
-    await expect(
-      repositories.ledger.findOrderById(createTestOrderId(1)),
-    ).resolves.toMatchObject({
+    await expect(repositories.ledger.findOrderById(createTestOrderId(1))).resolves.toMatchObject({
       aggregate: {
         lines: [{ downloadRefs: ["download:order_1:order_line_1"] }],
         metadata: { fulfilledAt: TEST_NOW },
@@ -18009,9 +18005,7 @@ describe("backend API composition", () => {
       throw new Error("Expected checkout.preview to succeed.");
     }
     await expect(repositories.session.findById(preview.data.id!)).resolves.toBeNull();
-    await expect(
-      repositories.session.findById(createTestCheckoutSessionId(1)),
-    ).resolves.toBeNull();
+    await expect(repositories.session.findById(createTestCheckoutSessionId(1))).resolves.toBeNull();
     expect(Object.values(fake.getCalls()).flat()).toEqual([]);
   });
 
@@ -18323,9 +18317,7 @@ describe("backend API composition", () => {
       },
     });
     expect(fake.getCalls().createCheckoutSession).toEqual([]);
-    await expect(
-      repositories.session.findById(createTestCheckoutSessionId(1)),
-    ).resolves.toBeNull();
+    await expect(repositories.session.findById(createTestCheckoutSessionId(1))).resolves.toBeNull();
     await expectCheckoutFailureInvariant({
       repositories,
       provider: fake,
@@ -18551,7 +18543,9 @@ describe("backend API composition", () => {
       quantityReserved: 2,
     });
 
-    const checkoutDoc = await repositories.session.findCheckoutById(createCheckoutSessionId("checkout_1"));
+    const checkoutDoc = await repositories.session.findCheckoutById(
+      createCheckoutSessionId("checkout_1"),
+    );
     if (!checkoutDoc) throw new Error("Expected checkout document.");
     await repositories.session.put({ ...checkoutDoc, status: "failed" });
 
@@ -18678,9 +18672,7 @@ describe("backend API composition", () => {
     await expect(repositories.stock.findBySellableId(sellable.id)).resolves.toMatchObject({
       quantityReserved: 0,
     });
-    await expect(
-      repositories.session.findById(createTestCheckoutSessionId(1)),
-    ).resolves.toBeNull();
+    await expect(repositories.session.findById(createTestCheckoutSessionId(1))).resolves.toBeNull();
     await expect(repositories.session.findById(added.data.id)).resolves.toMatchObject({
       type: "cart",
       status: "open",
@@ -18781,9 +18773,7 @@ describe("backend API composition", () => {
     await expect(
       repositories.stock.findEventById(createTestMikaId("stock_event", 1)),
     ).resolves.toMatchObject({ status: "released" });
-    await expect(
-      repositories.session.findById(createTestCheckoutSessionId(1)),
-    ).resolves.toBeNull();
+    await expect(repositories.session.findById(createTestCheckoutSessionId(1))).resolves.toBeNull();
   });
 
   it("releases reservations when the checkout provider returns a failed session", async () => {
@@ -18842,9 +18832,7 @@ describe("backend API composition", () => {
       type: "cart",
       status: "open",
     });
-    await expect(
-      repositories.session.findById(createTestCheckoutSessionId(1)),
-    ).resolves.toBeNull();
+    await expect(repositories.session.findById(createTestCheckoutSessionId(1))).resolves.toBeNull();
   });
 
   it("starts hosted checkout, persists binding, and returns the redirect URL", async () => {
@@ -19539,9 +19527,7 @@ describe("backend API composition", () => {
       type: "cart",
       status: "checkout_pending",
     });
-    await expect(
-      repositories.session.findById(createTestCheckoutSessionId(2)),
-    ).resolves.toBeNull();
+    await expect(repositories.session.findById(createTestCheckoutSessionId(2))).resolves.toBeNull();
     await expect(
       repositories.session.findCheckoutByIdempotencyKey("checkout_replay_1"),
     ).resolves.toMatchObject({
@@ -19700,9 +19686,7 @@ describe("backend API composition", () => {
       error: { code: "IDEMPOTENCY_MISMATCH" },
     });
     if (attacker.ok) throw new Error("Expected cross-session replay to be rejected.");
-    await expect(
-      repositories.session.findById(createTestCheckoutSessionId(2)),
-    ).resolves.toBeNull();
+    await expect(repositories.session.findById(createTestCheckoutSessionId(2))).resolves.toBeNull();
   });
 
   it("rejects duplicate checkout starts that reuse an idempotency key with different input", async () => {

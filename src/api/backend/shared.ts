@@ -223,7 +223,10 @@ function variantOptionChildren(
   });
 }
 
-function priceIdChild(input: JsonObject, key: string): ReturnType<typeof createPriceId> | undefined {
+function priceIdChild(
+  input: JsonObject,
+  key: string,
+): ReturnType<typeof createPriceId> | undefined {
   const value = stringChild(input, key);
   return value ? createPriceId(value) : undefined;
 }
