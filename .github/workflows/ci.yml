@@ -38,12 +38,12 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: bnomei/emdash-mika-template
-          ref: b6c6ad5c7f141be6d7afd24e7edf8add807ffc76
+          ref: 16dddd06f9a7032270b8d031b4dadca04856fce09
           path: emdash-mika-template
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: bnomei/emdash-mika-docs
-          ref: ac65628c05b24e3351d5db301a5573ea117fedc4
+          ref: 958aacd817de3f0a5a4ef1bfabee6d410ed8e867
           path: emdash-mika-docs
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
