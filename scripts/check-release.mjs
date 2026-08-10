@@ -32,7 +32,7 @@ try {
   const artifact = packRelease();
   verifyCleanConsumer(artifact);
   verifyTemplate(artifact);
-  runNpm(docsRoot, ["run", "build"]);
+  verifyDocs();
   console.log("Release artifact, clean consumer, demo, and docs checks passed.");
 } finally {
   rmSync(tempRoot, { force: true, recursive: true });
@@ -139,21 +139,46 @@ function verifyCleanConsumer(artifact) {
 }
 
 function verifyTemplate(artifact) {
-  runNpm(templateRoot, [
+  const candidateRoot = copyProject(templateRoot, "template");
+  const manifestPath = join(candidateRoot, "package.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  manifest.dependencies[packageName] = `file:${artifact}`;
+  writeJson(manifestPath, manifest);
+  runNpm(candidateRoot, [
     "install",
-    "--no-save",
-    "--package-lock=false",
+    "--package-lock-only",
+    "--ignore-scripts",
     "--no-audit",
     "--no-fund",
-    artifact,
   ]);
-  assertInstalledArtifact(templateRoot);
-  runNpm(templateRoot, ["rebuild", "better-sqlite3", "--foreground-scripts"]);
+  runNpm(candidateRoot, ["ci", "--no-audit", "--no-fund"]);
+  assertInstalledArtifact(candidateRoot);
+  runNpm(candidateRoot, ["rebuild", "better-sqlite3", "--foreground-scripts"]);
 
   const env = { EMDASH_MIKA_TEMPLATE_SKIP_LOCAL_BUILD: "1" };
-  runNpm(templateRoot, ["run", "typecheck"], { env });
-  runNpm(templateRoot, ["test"], { env });
-  runNpm(templateRoot, ["run", "build"], { env });
+  runNpm(candidateRoot, ["run", "typecheck"], { env });
+  runNpm(candidateRoot, ["test"], { env });
+  runNpm(candidateRoot, ["run", "build"], { env });
+}
+
+function verifyDocs() {
+  const candidateRoot = copyProject(docsRoot, "docs");
+  runNpm(candidateRoot, ["ci", "--no-audit", "--no-fund"]);
+  runNpm(candidateRoot, ["run", "build"]);
+}
+
+function copyProject(sourceRoot, name) {
+  const candidateRoot = join(tempRoot, name);
+  const excluded = new Set([".astro", ".emdash", ".git", "dist", "node_modules"]);
+  cpSync(sourceRoot, candidateRoot, {
+    recursive: true,
+    filter(source) {
+      const path = relative(sourceRoot, source);
+      if (!path) return true;
+      return !excluded.has(path.split(sep)[0]);
+    },
+  });
+  return candidateRoot;
 }
 
 function assertInstalledArtifact(projectRoot) {
@@ -187,9 +212,6 @@ function assertSiblingProject(projectRoot, name) {
     throw new Error(
       `${name} is required at ${projectRoot}. Override its location with the matching EMDASH_MIKA_*_ROOT environment variable.`,
     );
-  }
-  if (!existsSync(join(projectRoot, "node_modules"))) {
-    throw new Error(`${name} dependencies are not installed. Run npm ci in ${projectRoot}.`);
   }
 }
 
