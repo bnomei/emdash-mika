@@ -232,6 +232,7 @@ export function createCheckoutAggregate(input: {
   readonly lines: readonly CheckoutLine[];
   readonly binding: CheckoutBinding;
   readonly coupon?: CouponSnapshot;
+  readonly totals?: CartTotals;
   readonly metadata?: JsonObject;
 }): CheckoutAggregate {
   return omitUndefined({
@@ -239,7 +240,7 @@ export function createCheckoutAggregate(input: {
     mode: input.mode,
     currency: input.currency,
     lines: input.lines,
-    totals: calculateTotals(input.currency, input.lines, input.coupon),
+    totals: input.totals ?? calculateTotals(input.currency, input.lines, input.coupon),
     binding: input.binding,
     coupon: input.coupon,
     metadata: input.metadata,

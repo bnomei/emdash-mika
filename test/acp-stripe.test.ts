@@ -2980,6 +2980,46 @@ describe("Mika Stripe provider", () => {
     expect(intentCalls[0]).toMatchObject({ params: { amount: 2460, currency: "eur" } });
   });
 
+  it("rejects a hosted Stripe handoff that cannot represent the authoritative total", async () => {
+    let createCalls = 0;
+    const stripe: MikaStripeClient = {
+      checkout: {
+        sessions: {
+          create: async () => {
+            createCalls += 1;
+            return { id: "cs_unreachable", status: "open", mode: "payment" };
+          },
+          retrieve: async () => ({ id: "cs_unreachable", status: "open", mode: "payment" }),
+        },
+      },
+    };
+    const provider = createMikaStripeProvider({ stripe });
+
+    await expect(
+      provider.createCheckoutSession({
+        mode: "payment",
+        provider: createProviderName("stripe"),
+        successUrl: "https://shop.example.test/success",
+        cancelUrl: "https://shop.example.test/cancel",
+        total: { amount: 2_700, currency: createCurrencyCode("EUR") },
+        lines: [
+          {
+            sellableId: createSellableId("sellable_1"),
+            priceId: createPriceId("price_1"),
+            contentRef: { collection: "products", id: "print" },
+            title: "Limited print",
+            quantity: 2,
+            unitAmount: 1_200,
+            currency: createCurrencyCode("EUR"),
+            mode: "payment",
+            fulfillmentKind: "external",
+          },
+        ],
+      }),
+    ).rejects.toThrow(/cannot represent host-added tax, shipping, or fee amounts/i);
+    expect(createCalls).toBe(0);
+  });
+
   it("resolves the invoice id from a payment-intent id before retrieving the invoice", async () => {
     const invoiceCalls: string[] = [];
     const intentCalls: string[] = [];

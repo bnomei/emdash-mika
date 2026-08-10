@@ -70,6 +70,8 @@ import type {
 import type { EphemeralRecord, StockEventRecord, StockItemRecord } from "../../types/operational";
 import type { MikaNotificationHook } from "../notifications";
 import type { MikaApiOverrides } from "../server";
+import type { MikaRequestContext } from "../context";
+import type { CartQuoteDTO, CartQuoteInput } from "../types";
 
 /** Paginated id/data page returned by repository-port list methods. */
 export type MikaDocumentList<TDocument> = PaginatedStorageResult<{
@@ -526,6 +528,22 @@ export type MikaCouponResolver = (
   input: MikaCouponResolverInput,
 ) => Promise<MikaCouponResolution | null> | MikaCouponResolution | null;
 
+/** Inputs passed to the host-owned final quote calculation. */
+export interface MikaQuoteResolverInput {
+  readonly ctx: MikaRequestContext;
+  readonly input: CartQuoteInput;
+  /** Mika's catalog, coupon, and availability quote before host business amounts are applied. */
+  readonly quote: CartQuoteDTO;
+}
+
+/**
+ * Host hook for adding tax, shipping, fees, or policy results to Mika's default quote.
+ * The resolved quote is reused by preview proofs, checkout provider handoff, and persistence.
+ */
+export type MikaQuoteResolver = (
+  input: MikaQuoteResolverInput,
+) => Promise<CartQuoteDTO> | CartQuoteDTO;
+
 /** TTLs, redirect URLs, and metadata knobs for backend-owned resources. */
 export interface MikaBackendConfig {
   readonly accountExport?: {
@@ -582,6 +600,7 @@ export interface MikaBackendDependencies {
   };
   readonly onError?: MikaBackendErrorObserver;
   readonly providers: MikaProviderRegistry;
+  readonly quoteResolver?: MikaQuoteResolver;
   readonly repositories: MikaBackendRepositories;
 }
 

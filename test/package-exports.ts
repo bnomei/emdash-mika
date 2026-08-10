@@ -58,6 +58,8 @@ import type {
   createMikaServerClient,
   MikaApi,
   MikaBackendDependencies,
+  MikaQuoteResolver,
+  MikaQuoteResolverInput,
   MikaCreatePluginOptions,
   MikaEmailDeliveryMessage,
   MikaEmailOutboxRunner,
@@ -193,6 +195,8 @@ export type PackageEntryContract = {
   readonly assertWired: typeof assertMikaApiWired;
   readonly backendInput: CreateMikaBackendApiInput;
   readonly backendDependencies: MikaBackendDependencies;
+  readonly quoteResolver: MikaQuoteResolver;
+  readonly quoteResolverInput: MikaQuoteResolverInput;
   readonly notificationKind: MikaNotificationKind;
   readonly notificationIntent: MikaNotificationIntent;
   readonly notificationHook: MikaNotificationHook;

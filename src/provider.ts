@@ -106,8 +106,9 @@ export interface MikaProviderCheckoutInput {
    * discount, plus any host-added amounts such as tax or shipping). Adapters that create a direct
    * charge — e.g. delegated ACP payments — MUST charge exactly this amount when present instead
    * of recomputing from `lines`, or the charge drifts from the total the buyer confirmed.
-   * Hosted-checkout adapters may ignore it when the provider derives its own total from lines
-   * and discounts.
+   * Hosted-checkout adapters may derive the same value from lines and discounts, but MUST reject
+   * the handoff when they cannot represent a different authoritative total. Silently charging a
+   * different amount would invalidate the preview and persisted checkout.
    */
   readonly total?: MoneyDTO;
   readonly successUrl: string;

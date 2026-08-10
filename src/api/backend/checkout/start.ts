@@ -29,7 +29,12 @@ import {
   type PurchaseMode,
 } from "../../../types/primitives";
 import type { MikaRequestContext } from "../../context";
-import type { CheckoutSessionDTO, MikaApiResult, StartCheckoutInput } from "../../types";
+import type {
+  CartQuoteDTO,
+  CheckoutSessionDTO,
+  MikaApiResult,
+  StartCheckoutInput,
+} from "../../types";
 import { requireProviderFeature } from "../provider-dispatch";
 import {
   apiFailure,
@@ -116,6 +121,7 @@ export async function requireDelegatedPaymentAuthorization(
   ctx: MikaRequestContext,
   checkoutInput: StartCheckoutInput,
   providerName: ProviderName | undefined,
+  resolvedQuote?: CartQuoteDTO,
 ): Promise<{ readonly ok: true } | MikaApiFailure> {
   const customFields = checkoutInput.customFields;
   const token = customFields?.[MIKA_DELEGATED_PAYMENT_TOKEN_METADATA_KEY];
@@ -133,7 +139,7 @@ export async function requireDelegatedPaymentAuthorization(
   }
 
   const proofInput: StartCheckoutInput = { ...checkoutInput, provider: providerName };
-  const quote = await createCartQuote(input, ctx, proofInput);
+  const quote = resolvedQuote ?? (await createCartQuote(input, ctx, proofInput));
   const mode = await resolveCheckoutPreviewMode(input, ctx, proofInput);
   const expectedHash = await delegatedPaymentProofHash(
     input,
@@ -250,16 +256,48 @@ export async function startCheckout(
   }
 
   const providerName = checkoutInput.provider ?? input.defaults?.provider;
+  const hostQuote = input.quoteResolver
+    ? await createCartQuote(input, ctx, {
+        ...checkoutInput,
+        customFields: checkoutPersistedCustomMetadata(checkoutInput.customFields),
+      })
+    : undefined;
   const delegatedPaymentAuth = await requireDelegatedPaymentAuthorization(
     input,
     ctx,
     checkoutInput,
     providerName,
+    hostQuote,
   );
   if (!delegatedPaymentAuth.ok) return delegatedPaymentAuth;
 
   const resolved = await resolveCheckoutStart(input, ctx, checkoutInput);
   if (!resolved.ok) return resolved;
+
+  if (hostQuote?.status === "expired") return checkoutExpired();
+  if (hostQuote?.status === "unavailable") {
+    const error = hostQuote.errors?.[0];
+    return apiFailure(
+      error?.code === "VALIDATION_FAILED" ? 400 : 409,
+      error?.code ?? "CONFLICT",
+      error?.message ?? "The host quote is unavailable for checkout.",
+      error?.fieldErrors,
+    );
+  }
+  if (
+    hostQuote &&
+    (hostQuote.currency !== resolved.currency ||
+      [
+        hostQuote.subtotal,
+        hostQuote.discount,
+        hostQuote.tax,
+        hostQuote.shipping,
+        hostQuote.total,
+        ...(hostQuote.adjustments?.map((adjustment) => adjustment.amount) ?? []),
+      ].some((amount) => amount && amount.currency !== resolved.currency))
+  ) {
+    return validationFailed("quote", "Host quote currency must match the checkout currency.");
+  }
 
   if (!providerName) {
     return validationFailed("provider", "A checkout provider is required.");
@@ -320,14 +358,14 @@ export async function startCheckout(
 
   const providerSession = await (async () => {
     try {
-      const total = moneyDTO(
-        Math.max(0, checkoutSubtotal - checkoutDiscountAmount),
-        resolved.currency,
-      );
+      const total =
+        hostQuote?.total ??
+        moneyDTO(Math.max(0, checkoutSubtotal - checkoutDiscountAmount), resolved.currency);
       const discount =
-        checkoutDiscountAmount > 0
+        hostQuote?.discount ??
+        (checkoutDiscountAmount > 0
           ? moneyDTO(checkoutDiscountAmount, resolved.currency)
-          : undefined;
+          : undefined);
       const lines = reserved.lines.map((line) => checkoutLineToProviderLine(providerName, line));
 
       if (providerDispatch.kind === "delegated") {
@@ -375,7 +413,8 @@ export async function startCheckout(
       return null;
     }
   })();
-  const checkoutTotalAmount = Math.max(0, checkoutSubtotal - checkoutDiscountAmount);
+  const checkoutTotalAmount =
+    hostQuote?.total.amount ?? Math.max(0, checkoutSubtotal - checkoutDiscountAmount);
   if (!providerSession) {
     await emitCheckoutStartFailedNotification(
       input,
@@ -453,6 +492,15 @@ export async function startCheckout(
         currency: resolved.currency,
         lines: reserved.lines,
         coupon: resolved.coupon,
+        totals: hostQuote
+          ? omitUndefined({
+              subtotal: hostQuote.subtotal,
+              discount: hostQuote.discount,
+              tax: hostQuote.tax,
+              shipping: hostQuote.shipping,
+              total: hostQuote.total,
+            })
+          : undefined,
         binding: omitUndefined({
           provider: providerName,
           providerCheckoutId,

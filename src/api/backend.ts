@@ -31,6 +31,8 @@ export type {
   MikaCouponResolution,
   MikaCouponResolverInput,
   MikaCouponResolver,
+  MikaQuoteResolver,
+  MikaQuoteResolverInput,
   MikaBackendConfig,
   MikaBackendErrorObserver,
   MikaBackendDependencies,

@@ -253,7 +253,7 @@ export async function createCartQuote(
         ? "changed"
         : "valid";
 
-  return omitUndefined({
+  const quote: CartQuoteDTO = omitUndefined({
     id: input.createId("cart_quote"),
     cartId: cartResult.cart?.id,
     status,
@@ -293,6 +293,8 @@ export async function createCartQuote(
     warnings: warnings.length > 0 ? warnings : undefined,
     errors: errors.length > 0 ? errors : undefined,
   });
+
+  return input.quoteResolver ? input.quoteResolver({ ctx, input: quoteInput, quote }) : quote;
 }
 
 export async function findQuoteCart(

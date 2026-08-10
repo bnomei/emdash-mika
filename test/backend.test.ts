@@ -19826,10 +19826,22 @@ describe("backend API composition", () => {
     await repositories.catalog.put(
       createCatalogItemDocument({ contentRef, sellables: [sellable] }),
     );
+    let feeAmount = 60;
     const api = createMikaBackendApi(
       createIncrementingBackendDependencies({
         repositories,
         providers: createMikaProviderRegistry([fake.provider]),
+        quoteResolver: ({ quote }) => ({
+          ...quote,
+          tax: { amount: 240, currency: quote.currency },
+          shipping: { amount: 100, currency: quote.currency },
+          adjustments: [
+            { type: "tax", amount: { amount: 240, currency: quote.currency } },
+            { type: "shipping", amount: { amount: 100, currency: quote.currency } },
+            { type: "fee", amount: { amount: feeAmount, currency: quote.currency } },
+          ],
+          total: { amount: 1_200 + 240 + 100 + feeAmount, currency: quote.currency },
+        }),
       }),
     );
     const ctx = createTestRequestContext({
@@ -19854,6 +19866,12 @@ describe("backend API composition", () => {
     if (!preview.ok) throw new Error("Expected checkout.preview to succeed.");
     const inputHash = preview.data.inputHash;
     if (!inputHash) throw new Error("Expected checkout.preview to return an input hash.");
+    expect(preview.data.quote).toMatchObject({
+      tax: { amount: 240, currency: TEST_CURRENCY },
+      shipping: { amount: 100, currency: TEST_CURRENCY },
+      adjustments: [{ type: "tax" }, { type: "shipping" }, { type: "fee" }],
+      total: { amount: 1_600, currency: TEST_CURRENCY },
+    });
 
     await expect(
       api.checkout.start(ctx, {
@@ -19871,6 +19889,24 @@ describe("backend API composition", () => {
     expect(fake.getCalls().createCheckoutSession).toHaveLength(0);
     expect(fake.getCalls().createDelegatedPayment).toHaveLength(0);
 
+    feeAmount = 61;
+    await expect(
+      api.checkout.start(ctx, {
+        ...previewInput,
+        customFields: {
+          ...previewInput.customFields,
+          acpPaymentToken: "spt_authorized_123",
+          acpPaymentAuthorizationInputHash: inputHash,
+        },
+      }),
+    ).resolves.toMatchObject({ ok: false, status: 403, error: { code: "FORBIDDEN" } });
+
+    const currentPreview = await api.checkout.preview(ctx, previewInput);
+    if (!currentPreview.ok || !currentPreview.data.inputHash) {
+      throw new Error("Expected the current business quote to produce an input hash.");
+    }
+    expect(currentPreview.data.inputHash).not.toBe(inputHash);
+
     const started = await api.checkout.start(ctx, {
       ...previewInput,
       customFields: {
@@ -19879,7 +19915,7 @@ describe("backend API composition", () => {
         acpPaymentProvider: "stripe",
         acpPaymentAuthorizationId: "acp_payment_authorization_generated_after_preview",
         acpCheckoutSessionId: "checkout_session_acp_1",
-        acpPaymentAuthorizationInputHash: inputHash,
+        acpPaymentAuthorizationInputHash: currentPreview.data.inputHash,
       },
     });
     expect(started).toMatchObject({ ok: true });
@@ -19891,6 +19927,7 @@ describe("backend API composition", () => {
     expect(fake.getCalls().createDelegatedPayment[0]).toMatchObject({
       mode: "payment",
       token: "spt_authorized_123",
+      total: { amount: 1_601, currency: TEST_CURRENCY },
       metadata: {
         publicNote: "deliver after 5pm",
       },
@@ -19913,6 +19950,12 @@ describe("backend API composition", () => {
     expect(persisted.aggregate.metadata).not.toHaveProperty("acpPaymentAuthorizationId");
     expect(persisted.aggregate.metadata).not.toHaveProperty("acpCheckoutSessionId");
     expect(persisted.aggregate.metadata).not.toHaveProperty("acpPaymentAuthorizationInputHash");
+    expect(persisted.aggregate.totals).toEqual({
+      subtotal: { amount: 1_200, currency: TEST_CURRENCY },
+      tax: { amount: 240, currency: TEST_CURRENCY },
+      shipping: { amount: 100, currency: TEST_CURRENCY },
+      total: { amount: 1_601, currency: TEST_CURRENCY },
+    });
   });
 
   it("allows delegated checkout with a couponCode authorized by checkout preview", async () => {

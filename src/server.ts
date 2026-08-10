@@ -88,6 +88,8 @@ export {
   type MikaCouponResolution,
   type MikaCouponResolver,
   type MikaCouponResolverInput,
+  type MikaQuoteResolver,
+  type MikaQuoteResolverInput,
 } from "./api/backend";
 /** Notification hook context shapes for commerce lifecycle emails and host callbacks. */
 export type {

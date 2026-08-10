@@ -34,6 +34,8 @@ export async function createStripeCheckoutSession(
     throw new Error("Stripe checkout sessions are not available.");
   }
 
+  assertStripeHostedTotalIsRepresentable(input);
+
   const discounts = await stripeCheckoutDiscounts(options, input);
 
   const session = await options.stripe.checkout.sessions.create(
@@ -58,6 +60,22 @@ export async function createStripeCheckoutSession(
   );
 
   return stripeCheckoutSessionToMika(provider, session);
+}
+
+/** Stripe-hosted checkout only represents Mika's catalog lines and coupon discount. */
+export function assertStripeHostedTotalIsRepresentable(input: MikaProviderCheckoutInput): void {
+  if (!input.total) return;
+
+  const subtotal = input.lines.reduce(
+    (amount, line) => amount + line.unitAmount * line.quantity,
+    0,
+  );
+  const representedTotal = Math.max(0, subtotal - (input.discount?.amount ?? 0));
+  if (input.total.amount !== representedTotal) {
+    throw new Error(
+      "Stripe hosted checkout cannot represent host-added tax, shipping, or fee amounts; use a host adapter that applies them or delegated payment.",
+    );
+  }
 }
 
 /**

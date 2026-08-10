@@ -156,16 +156,19 @@ otherwise — unwired methods would answer `501` on every route at runtime. Pass
 
 Mika's built-in quote reprices catalog lines, applies the configured coupon
 resolver, and checks availability. It deliberately does not calculate tax,
-shipping, or business-specific fees. Hosts that need those values should use
-one business quote function behind `MikaApiOverrides` and return them through
+shipping, or business-specific fees. Hosts that need those values should pass
+one `quoteResolver` to `createMikaBackendApi()` and return them through
 `CartQuoteDTO.tax`, `.shipping`, `.adjustments`, and `.total`.
 
-Use that same calculator for every operation that presents or charges a total.
-In particular, overriding `cart.quote` does not alter the built-in
-`checkout.start` calculation: either override `cart.quote`, `checkout.preview`,
-and `checkout.start` together, or perform the same calculation in the provider
-adapter used by checkout start. Mixing a custom display quote with the default
-checkout start can hand a different total to the payment provider.
+The resolver runs inside Mika's shared quote path. Its result is reused by cart
+quote, checkout preview, delegated-payment proof, checkout provider handoff,
+and persisted checkout/order totals. Do not override only `cart.quote` to add
+business amounts: operation overrides remain available for replacing complete
+workflows, but a display-only override cannot change checkout's charge.
+Provider adapters must apply the authoritative total or reject it. Mika's
+built-in delegated Stripe path charges it directly; the hosted Stripe adapter
+rejects host-added amounts because its line/coupon projection cannot represent
+them without host-specific Stripe configuration.
 
 `CartQuoteLineDTO.fulfillmentKind` carries provider-neutral classification into
 the quote. Use `external` for physical or otherwise host-fulfilled lines; the
@@ -174,10 +177,12 @@ Mika's built-in delegated-payment proof binds the quote items, subtotal,
 discount, tax, shipping, adjustments, and total before provider handoff.
 
 The compile-checked
-[`business-quote-overrides.ts`](./test/fixtures/business-quote-overrides.ts)
-fixture shows tax, shipping, a fee, availability, and mixed download/external
-fulfillment using only public package exports. It is integration scaffolding,
-not a tax or shipping implementation.
+[`business-quote-resolver.ts`](./test/fixtures/business-quote-resolver.ts)
+fixture and its
+[`business-quote.test.ts`](./test/business-quote.test.ts) proof show tax,
+shipping, a fee, and mixed download/external fulfillment using only public
+package exports. They are integration scaffolding, not a tax or shipping
+implementation.
 
 ## Errors
 
