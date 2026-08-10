@@ -6,6 +6,7 @@ import type { mikaPlugin } from "@bnomei/emdash-mika";
 import type {
   createMikaAcpCheckoutHandlers,
   createMikaAcpProductFeed,
+  MIKA_ACP_SCHEMA_SNAPSHOT,
   MikaAcpCheckoutSession,
 } from "@bnomei/emdash-mika/acp";
 import type {
@@ -145,6 +146,7 @@ export type PackageEntryContract = {
   readonly createPluginOptions: MikaCreatePluginOptions;
   readonly acpFeed: typeof createMikaAcpProductFeed;
   readonly acpCheckoutHandlers: typeof createMikaAcpCheckoutHandlers;
+  readonly acpSchemaSnapshot: typeof MIKA_ACP_SCHEMA_SNAPSHOT;
   readonly acpCheckoutSession: MikaAcpCheckoutSession;
   readonly agent: typeof createMikaAgentManifest;
   readonly agentManifestSchema: typeof mikaAgentManifestJsonSchema;

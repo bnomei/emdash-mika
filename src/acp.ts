@@ -47,7 +47,11 @@ export type {
   MikaAcpOrderWebhookEvent,
 } from "./acp/types";
 
-export { MIKA_ACP_API_VERSION, MIKA_ACP_DEFAULT_SESSION_PREFIX } from "./acp/constants";
+export {
+  MIKA_ACP_API_VERSION,
+  MIKA_ACP_SCHEMA_SNAPSHOT,
+  MIKA_ACP_DEFAULT_SESSION_PREFIX,
+} from "./acp/constants";
 
 export {
   createMikaAcpProductFeed,

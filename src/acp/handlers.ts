@@ -90,9 +90,8 @@ import {
   putAcpRecordRetryingIncidentalExpiry,
 } from "./session-store";
 
-// ACP agents commonly serialize omitted optionals as explicit JSON null; accept both.
 export function acpOptional<TSchema extends z.ZodTypeAny>(schema: TSchema) {
-  return schema.nullish().transform((value) => value ?? undefined);
+  return schema.optional();
 }
 
 export function acpExactObject<T extends object>(schema: z.ZodTypeAny): z.ZodType<T> {
@@ -100,61 +99,75 @@ export function acpExactObject<T extends object>(schema: z.ZodTypeAny): z.ZodTyp
 }
 
 export const acpBuyerSchema = acpExactObject<MikaAcpBuyer>(
-  z.object({
-    name: acpOptional(z.string()),
-    email: acpOptional(z.string()),
-    phone_number: acpOptional(z.string()),
-  }),
+  z
+    .object({
+      first_name: z.string(),
+      last_name: z.string(),
+      email: z.string().email(),
+      phone_number: acpOptional(z.string()),
+    })
+    .strict(),
 );
 
-export const acpItemSchema = z.object({
-  id: z.string().min(1),
-  quantity: z.number().int().positive(),
-}) satisfies z.ZodType<MikaAcpItem>;
+export const acpItemSchema = z
+  .object({
+    id: z.string().min(1),
+    quantity: z.number().positive(),
+  })
+  .strict() satisfies z.ZodType<MikaAcpItem>;
 
 export const acpAddressSchema = acpExactObject<MikaAcpAddress>(
-  z.object({
-    name: z.string(),
-    line_one: z.string(),
-    line_two: acpOptional(z.string()),
-    city: z.string(),
-    state: z.string(),
-    country: z.string(),
-    postal_code: z.string(),
-    phone_number: acpOptional(z.string()),
-  }),
+  z
+    .object({
+      name: z.string(),
+      line_one: z.string(),
+      line_two: acpOptional(z.string()),
+      city: z.string(),
+      state: z.string(),
+      country: z.string(),
+      postal_code: z.string(),
+    })
+    .strict(),
 );
 
 export const acpPaymentDataSchema = acpExactObject<MikaAcpPaymentData>(
-  z.object({
-    token: z.string().min(1),
-    provider: z.enum(["stripe", "adyen", "braintree"]),
-    billing_address: acpOptional(acpAddressSchema),
-  }),
+  z
+    .object({
+      token: z.string().min(1),
+      provider: z.literal("stripe"),
+      billing_address: acpOptional(acpAddressSchema),
+    })
+    .strict(),
 );
 
 export const acpCheckoutCreateRequestSchema = acpExactObject<MikaAcpCheckoutCreateRequest>(
-  z.object({
-    buyer: acpOptional(acpBuyerSchema),
-    items: z.array(acpItemSchema).min(1, "items must be a non-empty array."),
-    fulfillment_address: acpOptional(acpAddressSchema),
-  }),
+  z
+    .object({
+      buyer: acpOptional(acpBuyerSchema),
+      items: z.array(acpItemSchema).min(1, "items must be a non-empty array."),
+      fulfillment_address: acpOptional(acpAddressSchema),
+    })
+    .strict(),
 );
 
 export const acpCheckoutUpdateRequestSchema = acpExactObject<MikaAcpCheckoutUpdateRequest>(
-  z.object({
-    buyer: acpOptional(acpBuyerSchema),
-    items: acpOptional(z.array(acpItemSchema).min(1, "items must be a non-empty array.")),
-    fulfillment_address: acpOptional(acpAddressSchema),
-    fulfillment_option_id: acpOptional(z.string().min(1)),
-  }),
+  z
+    .object({
+      buyer: acpOptional(acpBuyerSchema),
+      items: acpOptional(z.array(acpItemSchema)),
+      fulfillment_address: acpOptional(acpAddressSchema),
+      fulfillment_option_id: acpOptional(z.string()),
+    })
+    .strict(),
 );
 
 export const acpCheckoutCompleteRequestSchema = acpExactObject<MikaAcpCheckoutCompleteRequest>(
-  z.object({
-    buyer: acpOptional(acpBuyerSchema),
-    payment_data: acpPaymentDataSchema,
-  }),
+  z
+    .object({
+      buyer: acpOptional(acpBuyerSchema),
+      payment_data: acpPaymentDataSchema,
+    })
+    .strict(),
 );
 
 /** Creates authenticated ACP checkout HTTP handlers backed by MikaApi cart and checkout ops. */
@@ -460,25 +473,7 @@ export async function handleAcpComplete(
     if (!body.ok) {
       return acpError(request, 400, "invalid_request", body.message, body.path);
     }
-    const expectedProvider = providerToAcp(record.provider);
-    if (body.data.payment_data.provider !== expectedProvider) {
-      return acpError(
-        request,
-        400,
-        "invalid_request",
-        `payment_data.provider must be '${expectedProvider}' for this checkout session.`,
-        "$.payment_data.provider",
-      );
-    }
-    if (body.data.payment_data.provider !== "stripe") {
-      return acpError(
-        request,
-        400,
-        "invalid_request",
-        "ACP delegated checkout currently supports Stripe shared payment tokens only.",
-        "$.payment_data.provider",
-      );
-    }
+    providerToAcp(record.provider);
 
     const customer = buyerToCustomer(body.data.buyer ?? record.buyer);
     const preview = await previewAcpCheckout(options, request, record, customer);

@@ -241,7 +241,7 @@ export interface MikaAcpCheckoutCompleteRequest {
 /** Delegated payment token and provider submitted at checkout completion. */
 export interface MikaAcpPaymentData {
   readonly token: string;
-  readonly provider: "stripe" | "adyen" | "braintree";
+  readonly provider: "stripe";
   readonly billing_address?: MikaAcpAddress;
 }
 
@@ -264,7 +264,7 @@ export interface MikaAcpCheckoutSession {
 
 /** Supported delegated payment provider and payment methods for the checkout session. */
 export interface MikaAcpPaymentProvider {
-  readonly provider: "stripe" | "adyen" | "braintree";
+  readonly provider: "stripe";
   readonly supported_payment_methods: readonly ["card"];
 }
 
@@ -283,7 +283,11 @@ export interface MikaAcpOrder {
 
 /** ACP HTTP error envelope for invalid, unauthorized, or non-idempotent requests. */
 export interface MikaAcpError {
-  readonly type: "invalid_request";
+  readonly type:
+    | "invalid_request"
+    | "request_not_idempotent"
+    | "processing_error"
+    | "service_unavailable";
   readonly code:
     | "request_not_idempotent"
     | "invalid_request"
@@ -292,7 +296,6 @@ export interface MikaAcpError {
     | Lowercase<MikaErrorCode>;
   readonly message: string;
   readonly param?: string;
-  readonly retry_after?: number;
 }
 
 /** ACP order webhook payload emitted after checkout completion or order status changes. */

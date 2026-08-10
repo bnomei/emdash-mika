@@ -5,6 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { createHash, createHmac } from "node:crypto";
 
 import { optionalProperty } from "../src/internal/object";
+import { fulfillmentOptions } from "../src/acp/mappers";
 import {
   createMemoryMikaAcpSessionStore,
   createMikaAcpCheckoutHandlers,
@@ -56,6 +57,43 @@ import {
 } from "./helpers/provider-contract";
 
 describe("Mika ACP projection", () => {
+  it("advertises digital fulfillment only when every quoted line proves it", () => {
+    const currency = createCurrencyCode("EUR");
+    const quote = (
+      fulfillmentKinds: readonly ("download" | "license" | "entitlement" | "external" | "none")[],
+      overrides: Partial<CartQuoteDTO> = {},
+    ): CartQuoteDTO => ({
+      status: "valid",
+      currency,
+      items: fulfillmentKinds.map((fulfillmentKind, index) => ({
+        sellableId: createSellableId(`sellable_${index + 1}`),
+        fulfillmentKind,
+        quantity: 1,
+        subtotal: { amount: 1_200, currency },
+        total: { amount: 1_200, currency },
+      })),
+      subtotal: { amount: fulfillmentKinds.length * 1_200, currency },
+      total: { amount: fulfillmentKinds.length * 1_200, currency },
+      ...overrides,
+    });
+
+    expect(fulfillmentOptions(quote(["download", "license", "entitlement"]))).toEqual([
+      expect.objectContaining({ type: "digital", id: "digital_delivery" }),
+    ]);
+    expect(fulfillmentOptions(quote(["external"]))).toEqual([]);
+    expect(fulfillmentOptions(quote(["download", "external"]))).toEqual([]);
+    expect(fulfillmentOptions(quote(["none"]))).toEqual([]);
+    expect(fulfillmentOptions(quote([]))).toEqual([]);
+    expect(fulfillmentOptions(quote(["download"], { status: "unavailable" }))).toEqual([]);
+    expect(
+      fulfillmentOptions(
+        quote(["download"], {
+          errors: [{ code: "VALIDATION_FAILED", message: "Host policy rejected checkout." }],
+        }),
+      ),
+    ).toEqual([]);
+  });
+
   it("builds API product feeds and file-upload rows from Mika sellables", () => {
     const sellable = createTestSellableDTO({
       id: createSellableId("sellable_print"),
@@ -270,7 +308,7 @@ describe("Mika ACP projection", () => {
     const created = await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create", {
         items: [{ id: "sellable_1:price_1", quantity: 2 }],
-        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+        buyer: { first_name: "Ada", last_name: "Buyer", email: "ada@example.test" },
       }),
     );
 
@@ -340,9 +378,9 @@ describe("Mika ACP projection", () => {
 
   it("fails loudly instead of misreporting an unsupported provider as stripe on the ACP wire", async () => {
     // providerToAcp previously silently reported "stripe" for any provider outside ACP's
-    // {stripe, adyen, braintree} union — an agent would generate a Stripe-shaped shared payment
-    // token for a session actually configured with a different, unsupported provider, a payment
-    // routing failure worse than a loud error.
+    // pinned Stripe-only union — an agent would generate a Stripe-shaped shared payment token for
+    // a session actually configured with a different provider, a payment-routing failure worse
+    // than a loud error.
     let cart = createCart([]);
     const handlers = createMikaAcpCheckoutHandlers({
       api: createAcpTestApi({
@@ -475,7 +513,7 @@ describe("Mika ACP projection", () => {
         "https://shop.example.test/checkout_sessions/checkout_session_acp_expiring",
         "idem_expiring_update",
         {
-          buyer: { name: "Ada Buyer", email: "ada@example.test" },
+          buyer: { first_name: "Ada", last_name: "Buyer", email: "ada@example.test" },
         },
       ),
       "checkout_session_acp_expiring",
@@ -578,7 +616,7 @@ describe("Mika ACP projection", () => {
 
     const body = {
       items: [{ id: "sellable_1:price_1", quantity: 2 }],
-      buyer: { name: "Ada Buyer", email: "ada@example.test" },
+      buyer: { first_name: "Ada", last_name: "Buyer", email: "ada@example.test" },
     };
 
     const first = await handlers.create(
@@ -650,6 +688,7 @@ describe("Mika ACP projection", () => {
 
     expect(second.status).toBe(409);
     await expect(second.json()).resolves.toMatchObject({
+      type: "request_not_idempotent",
       code: "request_not_idempotent",
       message: "Idempotency-Key replay is already in progress.",
     });
@@ -696,7 +735,7 @@ describe("Mika ACP projection", () => {
     });
     const body = {
       items: [{ id: "sellable_1:price_1", quantity: 1 }],
-      buyer: { name: "Ada Buyer", email: "ada@example.test" },
+      buyer: { first_name: "Ada", last_name: "Buyer", email: "ada@example.test" },
     };
 
     const failed = await handlers.create(
@@ -704,6 +743,7 @@ describe("Mika ACP projection", () => {
     );
     expect(failed.status).toBe(500);
     await expect(failed.json()).resolves.toMatchObject({
+      type: "processing_error",
       code: "provider_failed",
       message: "ACP checkout operation failed.",
     });
@@ -742,7 +782,7 @@ describe("Mika ACP projection", () => {
     await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_pending", {
         items: [{ id: "sellable_1:price_1", quantity: 1 }],
-        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+        buyer: { first_name: "Ada", last_name: "Buyer", email: "ada@example.test" },
       }),
     );
 
@@ -812,7 +852,7 @@ describe("Mika ACP projection", () => {
     await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_race", {
         items: [{ id: "sellable_1:price_1", quantity: 1 }],
-        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+        buyer: { first_name: "Ada", last_name: "Buyer", email: "ada@example.test" },
       }),
     );
 
@@ -1193,7 +1233,7 @@ describe("Mika ACP projection", () => {
     await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_cancel_bound", {
         items: [{ id: "sellable_1:price_1", quantity: 1 }],
-        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+        buyer: { first_name: "Ada", last_name: "Buyer", email: "ada@example.test" },
       }),
     );
     await handlers.complete(
@@ -1245,7 +1285,7 @@ describe("Mika ACP projection", () => {
     await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_cancel_fail", {
         items: [{ id: "sellable_1:price_1", quantity: 1 }],
-        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+        buyer: { first_name: "Ada", last_name: "Buyer", email: "ada@example.test" },
       }),
     );
     await handlers.complete(
@@ -1299,7 +1339,7 @@ describe("Mika ACP projection", () => {
     await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_bound", {
         items: [{ id: "sellable_1:price_1", quantity: 1 }],
-        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+        buyer: { first_name: "Ada", last_name: "Buyer", email: "ada@example.test" },
       }),
     );
 
@@ -1351,7 +1391,7 @@ describe("Mika ACP projection", () => {
     await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_failed_checkout", {
         items: [{ id: "sellable_1:price_1", quantity: 1 }],
-        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+        buyer: { first_name: "Ada", last_name: "Buyer", email: "ada@example.test" },
       }),
     );
 
@@ -1393,7 +1433,7 @@ describe("Mika ACP projection", () => {
 
     await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_rate_limit_create", {
-        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+        buyer: { first_name: "Ada", last_name: "Buyer", email: "ada@example.test" },
         items: [{ id: "sellable_1:price_1", quantity: 1 }],
       }),
     );
@@ -1412,7 +1452,6 @@ describe("Mika ACP projection", () => {
       type: "invalid_request",
       code: "rate_limited",
       message: "Too many checkout attempts.",
-      retry_after: 30,
     });
   });
 
@@ -1679,7 +1718,6 @@ describe("Mika ACP projection", () => {
     expect(completed.status).toBe(400);
     await expect(completed.json()).resolves.toMatchObject({
       code: "invalid_request",
-      message: "payment_data.provider must be 'stripe' for this checkout session.",
       param: "$.payment_data.provider",
     });
     expect(checkoutStartCount).toBe(0);
@@ -1949,7 +1987,7 @@ describe("Mika ACP projection", () => {
     await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_reclaim", {
         items: [{ id: "sellable_1:price_1", quantity: 1 }],
-        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+        buyer: { first_name: "Ada", last_name: "Buyer", email: "ada@example.test" },
       }),
     );
 
@@ -2035,7 +2073,7 @@ describe("Mika ACP projection", () => {
     await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_expiry", {
         items: [{ id: "sellable_1:price_1", quantity: 1 }],
-        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+        buyer: { first_name: "Ada", last_name: "Buyer", email: "ada@example.test" },
       }),
     );
 
@@ -2120,7 +2158,7 @@ describe("Mika ACP projection", () => {
     await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_expiry_deserialized", {
         items: [{ id: "sellable_1:price_1", quantity: 1 }],
-        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+        buyer: { first_name: "Ada", last_name: "Buyer", email: "ada@example.test" },
       }),
     );
 
@@ -2191,7 +2229,7 @@ describe("Mika ACP projection", () => {
     await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_real_conflict", {
         items: [{ id: "sellable_1:price_1", quantity: 1 }],
-        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+        buyer: { first_name: "Ada", last_name: "Buyer", email: "ada@example.test" },
       }),
     );
 
@@ -2210,13 +2248,13 @@ describe("Mika ACP projection", () => {
       acpRequest(
         "https://shop.example.test/checkout_sessions/checkout_session_acp_real_conflict",
         "idem_update_real_conflict",
-        { buyer: { name: "Bea Buyer", email: "bea@example.test" } },
+        { buyer: { first_name: "Bea", last_name: "Buyer", email: "bea@example.test" } },
       ),
       "checkout_session_acp_real_conflict",
     );
     expect(updated.status).toBe(200);
     await expect(updated.json()).resolves.toMatchObject({
-      buyer: { name: "Bea Buyer", email: "bea@example.test" },
+      buyer: { first_name: "Bea", last_name: "Buyer", email: "bea@example.test" },
     });
 
     releaseGate();
@@ -2228,10 +2266,10 @@ describe("Mika ACP projection", () => {
     expect(completed.status).toBe(200);
     const completedBody = (await completed.json()) as {
       status?: string;
-      buyer?: { name?: string };
+      buyer?: { first_name?: string; last_name?: string };
     };
     expect(completedBody.status).not.toBe("completed");
-    expect(completedBody.buyer?.name).toBe("Bea Buyer");
+    expect(completedBody.buyer).toMatchObject({ first_name: "Bea", last_name: "Buyer" });
   });
 
   it("reports the real persisted outcome when a compensating revert loses its CAS race", async () => {
@@ -2296,7 +2334,7 @@ describe("Mika ACP projection", () => {
     await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_revert_race", {
         items: [{ id: "sellable_1:price_1", quantity: 1 }],
-        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+        buyer: { first_name: "Ada", last_name: "Buyer", email: "ada@example.test" },
       }),
     );
 
@@ -2369,7 +2407,7 @@ describe("Mika ACP projection", () => {
     await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_revert_incidental", {
         items: [{ id: "sellable_1:price_1", quantity: 1 }],
-        buyer: { name: "Ada Buyer", email: "ada@example.test" },
+        buyer: { first_name: "Ada", last_name: "Buyer", email: "ada@example.test" },
       }),
     );
 
@@ -2378,7 +2416,7 @@ describe("Mika ACP projection", () => {
         "https://shop.example.test/checkout_sessions/checkout_session_acp_revert_incidental/complete",
         "idem_complete_revert_incidental",
         {
-          buyer: { name: "Bea Buyer", email: "bea@example.test" },
+          buyer: { first_name: "Bea", last_name: "Buyer", email: "bea@example.test" },
           payment_data: { provider: "stripe", token: "spt_test_123" },
         },
       ),
@@ -2414,7 +2452,7 @@ describe("Mika ACP projection", () => {
       "checkout_session_acp_revert_incidental",
     );
     await expect(following.json()).resolves.toMatchObject({
-      buyer: { name: "Bea Buyer", email: "bea@example.test" },
+      buyer: { first_name: "Bea", last_name: "Buyer", email: "bea@example.test" },
     });
   });
 
@@ -2472,7 +2510,7 @@ describe("Mika ACP projection", () => {
     });
     expect(cartMutations).toBe(0);
 
-    // Agents commonly serialize omitted optionals as explicit JSON null.
+    // The pinned schema does not treat null as an omitted optional.
     const nullBuyer = await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_null_buyer", {
         buyer: null,
@@ -2480,7 +2518,11 @@ describe("Mika ACP projection", () => {
         items: [{ id: "sellable_1:price_1", quantity: 1 }],
       }),
     );
-    expect(nullBuyer.status).toBe(201);
+    expect(nullBuyer.status).toBe(400);
+    await expect(nullBuyer.json()).resolves.toMatchObject({
+      code: "invalid_request",
+      param: "$.buyer",
+    });
 
     const created = await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_body_validation", {
@@ -2503,7 +2545,7 @@ describe("Mika ACP projection", () => {
       param: "$.fulfillment_option_id",
     });
 
-    // Empty items on update used to wipe the cart with a 200; cancel is the way to abandon.
+    // The pinned update schema permits an empty items array, which explicitly clears the cart.
     const emptyUpdate = await handlers.update(
       acpRequest(
         "https://shop.example.test/checkout_sessions/checkout_session_acp_body_validation",
@@ -2512,18 +2554,17 @@ describe("Mika ACP projection", () => {
       ),
       "checkout_session_acp_body_validation",
     );
-    expect(emptyUpdate.status).toBe(400);
+    expect(emptyUpdate.status).toBe(200);
     await expect(emptyUpdate.json()).resolves.toMatchObject({
-      code: "invalid_request",
-      message: expect.stringContaining("non-empty"),
-      param: "$.items",
+      line_items: [],
     });
+    expect(cart.items).toEqual([]);
 
     const missingPayment = await handlers.complete(
       acpRequest(
         "https://shop.example.test/checkout_sessions/checkout_session_acp_body_validation/complete",
         "idem_complete_missing_payment",
-        { buyer: { email: "ada@example.test" } },
+        {},
       ),
       "checkout_session_acp_body_validation",
     );

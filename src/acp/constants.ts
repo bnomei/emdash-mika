@@ -5,6 +5,9 @@
 /** ACP API version header value supported by Mika checkout handlers. */
 export const MIKA_ACP_API_VERSION = "2025-09-12";
 
+/** Official ACP repository schema snapshot used by Mika's conformance tests. */
+export const MIKA_ACP_SCHEMA_SNAPSHOT = "2025-09-29";
+
 /** Default prefix for generated ACP checkout session ids. */
 export const MIKA_ACP_DEFAULT_SESSION_PREFIX = "acp_checkout";
 

@@ -14,8 +14,9 @@ import type {
 
 /** Buyer contact fields carried through the ACP checkout session lifecycle. */
 export interface MikaAcpBuyer {
-  readonly name?: string;
-  readonly email?: string;
+  readonly first_name: string;
+  readonly last_name: string;
+  readonly email: string;
   readonly phone_number?: string;
 }
 
@@ -34,7 +35,6 @@ export interface MikaAcpAddress {
   readonly state: string;
   readonly country: string;
   readonly postal_code: string;
-  readonly phone_number?: string;
 }
 
 /** Lifecycle status advertised on ACP checkout session responses. */

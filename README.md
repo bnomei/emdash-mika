@@ -354,6 +354,14 @@ provider contract, including hosted Checkout Sessions, paid-state webhook
 normalization, signed webhooks, protected invoice lookup, and delegated
 checkout metadata for Stripe Shared Payment Tokens.
 
+Mika's checkout handlers support `API-Version: 2025-09-12` and pin conformance
+to the official ACP `2025-09-29` checkout schema snapshot. This surface supports
+Stripe delegated payments only. Mika advertises digital fulfillment only when
+every quoted line is explicitly classified as a download, license, or
+entitlement; external, mixed, unavailable, and otherwise unknown fulfillment
+is omitted because Mika does not invent shipping rates, carriers, or delivery
+windows. Upgrade the API version and schema snapshot together.
+
 ## Notifications And Email
 
 Trusted backends can pass a notification hook to `createMikaBackendApi()`:

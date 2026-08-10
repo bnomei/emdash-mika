@@ -20,6 +20,7 @@ import {
   createPriceId,
   createSellableId,
   type ISODateTime,
+  type FulfillmentKind,
   type PriceId,
   type ProviderName,
   type SellableId,
@@ -195,10 +196,25 @@ export function acpLineItem(line: CartQuoteLineDTO | CartLineDTO, index: number)
   };
 }
 
-export function fulfillmentOptions(quote: CartQuoteDTO): readonly MikaAcpFulfillmentOption[] {
-  const hasDigital = quote.items.length > 0;
+const ACP_DIGITAL_FULFILLMENT_KINDS = new Set<FulfillmentKind>([
+  "download",
+  "license",
+  "entitlement",
+]);
 
-  return hasDigital
+export function fulfillmentOptions(quote: CartQuoteDTO): readonly MikaAcpFulfillmentOption[] {
+  const isSupportedDigitalQuote =
+    quote.items.length > 0 &&
+    quote.status !== "expired" &&
+    quote.status !== "unavailable" &&
+    !quote.errors?.length &&
+    quote.items.every(
+      (line) =>
+        line.fulfillmentKind !== undefined &&
+        ACP_DIGITAL_FULFILLMENT_KINDS.has(line.fulfillmentKind),
+    );
+
+  return isSupportedDigitalQuote
     ? [
         {
           type: "digital",
@@ -279,11 +295,11 @@ export function acpCheckoutLink(link: MikaAcpLink): readonly MikaAcpCheckoutLink
   return [];
 }
 
-export const MIKA_ACP_PAYMENT_PROVIDERS = ["stripe", "adyen", "braintree"] as const;
+export const MIKA_ACP_PAYMENT_PROVIDERS = ["stripe"] as const;
 
 /**
- * Maps a Mika provider to the ACP wire protocol's closed payment-provider union. Throws for any
- * provider outside that set instead of silently reporting "stripe" — the wrong provider name on
+ * Maps a Mika provider to the pinned ACP wire protocol's Stripe-only payment-provider union.
+ * Throws for any other provider instead of silently reporting "stripe" — the wrong provider on
  * `payment_provider` would make an agent generate a shared payment token shaped for a provider
  * that isn't actually handling the charge, a payment-routing failure worse than a loud error.
  * All call sites run inside a handler that converts an unhandled throw to a generic ACP 500.
@@ -309,7 +325,7 @@ export function buyerToCustomer(
 
   return omitUndefined({
     email: buyer.email,
-    name: buyer.name,
+    name: `${buyer.first_name} ${buyer.last_name}`.trim(),
   });
 }
 
@@ -421,11 +437,17 @@ export function acpError(
   options: { readonly retryAfter?: number } = {},
 ): Response {
   const body: MikaAcpError = {
-    type: "invalid_request",
+    type:
+      code === "request_not_idempotent"
+        ? "request_not_idempotent"
+        : status === 503
+          ? "service_unavailable"
+          : status >= 500
+            ? "processing_error"
+            : "invalid_request",
     code,
     message,
     ...(param ? { param } : {}),
-    ...(options.retryAfter !== undefined ? { retry_after: options.retryAfter } : {}),
   };
   const headers = acpResponseHeaders(request);
   if (options.retryAfter !== undefined) headers.set("Retry-After", String(options.retryAfter));

@@ -4,7 +4,14 @@
  */
 import { defineConfig } from "vite-plus";
 
-const generatedPatterns = [".frigg/**", "dist/**", "node_modules/**", "package-lock.json"];
+const generatedPatterns = [
+  ".frigg/**",
+  "dist/**",
+  "node_modules/**",
+  "package-lock.json",
+  // Preserve the checksum-pinned upstream ACP schema byte-for-byte.
+  "test/fixtures/acp/schema.agentic_checkout.2025-09-29.json",
+];
 
 export default defineConfig({
   fmt: {
