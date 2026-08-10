@@ -388,6 +388,7 @@ async function quoteCartLine(
       lineId: line.id,
       sellableId: line.item.sellableId,
       priceId: line.item.priceId,
+      fulfillmentKind: line.item.fulfillmentKind,
       title,
       sku,
       variantOptions,
@@ -451,6 +452,7 @@ async function quoteInputLine(
     line: omitUndefined({
       sellableId: quoteInput.sellableId ?? createSellableId("sellable_missing"),
       priceId: price?.id ?? quoteInput.priceId,
+      fulfillmentKind: price?.fulfillmentKind,
       title: sellable?.titleSnapshot,
       sku: price?.sku ?? sellable?.sku,
       variantOptions: sellable?.variantOptions,

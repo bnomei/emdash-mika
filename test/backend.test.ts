@@ -33,6 +33,7 @@ import {
 } from "../src/api/backend";
 import { MIKA_AGENT_IDEMPOTENCY_KEY_HEADER } from "../src/api/agent-types";
 import { callMikaOperation, mikaActionDefinitions } from "../src/api/operations";
+import { delegatedPaymentProofProjection } from "../src/api/backend/checkout/preview";
 import { createMikaPluginRoutes } from "../src/api/route-handlers";
 import { mikaPluginRoutes } from "../src/api/routes";
 import { formatSubjectRef, parseSubjectRef, subjectHashCandidates } from "../src/api/subject-ref";
@@ -40,6 +41,7 @@ import { createMikaStorageConfig, type StorageCollection } from "../src/storage/
 import {
   MIKA_ERROR_CODES,
   type CartDTO,
+  type CartQuoteDTO,
   type MikaApiResult,
   type MikaProviderCapability,
 } from "../src/api/types";
@@ -17624,6 +17626,7 @@ describe("backend API composition", () => {
           {
             lineId: added.data.items[0]!.id,
             sellableId: sellable.id,
+            fulfillmentKind: "none",
             quantity: 2,
             unitAmount: { amount: 1200, currency: TEST_CURRENCY },
             subtotal: { amount: 2400, currency: TEST_CURRENCY },
@@ -17992,6 +17995,55 @@ describe("backend API composition", () => {
       repositories.session.findById(createTestCheckoutSessionId(1)),
     ).resolves.toBeNull();
     expect(Object.values(fake.getCalls()).flat()).toEqual([]);
+  });
+
+  it("binds every charged quote value into delegated payment authorization", () => {
+    const quote: CartQuoteDTO = {
+      status: "valid",
+      currency: TEST_CURRENCY,
+      items: [
+        {
+          sellableId: createTestSellableId(1),
+          fulfillmentKind: "download",
+          quantity: 1,
+          unitAmount: { amount: 7_000, currency: TEST_CURRENCY },
+          subtotal: { amount: 7_000, currency: TEST_CURRENCY },
+          total: { amount: 7_000, currency: TEST_CURRENCY },
+        },
+      ],
+      subtotal: { amount: 7_000, currency: TEST_CURRENCY },
+      discount: { amount: 500, currency: TEST_CURRENCY },
+      tax: { amount: 1_300, currency: TEST_CURRENCY },
+      shipping: { amount: 800, currency: TEST_CURRENCY },
+      adjustments: [
+        { type: "fee", label: "Packaging", amount: { amount: 300, currency: TEST_CURRENCY } },
+      ],
+      total: { amount: 8_900, currency: TEST_CURRENCY },
+    };
+    const project = (candidate: CartQuoteDTO) =>
+      JSON.stringify(
+        delegatedPaymentProofProjection({}, candidate, "payment", createProviderName("stripe")),
+      );
+    const baseline = project(quote);
+
+    const changedQuotes: readonly CartQuoteDTO[] = [
+      { ...quote, subtotal: { amount: 7_001, currency: TEST_CURRENCY } },
+      { ...quote, discount: { amount: 501, currency: TEST_CURRENCY } },
+      { ...quote, tax: { amount: 1_301, currency: TEST_CURRENCY } },
+      { ...quote, shipping: { amount: 801, currency: TEST_CURRENCY } },
+      {
+        ...quote,
+        adjustments: [
+          { type: "fee", label: "Packaging", amount: { amount: 301, currency: TEST_CURRENCY } },
+        ],
+      },
+      { ...quote, total: { amount: 8_901, currency: TEST_CURRENCY } },
+      { ...quote, items: [{ ...quote.items[0]!, fulfillmentKind: "external" }] },
+    ];
+
+    for (const changed of changedQuotes) {
+      expect(project(changed)).not.toBe(baseline);
+    }
   });
 
   it("requires current bound payment authorization when checkout preview quote changes", async () => {

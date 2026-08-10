@@ -302,6 +302,8 @@ export interface CartQuoteLineDTO {
   readonly lineId?: MikaId;
   readonly sellableId: SellableId;
   readonly priceId?: PriceId;
+  /** Host-neutral delivery classification; hosts still own the delivery workflow. */
+  readonly fulfillmentKind?: FulfillmentKind;
   readonly title?: string;
   readonly sku?: string;
   readonly variantOptions?: readonly VariantOptionValueDTO[];
