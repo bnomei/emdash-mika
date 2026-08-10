@@ -72,6 +72,8 @@ export function acpCheckoutSessionFromSnapshot(input: {
   readonly orderUrl?: string;
   readonly checkout?: CheckoutSessionDTO;
 }): MikaAcpCheckoutSession {
+  const orderId = input.checkout?.orderId ?? input.checkout?.id ?? input.record.checkoutId;
+
   return {
     id: input.record.id,
     ...(input.record.buyer ? { buyer: input.record.buyer } : {}),
@@ -92,10 +94,10 @@ export function acpCheckoutSessionFromSnapshot(input: {
     totals: input.snapshot.totals,
     messages: input.snapshot.messages,
     links: input.seller.links.flatMap((link) => acpCheckoutLink(link)),
-    ...(input.status === "completed" && input.checkout && input.orderUrl
+    ...(input.status === "completed" && orderId && input.orderUrl
       ? {
           order: {
-            id: input.checkout.orderId ?? input.checkout.id,
+            id: orderId,
             checkout_session_id: input.record.id,
             permalink_url: acpAbsoluteUri(input.orderUrl, "order URL"),
           },
@@ -122,6 +124,7 @@ export function acpCheckoutSessionFromState(input: {
           : input.quote.status === "valid" || input.quote.status === "changed"
             ? "ready_for_payment"
             : "not_ready_for_payment";
+  const orderId = input.checkout?.orderId ?? input.checkout?.id ?? input.record.checkoutId;
 
   return {
     id: input.record.id,
@@ -143,10 +146,10 @@ export function acpCheckoutSessionFromState(input: {
     totals: acpTotals(input.quote),
     messages: acpMessages(input.quote),
     links: input.seller.links.flatMap((link) => acpCheckoutLink(link)),
-    ...(status === "completed" && input.checkout && input.orderUrl
+    ...(status === "completed" && orderId && input.orderUrl
       ? {
           order: {
-            id: input.checkout.orderId ?? input.checkout.id,
+            id: orderId,
             checkout_session_id: input.record.id,
             permalink_url: acpAbsoluteUri(input.orderUrl, "order URL"),
           },

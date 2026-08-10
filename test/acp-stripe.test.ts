@@ -390,6 +390,63 @@ describe("Mika ACP projection", () => {
     expect(checkoutStartCount).toBe(1);
   });
 
+  it("projects the persisted order when checkout status lookup fails after completion", async () => {
+    let cart = createCart([]);
+    let statusUnavailable = false;
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+        onCheckoutStatus: () =>
+          statusUnavailable
+            ? fail<CheckoutSessionDTO>(503, "INTERNAL", "Checkout status is unavailable.")
+            : undefined,
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      createSessionId: () => "checkout_session_persisted_order",
+    });
+
+    await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_persisted_order_create", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+      }),
+    );
+    const completed = await handlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_persisted_order/complete",
+        "idem_persisted_order_complete",
+        { payment_data: { provider: "stripe", token: "spt_test_123" } },
+      ),
+      "checkout_session_persisted_order",
+    );
+    expect(completed.status).toBe(200);
+
+    statusUnavailable = true;
+    const replayed = await handlers.get(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_persisted_order",
+        "idem_persisted_order_get",
+        {},
+      ),
+      "checkout_session_persisted_order",
+    );
+
+    expect(replayed.status).toBe(200);
+    await expect(replayed.json()).resolves.toMatchObject({
+      status: "completed",
+      order: {
+        id: "checkout_1",
+        checkout_session_id: "checkout_session_persisted_order",
+        permalink_url: "https://shop.example.test/account/orders/checkout_session_persisted_order",
+      },
+    });
+  });
+
   it("fails loudly instead of misreporting an unsupported provider as stripe on the ACP wire", async () => {
     // providerToAcp previously silently reported "stripe" for any provider outside ACP's
     // pinned Stripe-only union — an agent would generate a Stripe-shaped shared payment token for
@@ -4039,6 +4096,7 @@ function createAcpTestApi(input: {
     cancelInput: { readonly checkoutId: MikaIdLike },
     ctx: MikaRequestContext,
   ) => MikaApiResult<CheckoutSessionDTO> | undefined;
+  readonly onCheckoutStatus?: () => MikaApiResult<CheckoutSessionDTO> | undefined;
   readonly checkoutSessionStatus?: CheckoutSessionDTO["status"];
 }): MikaApi {
   const checkoutSessionStatus = input.checkoutSessionStatus ?? "completed";
@@ -4112,7 +4170,7 @@ function createAcpTestApi(input: {
 
         return ok<CheckoutSessionDTO>(checkoutSession());
       },
-      status: async () => ok<CheckoutSessionDTO>(checkoutSession()),
+      status: async () => input.onCheckoutStatus?.() ?? ok<CheckoutSessionDTO>(checkoutSession()),
       cancel: async (ctx: MikaRequestContext, cancelInput: { readonly checkoutId: MikaIdLike }) => {
         const override = input.onCheckoutCancel?.(cancelInput, ctx);
         if (override) return override;
