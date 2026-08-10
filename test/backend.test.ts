@@ -20735,6 +20735,81 @@ describe("backend API composition", () => {
     expect(finalWishlist.data.items).toHaveLength(1);
   });
 
+  it("serializes concurrent first wishlist mutations onto one active document", async () => {
+    const sellableA = createSellableDefinition({ id: createTestSellableId(1) });
+    const sellableB = createSellableDefinition({
+      id: createTestSellableId(2),
+      sku: "TEST-SKU-2",
+      prices: [createPriceDefinition({ id: createTestPriceId(2) })],
+    });
+    const baseRepositories = createTestBackendRepositories();
+    await baseRepositories.catalog.put(
+      createCatalogItemDocument({
+        contentRef: createTestContentRef(),
+        sellables: [sellableA, sellableB],
+      }),
+    );
+
+    let lockAttempts = 0;
+    let releaseFirstAttempt!: () => void;
+    const bothAttempted = new Promise<void>((resolve) => {
+      releaseFirstAttempt = resolve;
+    });
+    const gatedEphemeral = new Proxy(baseRepositories.ephemeral, {
+      get(target, property, receiver) {
+        if (property === "tryAcquireLock") {
+          return async (input: Parameters<MikaEphemeralRepositoryPort["tryAcquireLock"]>[0]) => {
+            const result = await target.tryAcquireLock(input);
+            lockAttempts += 1;
+            if (lockAttempts === 2) releaseFirstAttempt();
+            if (result) await bothAttempted;
+            return result;
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const createdWishlistIds: MikaId[] = [];
+    const trackingSession = new Proxy(baseRepositories.session, {
+      get(target, property, receiver) {
+        if (property === "put") {
+          return async (document: MikaStorageDocuments["session"]) => {
+            if (document.type === "wishlist") createdWishlistIds.push(document.id);
+            return target.put(document);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const repositories = {
+      ...baseRepositories,
+      ephemeral: gatedEphemeral,
+      session: trackingSession,
+    } satisfies MikaBackendRepositories;
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+
+    const results = await Promise.all([
+      api.wishlist.add(ctx, { sellableId: sellableA.id }),
+      api.wishlist.add(ctx, { sellableId: sellableB.id }),
+    ]);
+
+    expect(new Set(createdWishlistIds).size).toBe(1);
+    const attemptedSellableIds = [sellableA.id, sellableB.id];
+    const successfulSellableIds = results.flatMap((result, index) =>
+      result.ok ? [attemptedSellableIds[index]!] : [],
+    );
+    const finalWishlist = await api.wishlist.get(ctx);
+    if (!finalWishlist.ok) throw new Error("Expected wishlist.get to succeed.");
+    expect(finalWishlist.data.items.map((item) => item.sellableId)).toEqual(
+      expect.arrayContaining(successfulSellableIds),
+    );
+    expect(finalWishlist.data.items).toHaveLength(successfulSellableIds.length);
+    expect(results.every((result) => result.ok || result.error.code === "CONFLICT")).toBe(true);
+  });
+
   it("recovers a legacy wishlist without a version on its next write", async () => {
     const sellable = createSellableDefinition();
     const repositories = createTestBackendRepositories();
@@ -20923,6 +20998,98 @@ describe("backend API composition", () => {
       ok: true,
       data: { items: [] },
     });
+  });
+
+  it("shares first-cart creation serialization between cart.add and move-to-cart", async () => {
+    const wishlistSellable = createSellableDefinition({ id: createTestSellableId(1) });
+    const cartSellable = createSellableDefinition({
+      id: createTestSellableId(2),
+      sku: "TEST-SKU-2",
+      prices: [createPriceDefinition({ id: createTestPriceId(2) })],
+    });
+    const baseRepositories = createTestBackendRepositories();
+    await baseRepositories.catalog.put(
+      createCatalogItemDocument({
+        contentRef: createTestContentRef(),
+        sellables: [wishlistSellable, cartSellable],
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+    const seedApi = createMikaBackendApi(
+      createIncrementingBackendDependencies({ repositories: baseRepositories }),
+    );
+    const wishlist = await seedApi.wishlist.add(ctx, { sellableId: wishlistSellable.id });
+    if (!wishlist.ok) throw new Error("Expected seed wishlist.add to succeed.");
+    const wishlistItemId = wishlist.data.items[0]!.id;
+
+    let lockAttempts = 0;
+    let releaseFirstAttempt!: () => void;
+    const bothAttempted = new Promise<void>((resolve) => {
+      releaseFirstAttempt = resolve;
+    });
+    const gatedEphemeral = new Proxy(baseRepositories.ephemeral, {
+      get(target, property, receiver) {
+        if (property === "tryAcquireLock") {
+          return async (input: Parameters<MikaEphemeralRepositoryPort["tryAcquireLock"]>[0]) => {
+            const result = await target.tryAcquireLock(input);
+            lockAttempts += 1;
+            if (lockAttempts === 2) releaseFirstAttempt();
+            if (result) await bothAttempted;
+            return result;
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const createdCartIds: MikaId[] = [];
+    const trackingSession = new Proxy(baseRepositories.session, {
+      get(target, property, receiver) {
+        if (property === "put") {
+          return async (document: MikaStorageDocuments["session"]) => {
+            if (document.type === "cart") createdCartIds.push(document.id);
+            return target.put(document);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const repositories = {
+      ...baseRepositories,
+      ephemeral: gatedEphemeral,
+      session: trackingSession,
+    } satisfies MikaBackendRepositories;
+    const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
+
+    const [moveResult, addResult] = await Promise.all([
+      api.wishlist.moveToCart(ctx, { itemId: wishlistItemId }),
+      api.cart.add(ctx, { sellableId: cartSellable.id }),
+    ]);
+    expect(moveResult.ok || moveResult.error.code === "CONFLICT").toBe(true);
+    expect(addResult.ok || addResult.error.code === "CONFLICT").toBe(true);
+    expect(new Set(createdCartIds).size).toBe(1);
+
+    if (!moveResult.ok) {
+      await expect(api.wishlist.moveToCart(ctx, { itemId: wishlistItemId })).resolves.toMatchObject(
+        {
+          ok: true,
+        },
+      );
+    }
+    if (!addResult.ok) {
+      await expect(api.cart.add(ctx, { sellableId: cartSellable.id })).resolves.toMatchObject({
+        ok: true,
+      });
+    }
+
+    const finalCart = await api.cart.get(ctx);
+    if (!finalCart.ok) throw new Error("Expected cart.get to succeed.");
+    expect(finalCart.data.items.map((item) => item.sellableId)).toEqual(
+      expect.arrayContaining([wishlistSellable.id, cartSellable.id]),
+    );
+    expect(finalCart.data.items).toHaveLength(2);
+    await expect(api.wishlist.get(ctx)).resolves.toMatchObject({ ok: true, data: { items: [] } });
   });
 
   it("saves cart lines for later and removes them from the cart", async () => {

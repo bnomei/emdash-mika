@@ -7,15 +7,17 @@ import { omitUndefined } from "../../internal/object";
 import { createWishlistAggregate } from "../../model/builders";
 import { nextWishlistVersion } from "../../model/wishlist-version";
 import type { CartLine, WishlistItem } from "../../types/aggregates";
-import type { WishlistDocument } from "../../types/documents";
+import type { CartDocument, WishlistDocument } from "../../types/documents";
 import { createISODateTime } from "../../types/primitives";
-import type { ISODateTime, MikaId } from "../../types/primitives";
+import type { CurrencyCode, ISODateTime, MikaId } from "../../types/primitives";
 import type { MikaRequestContext } from "../context";
 import type { MikaApi } from "../server";
 import { cartWriteBlocked, createCartDocument, findOrCreateOpenCart, mergeCartLine } from "./cart";
 import {
+  apiFailure,
   cartLineNotFound,
   invalidWishlist,
+  observeBackendError,
   validationFailed,
   wishlistItemNotFound,
 } from "./errors";
@@ -33,7 +35,7 @@ import {
   updateCartDocument,
   wishlistDocumentToDTO,
 } from "./quote";
-import { defaultBackendCurrency } from "./shared";
+import { addMilliseconds, defaultBackendCurrency } from "./shared";
 
 const WISHLIST_MOVE_IDS_METADATA_KEY = "mikaWishlistMoveIds";
 
@@ -42,15 +44,22 @@ export function createWishlistBackend(
 ): MikaApi["wishlist"] {
   const wishlist = {
     get: async (ctx) => {
-      const document = await findOrCreateActiveWishlist(input, ctx);
+      const documentResult = await findOrCreateActiveWishlist(input, ctx);
+      if (!documentResult.ok) return documentResult;
 
-      return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, document) };
+      return {
+        ok: true,
+        status: 200,
+        data: await wishlistDocumentToDTO(input, documentResult.wishlist),
+      };
     },
     add: async (ctx, itemInput) => {
       const resolved = await resolveWishlistItem(input, itemInput);
       if (!resolved.ok) return resolved;
 
-      const document = await findOrCreateActiveWishlist(input, ctx);
+      const documentResult = await findOrCreateActiveWishlist(input, ctx);
+      if (!documentResult.ok) return documentResult;
+      const document = documentResult.wishlist;
       const existingItem = document.aggregate.items.find((item) =>
         isEquivalentWishlistItem(item, resolved.item),
       );
@@ -69,7 +78,9 @@ export function createWishlistBackend(
       };
     },
     remove: async (ctx, itemInput) => {
-      const document = await findOrCreateActiveWishlist(input, ctx);
+      const documentResult = await findOrCreateActiveWishlist(input, ctx);
+      if (!documentResult.ok) return documentResult;
+      const document = documentResult.wishlist;
       if (!document.aggregate.items.some((item) => item.id === itemInput.itemId)) {
         return wishlistItemNotFound(itemInput.itemId);
       }
@@ -95,20 +106,16 @@ export function createWishlistBackend(
         return validationFailed("quantity", "Quantity must be a positive whole number.");
       }
 
-      const document = await findOrCreateActiveWishlist(input, ctx);
+      const documentResult = await findOrCreateActiveWishlist(input, ctx);
+      if (!documentResult.ok) return documentResult;
+      const document = documentResult.wishlist;
       const item = document.aggregate.items.find((candidate) => candidate.id === itemInput.itemId);
       if (!item) {
         return wishlistItemNotFound(itemInput.itemId);
       }
 
       const currency = defaultBackendCurrency(input);
-      const existingCart = await findOpenCart(input, ctx, currency);
-      if (existingCart) {
-        const writeBlocked = cartWriteBlocked(existingCart);
-        if (writeBlocked) return writeBlocked;
-      }
-      const cart = existingCart ?? createCartDocument(input, ctx, currency);
-      if (item.item.currency !== cart.aggregate.currency) {
+      if (item.item.currency !== currency) {
         return validationFailed(
           "itemId",
           `Wishlist item '${item.id}' uses currency '${item.item.currency}'.`,
@@ -125,45 +132,20 @@ export function createWishlistBackend(
           [WISHLIST_MOVE_IDS_METADATA_KEY]: Array.of<string>(item.id),
         },
       });
-      const alreadyMoved = cart.aggregate.items.some((candidate) =>
-        wishlistMoveIds(candidate).includes(item.id),
-      );
-      const itemsResult = alreadyMoved
-        ? { ok: true as const, items: cart.aggregate.items }
-        : await mergeCartLine(input, cart.aggregate.items, line);
-      if (!itemsResult.ok) return itemsResult;
-
-      const cartItems = alreadyMoved
-        ? itemsResult.items
-        : markWishlistMove(itemsResult.items, line, item.id);
-      const updatedCart = updateCartDocument(cart, cartItems, ctx.now);
+      const cartResult = await persistWishlistMoveToCart(input, ctx, currency, line, item.id);
+      if (!cartResult.ok) return cartResult;
       const updatedWishlist = updateWishlistDocument(
         document,
         document.aggregate.items.filter((candidate) => candidate.id !== item.id),
         ctx.now,
       );
 
-      let persistedCart = cart;
-      if (!alreadyMoved) {
-        if (existingCart) {
-          const cartResult = await input.repositories.session.putCartIfUnchanged(
-            updatedCart,
-            cart.version,
-          );
-          if (!cartResult) return cartChanged(cart.id);
-          persistedCart = cartResult;
-        } else {
-          await input.repositories.session.put(updatedCart);
-          persistedCart = updatedCart;
-        }
-      }
-
       // Cart first is deliberate: if the wishlist CAS loses a race, the item exists in both
       // places rather than neither. The move marker prevents a retry from adding quantity twice.
       const wishlistResult = await putWishlistOrConflict(input, updatedWishlist, document.version);
       if (!wishlistResult.ok) return wishlistResult;
 
-      return { ok: true, status: 200, data: await cartDocumentToDTO(input, persistedCart) };
+      return { ok: true, status: 200, data: await cartDocumentToDTO(input, cartResult.cart) };
     },
     saveForLater: async (ctx, itemInput) => {
       const cart = await findOrCreateOpenCart(input, ctx);
@@ -174,7 +156,9 @@ export function createWishlistBackend(
         return cartLineNotFound(itemInput.lineId);
       }
 
-      const document = await findOrCreateActiveWishlist(input, ctx);
+      const documentResult = await findOrCreateActiveWishlist(input, ctx);
+      if (!documentResult.ok) return documentResult;
+      const document = documentResult.wishlist;
       const item: WishlistItem = omitUndefined({
         id: input.createId("wishlist_item"),
         item: line.item,
@@ -208,7 +192,7 @@ export function createWishlistBackend(
     merge: async (ctx, mergeInput) => {
       const targetResult = mergeInput.targetWishlistId
         ? await findOwnedActiveWishlistById(input, ctx, mergeInput.targetWishlistId)
-        : { ok: true as const, wishlist: await findOrCreateActiveWishlist(input, ctx) };
+        : await findOrCreateActiveWishlist(input, ctx);
       if (!targetResult.ok) return targetResult;
 
       const sourceSessionId = mergeInput.sourceSessionId;
@@ -276,14 +260,52 @@ export function createWishlistBackend(
 async function findOrCreateActiveWishlist(
   input: MikaCartWishlistBackendInput,
   ctx: MikaRequestContext,
-): Promise<WishlistDocument> {
+): Promise<{ readonly ok: true; readonly wishlist: WishlistDocument } | MikaApiFailure> {
   const existing = await findActiveWishlist(input, ctx);
-  if (existing) return existing;
+  if (existing) return { ok: true, wishlist: existing };
 
-  const wishlist = createWishlistDocument(input, ctx);
-  await input.repositories.session.put(wishlist);
+  const lockIdentity = ctx.customerId ?? ctx.sessionId;
+  if (!lockIdentity) {
+    const wishlist = createWishlistDocument(input, ctx);
+    await input.repositories.session.put(wishlist);
 
-  return wishlist;
+    return { ok: true, wishlist };
+  }
+
+  const lockKey = `wishlist-create-lock:${await input.hash(lockIdentity)}`;
+  const owner = input.createId("wishlist_create_lock_owner");
+  const lock = await input.repositories.ephemeral.tryAcquireLock({
+    key: lockKey,
+    owner,
+    expiresAt: addMilliseconds(ctx.now, 30_000),
+    now: ctx.now,
+  });
+  if (!lock) {
+    const winner = await findActiveWishlist(input, ctx);
+    if (winner) return { ok: true, wishlist: winner };
+
+    return apiFailure(409, "CONFLICT", "Wishlist is being created by another request.", {
+      wishlistId: "Wishlist is being created by another request. Reload and try again.",
+    });
+  }
+
+  try {
+    // Re-check after acquiring the lock: another creator may have completed between the initial
+    // read and this acquisition if its lock was released before our attempt reached storage.
+    const winner = await findActiveWishlist(input, ctx);
+    if (winner) return { ok: true, wishlist: winner };
+
+    const wishlist = createWishlistDocument(input, ctx);
+    await input.repositories.session.put(wishlist);
+
+    return { ok: true, wishlist };
+  } finally {
+    await input.repositories.ephemeral
+      .releaseLock({ key: lockKey, owner, now: ctx.now })
+      .catch((error: unknown) =>
+        observeBackendError(input, "wishlist.createLock.release", error, { lockKey }),
+      );
+  }
 }
 
 async function findActiveWishlist(
@@ -338,6 +360,100 @@ function createWishlistDocument(
     createdAt: now,
     updatedAt: now,
   });
+}
+
+async function persistWishlistMoveToCart(
+  input: MikaCartWishlistBackendInput,
+  ctx: MikaRequestContext,
+  currency: CurrencyCode,
+  line: CartLine,
+  wishlistItemId: MikaId,
+): Promise<{ readonly ok: true; readonly cart: CartDocument } | MikaApiFailure> {
+  const existing = await findOpenCart(input, ctx, currency);
+  if (existing) {
+    return appendWishlistMoveToCart(input, ctx, existing, line, wishlistItemId, true);
+  }
+
+  const lockIdentity = ctx.customerId ?? ctx.sessionId;
+  if (!lockIdentity) {
+    return appendWishlistMoveToCart(
+      input,
+      ctx,
+      createCartDocument(input, ctx, currency),
+      line,
+      wishlistItemId,
+      false,
+    );
+  }
+
+  // Share cart.add's lock key so a first move and a first add cannot create separate open carts.
+  const lockKey = `cart-create-lock:${await input.hash(`${lockIdentity}:${currency}`)}`;
+  const owner = input.createId("cart_create_lock_owner");
+  const lock = await input.repositories.ephemeral.tryAcquireLock({
+    key: lockKey,
+    owner,
+    expiresAt: addMilliseconds(ctx.now, 30_000),
+    now: ctx.now,
+  });
+  if (!lock) {
+    const winner = await findOpenCart(input, ctx, currency);
+    if (!winner) {
+      return apiFailure(409, "CONFLICT", "Cart is being created by another request.", {
+        cartId: "Cart is being created by another request. Reload the cart and try again.",
+      });
+    }
+
+    return appendWishlistMoveToCart(input, ctx, winner, line, wishlistItemId, true);
+  }
+
+  try {
+    const winner = await findOpenCart(input, ctx, currency);
+    return appendWishlistMoveToCart(
+      input,
+      ctx,
+      winner ?? createCartDocument(input, ctx, currency),
+      line,
+      wishlistItemId,
+      Boolean(winner),
+    );
+  } finally {
+    await input.repositories.ephemeral
+      .releaseLock({ key: lockKey, owner, now: ctx.now })
+      .catch((error: unknown) =>
+        observeBackendError(input, "wishlist.moveToCart.createLock.release", error, { lockKey }),
+      );
+  }
+}
+
+async function appendWishlistMoveToCart(
+  input: MikaCartWishlistBackendInput,
+  ctx: MikaRequestContext,
+  cart: CartDocument,
+  line: CartLine,
+  wishlistItemId: MikaId,
+  persisted: boolean,
+): Promise<{ readonly ok: true; readonly cart: CartDocument } | MikaApiFailure> {
+  const writeBlocked = cartWriteBlocked(cart);
+  if (writeBlocked) return writeBlocked;
+  const alreadyMoved = cart.aggregate.items.some((candidate) =>
+    wishlistMoveIds(candidate).includes(wishlistItemId),
+  );
+  if (alreadyMoved) return { ok: true, cart };
+
+  const itemsResult = await mergeCartLine(input, cart.aggregate.items, line);
+  if (!itemsResult.ok) return itemsResult;
+  const updated = updateCartDocument(
+    cart,
+    markWishlistMove(itemsResult.items, line, wishlistItemId),
+    ctx.now,
+  );
+  if (!persisted) {
+    await input.repositories.session.put(updated);
+    return { ok: true, cart: updated };
+  }
+
+  const stored = await input.repositories.session.putCartIfUnchanged(updated, cart.version);
+  return stored ? { ok: true, cart: stored } : cartChanged(cart.id);
 }
 
 function updateWishlistDocument(
