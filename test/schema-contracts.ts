@@ -146,7 +146,15 @@ export const orderInvoiceInputSchemaContract: AssertExactKeys<
 > = true;
 export const returnToInputSchemaContract: AssertExactKeys<
   z.infer<typeof returnToInputSchema>,
-  AccountExportInput & AccountDeleteInput & AccountPortalInput
+  AccountExportInput
+> = true;
+export const returnToInputSchemaAccountDeleteContract: AssertExactKeys<
+  z.infer<typeof returnToInputSchema>,
+  AccountDeleteInput
+> = true;
+export const returnToInputSchemaAccountPortalContract: AssertExactKeys<
+  z.infer<typeof returnToInputSchema>,
+  AccountPortalInput
 > = true;
 export const addCartItemInputSchemaContract: AssertExactKeys<
   z.infer<typeof addCartItemInputSchema>,

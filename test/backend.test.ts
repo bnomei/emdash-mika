@@ -1630,6 +1630,32 @@ describe("backend test storage helpers", () => {
     });
   });
 
+  it("preserves the ACP session store receiver during maintenance cleanup", async () => {
+    const cleanupInputs: unknown[] = [];
+    const store = {
+      cleanupRan: false,
+      async cleanupExpired(input: { readonly now: ISODateTime; readonly limit?: number }) {
+        this.cleanupRan = true;
+        cleanupInputs.push(input);
+        return { scanned: 2, expired: 1, purged: 1, hasMore: false };
+      },
+    };
+    type MaintenanceRunnerInput = NonNullable<Parameters<typeof createMikaMaintenanceRunner>[0]>;
+    type AcpSessionStore = NonNullable<MaintenanceRunnerInput["acpSessionStore"]>;
+    const runner = createMikaMaintenanceRunner({
+      acpSessionStore: store as unknown as AcpSessionStore,
+    });
+
+    await expect(runner.runOnce({ now: TEST_NOW, acpSessionLimit: 7 })).resolves.toMatchObject({
+      acpSessions: {
+        status: "completed",
+        result: { scanned: 2, expired: 1, purged: 1, hasMore: false },
+      },
+    });
+    expect(store.cleanupRan).toBe(true);
+    expect(cleanupInputs).toEqual([{ now: TEST_NOW, limit: 7 }]);
+  });
+
   it("uses EmDash email delivery with system source by default", async () => {
     const calls: Array<{ readonly message: unknown; readonly source: string }> = [];
     const sender = createEmDashMikaEmailSender({
@@ -4669,8 +4695,9 @@ describe("backend API composition", () => {
       });
       const tokenHash = createTestHash("magic-link-token:magic_link_token_1");
 
-      const originalListOrders = harness.repositories.ledger.listOrdersByCustomer;
-      harness.repositories.ledger.listOrdersByCustomer = async () => {
+      const ledger = harness.repositories.ledger;
+      const originalListOrders = ledger.listOrdersByCustomer.bind(ledger);
+      ledger.listOrdersByCustomer = async () => {
         throw new Error("ledger read outage");
       };
       const ctx = createTestRequestContext();
@@ -4683,7 +4710,7 @@ describe("backend API composition", () => {
         status: "pending",
       });
 
-      harness.repositories.ledger.listOrdersByCustomer = originalListOrders;
+      ledger.listOrdersByCustomer = originalListOrders;
       const ctx2 = createTestRequestContext();
       await expect(
         harness.api.magicLink.verify(ctx2, { token: "magic_link_token_1" }),
@@ -6587,7 +6614,7 @@ describe("backend API composition", () => {
       });
 
       const staleSessionCtx = createTestRequestContext({ customerId: false, userId: false });
-      staleSessionCtx.session?.set("mika.customerId", customer.customerId);
+      await staleSessionCtx.session?.set("mika.customerId", customer.customerId);
       expect(await api.account.get(staleSessionCtx)).toMatchObject({
         ok: false,
         status: 401,

@@ -93,7 +93,7 @@ export interface MikaCheckoutPaymentFailedNotificationContext extends MikaNotifi
   readonly providerCheckoutId?: string;
   readonly providerPaymentId?: string;
   readonly providerOrderId?: string;
-  readonly status?: CheckoutStatus | string;
+  readonly status?: CheckoutStatus | (string & {});
   readonly paymentStatus?: string;
   readonly eventType?: string;
   readonly webhookId?: MikaId;

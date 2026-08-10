@@ -233,25 +233,28 @@ export type MikaServerOperationFacade = MikaOperationFacade &
  * Bidirectional pin: hand {@link MikaServerOperationFacade} namespaces/methods match
  * registry-derived {@link mikaOperationFacadeSpec} (from ops with `apiMethod !== false`).
  */
-type MikaFacadeRegistryDrift =
-  | {
-      readonly [K in keyof MikaOperationFacadeSpec]: Exclude<
-        keyof MikaOperationFacadeSpec[K],
-        K extends keyof MikaServerOperationFacade ? keyof MikaServerOperationFacade[K] : never
-      >;
-    }[keyof MikaOperationFacadeSpec]
-  | {
-      readonly [K in keyof MikaServerOperationFacade]: Exclude<
-        keyof MikaServerOperationFacade[K],
-        K extends keyof MikaOperationFacadeSpec ? keyof MikaOperationFacadeSpec[K] : never
-      >;
-    }[keyof MikaServerOperationFacade]
-  | Exclude<keyof MikaOperationFacadeSpec, keyof MikaServerOperationFacade>
-  | Exclude<keyof MikaServerOperationFacade, keyof MikaOperationFacadeSpec>;
-
-type _AssertMikaFacadePinnedToRegistry = MikaFacadeRegistryDrift extends never
+type MikaFacadeSpecCoversInterface = MikaOperationFacadeSpec extends {
+  readonly [TNamespace in keyof MikaServerOperationFacade]: {
+    readonly [TMethod in keyof MikaServerOperationFacade[TNamespace]]: unknown;
+  };
+}
   ? true
-  : MikaFacadeRegistryDrift;
+  : false;
+
+type MikaFacadeInterfaceCoversSpec = MikaServerOperationFacade extends {
+  readonly [TNamespace in keyof MikaOperationFacadeSpec]: {
+    readonly [TMethod in keyof MikaOperationFacadeSpec[TNamespace]]: unknown;
+  };
+}
+  ? true
+  : false;
+
+type _AssertMikaFacadePinnedToRegistry = [
+  MikaFacadeSpecCoversInterface,
+  MikaFacadeInterfaceCoversSpec,
+] extends [true, true]
+  ? true
+  : never;
 const _assertMikaFacadePinnedToRegistry: _AssertMikaFacadePinnedToRegistry = true;
 void _assertMikaFacadePinnedToRegistry;
 

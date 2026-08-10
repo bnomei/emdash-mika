@@ -233,7 +233,9 @@ export function createMikaMaintenanceRunner(
         };
       });
       const acpSessions = await runMaintenanceTask(async () => {
-        const cleanup = input.cleanupExpiredAcpSessions ?? input.acpSessionStore?.cleanupExpired;
+        const acpSessionStore = input.acpSessionStore;
+        const cleanup =
+          input.cleanupExpiredAcpSessions ?? acpSessionStore?.cleanupExpired?.bind(acpSessionStore);
         if (!cleanup) {
           return {
             status: "skipped" as const,

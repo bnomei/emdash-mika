@@ -101,7 +101,7 @@ import type {
   WishlistItemInput,
 } from "../src/types/index";
 
-type AssertEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+type AssertEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
 type PublicOperationInputPairs = {
   AccountDeleteInput: AssertEqual<ApiAccountDeleteInput, AccountDeleteInput>;
@@ -162,8 +162,11 @@ export type TypesBarrelCompleteness = AllTrue<PublicOperationInputPairs>;
  * Guard: validation remains the SoT for representative Inputs (z.infer re-export path).
  * Sample cart, checkout, and admin money-path inputs so a single-schema drift is less likely.
  */
-type _ValidationSoT = AssertEqual<ValidationAddCartItemInput, ApiAddCartItemInput> &
-  AssertEqual<ValidationStartCheckoutInput, ApiStartCheckoutInput> &
-  AssertEqual<ValidationCheckoutStatusInput, ApiCheckoutStatusInput> &
-  AssertEqual<ValidationOrderRefundInput, ApiOrderRefundInput>;
-export type TypesBarrelValidationSoT = _ValidationSoT;
+type ValidationSourceOfTruthPairs = {
+  AddCartItemInput: AssertEqual<ValidationAddCartItemInput, ApiAddCartItemInput>;
+  StartCheckoutInput: AssertEqual<ValidationStartCheckoutInput, ApiStartCheckoutInput>;
+  CheckoutStatusInput: AssertEqual<ValidationCheckoutStatusInput, ApiCheckoutStatusInput>;
+  OrderRefundInput: AssertEqual<ValidationOrderRefundInput, ApiOrderRefundInput>;
+};
+
+export type TypesBarrelValidationSoT = AllTrue<ValidationSourceOfTruthPairs>;

@@ -13,7 +13,7 @@
  * | `accountExportDownloadInputSchema` | `AccountExportDownloadInput` | schema omits `consumeToken` | server-only force-consume after auth | schema-contracts (`Omit<…,"consumeToken">`) |
  * | `subscriptionCancelInputSchema` | `Omit<SubscriptionActionInput,"priceId">` | no `priceId` | backend only reads price on change | schema-contracts |
  * | `subscriptionRenewInputSchema` | same as cancel | no `priceId` | same | schema-contracts |
- * | `returnToInputSchema` | shared by export/delete/portal inputs | one schema, three public types | same optional return path field | schema-contracts (`AccountExportInput & …`) |
+ * | `returnToInputSchema` | shared by export/delete/portal inputs | one schema, three public types | same optional return path field | schema-contracts (three named assertions) |
  * | `stockAvailabilityInputSchema` | `{ sellableId: SellableId }` (not a named `*Input`) | catalog helper, not full op input | availability probe | schema-contracts |
  * | `downloadResolveInputSchema` | `{ token: string }` | token-only public probe | download redirect | schema-contracts |
  * | form schemas (`cartAddForm*`, `checkoutStartForm*`, …) | not public `*Input` | flattened HTML transport / purchase shortcuts | normalizers → API inputs | operations action defs |
