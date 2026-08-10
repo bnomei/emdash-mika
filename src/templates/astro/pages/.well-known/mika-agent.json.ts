@@ -1,4 +1,4 @@
-// mika-template-version: 0.1.0
+// mika-template-version: 0.1.1
 /**
  * Agent capability manifest at `/.well-known/mika-agent.json`.
  * Publishes public Mika operations and protected-flow requirements for agents.

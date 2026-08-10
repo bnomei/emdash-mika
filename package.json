@@ -1,6 +1,6 @@
 {
   "name": "@bnomei/emdash-mika",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Agent-ready commerce primitives for content-led storefronts.",
   "keywords": [
     "agentic-commerce",

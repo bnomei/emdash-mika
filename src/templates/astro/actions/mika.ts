@@ -1,4 +1,4 @@
-// mika-template-version: 0.1.0
+// mika-template-version: 0.1.1
 /**
  * Re-exports Mika Astro Actions from the package subpath.
  * Hosts should customize via `actions/index.ts` (`createMikaActions(options)`), not this shim.

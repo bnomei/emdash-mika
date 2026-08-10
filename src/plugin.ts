@@ -38,7 +38,7 @@ export { MIKA_PLUGIN_ID } from "./api/routes";
  * Published plugin semver wired into the EmDash descriptor and runtime — must match the
  * package.json version exactly (test/index.test.ts asserts this on every publish gate run).
  */
-export const MIKA_PLUGIN_VERSION = "0.1.0";
+export const MIKA_PLUGIN_VERSION = "0.1.1";
 
 /** npm package name used to derive package-owned descriptor and runtime entrypoints. */
 export const MIKA_PACKAGE_NAME = "@bnomei/emdash-mika";

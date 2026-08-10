@@ -1,4 +1,4 @@
-// mika-template-version: 0.1.0
+// mika-template-version: 0.1.1
 /**
  * Provider webhook ingest route for the storefront template.
  * Hashes the raw body and forwards the public webhook receive input to `Mika.webhook.receive`.

@@ -1,4 +1,4 @@
-// mika-template-version: 0.1.0
+// mika-template-version: 0.1.1
 /**
  * EmDash plugin entrypoint for the Astro storefront template.
  * The EmDash host JSON-serializes `mikaPlugin()` descriptor options into a generated module, so
