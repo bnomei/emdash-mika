@@ -4,6 +4,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import Ajv2020 from "ajv/dist/2020";
+import addFormats from "ajv-formats";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -74,7 +75,8 @@ function normalizedPinnedSchema(): AcpSchemaBundle {
 
 function conformanceValidator() {
   const schema = normalizedPinnedSchema();
-  const ajv = new Ajv2020({ allErrors: true, strict: true, validateFormats: false });
+  const ajv = new Ajv2020({ allErrors: true, strict: true });
+  addFormats(ajv);
   ajv.addSchema(schema);
 
   return (definition: string, value: unknown) => {
@@ -177,6 +179,23 @@ describe("ACP 2025-09-29 schema conformance", () => {
     });
 
     expectConformant("CheckoutSessionWithOrder", completedSession);
+
+    expect(() =>
+      acpCheckoutSessionFromState({
+        record,
+        quote,
+        seller: { name: "Mika Studio", links: [{ type: "terms_of_use", url: "not a uri" }] },
+      }),
+    ).toThrow("ACP seller link must be an absolute URI.");
+    expect(() =>
+      acpCheckoutSessionFromState({
+        record: { ...record, status: "completed" },
+        quote,
+        checkout,
+        seller,
+        orderUrl: "not a uri",
+      }),
+    ).toThrow("ACP order URL must be an absolute URI.");
 
     const error = {
       type: "invalid_request",

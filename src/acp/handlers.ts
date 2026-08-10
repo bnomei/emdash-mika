@@ -41,6 +41,7 @@ import type {
   MikaAcpSessionStore,
 } from "../api/acp-session";
 import {
+  MIKA_ACP_API_VERSION,
   MIKA_ACP_DEFAULT_IDEMPOTENCY_CLAIM_TTL_MS,
   MIKA_ACP_DEFAULT_SESSION_PREFIX,
 } from "./constants";
@@ -865,10 +866,11 @@ export async function reconcileAcpCart(
   const parsedItems: {
     readonly item: MikaAcpItem;
     readonly ids: ReturnType<typeof parseAcpItemId>;
+    readonly index: number;
   }[] = [];
-  for (const item of items) {
+  for (const [index, item] of items.entries()) {
     try {
-      parsedItems.push({ item, ids: parseAcpItemId(item.id) });
+      parsedItems.push({ item, ids: parseAcpItemId(item.id), index });
     } catch (error) {
       return {
         ok: false,
@@ -877,6 +879,7 @@ export async function reconcileAcpCart(
           400,
           "invalid_request",
           error instanceof Error ? error.message : "ACP item id is invalid.",
+          `$.items[${index}].id`,
         ),
       };
     }
@@ -904,7 +907,7 @@ export async function reconcileAcpCart(
     cart = removed.data;
   }
 
-  for (const { item, ids } of parsedItems) {
+  for (const { item, ids, index } of parsedItems) {
     const added = await options.api.cart.add(
       ctx,
       omitUndefined({
@@ -924,6 +927,7 @@ export async function reconcileAcpCart(
           rollbackMessage
             ? `${resultMessage(added)} Cart rollback failed: ${rollbackMessage}`
             : undefined,
+          acpItemErrorPath(resultFieldName(added), index),
         ),
       };
     }
@@ -941,6 +945,20 @@ export async function reconcileAcpCart(
       updatedAt: nowIso(options),
     },
   };
+}
+
+function resultFieldName(
+  result: Extract<MikaApiResult<unknown>, { readonly ok: false }>,
+): string | undefined {
+  return Object.keys(result.error.fieldErrors ?? {})[0];
+}
+
+function acpItemErrorPath(fieldName: string | undefined, index: number): string | undefined {
+  if (!fieldName) return undefined;
+  if (fieldName === "quantity") return `$.items[${index}].quantity`;
+  if (fieldName === "sellableId" || fieldName === "priceId") return `$.items[${index}].id`;
+
+  return `$.items[${index}]`;
 }
 
 export async function restoreAcpCart(
@@ -1032,6 +1050,14 @@ export async function verifyAcpRequest(
     if (!safeStringEqual(request.headers.get("Authorization") ?? "", expected)) {
       return acpError(request, 401, "unauthorized", "ACP authorization failed.");
     }
+  }
+  if (request.headers.get("API-Version") !== MIKA_ACP_API_VERSION) {
+    return acpError(
+      request,
+      400,
+      "invalid_request",
+      `API-Version header must equal '${MIKA_ACP_API_VERSION}'.`,
+    );
   }
   // Idempotency-Key is required for mutating requests; GET handlers pass bodyRequired=false.
   if (bodyRequired && !request.headers.get("Idempotency-Key")) {

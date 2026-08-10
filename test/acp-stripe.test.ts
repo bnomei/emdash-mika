@@ -1067,6 +1067,7 @@ describe("Mika ACP projection", () => {
       new Request(url, {
         method: "POST",
         headers: {
+          "API-Version": "2025-09-12",
           "Content-Type": "application/json",
           "Idempotency-Key": "idem_spec_headers",
           Signature: signature,
@@ -1476,11 +1477,53 @@ describe("Mika ACP projection", () => {
 
     const authorized = await handlers.get(
       new Request("https://shop.example.test/checkout_sessions/missing", {
-        headers: { Authorization: "Bearer acp_test_key" },
+        headers: { Authorization: "Bearer acp_test_key", "API-Version": "2025-09-12" },
       }),
       "missing",
     );
     expect(authorized.status).toBe(404);
+  });
+
+  it("rejects missing or unsupported ACP API versions before cart mutation", async () => {
+    let cart = createCart([]);
+    let cartMutations = 0;
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cartMutations += 1;
+          cart = next;
+        },
+      }),
+      store: createMemoryMikaAcpSessionStore(),
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+    });
+    const request = (apiVersion?: string) => {
+      const headers = new Headers({
+        Authorization: "Bearer acp_test_key",
+        "Content-Type": "application/json",
+        "Idempotency-Key": "idem_version",
+      });
+      if (apiVersion) headers.set("API-Version", apiVersion);
+
+      return new Request("https://shop.example.test/checkout_sessions", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ items: [{ id: "sellable_1:price_1", quantity: 1 }] }),
+      });
+    };
+
+    for (const apiVersion of [undefined, "2099-01-01"] as const) {
+      const response = await handlers.create(request(apiVersion));
+      expect(response.status).toBe(400);
+      expect(response.headers.get("API-Version")).toBe("2025-09-12");
+      await expect(response.json()).resolves.toMatchObject({
+        code: "invalid_request",
+        message: "API-Version header must equal '2025-09-12'.",
+      });
+    }
+    expect(cartMutations).toBe(0);
   });
 
   it("pins ACP checkout context URLs to the configured baseUrl", async () => {
@@ -2466,6 +2509,12 @@ describe("Mika ACP projection", () => {
           cartMutations += 1;
           cart = next;
         },
+        onCartAdd: (item) =>
+          item.quantity === 1.5
+            ? fail<CartDTO>(400, "VALIDATION_FAILED", "Quantity must be an integer.", {
+                fieldErrors: { quantity: "Quantity must be an integer." },
+              })
+            : undefined,
       }),
       store: createMemoryMikaAcpSessionStore(),
       seller: { name: "Mika Studio", links: [] },
@@ -2497,6 +2546,32 @@ describe("Mika ACP projection", () => {
       param: "$.items[0].quantity",
     });
 
+    const malformedId = await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_malformed_id", {
+        items: [{ id: ":price_1", quantity: 1 }],
+      }),
+    );
+    expect(malformedId.status).toBe(400);
+    await expect(malformedId.json()).resolves.toMatchObject({
+      code: "invalid_request",
+      param: "$.items[0].id",
+    });
+
+    const fractionalQuantity = await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_create_fractional_quantity", {
+        items: [
+          { id: "sellable_1:price_1", quantity: 1 },
+          { id: "sellable_2:price_2", quantity: 1.5 },
+        ],
+      }),
+    );
+    expect(fractionalQuantity.status).toBe(400);
+    await expect(fractionalQuantity.json()).resolves.toMatchObject({
+      code: "validation_failed",
+      param: "$.items[1].quantity",
+    });
+
+    const mutationsBeforeJunkBuyer = cartMutations;
     const junkBuyer = await handlers.create(
       acpRequest("https://shop.example.test/checkout_sessions", "idem_create_junk_buyer", {
         buyer: "not-an-object",
@@ -2508,7 +2583,7 @@ describe("Mika ACP projection", () => {
       code: "invalid_request",
       param: "$.buyer",
     });
-    expect(cartMutations).toBe(0);
+    expect(cartMutations).toBe(mutationsBeforeJunkBuyer);
 
     // The pinned schema does not treat null as an omitted optional.
     const nullBuyer = await handlers.create(
@@ -4043,7 +4118,10 @@ function fail<T>(
   status: number,
   code: Extract<MikaApiResult<T>, { readonly ok: false }>["error"]["code"],
   message: string,
-  options: { readonly retryAfter?: number } = {},
+  options: {
+    readonly retryAfter?: number;
+    readonly fieldErrors?: Record<string, string>;
+  } = {},
 ): MikaApiResult<T> {
   return {
     ok: false,
@@ -4052,6 +4130,7 @@ function fail<T>(
       code,
       message,
       ...(options.retryAfter !== undefined ? { retryAfter: options.retryAfter } : {}),
+      ...(options.fieldErrors ? { fieldErrors: options.fieldErrors } : {}),
     },
   };
 }

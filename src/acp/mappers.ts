@@ -44,6 +44,7 @@ import type {
   MikaAcpPaymentProvider,
   MikaAcpSeller,
 } from "./types";
+import { MIKA_ACP_API_VERSION } from "./constants";
 
 export function acpSessionSnapshotFromQuote(
   record: MikaAcpSessionRecord,
@@ -96,7 +97,7 @@ export function acpCheckoutSessionFromSnapshot(input: {
           order: {
             id: input.checkout.orderId ?? input.checkout.id,
             checkout_session_id: input.record.id,
-            permalink_url: input.orderUrl,
+            permalink_url: acpAbsoluteUri(input.orderUrl, "order URL"),
           },
         }
       : {}),
@@ -147,7 +148,7 @@ export function acpCheckoutSessionFromState(input: {
           order: {
             id: input.checkout.orderId ?? input.checkout.id,
             checkout_session_id: input.record.id,
-            permalink_url: input.orderUrl,
+            permalink_url: acpAbsoluteUri(input.orderUrl, "order URL"),
           },
         }
       : {}),
@@ -288,11 +289,19 @@ export function acpCheckoutLink(link: MikaAcpLink): readonly MikaAcpCheckoutLink
     link.type === "privacy_policy" ||
     link.type === "seller_shop_policies"
   ) {
-    return [{ type: link.type, url: link.url }];
+    return [{ type: link.type, url: acpAbsoluteUri(link.url, "seller link") }];
   }
-  if (link.type === "terms_of_service") return [{ type: "terms_of_use", url: link.url }];
+  if (link.type === "terms_of_service") {
+    return [{ type: "terms_of_use", url: acpAbsoluteUri(link.url, "seller link") }];
+  }
 
   return [];
+}
+
+function acpAbsoluteUri(value: string, field: string): string {
+  if (!URL.canParse(value)) throw new Error(`ACP ${field} must be an absolute URI.`);
+
+  return value;
 }
 
 export const MIKA_ACP_PAYMENT_PROVIDERS = ["stripe"] as const;
@@ -396,6 +405,7 @@ export function acpErrorFromResult(
   request: Request,
   result: Extract<MikaApiResult<unknown>, { readonly ok: false }>,
   message?: string,
+  paramOverride?: string,
 ): Response {
   const fieldName = Object.keys(result.error.fieldErrors ?? {})[0];
 
@@ -404,7 +414,7 @@ export function acpErrorFromResult(
     result.status,
     acpErrorCodeFromMika(result.error),
     message ?? result.error.message,
-    fieldName ? `$.${fieldName}` : undefined,
+    paramOverride ?? (fieldName ? `$.${fieldName}` : undefined),
     omitUndefined({ retryAfter: result.error.retryAfter }),
   );
 }
@@ -459,7 +469,10 @@ export function acpError(
 }
 
 export function acpResponseHeaders(request: Request): Headers {
-  const headers = new Headers({ "Content-Type": "application/json" });
+  const headers = new Headers({
+    "API-Version": MIKA_ACP_API_VERSION,
+    "Content-Type": "application/json",
+  });
   const idempotencyKey = request.headers.get("Idempotency-Key");
   const requestId = request.headers.get("Request-Id");
   if (idempotencyKey) headers.set("Idempotency-Key", idempotencyKey);
