@@ -4901,11 +4901,13 @@ describe("backend API composition", () => {
       repositories.ephemeral.get(createTestHash("download-token:download_token_1")),
     ).resolves.toMatchObject({ subjectHash: `customer:${customer.customerId}` });
 
-    await expect(api.download.confirm({ token: token ?? "" })).resolves.toMatchObject({
+    const confirmed = await api.download.confirm({ token: token ?? "" });
+    expect(confirmed).toMatchObject({
       ok: true,
       status: 200,
-      data: { redirectUrl: "download:order_1:order_line_1" },
+      data: { downloadRef: "download:order_1:order_line_1" },
     });
+    expect(confirmed).not.toHaveProperty("data.redirectUrl");
   });
 
   it("reuses a still-valid download token across repeated account.get views instead of re-minting", async () => {
@@ -9693,7 +9695,7 @@ describe("backend API composition", () => {
     ).resolves.toMatchObject({
       ok: true,
       status: 200,
-      data: { redirectUrl: "download:partial-refund" },
+      data: { downloadRef: "download:partial-refund" },
     });
   });
 
@@ -12922,6 +12924,10 @@ describe("backend API composition", () => {
         title: "Test sellable",
       },
     });
+    const downloadIntent = notificationIntents.find((intent) => intent.kind === "download.ready");
+    const syntheticDownloadRef = downloadIntent?.context.downloadRef;
+    expect(syntheticDownloadRef).toBe("download:order_1:order_line_3");
+    expect(syntheticDownloadRef).not.toMatch(/^https?:\/\//i);
     await expect(accountCollection.get("entitlement_order_1_order_line_1")).resolves.toMatchObject({
       type: "entitlement",
       customerId: "customer_1",
@@ -12932,7 +12938,8 @@ describe("backend API composition", () => {
         sellableId: entitlementSellable.id,
       },
     });
-    await expect(accountCollection.get("license_order_1_order_line_2")).resolves.toMatchObject({
+    const storedLicense = await accountCollection.get("license_order_1_order_line_2");
+    expect(storedLicense).toMatchObject({
       type: "license",
       customerId: "customer_1",
       orderId: "order_1",
@@ -12943,7 +12950,8 @@ describe("backend API composition", () => {
         displayKeySuffix: expect.any(String),
       },
     });
-    await expect(opsCollection.get("email_order_1_order_confirmation")).resolves.toMatchObject({
+    const orderConfirmationEmail = await opsCollection.get("email_order_1_order_confirmation");
+    expect(orderConfirmationEmail).toMatchObject({
       type: "email",
       status: "queued",
       orderId: "order_1",
@@ -12955,6 +12963,16 @@ describe("backend API composition", () => {
         idempotencyKey: "order-confirmation:order_1",
       },
     });
+    const account = await api.account.get(shopperCtx);
+    const observableFulfillment = JSON.stringify({
+      account,
+      notificationIntents,
+      orderConfirmationEmail,
+    });
+    expect(observableFulfillment).not.toContain("licenseKeyHash");
+    if (storedLicense?.type === "license") {
+      expect(observableFulfillment).not.toContain(storedLicense.record.licenseKeyHash);
+    }
     await expect(
       repositories.ledger.findOrderByProviderPayment(stripe, "payment_fulfillment_1"),
     ).resolves.toMatchObject({

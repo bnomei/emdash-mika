@@ -68,7 +68,6 @@ export async function createOrderLineDownloadToken(
       orderLineId: line.id,
       ...(line.entitlementId ? { entitlementId: line.entitlementId } : {}),
       title: line.item.titleSnapshot,
-      redirectUrl: downloadRef,
     },
   });
   // account.get can be called far more often than a download link is actually clicked (every

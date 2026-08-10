@@ -4139,6 +4139,7 @@ describe("public types", () => {
       MikaApiResult<ProviderHealthDTO>
     >();
     expectTypeOf<DownloadResolutionDTO>().toEqualTypeOf<{
+      readonly downloadRef?: string;
       readonly title?: string;
       readonly redirectUrl?: string;
       readonly expiresAt?: ISODateTime;

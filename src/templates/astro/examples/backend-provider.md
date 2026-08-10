@@ -107,13 +107,28 @@ When a provider webhook marks a payment order as paid, Mika fulfills each order
 line according to the purchased price's `fulfillmentKind`:
 
 - `entitlement` creates an active entitlement document.
-- `download` adds a download ref to the order line.
+- `download` adds an opaque `download:*` ref to the order line.
 - `license` creates an active license document with a hashed license key and a
   display suffix on the order line.
 
+The download ref is fulfillment evidence, not a URL or object-storage path.
+Mika's built-in token operations validate order access, entitlement/license
+state, expiry, revocation, and replay. Wrap the public `api.download.resolve`
+and `api.download.confirm` methods to map `DownloadResolutionDTO.downloadRef`
+to a short-lived HTTPS URL. Resolve/sign first and delegate to Mika's
+single-use confirm only after the asset is available, so a storage failure does
+not consume the token. Keep the GET-validate / POST-consume interstitial from
+the copied template pages.
+
 License fulfillment is automatic backend behavior, not a separate public
-`license.generate` action. If the storefront must reveal full license keys to
-customers, the host should own that delivery policy and storage boundary.
+`license.generate` action. Mika exposes only a deterministic hash and display
+suffix. Queue a durable host job from the typed `license.issued` notification,
+then generate, store, and deliver the raw key in host-owned secret storage. Key
+that work by `licenseId`, and never put raw keys, download tokens, signed URLs,
+or provider secrets in DTOs or logs.
+
+Mika deliberately does not include object storage, URL signing, a license
+server, or a digital-delivery email provider.
 
 ## Notifications And Email
 

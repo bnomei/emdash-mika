@@ -424,9 +424,12 @@ export interface DownloadDTO {
   readonly expiresAt?: ISODateTime;
 }
 
-/** Token resolution outcome with redirect URL and expiry. */
+/** Token resolution outcome with opaque fulfillment evidence and an optional host-resolved URL. */
 export interface DownloadResolutionDTO {
+  /** Storage-neutral evidence the host may map to a private asset; never a usable URL by itself. */
+  readonly downloadRef?: string;
   readonly title?: string;
+  /** Short-lived asset URL only when the host has explicitly resolved one. */
   readonly redirectUrl?: string;
   readonly expiresAt?: ISODateTime;
 }

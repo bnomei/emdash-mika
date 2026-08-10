@@ -635,7 +635,6 @@ export async function issueDownload(
           ...(issueInput.entitlementId ? { entitlementId: issueInput.entitlementId } : {}),
           ...(target.license?.id ? { licenseId: target.license.id } : {}),
           title: target.line.item.titleSnapshot,
-          redirectUrl: target.downloadRef,
           adminAuditId: audit.id,
         },
       });

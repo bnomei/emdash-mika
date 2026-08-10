@@ -177,7 +177,7 @@ Do not bundle object storage, URL signing, a license server, or an email deliver
 
 **Proof**
 
-- synthetic download references remain opaque and are not URL-shaped;
+- synthetic download references remain opaque and are not HTTP(S) URL-shaped;
 - raw license material never appears in Mika DTOs, receipts, or logs;
 - the minimal host-extension example compiles using public exports only;
 - existing Mika-owned token authorization, expiry, and replay behavior remains covered by focused tests.

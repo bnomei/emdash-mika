@@ -178,7 +178,7 @@ export interface MikaApi {
       input: SubscriptionActionInput,
     ): Promise<MikaApiResult<AccountDTO>>;
   };
-  /** Download tokens: resolve returns the target URL; confirm consumes the token after delivery. */
+  /** Download tokens expose opaque evidence; host overrides may resolve it before confirmation. */
   readonly download: {
     resolve(input: { readonly token: string }): Promise<MikaApiResult<DownloadResolutionDTO>>;
     confirm(input: { readonly token: string }): Promise<MikaApiResult<DownloadResolutionDTO>>;

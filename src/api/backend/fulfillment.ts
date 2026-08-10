@@ -338,8 +338,9 @@ export async function resolveDownload(
     ok: true,
     status: 200,
     data: omitUndefined({
+      downloadRef,
       title: stringChild(data, "title") ?? line.item.titleSnapshot,
-      redirectUrl: stringChild(data, "redirectUrl") ?? downloadRef,
+      redirectUrl: stringChild(data, "redirectUrl"),
       expiresAt: record?.expiresAt,
     }),
   };

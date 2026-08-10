@@ -395,6 +395,35 @@ Mika email outbox rows until a default renderer is intentionally added. The
 existing email outbox runner remains compatible with Mika's queued
 `magic_link` and `order_confirmation` email documents.
 
+## Digital Delivery Boundary
+
+Mika records digital fulfillment without owning private storage or raw secrets.
+A built-in download produces an opaque `download:*` reference. After token
+authorization, `DownloadResolutionDTO.downloadRef` exposes that evidence;
+`redirectUrl` is absent until host code explicitly maps the reference to a real
+asset. Treat the reference as an identifier, never as a URL or storage path.
+
+A production host can wrap the existing `download.resolve` and
+`download.confirm` operations. Resolve through Mika first to retain order,
+entitlement/license, expiry, and revocation checks; map `downloadRef` to a
+short-lived HTTPS URL; then let Mika consume the token during confirmation.
+Resolve/sign before consuming so a storage failure does not burn the buyer's
+one-time token. The compile-checked
+[`digital-delivery.ts`](./test/fixtures/digital-delivery.ts) fixture shows this
+using public package exports only.
+
+License fulfillment is evidence-only too. Mika stores a deterministic hash and
+display suffix and emits `license.issued` with IDs and the suffix—never a raw
+key. Queue a durable host job from that notification; the worker can generate,
+store, and deliver the raw credential in a secret-capable system. Use
+`licenseId` as the idempotency anchor.
+
+Hosts must authorize before asset resolution, keep signed URLs short-lived,
+preserve Mika's single-use confirmation and replay errors, and redact tokens,
+raw keys, signed URLs, and provider secrets from logs. Mika intentionally ships
+no object-storage adapter, URL signer, license server, or digital-delivery email
+provider.
+
 ## Package Surface
 
 - ESM entry: `@bnomei/emdash-mika` for descriptor-focused plugin registration.
