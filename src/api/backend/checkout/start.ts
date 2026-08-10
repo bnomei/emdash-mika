@@ -31,6 +31,7 @@ import {
 import type { MikaRequestContext } from "../../context";
 import type {
   CartQuoteDTO,
+  CartQuoteInput,
   CheckoutSessionDTO,
   MikaApiResult,
   StartCheckoutInput,
@@ -59,6 +60,7 @@ import {
   couponRejectionMessage,
   couponSnapshotForSubtotal,
   createCartQuote,
+  createDefaultCartQuote,
   findQuoteCart,
   selectCartPrice,
   siblingSellableQuantity,
@@ -104,6 +106,62 @@ export type CheckoutStartResolution = {
   readonly coupon?: CouponSnapshot;
   readonly lines: readonly CheckoutStartLineResolution[];
 };
+
+function checkoutResolutionMatchesDefaultQuote(
+  resolved: CheckoutStartResolution,
+  quote: CartQuoteDTO,
+): boolean {
+  const subtotal = resolved.lines.reduce(
+    (amount, resolution) => amount + resolution.line.item.unitAmount * resolution.line.quantity,
+    0,
+  );
+  const discount = couponDiscountAmount(resolved.coupon, subtotal);
+  if (
+    quote.currency !== resolved.currency ||
+    quote.subtotal.currency !== resolved.currency ||
+    quote.subtotal.amount !== subtotal ||
+    (quote.discount?.amount ?? 0) !== discount ||
+    quote.total.currency !== resolved.currency ||
+    quote.total.amount !== Math.max(0, subtotal - discount) ||
+    quote.items.length !== resolved.lines.length
+  ) {
+    return false;
+  }
+
+  const quoteCoupon = quote.coupon;
+  if (
+    Boolean(quoteCoupon) !== Boolean(resolved.coupon) ||
+    (resolved.coupon &&
+      (quoteCoupon?.label !== resolved.coupon.label ||
+        quoteCoupon?.providerCouponId !== resolved.coupon.providerRef?.priceId))
+  ) {
+    return false;
+  }
+
+  return quote.items.every((quoteLine, index) => {
+    const line = resolved.lines[index]?.line;
+    if (!line) return false;
+    const subtotalAmount = line.item.unitAmount * line.quantity;
+
+    return (
+      quoteLine.lineId === line.cartLineId &&
+      quoteLine.sellableId === line.item.sellableId &&
+      quoteLine.priceId === line.item.priceId &&
+      quoteLine.fulfillmentKind === line.item.fulfillmentKind &&
+      quoteLine.title === line.item.titleSnapshot &&
+      quoteLine.sku === line.item.sku &&
+      JSON.stringify(quoteLine.variantOptions ?? []) ===
+        JSON.stringify(line.item.variantOptions ?? []) &&
+      quoteLine.quantity === line.quantity &&
+      quoteLine.unitAmount?.currency === resolved.currency &&
+      quoteLine.unitAmount.amount === line.item.unitAmount &&
+      quoteLine.subtotal?.currency === resolved.currency &&
+      quoteLine.subtotal.amount === subtotalAmount &&
+      quoteLine.total?.currency === resolved.currency &&
+      quoteLine.total.amount === subtotalAmount
+    );
+  });
+}
 
 /**
  * Gates delegated-payment handoff at checkout start.
@@ -259,12 +317,28 @@ export async function startCheckout(
   const resolved = await resolveCheckoutStart(input, ctx, checkoutInput);
   if (!resolved.ok) return resolved;
 
-  const hostQuote = input.quoteResolver
-    ? await createCartQuote(input, ctx, {
-        ...checkoutInput,
-        customFields: checkoutPersistedCustomMetadata(checkoutInput.customFields),
-      })
+  const hostQuoteInput: CartQuoteInput = {
+    ...checkoutInput,
+    customFields: checkoutPersistedCustomMetadata(checkoutInput.customFields),
+  };
+  const defaultQuote = input.quoteResolver
+    ? await createDefaultCartQuote(input, ctx, hostQuoteInput)
     : undefined;
+  if (defaultQuote && !checkoutResolutionMatchesDefaultQuote(resolved, defaultQuote)) {
+    return apiFailure(
+      409,
+      "CONFLICT",
+      "Checkout inputs changed while the business quote was being resolved. Retry checkout.",
+    );
+  }
+  const hostQuote =
+    defaultQuote && input.quoteResolver
+      ? await input.quoteResolver({
+          ctx,
+          input: hostQuoteInput,
+          quote: defaultQuote,
+        })
+      : undefined;
   const delegatedPaymentAuth = await requireDelegatedPaymentAuthorization(
     input,
     ctx,

@@ -20021,6 +20021,48 @@ describe("backend API composition", () => {
     });
   });
 
+  it("rejects direct checkout when catalog state changes between line and quote resolution", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repricedSellable = createSellableDefinition({
+      prices: [createPriceDefinition({ amount: 1_500 })],
+    });
+    const repositories = createTestBackendRepositories();
+    const originalCatalog = createCatalogItemDocument({ contentRef, sellables: [sellable] });
+    const repricedCatalog = createCatalogItemDocument({
+      contentRef,
+      sellables: [repricedSellable],
+    });
+    await repositories.catalog.put(originalCatalog);
+    const findCatalogItem = repositories.catalog.findItemBySellableId.bind(repositories.catalog);
+    let catalogReads = 0;
+    repositories.catalog.findItemBySellableId = async (sellableId) => {
+      catalogReads += 1;
+      return catalogReads === 1 ? findCatalogItem(sellableId) : repricedCatalog;
+    };
+    const fake = createFakeMikaProvider();
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+        quoteResolver: ({ quote }) => quote,
+      }),
+    );
+
+    await expect(
+      api.checkout.start(createTestRequestContext(), {
+        sellableId: sellable.id,
+        provider: TEST_PROVIDER,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "CONFLICT", message: expect.stringContaining("changed") },
+    });
+    expect(catalogReads).toBe(2);
+    expect(fake.getCalls().createCheckoutSession).toEqual([]);
+  });
+
   it("allows delegated checkout with a couponCode authorized by checkout preview", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();

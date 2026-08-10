@@ -147,6 +147,16 @@ export async function createCartQuote(
   ctx: MikaRequestContext,
   quoteInput: CartQuoteInput,
 ): Promise<CartQuoteDTO> {
+  const quote = await createDefaultCartQuote(input, ctx, quoteInput);
+  return input.quoteResolver ? input.quoteResolver({ ctx, input: quoteInput, quote }) : quote;
+}
+
+/** Builds Mika's quote without invoking the host resolver; used to bind checkout to one snapshot. */
+export async function createDefaultCartQuote(
+  input: MikaCartWishlistBackendInput,
+  ctx: MikaRequestContext,
+  quoteInput: CartQuoteInput,
+): Promise<CartQuoteDTO> {
   const defaultCurrency = defaultBackendCurrency(input);
   const cartResult = await findQuoteCart(input, ctx, quoteInput.cartId, defaultCurrency);
   const currency = cartResult.cart?.aggregate.currency ?? defaultCurrency;
@@ -294,7 +304,7 @@ export async function createCartQuote(
     errors: errors.length > 0 ? errors : undefined,
   });
 
-  return input.quoteResolver ? input.quoteResolver({ ctx, input: quoteInput, quote }) : quote;
+  return quote;
 }
 
 export async function findQuoteCart(
