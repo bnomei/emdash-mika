@@ -219,8 +219,8 @@ Source-tree tests do not prove that exports, declaration files, peer dependencie
 - Install that tarball into a clean temporary consumer.
 - Import each documented public entry point and run type-check plus a minimal runtime smoke test.
 - Commit one locked release-consumer lane using Node 22.13.0, npm 11.16.0, Astro 7.0.0, and EmDash 0.22.0. Install the exact optional peers required by the imported subpaths: Kumo 2.5.2, Phosphor Icons React 2.1.10, React 19.2.7, and React DOM 19.2.7. Expand this lane only when compatibility problems justify it.
-- Temporarily install the release candidate tarball into `emdash-mika-template`, set `EMDASH_MIKA_TEMPLATE_SKIP_LOCAL_BUILD=1`, assert that Node resolves Mika from the installed candidate, then run the template's existing type-check, test, and build scripts. The template may keep its local-path dependency for day-to-day development.
-- Run the existing `emdash-mika-docs` build. Keep compile-checked integration examples in this package's test fixtures instead of building a new documentation snippet runner for the first release.
+- Install the release candidate tarball into a disposable copy of `emdash-mika-template`, set `EMDASH_MIKA_TEMPLATE_SKIP_LOCAL_BUILD=1`, assert that Node resolves Mika from the installed candidate, then run the template's existing type-check, test, and build scripts. The template may keep its local-path dependency for day-to-day development.
+- Build a disposable copy of `emdash-mika-docs`. Keep compile-checked integration examples in this package's test fixtures instead of building a new documentation snippet runner for the first release.
 - Ensure no release-facing proof succeeds only because it resolves Mika source through a local path.
 
 **Proof gate**
