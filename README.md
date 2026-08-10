@@ -408,7 +408,7 @@ A production host can wrap the existing `download.resolve` and
 entitlement/license, expiry, and revocation checks; map `downloadRef` to a
 short-lived HTTPS URL; then let Mika consume the token during confirmation.
 Resolve/sign before consuming so a storage failure does not burn the buyer's
-one-time token. The compile-checked
+one-time token, and never let the signed URL outlive Mika's token expiry. The compile-checked
 [`digital-delivery.ts`](./test/fixtures/digital-delivery.ts) fixture shows this
 using public package exports only.
 

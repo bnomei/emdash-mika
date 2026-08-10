@@ -73,6 +73,53 @@ describe("external digital delivery fixture", () => {
     });
   });
 
+  it("rejects a non-HTTPS redirect already supplied by host token data", async () => {
+    const base = createMikaApi({
+      download: {
+        resolve: async () => ({
+          ok: true,
+          status: 200,
+          data: { redirectUrl: "http://assets.example.test/private/file.zip" },
+        }),
+        confirm: async () => ({
+          ok: true,
+          status: 200,
+          data: { redirectUrl: "http://assets.example.test/private/file.zip" },
+        }),
+      },
+    });
+    const api = withHostPrivateDownloads(base, () => ({
+      redirectUrl: "https://assets.example.test/unused",
+    }));
+
+    await expect(api.download.resolve({ token: "token_1" })).rejects.toThrow(
+      "Private download redirects must use HTTPS.",
+    );
+  });
+
+  it("rejects a signed URL that outlives Mika's authorization token", async () => {
+    const base = createMikaApi({
+      download: {
+        resolve: async () => ({
+          ok: true,
+          status: 200,
+          data: {
+            downloadRef: "download:order_1:line_1",
+            expiresAt: createISODateTime("2026-01-01T00:15:00.000Z"),
+          },
+        }),
+      },
+    });
+    const api = withHostPrivateDownloads(base, () => ({
+      redirectUrl: "https://assets.example.test/private/file.zip",
+      expiresAt: createISODateTime("2026-01-01T00:30:00.000Z"),
+    }));
+
+    await expect(api.download.resolve({ token: "token_1" })).rejects.toThrow(
+      "Private download redirects must not outlive the Mika token.",
+    );
+  });
+
   it("queues license delivery using evidence only", async () => {
     const jobs: HostLicenseDeliveryJob[] = [];
     const hook = createHostLicenseDeliveryHook((job) => {

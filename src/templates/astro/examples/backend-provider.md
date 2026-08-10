@@ -117,8 +117,9 @@ state, expiry, revocation, and replay. Wrap the public `api.download.resolve`
 and `api.download.confirm` methods to map `DownloadResolutionDTO.downloadRef`
 to a short-lived HTTPS URL. Resolve/sign first and delegate to Mika's
 single-use confirm only after the asset is available, so a storage failure does
-not consume the token. Keep the GET-validate / POST-consume interstitial from
-the copied template pages.
+not consume the token. The signed URL must use HTTPS and expire no later than
+Mika's token. Keep the GET-validate / POST-consume interstitial from the copied
+template pages; it hides the submit action when resolution has no real URL.
 
 License fulfillment is automatic backend behavior, not a separate public
 `license.generate` action. Mika exposes only a deterministic hash and display

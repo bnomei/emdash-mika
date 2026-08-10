@@ -23,20 +23,43 @@ async function resolveHostPrivateAsset(
   result: MikaApiResult<DownloadResolutionDTO>,
   resolveAsset: HostPrivateAssetResolver,
 ): Promise<MikaApiResult<DownloadResolutionDTO>> {
-  if (!result.ok || result.data.redirectUrl || !result.data.downloadRef) return result;
+  if (!result.ok) return result;
+  if (result.data.redirectUrl) {
+    assertHttpsRedirect(result.data.redirectUrl);
+    return result;
+  }
+  if (!result.data.downloadRef) return result;
 
   const asset = await resolveAsset(result.data.downloadRef);
-  if (new URL(asset.redirectUrl).protocol !== "https:") {
-    throw new Error("Private download redirects must use HTTPS.");
-  }
+  assertHttpsRedirect(asset.redirectUrl);
+  const expiresAt = boundedAssetExpiry(result.data.expiresAt, asset.expiresAt);
   return {
     ...result,
     data: {
       ...result.data,
       redirectUrl: asset.redirectUrl,
-      ...(asset.expiresAt ? { expiresAt: asset.expiresAt } : {}),
+      ...(expiresAt ? { expiresAt } : {}),
     },
   };
+}
+
+function assertHttpsRedirect(redirectUrl: string): void {
+  if (new URL(redirectUrl).protocol !== "https:") {
+    throw new Error("Private download redirects must use HTTPS.");
+  }
+}
+
+function boundedAssetExpiry(
+  tokenExpiry: ISODateTime | undefined,
+  assetExpiry: ISODateTime | undefined,
+): ISODateTime | undefined {
+  if (!tokenExpiry) return assetExpiry;
+  if (!assetExpiry) return tokenExpiry;
+  if (Date.parse(assetExpiry) > Date.parse(tokenExpiry)) {
+    throw new Error("Private download redirects must not outlive the Mika token.");
+  }
+
+  return assetExpiry;
 }
 
 /**

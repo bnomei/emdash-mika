@@ -4835,6 +4835,10 @@ describe("Mika Astro template contracts", () => {
       new URL("../src/templates/astro/pages/checkout/cancel.astro", import.meta.url),
       "utf8",
     );
+    const downloadPage = readFileSync(
+      new URL("../src/templates/astro/pages/download/[token].astro", import.meta.url),
+      "utf8",
+    );
     const accountOrdersComponent = readFileSync(
       new URL("../src/templates/astro/components/AccountOrders.astro", import.meta.url),
       "utf8",
@@ -4894,6 +4898,9 @@ describe("Mika Astro template contracts", () => {
     expect(checkoutCancel).toContain(
       "Payment was completed before this cancellation could be applied.",
     );
+    expect(downloadPage).toContain("await createMikaApi(api).download.resolve({ token })");
+    expect(downloadPage).toContain("token && deliveryReady");
+    expect(downloadPage).toContain("Private download delivery is not configured.");
     expect(checkoutCancel).toContain('import { Link, Text } from "@cloudflare/kumo"');
     expect(accountOrdersComponent).toContain("order.invoiceHref");
     expect(accountOrdersComponent).not.toContain("order.invoiceUrl");

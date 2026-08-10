@@ -4,7 +4,9 @@ import { actions, isInputError } from "astro:actions";
 import { Button, Text } from "@cloudflare/kumo";
 import MikaKumoPage from "../../components/MikaKumoPage.astro";
 import { mikaHiddenInput } from "@bnomei/emdash-mika/astro";
+import { createMikaApi } from "@bnomei/emdash-mika/server";
 import { mikaTemplateCurrentCartItemCount } from "../../lib/cart";
+import { api } from "../../lib/mika-api";
 
 export const prerender = false;
 
@@ -14,6 +16,17 @@ const confirmResult = Astro.getActionResult(actions.mika.download.confirm);
 if (confirmResult?.data?.redirectUrl) {
   return Astro.redirect(confirmResult.data.redirectUrl);
 }
+
+// Resolve without consuming before showing the POST action. An unwrapped Mika backend returns
+// only opaque evidence, so the copied template fails closed until the host wires asset delivery.
+const resolution = token ? await createMikaApi(api).download.resolve({ token }) : undefined;
+const deliveryReady = resolution?.ok === true && Boolean(resolution.data.redirectUrl);
+const deliveryError =
+  resolution?.ok === false
+    ? resolution.error.message
+    : resolution?.ok === true && resolution.data.downloadRef && !resolution.data.redirectUrl
+      ? "Private download delivery is not configured. Contact support."
+      : null;
 
 const confirmError =
   confirmResult?.error && !isInputError(confirmResult.error)
@@ -25,8 +38,9 @@ const cartItemCount = await mikaTemplateCurrentCartItemCount(Astro);
 <MikaKumoPage title="Download" pageSize="narrow" cartItemCount={cartItemCount} data-mika-download-page>
   <section class="mika-kumo-panel mika-kumo-stack">
     {confirmError && <Text as="p" variant="error" role="alert">{confirmError}</Text>}
+    {deliveryError && <Text as="p" variant="error" role="alert">{deliveryError}</Text>}
 
-    {token ? (
+    {token && deliveryReady ? (
       <>
         <Text as="p">Your download is ready. Select continue to start it.</Text>
         <form class="mika-kumo-form" action={actions.mika.download.confirm.queryString} method="post">
@@ -34,8 +48,8 @@ const cartItemCount = await mikaTemplateCurrentCartItemCount(Astro);
           <Button type="submit" variant="primary">Download</Button>
         </form>
       </>
-    ) : (
+    ) : !token ? (
       <Text as="p" variant="error" role="alert">Missing download token.</Text>
-    )}
+    ) : null}
   </section>
 </MikaKumoPage>
