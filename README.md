@@ -1,10 +1,13 @@
 # @bnomei/emdash-mika
 
+[![documentation](https://img.shields.io/badge/docs-mika.bnomei.com-2563eb.svg)](https://mika.bnomei.com/)
 [![npm version](https://img.shields.io/npm/v/@bnomei/emdash-mika.svg)](https://www.npmjs.com/package/@bnomei/emdash-mika)
 [![npm downloads](https://img.shields.io/npm/dm/@bnomei/emdash-mika.svg)](https://www.npmjs.com/package/@bnomei/emdash-mika)
 [![license](https://img.shields.io/npm/l/@bnomei/emdash-mika.svg)](https://www.npmjs.com/package/@bnomei/emdash-mika)
 [![types](https://img.shields.io/badge/types-included-blue.svg)](./package.json)
 [![source](https://img.shields.io/badge/source-GitHub-181717.svg?logo=github)](https://github.com/bnomei/emdash-mika)
+
+**Start here: [Mika documentation](https://mika.bnomei.com/)**
 
 Agent-ready commerce primitives for content-led storefronts.
 
@@ -24,6 +27,10 @@ contracts, provider interfaces, Astro Actions, server helpers, operation
 descriptors, and copyable Kumo-backed Astro templates. The host project still
 owns product content, frontend layout, payment-provider wiring, auth/session
 policy, rate limits, tax/shipping rules, and final backend behavior.
+
+Use the [Mika documentation](https://mika.bnomei.com/) for the guided path from
+installation through backend wiring, storefront integration, deployment, and
+the complete package reference. This README is the compact package overview.
 
 ## What It Can Do
 
@@ -73,6 +80,9 @@ package.
 
 ## Install
 
+Follow the [installation guide](https://mika.bnomei.com/getting-started/install/)
+for prerequisites, workspace setup, and the first integration steps.
+
 ```sh
 npm install @bnomei/emdash-mika
 ```
@@ -94,7 +104,8 @@ provide jump-to-source for plain npm installs of the published tarball alone.
 
 Hosts interact with Mika through three complementary faces. Pick the face that
 matches the trust boundary; do not expand the browser client to authenticated
-mutations.
+mutations. The [integration map](https://mika.bnomei.com/concepts/integration-map/)
+explains how these faces fit together in a host application.
 
 | Face               | Package surface                                                                                                                                 | When to use                                                                                                                                |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -194,6 +205,9 @@ callers that previously over-used generic `CONFLICT`.
 
 ## Maintenance wiring
 
+See the [deployment and maintenance guide](https://mika.bnomei.com/guides/deployment-maintenance/)
+for the production checklist and scheduling model.
+
 The default EmDash maintenance cron only **releases expired stock reservations**
 unless the host injects more ports:
 
@@ -238,6 +252,11 @@ virtual module, so it must be an absolute path or a bare package specifier,
 not a config-relative `./` path.
 
 ## Examples
+
+For the shortest runnable path, start with the
+[template quickstart](https://mika.bnomei.com/getting-started/quick-start-template/).
+The [template map](https://mika.bnomei.com/examples/template-map/) explains what
+to copy and what the host is expected to own.
 
 The package includes copyable Astro templates and stable example docs under:
 
@@ -315,6 +334,9 @@ cancel redirects as UX only, and confirm final payment/order state through the
 host's provider-backed checkout and order APIs.
 
 ## Agent-Ready Commerce
+
+The [agent-ready storefront guide](https://mika.bnomei.com/guides/agent-ready-storefront/)
+covers the public discovery surfaces and the protected-operation boundary.
 
 Mika exposes a semantic operation manifest for hosts that want to make a
 storefront available to agents without moving OAuth, payment credentials, or
@@ -397,6 +419,9 @@ existing email outbox runner remains compatible with Mika's queued
 
 ## Digital Delivery Boundary
 
+See [accounts and downloads](https://mika.bnomei.com/guides/account-downloads/)
+for the complete host integration flow.
+
 Mika records digital fulfillment without owning private storage or raw secrets.
 A built-in download produces an opaque `download:*` reference. After token
 authorization, `DownloadResolutionDTO.downloadRef` exposes that evidence;
@@ -426,6 +451,9 @@ provider.
 
 ## Package Surface
 
+The [package exports reference](https://mika.bnomei.com/reference/package-exports/)
+is the canonical entrypoint guide.
+
 - ESM entry: `@bnomei/emdash-mika` for descriptor-focused plugin registration.
 - ACP feed and checkout projection helpers: `@bnomei/emdash-mika/acp`.
 - Agent descriptors, proof refs, actor contracts, and agent vocabulary:
@@ -450,6 +478,16 @@ provider.
 The package intentionally does not expose a public `storage` subpath. Storage
 repositories, migrations, and SQL statements are implementation details until
 the backend service layer is stable enough to support as public API.
+
+## Documentation
+
+The complete documentation lives at **[mika.bnomei.com](https://mika.bnomei.com/)**:
+
+- [Getting started](https://mika.bnomei.com/getting-started/)
+- [Concepts and architecture](https://mika.bnomei.com/concepts/)
+- [Integration guides](https://mika.bnomei.com/guides/)
+- [Examples](https://mika.bnomei.com/examples/)
+- [Package reference](https://mika.bnomei.com/reference/)
 
 ## License
 
