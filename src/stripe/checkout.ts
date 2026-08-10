@@ -71,9 +71,14 @@ export function assertStripeHostedTotalIsRepresentable(input: MikaProviderChecko
     0,
   );
   const representedTotal = Math.max(0, subtotal - (input.discount?.amount ?? 0));
-  if (input.total.amount !== representedTotal) {
+  const representedCurrency = input.lines[0]?.currency;
+  const currenciesMatch =
+    representedCurrency === input.total.currency &&
+    input.lines.every((line) => line.currency === input.total?.currency) &&
+    (!input.discount || input.discount.currency === input.total.currency);
+  if (input.total.amount !== representedTotal || !currenciesMatch) {
     throw new Error(
-      "Stripe hosted checkout cannot represent host-added tax, shipping, or fee amounts; use a host adapter that applies them or delegated payment.",
+      "Stripe hosted checkout cannot represent the authoritative total amount or currency; use a host adapter that applies host-added amounts or delegated payment.",
     );
   }
 }

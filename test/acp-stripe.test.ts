@@ -3016,7 +3016,30 @@ describe("Mika Stripe provider", () => {
           },
         ],
       }),
-    ).rejects.toThrow(/cannot represent host-added tax, shipping, or fee amounts/i);
+    ).rejects.toThrow(/cannot represent the authoritative total amount or currency/i);
+    expect(createCalls).toBe(0);
+
+    await expect(
+      provider.createCheckoutSession({
+        mode: "payment",
+        provider: createProviderName("stripe"),
+        successUrl: "https://shop.example.test/success",
+        cancelUrl: "https://shop.example.test/cancel",
+        total: { amount: 2_400, currency: createCurrencyCode("USD") },
+        lines: [
+          {
+            sellableId: createSellableId("sellable_1"),
+            contentRef: { collection: "products", id: "print" },
+            title: "Limited print",
+            quantity: 2,
+            unitAmount: 1_200,
+            currency: createCurrencyCode("EUR"),
+            mode: "payment",
+            fulfillmentKind: "external",
+          },
+        ],
+      }),
+    ).rejects.toThrow(/cannot represent the authoritative total amount or currency/i);
     expect(createCalls).toBe(0);
   });
 

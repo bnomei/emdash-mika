@@ -256,6 +256,9 @@ export async function startCheckout(
   }
 
   const providerName = checkoutInput.provider ?? input.defaults?.provider;
+  const resolved = await resolveCheckoutStart(input, ctx, checkoutInput);
+  if (!resolved.ok) return resolved;
+
   const hostQuote = input.quoteResolver
     ? await createCartQuote(input, ctx, {
         ...checkoutInput,
@@ -270,9 +273,6 @@ export async function startCheckout(
     hostQuote,
   );
   if (!delegatedPaymentAuth.ok) return delegatedPaymentAuth;
-
-  const resolved = await resolveCheckoutStart(input, ctx, checkoutInput);
-  if (!resolved.ok) return resolved;
 
   if (hostQuote?.status === "expired") return checkoutExpired();
   if (hostQuote?.status === "unavailable") {

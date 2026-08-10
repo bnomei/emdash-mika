@@ -19958,6 +19958,69 @@ describe("backend API composition", () => {
     });
   });
 
+  it("rejects checkout when the cart changes while a host quote is resolving", async () => {
+    const contentRef = createTestContentRef();
+    const sellable = createSellableDefinition();
+    const repositories = createTestBackendRepositories({
+      stockBySellableId: new Map([
+        [
+          sellable.id,
+          createStockRecord({ sellableId: sellable.id, quantityOnHand: 5, quantityReserved: 0 }),
+        ],
+      ]),
+    });
+    const fake = createFakeMikaProvider();
+    await repositories.catalog.put(
+      createCatalogItemDocument({ contentRef, sellables: [sellable] }),
+    );
+    let signalQuoteEntered!: () => void;
+    const quoteEntered = new Promise<void>((resolve) => {
+      signalQuoteEntered = resolve;
+    });
+    let releaseQuote!: () => void;
+    const quoteReleased = new Promise<void>((resolve) => {
+      releaseQuote = resolve;
+    });
+    const api = createMikaBackendApi(
+      createIncrementingBackendDependencies({
+        repositories,
+        providers: createMikaProviderRegistry([fake.provider]),
+        quoteResolver: async ({ quote }) => {
+          signalQuoteEntered();
+          await quoteReleased;
+          return {
+            ...quote,
+            total: { amount: quote.total.amount + 100, currency: quote.currency },
+          };
+        },
+      }),
+    );
+    const ctx = createTestRequestContext({ customerId: false, userId: false });
+    const cart = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    if (!cart.ok) throw new Error("Expected cart.add to succeed.");
+
+    const checkoutPromise = api.checkout.start(ctx, { cartId: cart.data.id });
+    await quoteEntered;
+
+    const changedCart = await api.cart.add(ctx, { sellableId: sellable.id, quantity: 1 });
+    if (!changedCart.ok) throw new Error("Expected the concurrent cart change to succeed.");
+    expect(changedCart.data.items).toEqual([
+      expect.objectContaining({ sellableId: sellable.id, quantity: 2 }),
+    ]);
+
+    releaseQuote();
+    await expect(checkoutPromise).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "CONFLICT" },
+    });
+    expect(fake.getCalls().createCheckoutSession).toEqual([]);
+    await expect(api.cart.get(ctx)).resolves.toMatchObject({
+      ok: true,
+      data: { items: [{ sellableId: sellable.id, quantity: 2 }] },
+    });
+  });
+
   it("allows delegated checkout with a couponCode authorized by checkout preview", async () => {
     const contentRef = createTestContentRef();
     const sellable = createSellableDefinition();
