@@ -50,7 +50,7 @@ The first public release is acceptable when all of the following are true:
 1. Core state transitions do not silently lose wishlist or cart data under concurrent writes.
 2. Provider projections never invent fulfillment facts or hide actionable semantic errors.
 3. Existing override and hook surfaces are sufficient for a host to supply business-specific behavior without forking Mika.
-4. Every advertised integration boundary has a documented example and an executable test.
+4. Shared extension mechanisms and the highest-risk integration boundaries have documented examples and executable tests.
 5. A packed package installs and type-checks in a clean consumer project.
 6. The demo builds and its integration tests pass against the release candidate package.
 7. The public documentation builds and accurately distinguishes Mika-owned behavior from host-owned glue.
@@ -94,15 +94,18 @@ Mika should not implement every tax, shipping, inventory, or fulfillment service
 
 **Lean solution**
 
+- First build an external-style fixture using only the current public surface and record any fact it cannot express.
 - Treat `MikaApiOverrides` and the existing lifecycle/notification hooks as the primary integration surface.
 - Document how a host overrides quote and checkout operations to provide tax, shipping, fees, availability, and policy decisions.
-- Add only the smallest provider-neutral DTO fields that are genuinely missing for an honest projection, such as explicit fulfillment kind or fulfillment options.
+- Add a provider-neutral DTO field only when the fixture proves a required fact cannot otherwise be represented honestly.
 - Ensure quote proofs bind every value that can affect the charged total.
 - Prefer a typed callback or operation override over a new service abstraction.
 
 **Explicit non-goal**
 
 Do not build a generic catalog ingestion pipeline, tax engine, shipping engine, or rules framework. The demo and docs should show how content is mapped into Mika DTOs; the host owns that mapping.
+
+First-release physical fulfillment support is limited to classifying and projecting facts already supplied by the host. Mika will not calculate rates, collect new address shapes, manage carriers, or track shipments in this checkpoint. Unsupported fulfillment options are omitted.
 
 **Proof**
 
@@ -150,8 +153,8 @@ The built-in fulfillment path can produce synthetic download references and dete
 - Keep Mika storage-neutral and secret-neutral.
 - Document synthetic download references as opaque fulfillment records, not usable URLs.
 - Document license hashes/suffixes as evidence, not raw credentials.
-- Confirm that public hooks or operation overrides can resolve a download and issue/deliver a raw key.
-- Add a minimal typed hook only if the current public surface cannot express one of those actions cleanly.
+- Show one minimal host-owned extension example for resolving a download or issuing/delivering a raw key.
+- Add a typed hook only if that example proves the current public override or notification surface cannot express the integration cleanly.
 - Document replay, expiry, authorization, logging, and secret-redaction expectations.
 
 **Explicit non-goal**
@@ -160,13 +163,14 @@ Do not bundle object storage, URL signing, a license server, or an email deliver
 
 **Proof**
 
-- a fake signed-download resolver exercised through public APIs;
-- a fake one-time license issuer showing that raw material is delivered once and never stored in Mika receipts or logs;
-- tests for unauthorized, expired, replayed, and unavailable delivery attempts.
+- synthetic download references remain opaque and are not URL-shaped;
+- raw license material never appears in Mika DTOs, receipts, or logs;
+- the minimal host-extension example compiles using public exports only;
+- existing Mika-owned token authorization, expiry, and replay behavior remains covered by focused tests.
 
 **Exit condition**
 
-The docs and types make it impossible to mistake Mika's fulfillment evidence for a production asset or secret-delivery system.
+Observable tests prove that Mika exposes only fulfillment evidence, while the docs identify the exact host extension point for production asset or secret delivery.
 
 ### S4 — Add focused contract and lifecycle proof
 
@@ -179,7 +183,7 @@ The foundation is valuable only if alternative host implementations can preserve
 - Keep a small reusable provider-adapter contract helper covering capability declarations, unsupported operations, result normalization, and error mapping.
 - Add a small session-store contract helper covering compare-and-swap and retry behavior.
 - Add model-based or generated sequence tests for the highest-risk lifecycle invariants: completed checkouts stay terminal, stale writes fail, replay is idempotent, and invalid transitions never mutate state.
-- Test every public operation override at least once through the normal dispatcher.
+- Test representative read, mutation, checkout, fulfillment, and replay overrides through the normal dispatcher rather than exhaustively testing every operation.
 
 **Explicit non-goal**
 
@@ -265,7 +269,7 @@ Each page should contain:
 - what the host must implement;
 - the relevant public types and hooks;
 - a minimal example;
-- the test that proves the example's contract.
+- a link to executable proof when the page describes a shared mechanism or high-risk contract.
 
 ### AI-friendly reference material
 
