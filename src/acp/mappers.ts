@@ -298,7 +298,7 @@ export function acpCheckoutLink(link: MikaAcpLink): readonly MikaAcpCheckoutLink
   return [];
 }
 
-function acpAbsoluteUri(value: string, field: string): string {
+export function acpAbsoluteUri(value: string, field: string): string {
   if (!URL.canParse(value)) throw new Error(`ACP ${field} must be an absolute URI.`);
 
   return value;

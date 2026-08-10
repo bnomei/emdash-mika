@@ -124,6 +124,8 @@ export interface MikaAcpSessionRecord {
   readonly sessionId: string;
   readonly cartId?: CartId;
   readonly checkoutId?: CheckoutSessionId;
+  /** Validated public order permalink captured before checkout payment starts. */
+  readonly orderUrl?: string;
   readonly status: MikaAcpCheckoutSessionStatus;
   readonly buyer?: MikaAcpBuyer;
   readonly items: readonly MikaAcpItem[];

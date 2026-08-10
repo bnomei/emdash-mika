@@ -65,6 +65,8 @@ import {
   safeStringEqual,
 } from "./crypto";
 import {
+  acpAbsoluteUri,
+  acpCheckoutLink,
   acpCheckoutSessionFromState,
   acpCheckoutSessionFromSnapshot,
   acpError,
@@ -180,6 +182,12 @@ export function createMikaAcpCheckoutHandlers(
       "createMikaAcpCheckoutHandlers requires an apiKey or signatureSecret; refusing to expose ACP checkout sessions without authentication.",
     );
   }
+  if (typeof options.orderUrl !== "function") {
+    throw new Error(
+      "createMikaAcpCheckoutHandlers requires orderUrl so completed sessions conform to ACP.",
+    );
+  }
+  for (const link of options.seller.links) acpCheckoutLink(link);
   assertAcpAtomicIdempotencyStore(options.store);
 
   return {
@@ -490,6 +498,9 @@ export async function handleAcpComplete(
       );
     }
 
+    // Resolve and validate the permalink before checkout.start can charge or persist provider
+    // state. The validated value is stored on the ACP record so replays cannot drift.
+    const orderUrl = acpAbsoluteUri(options.orderUrl({ sessionId: record.id }), "order URL");
     const proofId = `acp_payment_authorization_${cryptoSafeId()}`;
     const ctx = acpContext(options, request, record.sessionId);
     const checkout = await options.api.checkout.start(
@@ -562,6 +573,7 @@ export async function handleAcpComplete(
       ...record,
       buyer: body.data.buyer ?? record.buyer,
       checkoutId: createCheckoutSessionId(checkout.data.id),
+      orderUrl,
       status: checkout.data.status === "completed" ? "completed" : "ready_for_payment",
       paymentAuthorizationId: proofId,
       quoteInputHash: preview.data.inputHash,
@@ -1009,9 +1021,8 @@ export async function recordToAcpSession(
         ? "canceled"
         : undefined;
   if (status === "completed" && record.quoteSnapshot) {
-    const orderUrl = options.orderUrl?.(
-      omitUndefined({ checkoutId: record.checkoutId, sessionId: record.id }),
-    );
+    const orderUrl =
+      record.orderUrl ?? acpAbsoluteUri(options.orderUrl({ sessionId: record.id }), "order URL");
 
     return acpCheckoutSessionFromSnapshot(
       omitUndefined({
@@ -1025,9 +1036,10 @@ export async function recordToAcpSession(
     );
   }
 
-  const orderUrl = options.orderUrl?.(
-    omitUndefined({ checkoutId: record.checkoutId, sessionId: record.id }),
-  );
+  const orderUrl =
+    status === "completed"
+      ? (record.orderUrl ?? acpAbsoluteUri(options.orderUrl({ sessionId: record.id }), "order URL"))
+      : undefined;
 
   return acpCheckoutSessionFromState(
     omitUndefined({

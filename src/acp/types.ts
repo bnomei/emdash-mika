@@ -14,7 +14,7 @@ import type {
   MikaAcpSessionStore,
   MikaAcpTotal,
 } from "../api/acp-session";
-import type { MikaId, ProviderName } from "../types/primitives";
+import type { ProviderName } from "../types/primitives";
 
 /** ACP session-store contracts and embedded wire types (defined in ../api/acp-session). */
 export type {
@@ -196,10 +196,11 @@ export interface CreateMikaAcpCheckoutHandlersOptions {
   readonly idempotencyClaimTtlMs?: number;
   /** Generator for ACP checkout session ids; defaults to a crypto-safe id. */
   readonly createSessionId?: () => string;
-  readonly orderUrl?: (input: {
-    readonly checkoutId?: MikaId;
-    readonly sessionId: string;
-  }) => string;
+  /**
+   * Stable public permalink for the completed order. The resolver must be deterministic from the
+   * ACP session id so Mika can validate and persist it before starting payment.
+   */
+  readonly orderUrl: (input: { readonly sessionId: string }) => string;
   /**
    * Observer for errors the handlers swallow (unhandled throws mapped to generic 500s,
    * best-effort lease releases). Without it those failures are invisible to operators.

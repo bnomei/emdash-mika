@@ -8,7 +8,7 @@ import { optionalProperty } from "../src/internal/object";
 import { fulfillmentOptions } from "../src/acp/mappers";
 import {
   createMemoryMikaAcpSessionStore,
-  createMikaAcpCheckoutHandlers,
+  createMikaAcpCheckoutHandlers as createMikaAcpCheckoutHandlersBase,
   createMikaAcpFileUploadRows,
   createMikaAcpProductFeed,
   serializeMikaAcpFileUploadRows,
@@ -17,6 +17,7 @@ import {
   type MikaAcpSessionStore,
   type MikaAcpSessionRecord,
   type MikaAcpSeller,
+  type CreateMikaAcpCheckoutHandlersOptions,
 } from "../src/acp";
 import type { MikaRequestContext } from "../src/api/context";
 import type { MikaApi } from "../src/api/server";
@@ -55,6 +56,19 @@ import {
   expectNonFulfillingProviderEvent,
   expectPaidProviderPaymentEvent,
 } from "./helpers/provider-contract";
+
+type TestAcpCheckoutHandlerOptions = Omit<CreateMikaAcpCheckoutHandlersOptions, "orderUrl"> & {
+  readonly orderUrl?: CreateMikaAcpCheckoutHandlersOptions["orderUrl"];
+};
+
+function createMikaAcpCheckoutHandlers(options: TestAcpCheckoutHandlerOptions) {
+  const {
+    orderUrl = ({ sessionId }) => `https://shop.example.test/account/orders/${sessionId}`,
+    ...rest
+  } = options;
+
+  return createMikaAcpCheckoutHandlersBase({ ...rest, orderUrl });
+}
 
 describe("Mika ACP projection", () => {
   it("advertises digital fulfillment only when every quoted line proves it", () => {
@@ -302,7 +316,7 @@ describe("Mika ACP projection", () => {
       provider: createProviderName("stripe"),
       now: () => new Date("2026-01-01T00:00:00.000Z"),
       createSessionId: () => "checkout_session_acp_1",
-      orderUrl: ({ checkoutId }) => `https://shop.example.test/account/orders/${checkoutId}`,
+      orderUrl: ({ sessionId }) => `https://shop.example.test/account/orders/${sessionId}`,
     });
 
     const created = await handlers.create(
@@ -338,7 +352,7 @@ describe("Mika ACP projection", () => {
       status: "completed",
       order: {
         checkout_session_id: "checkout_session_acp_1",
-        permalink_url: "https://shop.example.test/account/orders/checkout_1",
+        permalink_url: "https://shop.example.test/account/orders/checkout_session_acp_1",
       },
     });
     expect(checkoutPreviewInput).toMatchObject({
@@ -939,7 +953,7 @@ describe("Mika ACP projection", () => {
     expect(checkoutStartCount).toBe(1);
   });
 
-  it("refuses to build ACP handlers without an apiKey or signatureSecret", () => {
+  it("refuses to build ACP handlers without authentication, an order URL, or valid seller links", () => {
     let cart = createCart([]);
     const baseOptions = {
       api: createAcpTestApi({
@@ -957,11 +971,72 @@ describe("Mika ACP projection", () => {
       "requires an apiKey or signatureSecret",
     );
     expect(() =>
+      createMikaAcpCheckoutHandlersBase({
+        ...baseOptions,
+        apiKey: "acp_test_key",
+      } as unknown as CreateMikaAcpCheckoutHandlersOptions),
+    ).toThrow("requires orderUrl");
+    expect(() =>
+      createMikaAcpCheckoutHandlers({
+        ...baseOptions,
+        seller: {
+          name: "Mika Studio",
+          links: [{ type: "privacy_policy", url: "not a uri" }],
+        },
+        apiKey: "acp_test_key",
+      }),
+    ).toThrow("ACP seller link must be an absolute URI");
+    expect(() =>
       createMikaAcpCheckoutHandlers({ ...baseOptions, apiKey: "acp_test_key" }),
     ).not.toThrow();
     expect(() =>
       createMikaAcpCheckoutHandlers({ ...baseOptions, signatureSecret: "shh" }),
     ).not.toThrow();
+  });
+
+  it("rejects an invalid dynamic order URL before starting checkout", async () => {
+    let cart = createCart([]);
+    let checkoutStartCount = 0;
+    const store = createMemoryMikaAcpSessionStore();
+    const handlers = createMikaAcpCheckoutHandlers({
+      api: createAcpTestApi({
+        getCart: () => cart,
+        setCart: (next) => {
+          cart = next;
+        },
+        onCheckoutStart: () => {
+          checkoutStartCount += 1;
+        },
+      }),
+      store,
+      seller: { name: "Mika Studio", links: [] },
+      apiKey: "acp_test_key",
+      provider: createProviderName("stripe"),
+      createSessionId: () => "checkout_session_invalid_order_url",
+      orderUrl: () => "not a uri",
+    });
+
+    const created = await handlers.create(
+      acpRequest("https://shop.example.test/checkout_sessions", "idem_invalid_order_create", {
+        items: [{ id: "sellable_1:price_1", quantity: 1 }],
+      }),
+    );
+    expect(created.status).toBe(201);
+
+    const completed = await handlers.complete(
+      acpRequest(
+        "https://shop.example.test/checkout_sessions/checkout_session_invalid_order_url/complete",
+        "idem_invalid_order_complete",
+        { payment_data: { provider: "stripe", token: "spt_test_123" } },
+      ),
+      "checkout_session_invalid_order_url",
+    );
+
+    expect(completed.status).toBe(500);
+    expect(checkoutStartCount).toBe(0);
+    const persisted = await store.get("checkout_session_invalid_order_url");
+    expect(persisted).toMatchObject({ status: "ready_for_payment" });
+    expect(persisted).not.toHaveProperty("checkoutId");
   });
 
   it("refuses to build ACP handlers with a non-atomic idempotency store", () => {
