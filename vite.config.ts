@@ -14,6 +14,12 @@ const generatedPatterns = [
 ];
 
 export default defineConfig({
+  pack: {
+    deps: {
+      // Astro's slash subpaths and virtual colon modules must both remain host-provided.
+      neverBundle: [/^astro(?::|\/)/, "react", "stripe"],
+    },
+  },
   fmt: {
     ignorePatterns: generatedPatterns,
   },

@@ -8,6 +8,8 @@ All notable changes to Mika are documented in this file.
 
 - Eliminated all checker warnings without suppressing rules, including correct callback receiver
   binding and awaited session writes.
+- Declared Astro's virtual Actions module as external so package builds no longer report it as an
+  unresolved import.
 - Strengthened the bidirectional operation/action drift guards and the schema/type-export
   compile-time contracts.
 

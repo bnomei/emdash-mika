@@ -121,7 +121,7 @@
   },
   "scripts": {
     "build": "npm run build:pack -- --clean",
-    "build:pack": "vp pack src/index.ts src/acp.ts src/agent.ts src/admin.ts src/astro.ts src/astro-actions.ts src/api/client.ts src/email.ts src/provider.ts src/react.ts src/server.ts src/server/ports.ts src/server/maintenance.ts src/server/email.ts src/stripe.ts src/types/index.ts src/types/primitives-entry.ts src/types/aggregates.ts src/types/documents.ts src/types/operational.ts --format esm --dts --tsconfig tsconfig.json --deps.never-bundle astro/zod --deps.never-bundle react --deps.never-bundle stripe",
+    "build:pack": "vp pack src/index.ts src/acp.ts src/agent.ts src/admin.ts src/astro.ts src/astro-actions.ts src/api/client.ts src/email.ts src/provider.ts src/react.ts src/server.ts src/server/ports.ts src/server/maintenance.ts src/server/email.ts src/stripe.ts src/types/index.ts src/types/primitives-entry.ts src/types/aggregates.ts src/types/documents.ts src/types/operational.ts --format esm --dts --tsconfig tsconfig.json",
     "precheck": "npm run build",
     "check": "vp check .",
     "pack:check": "npm run build:pack -- --clean --publint",
