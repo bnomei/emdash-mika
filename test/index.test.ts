@@ -2633,6 +2633,93 @@ describe("Mika client", () => {
     });
   });
 
+  it("dispatches checkout and webhook replay overrides with normalized idempotency context", async () => {
+    const calls: Array<{
+      readonly operation: string;
+      readonly context?: unknown;
+      readonly input: unknown;
+    }> = [];
+    const routes = createMikaPluginRoutes(
+      createMikaApi({
+        checkout: {
+          start: async (ctx, input) => {
+            calls.push({ operation: "checkout.start", context: ctx, input });
+            return {
+              ok: true,
+              status: 200,
+              data: {
+                id: createCheckoutSessionId("checkout_override_1"),
+                status: "redirected",
+                mode: "payment",
+                provider: createProviderName("stripe"),
+                redirectUrl: "https://checkout.example.test/override",
+              },
+            };
+          },
+        },
+        admin: {
+          webhookReplay: async (input) => {
+            calls.push({ operation: "admin.webhookReplay", input });
+            return {
+              ok: true,
+              status: 200,
+              data: {
+                id: input.webhookId,
+                status: "completed",
+                affected: { webhooks: 1 },
+              },
+            };
+          },
+        },
+      } satisfies MikaApiOverrides),
+    );
+
+    await expect(
+      routes[mikaPluginRoutes.checkout].handler({
+        input: { cartId: " cart_1 ", provider: " stripe ", returnTo: " /account/orders " },
+        request: new Request("https://shop.test/_emdash/api/plugins/mika/checkout", {
+          method: "POST",
+          headers: { [MIKA_AGENT_IDEMPOTENCY_KEY_HEADER]: "checkout_override_idem_1" },
+        }),
+        sessionId: "session_override_1",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: { id: "checkout_override_1", status: "redirected" },
+    });
+    await expect(
+      routes[mikaPluginRoutes.adminWebhookReplay].handler({
+        input: { webhookId: " webhook_1 " },
+        request: new Request("https://shop.test/_emdash/api/plugins/mika/admin/webhooks/replay", {
+          method: "POST",
+          headers: { [MIKA_AGENT_IDEMPOTENCY_KEY_HEADER]: "webhook_replay_idem_1" },
+        }),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: { id: "webhook_1", status: "completed", affected: { webhooks: 1 } },
+    });
+
+    expect(calls).toMatchObject([
+      {
+        operation: "checkout.start",
+        context: { sessionId: "session_override_1", idempotencyKey: "checkout_override_idem_1" },
+        input: {
+          cartId: createCartId("cart_1"),
+          provider: createProviderName("stripe"),
+          returnTo: "/account/orders",
+        },
+      },
+      {
+        operation: "admin.webhookReplay",
+        input: {
+          webhookId: createMikaId("webhook_1"),
+          idempotencyKey: "webhook_replay_idem_1",
+        },
+      },
+    ]);
+  });
+
   it("allows JSON route operations by default when no policy is configured", async () => {
     let called = false;
     const routes = createMikaPluginRoutes(
