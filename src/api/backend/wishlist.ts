@@ -5,6 +5,7 @@
  */
 import { omitUndefined } from "../../internal/object";
 import { createWishlistAggregate } from "../../model/builders";
+import { nextWishlistVersion } from "../../model/wishlist-version";
 import type { CartLine, WishlistItem } from "../../types/aggregates";
 import type { WishlistDocument } from "../../types/documents";
 import { createISODateTime } from "../../types/primitives";
@@ -26,12 +27,15 @@ import {
   callerOwnsMergeSource,
   cartDocumentToDTO,
   findOpenCart,
+  isEquivalentCartLine,
   isEquivalentWishlistItem,
   resolveWishlistItem,
   updateCartDocument,
   wishlistDocumentToDTO,
 } from "./quote";
 import { defaultBackendCurrency } from "./shared";
+
+const WISHLIST_MOVE_IDS_METADATA_KEY = "mikaWishlistMoveIds";
 
 export function createWishlistBackend(
   input: MikaCartWishlistBackendInput & Pick<CreateMikaBackendApiInput, "overrides">,
@@ -55,9 +59,14 @@ export function createWishlistBackend(
         : [...document.aggregate.items, resolved.item];
       const updated = updateWishlistDocument(document, items, ctx.now);
 
-      await input.repositories.session.put(updated);
+      const persisted = await putWishlistOrConflict(input, updated, document.version);
+      if (!persisted.ok) return persisted;
 
-      return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, updated) };
+      return {
+        ok: true,
+        status: 200,
+        data: await wishlistDocumentToDTO(input, persisted.wishlist),
+      };
     },
     remove: async (ctx, itemInput) => {
       const document = await findOrCreateActiveWishlist(input, ctx);
@@ -71,9 +80,14 @@ export function createWishlistBackend(
         ctx.now,
       );
 
-      await input.repositories.session.put(updated);
+      const persisted = await putWishlistOrConflict(input, updated, document.version);
+      if (!persisted.ok) return persisted;
 
-      return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, updated) };
+      return {
+        ok: true,
+        status: 200,
+        data: await wishlistDocumentToDTO(input, persisted.wishlist),
+      };
     },
     moveToCart: async (ctx, itemInput) => {
       const quantity = itemInput.quantity ?? 1;
@@ -106,22 +120,50 @@ export function createWishlistBackend(
         item: item.item,
         quantity,
         addedAt: ctx.now,
-        metadata: item.metadata,
+        metadata: {
+          ...item.metadata,
+          [WISHLIST_MOVE_IDS_METADATA_KEY]: Array.of<string>(item.id),
+        },
       });
-      const itemsResult = await mergeCartLine(input, cart.aggregate.items, line);
+      const alreadyMoved = cart.aggregate.items.some((candidate) =>
+        wishlistMoveIds(candidate).includes(item.id),
+      );
+      const itemsResult = alreadyMoved
+        ? { ok: true as const, items: cart.aggregate.items }
+        : await mergeCartLine(input, cart.aggregate.items, line);
       if (!itemsResult.ok) return itemsResult;
 
-      const updatedCart = updateCartDocument(cart, itemsResult.items, ctx.now);
+      const cartItems = alreadyMoved
+        ? itemsResult.items
+        : markWishlistMove(itemsResult.items, line, item.id);
+      const updatedCart = updateCartDocument(cart, cartItems, ctx.now);
       const updatedWishlist = updateWishlistDocument(
         document,
         document.aggregate.items.filter((candidate) => candidate.id !== item.id),
         ctx.now,
       );
 
-      await input.repositories.session.put(updatedCart);
-      await input.repositories.session.put(updatedWishlist);
+      let persistedCart = cart;
+      if (!alreadyMoved) {
+        if (existingCart) {
+          const cartResult = await input.repositories.session.putCartIfUnchanged(
+            updatedCart,
+            cart.version,
+          );
+          if (!cartResult) return cartChanged(cart.id);
+          persistedCart = cartResult;
+        } else {
+          await input.repositories.session.put(updatedCart);
+          persistedCart = updatedCart;
+        }
+      }
 
-      return { ok: true, status: 200, data: await cartDocumentToDTO(input, updatedCart) };
+      // Cart first is deliberate: if the wishlist CAS loses a race, the item exists in both
+      // places rather than neither. The move marker prevents a retry from adding quantity twice.
+      const wishlistResult = await putWishlistOrConflict(input, updatedWishlist, document.version);
+      if (!wishlistResult.ok) return wishlistResult;
+
+      return { ok: true, status: 200, data: await cartDocumentToDTO(input, persistedCart) };
     },
     saveForLater: async (ctx, itemInput) => {
       const cart = await findOrCreateOpenCart(input, ctx);
@@ -147,10 +189,21 @@ export function createWishlistBackend(
         ctx.now,
       );
 
-      await input.repositories.session.put(updatedWishlist);
-      await input.repositories.session.put(updatedCart);
+      // Wishlist first is deliberate: a cart CAS conflict leaves the item visible in both places,
+      // and mergeWishlistItems makes a retry idempotent instead of creating duplicate entries.
+      const wishlistResult = await putWishlistOrConflict(input, updatedWishlist, document.version);
+      if (!wishlistResult.ok) return wishlistResult;
+      const cartResult = await input.repositories.session.putCartIfUnchanged(
+        updatedCart,
+        cart.version,
+      );
+      if (!cartResult) return cartChanged(cart.id);
 
-      return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, updatedWishlist) };
+      return {
+        ok: true,
+        status: 200,
+        data: await wishlistDocumentToDTO(input, wishlistResult.wishlist),
+      };
     },
     merge: async (ctx, mergeInput) => {
       const targetResult = mergeInput.targetWishlistId
@@ -189,12 +242,23 @@ export function createWishlistBackend(
         ...source,
         status: "merged",
         updatedAt: ctx.now,
+        version: nextWishlistVersion(source.version),
       };
 
-      await input.repositories.session.put(updated);
-      await input.repositories.session.put(mergedSource);
+      const targetPersisted = await putWishlistOrConflict(
+        input,
+        updated,
+        targetResult.wishlist.version,
+      );
+      if (!targetPersisted.ok) return targetPersisted;
+      const sourcePersisted = await putWishlistOrConflict(input, mergedSource, source.version);
+      if (!sourcePersisted.ok) return sourcePersisted;
 
-      return { ok: true, status: 200, data: await wishlistDocumentToDTO(input, updated) };
+      return {
+        ok: true,
+        status: 200,
+        data: await wishlistDocumentToDTO(input, targetPersisted.wishlist),
+      };
     },
   } satisfies MikaApi["wishlist"];
 
@@ -269,6 +333,7 @@ function createWishlistDocument(
           new Date(new Date(now).getTime() + input.config.wishlist.ttlMs).toISOString(),
         )
       : undefined,
+    version: 1,
     aggregate: createWishlistAggregate(),
     createdAt: now,
     updatedAt: now,
@@ -283,10 +348,82 @@ function updateWishlistDocument(
   return {
     ...wishlist,
     updatedAt,
+    version: nextWishlistVersion(wishlist.version),
     aggregate: createWishlistAggregate(
       omitUndefined({ items, metadata: wishlist.aggregate.metadata }),
     ),
   };
+}
+
+async function putWishlistOrConflict(
+  input: MikaCartWishlistBackendInput,
+  wishlist: WishlistDocument,
+  expectedVersion: number | undefined,
+): Promise<{ readonly ok: true; readonly wishlist: WishlistDocument } | MikaApiFailure> {
+  const persisted = await input.repositories.session.putWishlistIfUnchanged(
+    wishlist,
+    expectedVersion,
+  );
+  if (!persisted) {
+    return apiWishlistChanged(wishlist.id);
+  }
+
+  return { ok: true, wishlist: persisted };
+}
+
+function apiWishlistChanged(wishlistId: MikaId): MikaApiFailure {
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "CONFLICT",
+      message: `Wishlist '${wishlistId}' was changed by another request.`,
+      fieldErrors: {
+        wishlistId: "Wishlist was changed by another request. Reload it and try again.",
+      },
+    },
+  };
+}
+
+function cartChanged(cartId: MikaId): MikaApiFailure {
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "CONFLICT",
+      message: `Cart '${cartId}' was changed by another request.`,
+      fieldErrors: {
+        cartId: "Cart was changed by another request. Reload it and try again.",
+      },
+    },
+  };
+}
+
+function wishlistMoveIds(line: CartLine): readonly string[] {
+  const value = line.metadata?.[WISHLIST_MOVE_IDS_METADATA_KEY];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function markWishlistMove(
+  items: readonly CartLine[],
+  movedLine: CartLine,
+  wishlistItemId: MikaId,
+): readonly CartLine[] {
+  return items.map((line) => {
+    if (!isEquivalentCartLine(line, movedLine)) return line;
+    const moveIds = wishlistMoveIds(line);
+    if (moveIds.includes(wishlistItemId)) return line;
+
+    return {
+      ...line,
+      metadata: {
+        ...line.metadata,
+        [WISHLIST_MOVE_IDS_METADATA_KEY]: [...moveIds, wishlistItemId],
+      },
+    };
+  });
 }
 
 function mergeWishlistItems(

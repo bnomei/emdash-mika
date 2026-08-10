@@ -237,6 +237,21 @@ export class SessionRepository {
     });
   }
 
+  async putWishlistIfUnchanged(
+    wishlist: WishlistDocument,
+    expectedVersion: number | undefined,
+  ): Promise<WishlistDocument | null> {
+    const updated = await this.documents.update(wishlist.id, (current) => {
+      const existing = documentOfType(current, "wishlist");
+      if (!existing || existing.status !== "active") return null;
+      if (existing.version !== undefined && existing.version !== expectedVersion) return null;
+
+      return wishlist;
+    });
+
+    return documentOfType(updated, "wishlist");
+  }
+
   async findCheckoutByProvider(
     provider: string,
     providerCheckoutId: string,

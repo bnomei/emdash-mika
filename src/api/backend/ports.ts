@@ -151,6 +151,15 @@ export interface MikaSessionRepositoryPort {
   ): Promise<CartDocument | null>;
   findWishlistBySession(sessionId: string): Promise<WishlistDocument | null>;
   findWishlistByCustomer(customerId: MikaId): Promise<WishlistDocument | null>;
+  /**
+   * Optimistic-concurrency wishlist write. Persists `wishlist` only when the stored active
+   * wishlist still has `expectedVersion`, returning null after a concurrent mutation. A missing
+   * stored version is accepted for documents created before wishlist versioning was introduced.
+   */
+  putWishlistIfUnchanged(
+    wishlist: WishlistDocument,
+    expectedVersion: number | undefined,
+  ): Promise<WishlistDocument | null>;
   findCheckoutByProvider(
     provider: string,
     providerCheckoutId: string,

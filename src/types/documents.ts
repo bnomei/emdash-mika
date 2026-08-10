@@ -132,6 +132,8 @@ export type WishlistDocument = AggregateDocument<
     readonly userId?: string;
     readonly status: WishlistStatus;
     readonly expiresAt?: ISODateTime;
+    /** Monotonically incremented on every optimistic-concurrency write. */
+    readonly version: number;
   },
   WishlistAggregate
 >;
