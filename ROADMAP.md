@@ -20,7 +20,7 @@ This distinction is the release filter for every item below. We should add a fea
 
 Mika already has the shape of a shippable foundation:
 
-- a semantic commerce API with 47 registered operations;
+- a semantic commerce API with a broad operation catalog;
 - provider-neutral DTOs and lifecycle rules;
 - host-owned authentication, policy, storage, and side effects;
 - Stripe and Agentic Commerce Protocol (ACP) projections;
@@ -47,15 +47,29 @@ The demo proves that a complete application can be built on Mika. It does not ne
 
 The first public release is acceptable when all of the following are true:
 
-1. Core state transitions do not silently lose wishlist or cart data under concurrent writes.
-2. Provider projections never invent fulfillment facts or hide actionable semantic errors.
-3. Existing override and hook surfaces are sufficient for a host to supply business-specific behavior without forking Mika.
-4. Shared extension mechanisms and the highest-risk integration boundaries have documented examples and executable tests.
-5. A packed package installs and type-checks in a clean consumer project.
-6. The demo builds and its integration tests pass against the release candidate package.
-7. The public documentation builds and accurately distinguishes Mika-owned behavior from host-owned glue.
+1. The packed package installs, imports, type-checks, and passes a minimal runtime smoke test in a clean consumer.
+2. Focused tests protect the risky invariants Mika owns: concurrent writes, terminal lifecycle states, replay, quote integrity, and truthful provider projection.
+3. A host can supply catalog mapping, business quoting, persistence, payment, and fulfillment behavior through public exports; representative examples compile without internal imports.
+4. Every protocol Mika advertises passes representative conformance tests against a pinned version.
+5. The demo builds and tests against the release candidate, and the public documentation builds with Mika-owned and host-owned responsibilities stated accurately.
 
 Anything beyond these criteria is post-ship unless it fixes a demonstrated correctness or security problem.
+
+### Release decision rule
+
+Each required checkpoint should end with the smallest combination of public contract, documentation, and executable proof that makes the boundary dependable. Add production code only when a representative host integration cannot express a required fact safely through the current public surface.
+
+Existing proof counts. Before adding code or tests, identify which exit-condition claim is not already covered by the package suite, the demo, or the docs. A checkpoint may close with documentation and release wiring when the underlying contract is already proven.
+
+The following are not release blockers by themselves:
+
+- eliminating ordinary project-specific glue;
+- publishing a generic adapter, ingestion, rules, or test framework;
+- providing a second implementation of a host-owned concern;
+- supporting every protocol flow or commerce model;
+- adding broad browser, provider, database, or peer-version matrices.
+
+AI can produce much of the application glue, but Mika must make the inputs, outputs, invariants, and security boundaries of that glue unambiguous.
 
 ---
 
@@ -134,13 +148,13 @@ ACP is a public projection of Mika's semantic state. It must not advertise digit
 
 **Proof**
 
-- validate representative cart, checkout, completion, and error payloads against the official pinned schemas;
+- validate `CheckoutSessionCreateRequest`, `CheckoutSessionUpdateRequest`, `CheckoutSessionCompleteRequest`, `CheckoutSession`, `CheckoutSessionWithOrder`, and `Error` against the official pinned schemas;
 - add physical, digital, mixed, empty, unavailable, and invalid-input fixtures;
 - retain snapshot tests only where they add readable protocol review value.
 
 **Exit condition**
 
-All advertised ACP flows pass schema validation and no fixture contains a fulfillment claim that was not present in semantic state.
+The named first-release schema set passes validation, and no fixture contains a fulfillment claim that was not present in semantic state. Additional ACP flows are post-ship work until Mika advertises them.
 
 ### S3 — Define the digital-delivery boundary precisely
 
@@ -180,18 +194,18 @@ The foundation is valuable only if alternative host implementations can preserve
 
 **Lean solution**
 
-- Keep a small reusable provider-adapter contract helper covering capability declarations, unsupported operations, result normalization, and error mapping.
-- Add a small session-store contract helper covering compare-and-swap and retry behavior.
-- Add model-based or generated sequence tests for the highest-risk lifecycle invariants: completed checkouts stay terminal, stale writes fail, replay is idempotent, and invalid transitions never mutate state.
+- Keep contract helpers internal to the test suite unless a real third-party adapter needs a published harness.
+- Use table-driven sequences for the highest-risk lifecycle invariants: completed checkouts stay terminal, stale writes fail, replay is idempotent, and invalid transitions never mutate state.
+- Exercise one representative provider adapter and one reference session store through public contracts.
 - Test representative read, mutation, checkout, fulfillment, and replay overrides through the normal dispatcher rather than exhaustively testing every operation.
 
 **Explicit non-goal**
 
-Do not publish a large adapter SDK, certify multiple databases, or pursue blanket mutation/property testing before release.
+Do not publish an adapter test SDK, certify multiple databases, introduce a model-testing framework, or pursue blanket mutation/property testing before release.
 
 **Exit condition**
 
-The reference implementations pass the same public contracts that a third-party implementation would need to satisfy.
+Focused tests protect the public invariants a third-party implementation must preserve without adding a new package surface.
 
 ### S5 — Prove the release artifact, docs, and demo together
 
@@ -204,10 +218,10 @@ Source-tree tests do not prove that exports, declaration files, peer dependencie
 - Pack the package exactly as it will be published.
 - Install that tarball into a clean temporary consumer.
 - Import each documented public entry point and run type-check plus a minimal runtime smoke test.
-- Test one supported peer-dependency combination before release; expand the matrix only when compatibility problems justify it.
-- Run the existing `emdash-mika-template` build and integration tests against the release candidate tarball or published version.
-- Build `emdash-mika-docs` and validate its code snippets or source anchors.
-- Remove local-path package dependencies from release-facing proof.
+- Commit one locked release-consumer lane using Node 22.13.0, npm 11.16.0, Astro 7.0.0, and EmDash 0.22.0. Install the exact optional peers required by the imported subpaths: Kumo 2.5.2, Phosphor Icons React 2.1.10, React 19.2.7, and React DOM 19.2.7. Expand this lane only when compatibility problems justify it.
+- Temporarily install the release candidate tarball into `emdash-mika-template`, set `EMDASH_MIKA_TEMPLATE_SKIP_LOCAL_BUILD=1`, assert that Node resolves Mika from the installed candidate, then run the template's existing type-check, test, and build scripts. The template may keep its local-path dependency for day-to-day development.
+- Run the existing `emdash-mika-docs` build. Keep compile-checked integration examples in this package's test fixtures instead of building a new documentation snippet runner for the first release.
+- Ensure no release-facing proof succeeds only because it resolves Mika source through a local path.
 
 **Proof gate**
 
@@ -221,7 +235,7 @@ npm pack -> clean consumer type/runtime smoke
         |
         +-> demo build + integration tests
         |
-        +-> public docs build + link/snippet checks
+        +-> public docs build
         |
         +-> ACP schema conformance
 ```
@@ -234,7 +248,7 @@ CI can prove that the exact artifact intended for publication supports the docum
 
 ## Documentation required for ship
 
-The public docs should optimize for a developer—or an AI working with that developer—who needs to assemble a project-specific integration.
+The public docs should optimize for a developer—or an AI working with that developer—who needs to assemble a project-specific integration. This is a minimum content set, not a required one-page-per-topic structure.
 
 ### Foundation guide
 
@@ -249,9 +263,9 @@ Explain, in one short path:
 7. expose the semantic API or an ACP projection;
 8. verify the integration with Mika's contract tests.
 
-### Boundary pages
+### Boundary reference
 
-Maintain explicit pages for:
+Cover these boundaries in dedicated pages or clearly named sections:
 
 - authentication and authorization;
 - persistence and concurrency;
@@ -263,17 +277,17 @@ Maintain explicit pages for:
 - ACP support and versioning;
 - data retention, logging, and secret handling.
 
-Each page should contain:
+For each boundary, state:
 
 - what Mika guarantees;
 - what the host must implement;
 - the relevant public types and hooks;
-- a minimal example;
-- a link to executable proof when the page describes a shared mechanism or high-risk contract.
+- the smallest useful example or a link to the relevant demo implementation;
+- a link to executable proof when the boundary is shared or high risk.
 
 ### AI-friendly reference material
 
-Favor small, compilable examples and stable type names over long framework-specific tutorials. If useful, publish an `llms.txt` or equivalent index pointing to canonical concepts, API references, and examples. Generated glue remains the consumer's responsibility; Mika's docs make that glue easier to generate correctly.
+Favor small, compilable examples and stable type names over long framework-specific tutorials. The demo is the end-to-end reference; the docs should not duplicate it as a second starter. An `llms.txt` or equivalent index is useful but not a first-release blocker. Generated glue remains the consumer's responsibility; Mika's docs make that glue easier to generate correctly.
 
 ---
 
@@ -318,7 +332,7 @@ Promote an item from this backlog only when it is required by a supported protoc
 2. **S1:** prove the public override surface can carry host-owned quote and fulfillment facts.
 3. **S2:** make ACP faithfully project those facts and pass pinned schema checks.
 4. **S3:** lock down and document the digital-delivery boundary.
-5. **S4:** extract only the focused contract/model tests needed to protect those guarantees.
+5. **S4:** add only the focused table-driven contract tests needed to protect those guarantees.
 6. **S5:** run the package → consumer → demo/docs/protocol release gate.
 
 S1 and the documentation work can proceed alongside S0. S2 depends on the final semantic facts from S1. S5 becomes the final release gate after the preceding contracts stabilize.
