@@ -519,6 +519,24 @@ async function createCartWithFirstLine(
   }
 
   try {
+    // The initial lookup happened before this lock was acquired. A previous holder may have
+    // created the cart and released the lock while this request was waiting, so re-read before
+    // creating or a stale first-add can still produce a second, invisible open cart.
+    const winner = await findOpenCart(input, ctx, currency);
+    if (winner) {
+      const writeBlocked = cartWriteBlocked(winner);
+      if (writeBlocked) return writeBlocked;
+
+      const merged = mergeCartAddLine(winner.aggregate.items, line, resolved);
+      if (!merged.ok) return merged;
+
+      const updated = updateCartDocument(winner, merged.items, ctx.now);
+      const persisted = await putCartOrConflict(input, updated, winner.version);
+      if (!persisted.ok) return persisted;
+
+      return { ok: true, status: 200, data: await cartDocumentToDTO(input, persisted.cart) };
+    }
+
     const document = updateCartDocument(createCartDocument(input, ctx, currency), [line], ctx.now);
     await input.repositories.session.put(document);
 

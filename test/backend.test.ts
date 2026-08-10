@@ -15777,8 +15777,18 @@ describe("backend API composition", () => {
       api.cart.add(ctx, { sellableId: sellableB.id, quantity: 1 }),
     ]);
 
-    expect(resultA).toMatchObject({ ok: true });
-    expect(resultB).toMatchObject({ ok: true });
+    expect(resultA.ok || resultA.error.code === "CONFLICT").toBe(true);
+    expect(resultB.ok || resultB.error.code === "CONFLICT").toBe(true);
+    if (!resultA.ok) {
+      await expect(
+        api.cart.add(ctx, { sellableId: sellableA.id, quantity: 1 }),
+      ).resolves.toMatchObject({ ok: true });
+    }
+    if (!resultB.ok) {
+      await expect(
+        api.cart.add(ctx, { sellableId: sellableB.id, quantity: 1 }),
+      ).resolves.toMatchObject({ ok: true });
+    }
 
     const cart = await api.cart.get(ctx);
     if (!cart.ok) throw new Error("Expected cart.get to succeed.");
@@ -21023,18 +21033,41 @@ describe("backend API composition", () => {
     const wishlistItemId = wishlist.data.items[0]!.id;
 
     let lockAttempts = 0;
-    let releaseFirstAttempt!: () => void;
-    const bothAttempted = new Promise<void>((resolve) => {
-      releaseFirstAttempt = resolve;
+    let markFirstAttempted!: () => void;
+    const firstAttempted = new Promise<void>((resolve) => {
+      markFirstAttempted = resolve;
     });
+    let markSecondAttempted!: () => void;
+    const secondAttempted = new Promise<void>((resolve) => {
+      markSecondAttempted = resolve;
+    });
+    let markFirstReleased!: () => void;
+    const firstReleased = new Promise<void>((resolve) => {
+      markFirstReleased = resolve;
+    });
+    const attemptedLockKeys: string[] = [];
     const gatedEphemeral = new Proxy(baseRepositories.ephemeral, {
       get(target, property, receiver) {
         if (property === "tryAcquireLock") {
           return async (input: Parameters<MikaEphemeralRepositoryPort["tryAcquireLock"]>[0]) => {
-            const result = await target.tryAcquireLock(input);
+            attemptedLockKeys.push(input.key);
             lockAttempts += 1;
-            if (lockAttempts === 2) releaseFirstAttempt();
-            if (result) await bothAttempted;
+            if (lockAttempts === 1) {
+              const result = await target.tryAcquireLock(input);
+              markFirstAttempted();
+              await secondAttempted;
+              return result;
+            }
+
+            markSecondAttempted();
+            await firstReleased;
+            return target.tryAcquireLock(input);
+          };
+        }
+        if (property === "releaseLock") {
+          return async (input: Parameters<MikaEphemeralRepositoryPort["releaseLock"]>[0]) => {
+            const result = await target.releaseLock(input);
+            markFirstReleased();
             return result;
           };
         }
@@ -21062,26 +21095,14 @@ describe("backend API composition", () => {
     } satisfies MikaBackendRepositories;
     const api = createMikaBackendApi(createIncrementingBackendDependencies({ repositories }));
 
-    const [moveResult, addResult] = await Promise.all([
-      api.wishlist.moveToCart(ctx, { itemId: wishlistItemId }),
-      api.cart.add(ctx, { sellableId: cartSellable.id }),
-    ]);
-    expect(moveResult.ok || moveResult.error.code === "CONFLICT").toBe(true);
-    expect(addResult.ok || addResult.error.code === "CONFLICT").toBe(true);
-    expect(new Set(createdCartIds).size).toBe(1);
-
-    if (!moveResult.ok) {
-      await expect(api.wishlist.moveToCart(ctx, { itemId: wishlistItemId })).resolves.toMatchObject(
-        {
-          ok: true,
-        },
-      );
-    }
-    if (!addResult.ok) {
-      await expect(api.cart.add(ctx, { sellableId: cartSellable.id })).resolves.toMatchObject({
-        ok: true,
-      });
-    }
+    const movePromise = api.wishlist.moveToCart(ctx, { itemId: wishlistItemId });
+    await firstAttempted;
+    const addPromise = api.cart.add(ctx, { sellableId: cartSellable.id });
+    const [moveResult, addResult] = await Promise.all([movePromise, addPromise]);
+    expect(moveResult).toMatchObject({ ok: true });
+    expect(addResult).toMatchObject({ ok: true });
+    expect(attemptedLockKeys).toEqual([attemptedLockKeys[0], attemptedLockKeys[0]]);
+    expect(createdCartIds).toEqual([createdCartIds[0]]);
 
     const finalCart = await api.cart.get(ctx);
     if (!finalCart.ok) throw new Error("Expected cart.get to succeed.");

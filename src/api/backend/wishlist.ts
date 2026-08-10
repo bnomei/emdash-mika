@@ -408,7 +408,7 @@ async function persistWishlistMoveToCart(
 
   try {
     const winner = await findOpenCart(input, ctx, currency);
-    return appendWishlistMoveToCart(
+    const result = await appendWishlistMoveToCart(
       input,
       ctx,
       winner ?? createCartDocument(input, ctx, currency),
@@ -416,6 +416,7 @@ async function persistWishlistMoveToCart(
       wishlistItemId,
       Boolean(winner),
     );
+    return result;
   } finally {
     await input.repositories.ephemeral
       .releaseLock({ key: lockKey, owner, now: ctx.now })
